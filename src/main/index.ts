@@ -2,8 +2,28 @@ import { app, shell, BrowserWindow, ipcMain } from 'electron'
 import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
+import { registerPaginationScheme } from './pagination-scheme'
+import { createPaginationHarness } from './pagination-window'
 
-function createWindow(): void {
+// Must run before app.whenReady() is awaited anywhere — Electron requires
+// protocol.registerSchemesAsPrivileged() to be called before the `ready`
+// event fires (see pagination-scheme.ts for why this scheme needs to be
+// privileged at all).
+registerPaginationScheme()
+
+// Phase 0 spike bridge, not part of the shipped app: Playwright's
+// `electronApplication.evaluate()` runs the injected callback in a bare V8
+// context with no `require` and no working dynamic `import()` (confirmed
+// empirically — both throw ReferenceError / "no dynamic import callback
+// specified" respectively). globalThis *is* shared with that context
+// though, so exposing createPaginationHarness this way is how gate5 (and
+// every later Phase 0 gate script) reaches it from a Playwright test.
+declare global {
+  var __pagedownPhase0: { createPaginationHarness: typeof createPaginationHarness } | undefined
+}
+globalThis.__pagedownPhase0 = { createPaginationHarness }
+
+function createWindow(): BrowserWindow {
   // Create the browser window.
   const mainWindow = new BrowserWindow({
     width: 900,
@@ -40,6 +60,8 @@ function createWindow(): void {
   } else {
     mainWindow.loadFile(join(__dirname, '../renderer/index.html'))
   }
+
+  return mainWindow
 }
 
 // This method will be called when Electron has finished
@@ -59,7 +81,23 @@ app.whenReady().then(() => {
   // IPC test
   ipcMain.on('ping', () => console.log('pong'))
 
-  createWindow()
+  const mainWindow = createWindow()
+
+  // Phase 0 spike wiring: prove the sandboxed pagination render harness
+  // (Gate 5, see src/main/pagination-window.ts) constructs successfully
+  // under real app startup, not just under the Playwright test's
+  // app.evaluate(). Positioned off-window so it doesn't cover the app's
+  // own UI — this is not part of the harness's real interface, just how
+  // this spike attaches it for a visible-if-you-go-looking smoke check.
+  // Real integration into app UI is out of scope for Task 3.
+  createPaginationHarness(mainWindow)
+    .then((harness) => {
+      harness.view.setBounds({ x: -9999, y: -9999, width: 816, height: 1056 })
+      console.log('[phase0] pagination render harness ready:', harness.view.webContents.getURL())
+    })
+    .catch((err) => {
+      console.error('[phase0] failed to create pagination render harness', err)
+    })
 
   app.on('activate', function () {
     // On macOS it's common to re-create a window in the app when the
