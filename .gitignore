@@ -1,0 +1,21 @@
+node_modules
+dist
+out
+.DS_Store
+.eslintcache
+*.log*
+
+# Vitest
+coverage
+
+# Playwright — HTML/blob reporters and raw run artifacts (traces, videos,
+# screenshots) are regenerated per run and not durable evidence. The JSON
+# reporter output is likewise transient; per-gate findings are recorded
+# manually in docs/superpowers/plans/2026-07-25-phase0-findings.md and in
+# the specific result files each gate task commits explicitly (e.g.
+# phase0/results/gate2-timing.json), not in this auto-generated report.
+test-results
+playwright-report
+blob-report
+playwright/.cache
+phase0/results/playwright-report.json
