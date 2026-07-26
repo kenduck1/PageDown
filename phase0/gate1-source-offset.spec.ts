@@ -97,37 +97,49 @@ function decodeMatchForOracle(
 }
 
 /**
- * Exhaustive, per-byte independent reconstruction of one run's expected
- * source<->rendered mapping, checked against the real `SourceMap` for every
- * single source byte in `[srcStart, srcEnd)` — not a sample, not gated on a
- * run-level aggregate, not scoped to only the bytes inside regex matches.
+ * Exhaustive, independent reconstruction of one run's expected source
+ * <-> rendered mapping, checked against the real `SourceMap` in BOTH
+ * directions: every single source byte in `[srcStart, srcEnd)` (via
+ * `srcToRun`), and every single rendered offset in `[0, renderedLength]`
+ * inclusive of the one-past-the-end position (via `htmlOffsetToSrc`). Not a
+ * sample, not gated on any condition, not scoped to only certain byte
+ * classes, and not one direction only.
  *
  * This replaced three narrower, partial checks this task went through in
  * turn (a run-level aggregate length comparison, then a per-match-only
  * loop, then a rendered-offset loop with a "&"/"\" skip heuristic) after
  * review found each had its own blind spot the others didn't cover — most
- * pointedly, all of them together still missed a bug that nulled an
- * ordinary, non-match byte (e.g. the character immediately after a real
- * entity), because none of them checked ordinary bytes as a matter of
- * course; they only checked bytes gated by an aggregate condition or
- * belonging to a regex match. This function checks every byte,
- * unconditionally:
+ * pointedly, a bug that nulls an ordinary, non-match byte was invisible to
+ * all of them at once, since none of them checked ordinary bytes as a
+ * matter of course. A later review round found this function *itself* had
+ * a further blind spot even after that fix: it only ever walked SOURCE
+ * bytes and asked "what rendered offset does this map to" — it never
+ * independently walked RENDERED offsets and asked "what source offset does
+ * this map to," so a bug that corrupts `htmlOffsetToSrc` for a rendered
+ * offset that's never the *first* one produced by any source byte (e.g.
+ * the second UTF-16 code unit of a decoded surrogate pair, as `&Afr;`
+ * produces) was completely unchecked. Both directions are walked here,
+ * independently, against the same reconstructed expectation:
  *
  * - An ordinary (non-match) byte must be addressable at the current
- *   running rendered offset (identity), and that offset must round-trip
- *   back to this exact source byte.
- * - The first byte of a *real* match (decodes to something different) must
- *   be addressable at the current running rendered offset; every other
- *   byte in that match must be `null` (non-addressable), same as markup
- *   syntax.
- * - Every byte of a *fake* match (decodes to itself) must be addressable
- *   in lockstep with the running rendered offset, exactly like ordinary
+ *   running rendered offset (identity).
+ * - The first byte of a *real* match (decodes to something different)
+ *   anchors every rendered offset the decode produces (one or more, for a
+ *   multi-code-unit decode); every other source byte in that match must be
+ *   `null` (non-addressable), same as markup syntax.
+ * - Every byte of a *fake* match (decodes to itself) is addressable in
+ *   lockstep with the running rendered offset, exactly like ordinary
  *   bytes — this is the byte range the original "&A;" bug got wrong.
+ * - `htmlOffsetToSrc(j, runId)` for every rendered offset `j` (including
+ *   `j === renderedLength`, the end-of-run position) must equal the source
+ *   anchor above, unconditionally — checked in its own loop, not derived
+ *   from the source-byte loop's results.
  *
  * Only meaningful for a run whose escape/entity-only model actually
- * explains its real `node.value` (the caller checks this first and skips
- * degraded runs, which are covered exhaustively by the dedicated
- * known-gap test below instead).
+ * explains its real `node.value` — the caller only invokes this for runs
+ * that already passed a hard, unconditional decoded-text equality check;
+ * `continuation-prefixes.md`'s degraded runs are covered by the separate
+ * known-gap test below, not by this function, and are not in `corpusFiles`.
  */
 function verifyRunExhaustively(
   sourceMap: SourceMap,
@@ -159,76 +171,164 @@ function verifyRunExhaustively(
     })
   }
 
-  function checkAddressable(srcOffset: number, expectedHtmlOffset: number, label: string): void {
-    const run = sourceMap.srcToRun(srcOffset)
-    if (!run) {
-      mismatches.push(
-        `${file}@${srcOffset}: ${label} should be addressable at rendered offset ${expectedHtmlOffset}, got null`
-      )
-      return
-    }
-    if (run.htmlOffset !== expectedHtmlOffset) {
-      mismatches.push(
-        `${file}@${srcOffset}: ${label} addressable but at the wrong rendered offset — expected ${expectedHtmlOffset}, got ${run.htmlOffset}`
-      )
-      return
-    }
-    const recovered = sourceMap.htmlOffsetToSrc(run.htmlOffset, run.runId)
-    if (recovered !== srcOffset) {
-      mismatches.push(
-        `${file}@${srcOffset}: ${label} round-trip mismatch — htmlOffsetToSrc(${run.htmlOffset}) => ${recovered}, expected ${srcOffset}`
-      )
-    }
-  }
-
-  function checkNotAddressable(srcOffset: number, label: string): void {
-    const run = sourceMap.srcToRun(srcOffset)
-    if (run) {
-      mismatches.push(
-        `${file}@${srcOffset}: ${label} should be null (non-addressable), got htmlOffset ${run.htmlOffset}`
-      )
-    }
-  }
-
-  let renderedOffset = 0
-  let i = 0
-  let matchIdx = 0
-  while (i < sourceSlice.length) {
-    const match = matches[matchIdx]
-    if (match && match.start === i) {
-      if (match.isReal) {
-        checkAddressable(
-          srcStart + i,
-          renderedOffset,
-          `anchor byte of real reference/escape ${JSON.stringify(match.whole)}`
-        )
-        for (let k = i + 1; k < match.end; k++) {
-          checkNotAddressable(
-            srcStart + k,
-            `interior byte of real reference/escape ${JSON.stringify(match.whole)}`
-          )
+  // Independent reconstruction: for every rendered offset (0 through
+  // renderedLength inclusive), the source offset it's expected to anchor
+  // to. Built once, straight from `matches`, with no reference to what the
+  // real SourceMap says — this is the shared expectation both direction
+  // loops below check against.
+  const expectedAnchorForRendered: number[] = []
+  {
+    let i = 0
+    let matchIdx = 0
+    while (i < sourceSlice.length) {
+      const match = matches[matchIdx]
+      if (match && match.start === i) {
+        if (match.isReal) {
+          // A real match's every produced rendered position (one or more,
+          // for a multi-code-unit decode) anchors to the SAME single source
+          // byte — the match's first byte — same as direction 1's anchor
+          // treatment above.
+          for (let k = 0; k < match.decodedLength; k++) {
+            expectedAnchorForRendered.push(srcStart + i)
+          }
+        } else {
+          // A fake match is plain identity, lockstep: each byte maps to its
+          // OWN source position, not all to the first byte's.
+          for (let k = i; k < match.end; k++) {
+            expectedAnchorForRendered.push(srcStart + k)
+          }
         }
-        renderedOffset += match.decodedLength
+        i = match.end
+        matchIdx++
       } else {
-        for (let k = i; k < match.end; k++) {
+        expectedAnchorForRendered.push(srcStart + i)
+        i += 1
+      }
+    }
+  }
+  expectedAnchorForRendered.push(srcEnd) // one-past-the-end position
+
+  // --- Direction 1: every SOURCE byte resolves correctly (srcToRun) ---
+  {
+    let renderedOffset = 0
+    let i = 0
+    let matchIdx = 0
+    while (i < sourceSlice.length) {
+      const match = matches[matchIdx]
+      if (match && match.start === i) {
+        if (match.isReal) {
           checkAddressable(
-            srcStart + k,
-            renderedOffset + (k - i),
-            `byte of fake (non-decoding) reference/escape-shaped match ${JSON.stringify(match.whole)}`
+            sourceMap,
+            mismatches,
+            file,
+            srcStart + i,
+            renderedOffset,
+            `anchor byte of real reference/escape ${JSON.stringify(match.whole)}`
+          )
+          for (let k = i + 1; k < match.end; k++) {
+            checkNotAddressable(
+              sourceMap,
+              mismatches,
+              file,
+              srcStart + k,
+              `interior byte of real reference/escape ${JSON.stringify(match.whole)}`
+            )
+          }
+          renderedOffset += match.decodedLength
+        } else {
+          for (let k = i; k < match.end; k++) {
+            checkAddressable(
+              sourceMap,
+              mismatches,
+              file,
+              srcStart + k,
+              renderedOffset + (k - i),
+              `byte of fake (non-decoding) reference/escape-shaped match ${JSON.stringify(match.whole)}`
+            )
+          }
+          renderedOffset += match.end - i // === decodedLength here, since a fake match's decoded output equals its own source text
+        }
+        i = match.end
+        matchIdx++
+      } else {
+        checkAddressable(sourceMap, mismatches, file, srcStart + i, renderedOffset, 'ordinary byte')
+        renderedOffset += 1
+        i += 1
+      }
+    }
+  }
+
+  // --- Direction 2: every RENDERED offset resolves correctly
+  // (htmlOffsetToSrc), independently of direction 1 above. This is the
+  // direction that catches a bug in an interior code unit of a
+  // multi-code-unit decode (e.g. the second UTF-16 unit of a surrogate
+  // pair), since direction 1 never queries `htmlOffsetToSrc` for any
+  // rendered offset except the one the FIRST source byte of a match maps
+  // to.
+  {
+    const anchorInfo = sourceMap.srcToRun(srcStart)
+    if (!anchorInfo) {
+      mismatches.push(
+        `${file}@[${srcStart},${srcEnd}): srcToRun(srcStart) unexpectedly returned null`
+      )
+    } else {
+      const runId = anchorInfo.runId
+      for (let j = 0; j < expectedAnchorForRendered.length; j++) {
+        const recovered = sourceMap.htmlOffsetToSrc(j, runId)
+        if (recovered !== expectedAnchorForRendered[j]) {
+          mismatches.push(
+            `${file} run[${srcStart},${srcEnd}) rendered offset ${j}: htmlOffsetToSrc(${j}) => ${recovered}, expected ${expectedAnchorForRendered[j]}`
           )
         }
-        renderedOffset += match.end - i // === decodedLength here, since a fake match's decoded output equals its own source text
       }
-      i = match.end
-      matchIdx++
-    } else {
-      checkAddressable(srcStart + i, renderedOffset, 'ordinary byte')
-      renderedOffset += 1
-      i += 1
     }
   }
 
   return matches.length
+}
+
+function checkAddressable(
+  sourceMap: SourceMap,
+  mismatches: string[],
+  file: string,
+  srcOffset: number,
+  expectedHtmlOffset: number,
+  label: string
+): void {
+  const run = sourceMap.srcToRun(srcOffset)
+  if (!run) {
+    mismatches.push(
+      `${file}@${srcOffset}: ${label} should be addressable at rendered offset ${expectedHtmlOffset}, got null`
+    )
+    return
+  }
+  if (run.htmlOffset !== expectedHtmlOffset) {
+    mismatches.push(
+      `${file}@${srcOffset}: ${label} addressable but at the wrong rendered offset — expected ${expectedHtmlOffset}, got ${run.htmlOffset}`
+    )
+    return
+  }
+  const recovered = sourceMap.htmlOffsetToSrc(run.htmlOffset, run.runId)
+  if (recovered !== srcOffset) {
+    mismatches.push(
+      `${file}@${srcOffset}: ${label} round-trip mismatch — htmlOffsetToSrc(${run.htmlOffset}) => ${recovered}, expected ${srcOffset}`
+    )
+  }
+}
+
+function checkNotAddressable(
+  sourceMap: SourceMap,
+  mismatches: string[],
+  file: string,
+  srcOffset: number,
+  label: string
+): void {
+  const run = sourceMap.srcToRun(srcOffset)
+  if (run) {
+    mismatches.push(
+      `${file}@${srcOffset}: ${label} should be null (non-addressable), got htmlOffset ${run.htmlOffset}`
+    )
+  }
 }
 
 // The test above is a self-consistent round trip: it derives the `htmlOffset`
@@ -252,11 +352,27 @@ function verifyRunExhaustively(
 // per-match-only loop missed bugs in *ordinary* (non-match) bytes entirely,
 // since it never looked at anything outside a regex match.
 // `verifyRunExhaustively` above replaces all three: it checks every single
-// source byte in a run, unconditionally, so there's no gap left for a bug to
-// hide in between checks.
-test('Gate 1 (independent oracle): the offset-correction table decodes every real corpus run identically to a live remark parse, and every source byte in it resolves through SourceMap to the correct, correctly-offset character', async () => {
+// source byte AND every single rendered offset in a run, unconditionally, so
+// there's no gap left for a bug to hide in between checks.
+//
+// A version of this test between the third and fourth review rounds made the
+// decoded-text mismatch below conditional on `isDegraded`, on the theory that
+// `continuation-prefixes.md`-style degradation is an expected outcome. That
+// was itself the exact mistake this whole chain of fixes has been about:
+// `isDegraded` is computed by comparing the table's own decode against
+// `node.value` in the first place (see `source-map.ts`), so ANY decode bug in
+// one of these 8 files makes `isDegraded` true for that run, which made the
+// check never fire regardless of how wrong the decode was — confirmed by a
+// reviewer reproduction (corrupting `&mdash;`/`&lt;`/`&gt;` to all decode to
+// `"?"`) that passed the entire suite green while two runs silently collapsed
+// to 1 addressable byte out of 143 and 181. None of these 8 `corpusFiles` is
+// `continuation-prefixes.md` — no run in any of them is EVER supposed to
+// degrade — so a decoded-text mismatch here is an unconditional hard
+// failure, full stop, no exception, no `isDegraded` check.
+test('Gate 1 (independent oracle): the offset-correction table decodes every real corpus run identically to a live remark parse, and every source byte and rendered offset in it resolves through SourceMap to the correct answer', async () => {
   const mismatches: string[] = []
   let totalRuns = 0
+  let verifiedRuns = 0
   let totalMatches = 0
 
   for (const file of corpusFiles) {
@@ -277,18 +393,13 @@ test('Gate 1 (independent oracle): the offset-correction table decodes every rea
 
       const { renderedText } = buildRunOffsetTables(sourceSlice)
       if (renderedText !== node.value) {
-        // This run needs the block-level fallback (see the known-gap test
-        // below) — verify it's at least correctly flagged as such here,
-        // rather than silently skipping it with no check at all.
-        const runInfo = sourceMap.srcToRun(srcStart)
-        if (!runInfo || !sourceMap.isDegraded(runInfo.runId)) {
-          mismatches.push(
-            `${file}@[${srcStart},${srcEnd}): decoded text mismatch (table says ${JSON.stringify(renderedText)}, real parse says ${JSON.stringify(node.value)}) but isDegraded is not true`
-          )
-        }
+        mismatches.push(
+          `${file}@[${srcStart},${srcEnd}): decoded text mismatch — table says ${JSON.stringify(renderedText)}, real parse says ${JSON.stringify(node.value)}`
+        )
         return
       }
 
+      verifiedRuns++
       totalMatches += verifyRunExhaustively(sourceMap, source, srcStart, srcEnd, mismatches, file)
     })
   }
@@ -300,8 +411,15 @@ test('Gate 1 (independent oracle): the offset-correction table decodes every rea
     console.log(mismatches.slice(0, 40).join('\n'))
   }
   expect(mismatches.slice(0, 40), mismatches.slice(0, 40).join('\n')).toHaveLength(0)
-  expect(totalRuns).toBeGreaterThan(0)
-  expect(totalMatches).toBeGreaterThan(0)
+  // Pinned to the actual known values (not just "> 0") — a corrupted decoder
+  // that still parses without throwing could otherwise slip past a looser
+  // bound at some other count; confirmed in review that ">0" alone survived
+  // a corrupted-decoder reproduction at counts of 3, 8, and 9.
+  expect(totalRuns).toBe(1440)
+  expect(totalMatches).toBe(16)
+  // None of these 8 files should ever produce a degraded run — every run
+  // that reached the decoded-text check above must have passed it.
+  expect(verifiedRuns).toBe(totalRuns)
 })
 
 // `continuation-prefixes.md` (a wrapped multi-line list item and a two-line

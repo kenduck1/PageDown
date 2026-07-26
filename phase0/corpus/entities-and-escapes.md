@@ -35,3 +35,11 @@ specific regression coverage would silently disappear. See
 `phase0/gate1-source-offset.spec.ts`'s per-match independent check, which
 verifies each match's own byte range regardless of what else shares its
 run, and does not depend on this specific sentence structure to work.
+
+Mathematical notation sometimes uses fraktur letters such as &Afr; in
+prose, which decodes to a single Unicode code point represented as a
+two-UTF-16-code-unit surrogate pair in JavaScript strings — unlike every
+other entity in this fixture, which decodes to exactly one code unit.
+This exercises the direction a per-source-byte check alone cannot cover:
+whether the _second_ code unit of a multi-unit decoded character also
+resolves back to the correct source anchor, not just the first.
