@@ -4,6 +4,7 @@ import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
 import { registerPaginationScheme } from './pagination-scheme'
 import { createPaginationHarness } from './pagination-window'
+import { paginateAndTime } from '../pagination/paginate'
 
 // Must run before app.whenReady() is awaited anywhere — Electron requires
 // protocol.registerSchemesAsPrivileged() to be called before the `ready`
@@ -18,10 +19,21 @@ registerPaginationScheme()
 // specified" respectively). globalThis *is* shared with that context
 // though, so exposing createPaginationHarness this way is how gate5 (and
 // every later Phase 0 gate script) reaches it from a Playwright test.
+//
+// Task 6 adds `paginateAndTime` to this same bridge for exactly the same
+// reason: the brief's gate2-performance.spec.ts sample does
+// `await import('../src/pagination/paginate')` inside `app.evaluate()`,
+// which fails the same way `import('../src/main/pagination-window')` did
+// in Task 3/Gate 5 — confirmed empirically, not assumed.
 declare global {
-  var __pagedownPhase0: { createPaginationHarness: typeof createPaginationHarness } | undefined
+  var __pagedownPhase0:
+    | {
+        createPaginationHarness: typeof createPaginationHarness
+        paginateAndTime: typeof paginateAndTime
+      }
+    | undefined
 }
-globalThis.__pagedownPhase0 = { createPaginationHarness }
+globalThis.__pagedownPhase0 = { createPaginationHarness, paginateAndTime }
 
 function createWindow(): BrowserWindow {
   // Create the browser window.
