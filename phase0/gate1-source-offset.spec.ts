@@ -9,7 +9,7 @@ import { visit } from 'unist-util-visit'
 import type { Root, Text } from 'mdast'
 import { decodeNamedCharacterReference } from 'decode-named-character-reference'
 import { decodeNumericCharacterReference } from 'micromark-util-decode-numeric-character-reference'
-import { markdownToHtml } from '../src/markdown/pipeline'
+import { markdownToHtml, type SourceMap } from '../src/markdown/pipeline'
 import { buildRunOffsetTables } from '../src/markdown/source-map'
 
 // The brief's sample uses `new URL(..., import.meta.url)` to resolve corpus
@@ -96,6 +96,141 @@ function decodeMatchForOracle(
   return named === false ? whole : named
 }
 
+/**
+ * Exhaustive, per-byte independent reconstruction of one run's expected
+ * source<->rendered mapping, checked against the real `SourceMap` for every
+ * single source byte in `[srcStart, srcEnd)` — not a sample, not gated on a
+ * run-level aggregate, not scoped to only the bytes inside regex matches.
+ *
+ * This replaced three narrower, partial checks this task went through in
+ * turn (a run-level aggregate length comparison, then a per-match-only
+ * loop, then a rendered-offset loop with a "&"/"\" skip heuristic) after
+ * review found each had its own blind spot the others didn't cover — most
+ * pointedly, all of them together still missed a bug that nulled an
+ * ordinary, non-match byte (e.g. the character immediately after a real
+ * entity), because none of them checked ordinary bytes as a matter of
+ * course; they only checked bytes gated by an aggregate condition or
+ * belonging to a regex match. This function checks every byte,
+ * unconditionally:
+ *
+ * - An ordinary (non-match) byte must be addressable at the current
+ *   running rendered offset (identity), and that offset must round-trip
+ *   back to this exact source byte.
+ * - The first byte of a *real* match (decodes to something different) must
+ *   be addressable at the current running rendered offset; every other
+ *   byte in that match must be `null` (non-addressable), same as markup
+ *   syntax.
+ * - Every byte of a *fake* match (decodes to itself) must be addressable
+ *   in lockstep with the running rendered offset, exactly like ordinary
+ *   bytes — this is the byte range the original "&A;" bug got wrong.
+ *
+ * Only meaningful for a run whose escape/entity-only model actually
+ * explains its real `node.value` (the caller checks this first and skips
+ * degraded runs, which are covered exhaustively by the dedicated
+ * known-gap test below instead).
+ */
+function verifyRunExhaustively(
+  sourceMap: SourceMap,
+  source: string,
+  srcStart: number,
+  srcEnd: number,
+  mismatches: string[],
+  file: string
+): number {
+  const sourceSlice = source.slice(srcStart, srcEnd)
+
+  const matches: {
+    start: number
+    end: number
+    decodedLength: number
+    isReal: boolean
+    whole: string
+  }[] = []
+  ESCAPE_OR_REFERENCE.lastIndex = 0
+  let m: RegExpExecArray | null
+  while ((m = ESCAPE_OR_REFERENCE.exec(sourceSlice))) {
+    const decoded = decodeMatchForOracle(m[1], m[2], m[0])
+    matches.push({
+      start: m.index,
+      end: m.index + m[0].length,
+      decodedLength: decoded.length,
+      isReal: decoded !== m[0],
+      whole: m[0]
+    })
+  }
+
+  function checkAddressable(srcOffset: number, expectedHtmlOffset: number, label: string): void {
+    const run = sourceMap.srcToRun(srcOffset)
+    if (!run) {
+      mismatches.push(
+        `${file}@${srcOffset}: ${label} should be addressable at rendered offset ${expectedHtmlOffset}, got null`
+      )
+      return
+    }
+    if (run.htmlOffset !== expectedHtmlOffset) {
+      mismatches.push(
+        `${file}@${srcOffset}: ${label} addressable but at the wrong rendered offset — expected ${expectedHtmlOffset}, got ${run.htmlOffset}`
+      )
+      return
+    }
+    const recovered = sourceMap.htmlOffsetToSrc(run.htmlOffset, run.runId)
+    if (recovered !== srcOffset) {
+      mismatches.push(
+        `${file}@${srcOffset}: ${label} round-trip mismatch — htmlOffsetToSrc(${run.htmlOffset}) => ${recovered}, expected ${srcOffset}`
+      )
+    }
+  }
+
+  function checkNotAddressable(srcOffset: number, label: string): void {
+    const run = sourceMap.srcToRun(srcOffset)
+    if (run) {
+      mismatches.push(
+        `${file}@${srcOffset}: ${label} should be null (non-addressable), got htmlOffset ${run.htmlOffset}`
+      )
+    }
+  }
+
+  let renderedOffset = 0
+  let i = 0
+  let matchIdx = 0
+  while (i < sourceSlice.length) {
+    const match = matches[matchIdx]
+    if (match && match.start === i) {
+      if (match.isReal) {
+        checkAddressable(
+          srcStart + i,
+          renderedOffset,
+          `anchor byte of real reference/escape ${JSON.stringify(match.whole)}`
+        )
+        for (let k = i + 1; k < match.end; k++) {
+          checkNotAddressable(
+            srcStart + k,
+            `interior byte of real reference/escape ${JSON.stringify(match.whole)}`
+          )
+        }
+        renderedOffset += match.decodedLength
+      } else {
+        for (let k = i; k < match.end; k++) {
+          checkAddressable(
+            srcStart + k,
+            renderedOffset + (k - i),
+            `byte of fake (non-decoding) reference/escape-shaped match ${JSON.stringify(match.whole)}`
+          )
+        }
+        renderedOffset += match.end - i // === decodedLength here, since a fake match's decoded output equals its own source text
+      }
+      i = match.end
+      matchIdx++
+    } else {
+      checkAddressable(srcStart + i, renderedOffset, 'ordinary byte')
+      renderedOffset += 1
+      i += 1
+    }
+  }
+
+  return matches.length
+}
+
 // The test above is a self-consistent round trip: it derives the `htmlOffset`
 // it feeds to `htmlOffsetToSrc` from `srcToRun(srcOffset)` on the very
 // `srcOffset` it then checks. For this SourceMap's shape, that composition
@@ -105,31 +240,21 @@ function decodeMatchForOracle(
 // decoded text. It is not, on its own, the independent oracle the design
 // review asked for.
 //
-// This second test is: it re-parses each corpus file directly (independent
-// of pipeline.ts/source-map.ts's internal wiring) to get the real `node.value`
-// mdast/micromark produces for every text run, and separately recomputes the
-// rendered text for that same run's raw source slice via
-// `buildRunOffsetTables` (source-map.ts's offset-correction table). If the
-// two ever disagree, the correction table is decoding differently than the
-// real parser does — a genuine, non-tautological failure mode this test can
-// actually detect.
-//
-// A first version of this test only checked `renderedText === node.value`
-// per run. Review found that alone is not enough: a correct decoded string
-// does not imply a correct *offset* table (the "&A;"-in-ordinary-prose bug —
-// see source-map.test.ts and the findings doc — decoded to the right text
-// while still nulling out two ordinary, addressable source characters). A
-// second version added a run-level aggregate check (below: "nothing net
-// collapsed in this whole run"). Review found THAT has its own blind spot:
-// if a run mixes a real, genuinely-collapsing reference (e.g. "&copy;") with
-// a fake one (e.g. "&A;"), the real one's length change means the aggregate
-// condition never holds for that run, so the fake one's bug — which,
-// reintroduced, wrongly nulls its own interior bytes regardless of anything
-// else in the run — goes completely unchecked. The fix is the per-match loop
-// at the end of this test: it classifies and checks each individual
-// escape/reference match's own byte range, independent of run-level
-// aggregates and of what else shares its run.
-test('Gate 1 (independent oracle): the offset-correction table decodes every real corpus run identically to a live remark parse, and every offset it reports resolves to the correct source character', async () => {
+// This second test re-parses each corpus file directly (independent of
+// pipeline.ts/source-map.ts's internal wiring) to get the real `node.value`
+// mdast/micromark produces for every text run. Three successive, narrower
+// versions of the check that followed were each found to have their own
+// blind spot in review: (1) comparing only `renderedText === node.value`
+// missed offset bugs that don't change the decoded text (the "&A;" bug); (2)
+// a run-level aggregate length comparison missed the same bug when it shared
+// a run with a real, genuinely-collapsing reference, since the real one's
+// length change masks the fake one's zero net change in the aggregate; (3) a
+// per-match-only loop missed bugs in *ordinary* (non-match) bytes entirely,
+// since it never looked at anything outside a regex match.
+// `verifyRunExhaustively` above replaces all three: it checks every single
+// source byte in a run, unconditionally, so there's no gap left for a bug to
+// hide in between checks.
+test('Gate 1 (independent oracle): the offset-correction table decodes every real corpus run identically to a live remark parse, and every source byte in it resolves through SourceMap to the correct, correctly-offset character', async () => {
   const mismatches: string[] = []
   let totalRuns = 0
   let totalMatches = 0
@@ -152,111 +277,25 @@ test('Gate 1 (independent oracle): the offset-correction table decodes every rea
 
       const { renderedText } = buildRunOffsetTables(sourceSlice)
       if (renderedText !== node.value) {
-        mismatches.push(
-          `${file}@[${srcStart},${srcEnd}): decoded text mismatch — table says ${JSON.stringify(renderedText)}, real parse says ${JSON.stringify(node.value)}`
-        )
-        return // decode itself is already wrong; skip the rest of the checks for this run
-      }
-
-      // Decoded text matches — now verify the *offsets*, not just the text,
-      // via the real SourceMap. Any offset in this run resolves to the same
-      // runId; srcStart always does (it's either an identity position or a
-      // decode-sequence anchor, never a null interior byte).
-      const runInfo = sourceMap.srcToRun(srcStart)
-      if (!runInfo) {
-        mismatches.push(
-          `${file}@[${srcStart},${srcEnd}): srcToRun(srcStart) unexpectedly returned null`
-        )
+        // This run needs the block-level fallback (see the known-gap test
+        // below) — verify it's at least correctly flagged as such here,
+        // rather than silently skipping it with no check at all.
+        const runInfo = sourceMap.srcToRun(srcStart)
+        if (!runInfo || !sourceMap.isDegraded(runInfo.runId)) {
+          mismatches.push(
+            `${file}@[${srcStart},${srcEnd}): decoded text mismatch (table says ${JSON.stringify(renderedText)}, real parse says ${JSON.stringify(node.value)}) but isDegraded is not true`
+          )
+        }
         return
       }
 
-      // Run-level aggregate check: if this run's rendered length exactly
-      // equals its raw source span, *nothing* collapsed anywhere in it, so
-      // every offset must be plain identity. Kept because it's a cheap,
-      // useful check for runs with no real entity/escape at all — but see
-      // the per-match loop below for the check that actually has detection
-      // power when a run mixes real and fake matches together.
-      if (node.value.length === srcEnd - srcStart) {
-        for (let srcOffset = srcStart; srcOffset < srcEnd; srcOffset++) {
-          const run = sourceMap.srcToRun(srcOffset)
-          if (!run || run.htmlOffset !== srcOffset - srcStart) {
-            mismatches.push(
-              `${file}@${srcOffset}: run of length srcEnd-srcStart===renderedLength should be pure identity, but srcToRun returned ${JSON.stringify(run)}`
-            )
-          }
-        }
-      }
-
-      for (let j = 0; j < node.value.length; j++) {
-        const recovered = sourceMap.htmlOffsetToSrc(j, runInfo.runId)
-        const recoveredChar = source[recovered]
-        // "&" or "\" at the recovered position means this rendered
-        // character came from a real, genuinely-collapsing entity/escape
-        // sequence (the anchor is the sequence's opening marker) — the
-        // rendered character legitimately isn't the same character as the
-        // marker itself, so it's excluded here, the same way markup syntax
-        // positions are excluded from the first test above. (This
-        // heuristic alone is not sufficient — see the per-match loop below
-        // — but it still catches other offset bugs, e.g. a wrong anchor
-        // position within a genuinely-collapsing run.)
-        if (recoveredChar === '&' || recoveredChar === '\\') continue
-        if (recoveredChar !== node.value[j]) {
-          mismatches.push(
-            `${file}@[${srcStart},${srcEnd}) rendered[${j}]: htmlOffsetToSrc(${j}) => src ${recovered} (${JSON.stringify(recoveredChar)}), expected ${JSON.stringify(node.value[j])}`
-          )
-        }
-      }
-
-      // Per-match independent check: the check with actual, verified
-      // detection power for a fake reference/escape sharing a run with a
-      // real one. Classifies each match independently (real vs. fake) and
-      // checks only that match's own byte range — unaffected by run-level
-      // aggregates or by other matches elsewhere in the same run.
-      ESCAPE_OR_REFERENCE.lastIndex = 0
-      let m: RegExpExecArray | null
-      while ((m = ESCAPE_OR_REFERENCE.exec(sourceSlice))) {
-        totalMatches++
-        const matchStart = srcStart + m.index
-        const matchEnd = matchStart + m[0].length
-        const decoded = decodeMatchForOracle(m[1], m[2], m[0])
-        const isReal = decoded !== m[0]
-
-        if (isReal) {
-          // The sequence's first byte anchors the produced character(s);
-          // it must be addressable. Interior bytes must not be (they were
-          // consumed by the real decode, same treatment as "**" syntax).
-          if (!sourceMap.srcToRun(matchStart)) {
-            mismatches.push(
-              `${file}@${matchStart}: anchor byte of real reference/escape ${JSON.stringify(m[0])} should be addressable, got null`
-            )
-          }
-          for (let i = matchStart + 1; i < matchEnd; i++) {
-            if (sourceMap.srcToRun(i)) {
-              mismatches.push(
-                `${file}@${i}: interior byte of real reference/escape ${JSON.stringify(m[0])} should be null (non-addressable), got a mapping`
-              )
-            }
-          }
-        } else {
-          // Fake match (reference-shaped but not real): every byte,
-          // including what would be "interior" for a real match, is
-          // ordinary identity text and must be individually addressable —
-          // this is exactly the byte range the "&A;" bug got wrong.
-          for (let i = matchStart; i < matchEnd; i++) {
-            if (!sourceMap.srcToRun(i)) {
-              mismatches.push(
-                `${file}@${i}: byte of fake (non-decoding) reference/escape-shaped match ${JSON.stringify(m[0])} should be addressable identity text, got null`
-              )
-            }
-          }
-        }
-      }
+      totalMatches += verifyRunExhaustively(sourceMap, source, srcStart, srcEnd, mismatches, file)
     })
   }
 
   if (mismatches.length > 0) {
     console.log(
-      `Gate 1 independent oracle: ${mismatches.length}/${totalRuns} runs (${totalMatches} escape/reference matches checked individually) mismatched:`
+      `Gate 1 independent oracle: ${mismatches.length}/${totalRuns} runs (${totalMatches} escape/reference matches) mismatched:`
     )
     console.log(mismatches.slice(0, 40).join('\n'))
   }
@@ -283,10 +322,14 @@ test('Gate 1 (independent oracle): the offset-correction table decodes every rea
 // in a degraded run resolves to that run's own start, every source offset
 // in it is either the anchor or explicitly non-addressable — holds across
 // the FULL rendered length and FULL source span of every degraded run, not
-// just a sampled offset or two (an earlier version of this test asserted
-// on only 2 of 307 affected source offsets, via the same tautological
-// `if (!run) continue` shape the very first Gate 1 fix in this task
-// addressed — the version below checks all of them).
+// just a sampled offset or two.
+//
+// Review also found the `isDegraded` check only ever asserted the `true`
+// direction: hardcoding `isDegraded` to always return `true` still passed
+// every test, because the "this run isn't degraded" branch below just
+// silently skipped its own coverage instead of failing. Fixed by also
+// asserting `isDegraded(...) === false` for the runs that should NOT be
+// degraded, so a lying accessor in either direction is caught.
 test('Gate 1 (known gap, downgraded to block-level guides): list-item/blockquote continuation-line prefix stripping degrades safely instead of silently mismapping', async () => {
   const file = 'continuation-prefixes.md'
   const source = readFileSync(join(__dirname, 'corpus', file), 'utf8')
@@ -298,28 +341,33 @@ test('Gate 1 (known gap, downgraded to block-level guides): list-item/blockquote
   const { sourceMap } = markdownToHtml(source)
 
   const degradedRuns: { srcStart: number; srcEnd: number; renderedLength: number }[] = []
+  const unaffectedRuns: { srcStart: number; srcEnd: number }[] = []
   visit(tree, 'text', (node: Text) => {
     const srcStart = node.position?.start.offset
     const srcEnd = node.position?.end.offset
     if (srcStart == null || srcEnd == null) return
     const sourceSlice = source.slice(srcStart, srcEnd)
-    if (sourceSlice === node.value) return // unaffected run in this same fixture (confirms not everything degrades)
+    if (sourceSlice === node.value) {
+      unaffectedRuns.push({ srcStart, srcEnd })
+      return
+    }
     // (a) the raw gap is genuine: without ground truth, the escape/entity
     // table alone really does disagree with the real parse.
     expect(buildRunOffsetTables(sourceSlice).renderedText).not.toBe(node.value)
     degradedRuns.push({ srcStart, srcEnd, renderedLength: node.value.length })
   })
-  // This fixture is specifically built to exercise the gap — if this drops
-  // to 0, either the fixture broke or the transform stopped being
-  // reproduced, and the checks below would no longer be exercising anything.
+  // This fixture is specifically built to exercise both cases — if either
+  // drops to 0, the fixture broke or the transform stopped reproducing, and
+  // the true/false split below would no longer be exercising anything.
   expect(degradedRuns.length).toBeGreaterThan(0)
+  expect(unaffectedRuns.length).toBeGreaterThan(0)
 
   for (const { srcStart, srcEnd, renderedLength } of degradedRuns) {
     const anchor = sourceMap.srcToRun(srcStart)
     expect(anchor).not.toBeNull()
     const runId = anchor!.runId
 
-    // (b) isDegraded correctly flags this run.
+    // (b) isDegraded correctly flags this run as degraded.
     expect(sourceMap.isDegraded(runId)).toBe(true)
 
     // (c) the block-level contract holds across the FULL run, not a sample:
@@ -340,13 +388,20 @@ test('Gate 1 (known gap, downgraded to block-level guides): list-item/blockquote
     }
   }
 
-  // Unaffected runs elsewhere in the same fixture are untouched by any of
-  // this — full-document sanity check.
-  for (let srcOffset = 0; srcOffset < source.length; srcOffset++) {
-    const run = sourceMap.srcToRun(srcOffset)
-    if (!run) continue
-    if (sourceMap.isDegraded(run.runId)) continue // covered exhaustively above
-    const recovered = sourceMap.htmlOffsetToSrc(run.htmlOffset, run.runId)
-    expect(source[recovered]).toBe(source[srcOffset])
+  // The false direction: runs that should NOT be degraded must report
+  // isDegraded === false, and every offset in them must resolve correctly —
+  // a lying "everything is degraded" accessor must fail here, not just
+  // silently skip coverage the way the previous version of this test did.
+  for (const { srcStart, srcEnd } of unaffectedRuns) {
+    const anchor = sourceMap.srcToRun(srcStart)
+    expect(anchor).not.toBeNull()
+    expect(sourceMap.isDegraded(anchor!.runId)).toBe(false)
+    for (let srcOffset = srcStart; srcOffset < srcEnd; srcOffset++) {
+      const run = sourceMap.srcToRun(srcOffset)
+      expect(run).not.toBeNull()
+      expect(sourceMap.isDegraded(run!.runId)).toBe(false)
+      const recovered = sourceMap.htmlOffsetToSrc(run!.htmlOffset, run!.runId)
+      expect(source[recovered]).toBe(source[srcOffset])
+    }
   }
 })
