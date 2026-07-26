@@ -140,6 +140,17 @@ function decodeMatchForOracle(
  * that already passed a hard, unconditional decoded-text equality check;
  * `continuation-prefixes.md`'s degraded runs are covered by the separate
  * known-gap test below, not by this function, and are not in `corpusFiles`.
+ *
+ * Returns `matchCount` and `multiCodeUnitMatchCount` (REAL matches only —
+ * decode to something different — whose decode produces more than one
+ * UTF-16 code unit, e.g. `&Afr;`; a fake match's `decodedLength` is just its
+ * own possibly-multi-character source text reproduced unchanged, e.g.
+ * `"&A;"`, which is not a "multi-code-unit decode" in the relevant sense) so
+ * the caller can pin that the multi-code-unit case is actually present in
+ * the corpus, not just handled in the abstract — a reviewer found that
+ * without this pin, editing the one fixture entity that exercises it (e.g.
+ * swapping `&Afr;` for `&copy;`) leaves `totalRuns`/`totalMatches` unchanged
+ * and the whole direction-2 rendered-offset check silently untested again.
  */
 function verifyRunExhaustively(
   sourceMap: SourceMap,
@@ -148,7 +159,7 @@ function verifyRunExhaustively(
   srcEnd: number,
   mismatches: string[],
   file: string
-): number {
+): { matchCount: number; multiCodeUnitMatchCount: number } {
   const sourceSlice = source.slice(srcStart, srcEnd)
 
   const matches: {
@@ -284,7 +295,16 @@ function verifyRunExhaustively(
     }
   }
 
-  return matches.length
+  return {
+    matchCount: matches.length,
+    // Only REAL matches count as a "multi-code-unit decode" — a fake match's
+    // `decodedLength` is just its own (possibly multi-character) source text
+    // reproduced unchanged (e.g. "&A;", 3 code units), which is plain
+    // identity, not a decode producing multiple rendered code units from one
+    // anchor the way a surrogate-pair-producing reference does.
+    multiCodeUnitMatchCount: matches.filter((match) => match.isReal && match.decodedLength > 1)
+      .length
+  }
 }
 
 function checkAddressable(
@@ -368,12 +388,16 @@ function checkNotAddressable(
 // to 1 addressable byte out of 143 and 181. None of these 8 `corpusFiles` is
 // `continuation-prefixes.md` — no run in any of them is EVER supposed to
 // degrade — so a decoded-text mismatch here is an unconditional hard
-// failure, full stop, no exception, no `isDegraded` check.
+// failure, full stop, no exception, and the check does not consult
+// `isDegraded` at all. `isDegraded` is still checked below, but as its own
+// separate, equally unconditional hard failure ("this file must never
+// degrade"), not as a way to excuse a decoded-text mismatch.
 test('Gate 1 (independent oracle): the offset-correction table decodes every real corpus run identically to a live remark parse, and every source byte and rendered offset in it resolves through SourceMap to the correct answer', async () => {
   const mismatches: string[] = []
   let totalRuns = 0
   let verifiedRuns = 0
   let totalMatches = 0
+  let totalMultiCodeUnitMatches = 0
 
   for (const file of corpusFiles) {
     const source = readFileSync(join(__dirname, 'corpus', file), 'utf8')
@@ -399,8 +423,34 @@ test('Gate 1 (independent oracle): the offset-correction table decodes every rea
         return
       }
 
+      // Every run that reaches here must genuinely not be degraded — not
+      // just "the decoded text happened to match" (which is all the check
+      // above proves), but `isDegraded` itself must say so.
+      const runInfo = sourceMap.srcToRun(srcStart)
+      if (!runInfo) {
+        mismatches.push(
+          `${file}@[${srcStart},${srcEnd}): srcToRun(srcStart) unexpectedly returned null`
+        )
+        return
+      }
+      if (sourceMap.isDegraded(runInfo.runId)) {
+        mismatches.push(
+          `${file}@[${srcStart},${srcEnd}): isDegraded is true, but this file must never degrade`
+        )
+        return
+      }
+
       verifiedRuns++
-      totalMatches += verifyRunExhaustively(sourceMap, source, srcStart, srcEnd, mismatches, file)
+      const { matchCount, multiCodeUnitMatchCount } = verifyRunExhaustively(
+        sourceMap,
+        source,
+        srcStart,
+        srcEnd,
+        mismatches,
+        file
+      )
+      totalMatches += matchCount
+      totalMultiCodeUnitMatches += multiCodeUnitMatchCount
     })
   }
 
@@ -411,15 +461,23 @@ test('Gate 1 (independent oracle): the offset-correction table decodes every rea
     console.log(mismatches.slice(0, 40).join('\n'))
   }
   expect(mismatches.slice(0, 40), mismatches.slice(0, 40).join('\n')).toHaveLength(0)
-  // Pinned to the actual known values (not just "> 0") — a corrupted decoder
-  // that still parses without throwing could otherwise slip past a looser
-  // bound at some other count; confirmed in review that ">0" alone survived
-  // a corrupted-decoder reproduction at counts of 3, 8, and 9.
+  // Pinned to the actual known values (not just "> 0"): a decode bug that
+  // still parses without throwing can leave a count like "> 0" satisfied at
+  // some other, wrong number — confirmed in review that a ">0" bound alone
+  // survived a corrupted-decoder reproduction at several different counts.
   expect(totalRuns).toBe(1440)
   expect(totalMatches).toBe(16)
-  // None of these 8 files should ever produce a degraded run — every run
-  // that reached the decoded-text check above must have passed it.
+  // Every run that reached the exhaustive check genuinely was not degraded
+  // (checked via `isDegraded` above, not merely implied).
   expect(verifiedRuns).toBe(totalRuns)
+  // Pins that the multi-code-unit (surrogate-pair) decode case — the one
+  // `&Afr;` fixture entity — is actually present in the corpus, not just
+  // handled in the abstract. Without this, editing that one fixture entity
+  // (e.g. swapping `&Afr;` for `&copy;`) would leave `totalRuns`/
+  // `totalMatches` unchanged and silently remove all coverage of the
+  // direction-2 rendered-offset check's reason for existing — confirmed by
+  // a reviewer reproduction that did exactly that and passed clean.
+  expect(totalMultiCodeUnitMatches).toBe(1)
 })
 
 // `continuation-prefixes.md` (a wrapped multi-line list item and a two-line

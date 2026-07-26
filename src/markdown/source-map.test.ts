@@ -152,6 +152,42 @@ describe('annotateSourceOffsets', () => {
       expect(degraded).toBe(false)
       expect(renderedText).toBe(source)
     })
+
+    it('pins both code units of a multi-code-unit decode (surrogate pair) directly, independent of any corpus fixture', () => {
+      // Review found the corpus-level coverage of this case (the one
+      // `&Afr;` sentence in phase0/corpus/entities-and-escapes.md) had no
+      // pin keeping it there: editing that fixture (e.g. swapping `&Afr;`
+      // for a single-code-unit entity like `&copy;`) would leave the
+      // Playwright gate's totalRuns/totalMatches counts unchanged and
+      // silently remove all coverage of this direction. This unit test
+      // exercises the same case directly, with no dependency on any
+      // fixture surviving future edits.
+      const source = 'Fraktur A is &Afr; in this sentence.'
+      const tree = unified().use(remarkParse).parse(source) as Root
+      const map = annotateSourceOffsets(tree, source)
+
+      let nodeValue = ''
+      visit(tree, 'text', (node: Text) => {
+        nodeValue += node.value
+      })
+      const decoded = '\u{1D504}' // MATHEMATICAL FRAKTUR CAPITAL A, a surrogate pair in UTF-16
+      expect(decoded).toHaveLength(2) // confirms this really is a 2-UTF-16-code-unit character
+      expect(nodeValue).toContain(decoded)
+
+      const ampIdx = source.indexOf('&Afr;')
+      const renderedIdx = nodeValue.indexOf(decoded)
+      expect(renderedIdx).toBeGreaterThan(-1)
+
+      const anchor = map.srcToRun(ampIdx)
+      expect(anchor).not.toBeNull()
+      const runId = anchor!.runId
+
+      // Both code units of the decoded surrogate pair must resolve back to
+      // the same source anchor (the "&") via htmlOffsetToSrc — not just the
+      // first one, which is all a source-byte-only walk would ever check.
+      expect(map.htmlOffsetToSrc(renderedIdx, runId)).toBe(ampIdx)
+      expect(map.htmlOffsetToSrc(renderedIdx + 1, runId)).toBe(ampIdx)
+    })
   })
 
   describe('buildRunOffsetTables (unmodeled-transform safety net)', () => {
