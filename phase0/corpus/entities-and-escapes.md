@@ -15,3 +15,8 @@ more plain text so the run continues well past the escape.
 Smart quotes are not auto-converted, but a named entity like &mdash; still
 needs correct source accounting, as does a numeric reference like &#65; and
 a hexadecimal one like &#x42;.
+
+Common abbreviations like Q&A; and R&D; look exactly like character
+references to a naive scanner but are not real ones — "A" and "D" are not
+recognized entity names, so this text renders unchanged and must stay
+identity-mapped character for character, not collapsed like a real entity.
