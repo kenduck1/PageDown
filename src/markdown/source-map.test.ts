@@ -123,5 +123,84 @@ describe('annotateSourceOffsets', () => {
         expect(map.srcToRun(ampersandOffset + i)).toBeNull()
       }
     })
+
+    it('does NOT collapse a reference-shaped match that is not a real reference (regression: "&A;" in ordinary prose)', () => {
+      // Found in review: the ESCAPE_OR_REFERENCE regex matches "&A;" (it's
+      // shaped like a character reference), but "A" is not a recognized
+      // named entity, so decodeNamedCharacterReference returns `false` and
+      // decodeMatch correctly falls back to the literal "&A;" unchanged.
+      // The bug was that buildRunOffsetTables still took the "this is a
+      // special construct" branch and anchored/nulled the interior "A" and
+      // ";" bytes anyway, even though nothing was actually decoded — so
+      // htmlOffsetToSrc returned wrong offsets for them and srcToRun
+      // wrongly returned null for two ordinary, addressable characters.
+      const source = 'We ran a Q&A; the results were shared.'
+      const tree = unified().use(remarkParse).parse(source) as Root
+      const map = annotateSourceOffsets(tree, source)
+
+      const ampIdx = source.indexOf('&A;')
+      // "&", "A", and ";" are all ordinary identity-mapped characters here —
+      // none of them should return null.
+      for (const offset of [ampIdx, ampIdx + 1, ampIdx + 2]) {
+        const run = map.srcToRun(offset)
+        expect(run, `srcToRun(${offset}) ("${source[offset]}") should not be null`).not.toBeNull()
+        const back = map.htmlOffsetToSrc(run!.htmlOffset, run!.runId)
+        expect(source[back]).toBe(source[offset])
+      }
+
+      const { renderedText, degraded } = buildRunOffsetTables(source)
+      expect(degraded).toBe(false)
+      expect(renderedText).toBe(source)
+    })
+  })
+
+  describe('buildRunOffsetTables (unmodeled-transform safety net)', () => {
+    it('falls back to a block-level guide, without lying, for a construct it cannot model (list-item continuation-line indentation stripping)', () => {
+      // Confirmed against a live parse: mdast strips the continuation-line
+      // indentation from a wrapped list item's merged text node, but keeps
+      // the node's `position` spanning the original (indented) source. This
+      // is a container-context-dependent transform (the stripped amount
+      // depends on the enclosing list item's marker width) that can't be
+      // recovered from the run's own source slice alone, unlike escapes/
+      // entities — so this is the one case `buildRunOffsetTables` cannot
+      // genuinely model, per the design's documented block-level fallback.
+      const source = '1. Requirements\n   1. Interview stakeholders\n      continuation text\n'
+      const tree = unified().use(remarkParse).parse(source) as Root
+
+      let sawDegradedRun = false
+      visit(tree, 'text', (node: Text) => {
+        const s = node.position?.start.offset
+        const e = node.position?.end.offset
+        if (s == null || e == null) return
+        const sourceSlice = source.slice(s, e)
+        if (sourceSlice === node.value) return // not the affected run
+
+        // Proves the raw gap is real: without ground truth, the table
+        // (pure identity + escape/entity modeling) disagrees with reality.
+        const raw = buildRunOffsetTables(sourceSlice)
+        expect(raw.renderedText).not.toBe(node.value)
+
+        // Proves the safety net: given the ground truth, the table falls
+        // back safely instead of reporting the (wrong) raw table above.
+        const safe = buildRunOffsetTables(sourceSlice, node.value)
+        expect(safe.degraded).toBe(true)
+        expect(safe.renderedText).toBe(node.value)
+        sawDegradedRun = true
+      })
+      expect(sawDegradedRun).toBe(true)
+    })
+
+    it('never returns a mismatched character for a degraded run, across every source offset (the whole point of the safety net)', () => {
+      const source = '> Reviewers should read the brief\n> before the meeting begins.\n'
+      const tree = unified().use(remarkParse).parse(source) as Root
+      const map = annotateSourceOffsets(tree, source)
+
+      for (let offset = 0; offset < source.length; offset++) {
+        const run = map.srcToRun(offset)
+        if (!run) continue // not independently addressable — expected for a degraded run's interior bytes
+        const recovered = map.htmlOffsetToSrc(run.htmlOffset, run.runId)
+        expect(source[recovered]).toBe(source[offset])
+      }
+    })
   })
 })

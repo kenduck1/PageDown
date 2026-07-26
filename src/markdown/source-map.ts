@@ -15,7 +15,9 @@ interface Run {
   // srcStart) `i` maps to, or null if `i` falls *inside* a multi-character
   // escape/entity sequence (e.g. the "m" in "&amp;") and therefore has no
   // independently addressable rendered position of its own — the same
-  // treatment the design already gives to pure markup syntax like "**".
+  // treatment the design already gives to pure markup syntax like "**". Also
+  // null for every non-anchor position in a run that fell back to the
+  // block-level guide (see `degraded` on `buildRunOffsetTables`'s return).
   srcToRendered: (number | null)[]
 }
 
@@ -51,23 +53,45 @@ function decodeMatch(
 
 /**
  * Scans one run's raw source slice and builds the rendered text plus a
- * bidirectional offset table between source and rendered positions. For
- * ordinary characters this is a 1:1 identity mapping. For an escape (`\*`)
- * or character reference (`&amp;`, `&#65;`, `&#x42;`), the whole source
- * sequence collapses to (usually) one rendered character: the sequence's
- * *first* source byte is recorded as the anchor for that rendered position
- * (so `srcToRun` → `htmlOffsetToSrc` round-trips exactly for it), and any
- * remaining interior source bytes of that same sequence map to `null` —
- * they don't correspond to their own rendered position, exactly as "**"
- * delimiter bytes already don't.
+ * bidirectional offset table between source and rendered positions.
+ *
+ * For ordinary characters this is a 1:1 identity mapping. For a *genuine*
+ * escape (`\*`) or character reference (`&amp;`, `&#65;`, `&#x42;`) — one
+ * where `decodeMatch` actually produces something different from the raw
+ * matched text — the whole source sequence collapses to (usually) one
+ * rendered character: the sequence's first source byte anchors that
+ * rendered position, and any remaining interior bytes map to `null` (no
+ * rendered position of their own, same as markup syntax). A reference-
+ * *shaped* match that isn't a real reference (`decodeMatch` returns the
+ * text unchanged — e.g. "&A;" in ordinary prose, not a recognized named
+ * entity) is identity-mapped character-for-character like anything else;
+ * it must NOT take the collapse branch just because the regex matched it.
+ *
+ * `groundTruthRenderedText`, when supplied, is the real `node.value` a live
+ * parse produced for this exact source slice. If the table this function
+ * computes doesn't match it, some transform beyond escapes/entities is at
+ * play that this function doesn't model — confirmed to happen for e.g.
+ * list-item/blockquote continuation-line prefix stripping across a soft
+ * line break within a single run (Gate 1 / Task 5 review found this; a
+ * correct fix needs the enclosing list/blockquote's container context —
+ * marker width, nesting depth — which isn't available from a run's own
+ * source slice alone, unlike escapes/entities, which are fully
+ * self-contained). Rather than return a silently-wrong per-character table
+ * for an unmodeled transform, the whole run falls back to the design's
+ * documented block-level guide: every rendered offset anchors to the run's
+ * own start, and every source offset except the run's first byte reports
+ * "not independently addressable" (`null`), exactly like markup syntax.
+ * This is a general safety net — it downgrades gracefully for *any* future
+ * unmodeled transform, not just the two found so far, and never lies.
  */
-// Exported (beyond what the `SourceMap` interface itself needs) so it can be
-// unit-tested directly against known escape/entity inputs and against
-// `node.value` from a real parse — see source-map.test.ts.
-export function buildRunOffsetTables(sourceSlice: string): {
+export function buildRunOffsetTables(
+  sourceSlice: string,
+  groundTruthRenderedText?: string
+): {
   renderedText: string
   renderedToSrc: number[]
   srcToRendered: (number | null)[]
+  degraded: boolean
 } {
   const renderedToSrc: number[] = []
   const srcToRendered: (number | null)[] = new Array(sourceSlice.length).fill(null)
@@ -88,10 +112,20 @@ export function buildRunOffsetTables(sourceSlice: string): {
     const matchEnd = matchStart + match[0].length
     const decoded = decodeMatch(match[1], match[2], match[0])
 
-    srcToRendered[matchStart] = renderedText.length
-    for (let k = 0; k < decoded.length; k++) {
-      renderedToSrc.push(matchStart)
-      renderedText += decoded[k]
+    if (decoded === match[0]) {
+      // Reference-shaped but not a real reference (e.g. "&A;", "&notreal;")
+      // — genuinely identity-mapped, character for character.
+      for (let i = matchStart; i < matchEnd; i++) {
+        srcToRendered[i] = renderedText.length
+        renderedToSrc.push(i)
+        renderedText += sourceSlice[i]
+      }
+    } else {
+      srcToRendered[matchStart] = renderedText.length
+      for (let k = 0; k < decoded.length; k++) {
+        renderedToSrc.push(matchStart)
+        renderedText += decoded[k]
+      }
     }
 
     lastIndex = matchEnd
@@ -105,29 +139,32 @@ export function buildRunOffsetTables(sourceSlice: string): {
     renderedText += sourceSlice[i]
   }
 
-  return { renderedText, renderedToSrc, srcToRendered }
+  if (groundTruthRenderedText !== undefined && renderedText !== groundTruthRenderedText) {
+    // Unmodeled transform — fall back to the block-level guide for this
+    // whole run rather than report a table we know disagrees with reality.
+    const fallbackSrcToRendered: (number | null)[] = new Array(sourceSlice.length).fill(null)
+    if (sourceSlice.length > 0) fallbackSrcToRendered[0] = 0
+    return {
+      renderedText: groundTruthRenderedText,
+      renderedToSrc: new Array(groundTruthRenderedText.length).fill(0),
+      srcToRendered: fallbackSrcToRendered,
+      degraded: true
+    }
+  }
+
+  return { renderedText, renderedToSrc, srcToRendered, degraded: false }
 }
 
 /**
  * Walks every inline text node in the mdast tree (remark provides `position`
  * with absolute character offsets into the original source for every node)
  * and records, per run, the exact source range it came from plus a source
- * offset table built by `buildRunOffsetTables`. For plain-text runs the
- * table is a direct identity index. Runs nested inside emphasis/strong/link
- * nodes still get their own entry with their own source range — the
- * *rendered* text differs from the source only in the surrounding
- * delimiters (**, *, [...](...)), which are outside the text node's own
- * position range, so the text node's own content is identity-mapped there
- * too. Escaped characters and HTML entities are the one case where a text
- * node's rendered value is not simply `source.slice(srcStart, srcEnd)` —
- * Gate 1 (Task 5) found this empirically (an entity/escape run's rendered
- * text can be significantly shorter than its source span, e.g. "&amp;" (5
- * source chars) decodes to "&" (1 rendered char)), and confirmed the naive
- * identity formula silently mapped offsets *after* an entity within the
- * same run to the wrong source character. `buildRunOffsetTables` corrects
- * this with an explicit table, using the exact decode primitives
- * (`decode-named-character-reference`, `micromark-util-decode-numeric-character-reference`)
- * that mdast-util-from-markdown itself uses to build `node.value`.
+ * offset table built by `buildRunOffsetTables`, passing the node's real
+ * `node.value` as the ground truth so any run whose source-to-rendered
+ * transform isn't fully modeled (escapes/entities are; see
+ * `buildRunOffsetTables`'s doc comment for the one confirmed exception —
+ * continuation-line prefix stripping) degrades safely to a block-level
+ * guide instead of returning a wrong per-character mapping.
  */
 export function annotateSourceOffsets(tree: Root, source: string): SourceMap {
   const runs: Run[] = []
@@ -139,7 +176,8 @@ export function annotateSourceOffsets(tree: Root, source: string): SourceMap {
     const srcEnd = node.position.end.offset
     if (srcStart == null || srcEnd == null) return
     const { renderedText, renderedToSrc, srcToRendered } = buildRunOffsetTables(
-      source.slice(srcStart, srcEnd)
+      source.slice(srcStart, srcEnd),
+      node.value
     )
     runs.push({
       runId: `run-${counter++}`,
@@ -157,7 +195,12 @@ export function annotateSourceOffsets(tree: Root, source: string): SourceMap {
     htmlOffsetToSrc(htmlOffset: number, runId: string): number {
       const run = byId.get(runId)
       if (!run) throw new Error(`Unknown runId ${runId}`)
-      if (htmlOffset < 0 || htmlOffset >= run.renderedToSrc.length) {
+      if (htmlOffset === run.renderedToSrc.length) {
+        // One past the last rendered character — a normal, valid caret
+        // position (end of this run), not an error.
+        return run.srcEnd
+      }
+      if (htmlOffset < 0 || htmlOffset > run.renderedToSrc.length) {
         throw new Error(
           `htmlOffset ${htmlOffset} out of range for run ${runId} (rendered length ${run.renderedToSrc.length})`
         )
