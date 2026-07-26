@@ -17,13 +17,32 @@ interface Run {
   // independently addressable rendered position of its own — the same
   // treatment the design already gives to pure markup syntax like "**". Also
   // null for every non-anchor position in a run that fell back to the
-  // block-level guide (see `degraded` on `buildRunOffsetTables`'s return).
+  // block-level guide (see `degraded` below).
   srcToRendered: (number | null)[]
+  // True when this run's source-to-rendered transform wasn't fully modeled
+  // (see `buildRunOffsetTables`'s doc comment) and fell back to a
+  // block-level guide. `srcToRun` already signals this correctly for
+  // interior source positions (returns `null`), but `htmlOffsetToSrc` alone
+  // cannot: for a degraded run, EVERY rendered offset resolves to the same
+  // `srcStart` — a precise-looking number that is only actually correct for
+  // offset 0. A caller who reaches `htmlOffsetToSrc` with some other
+  // rendered offset (e.g. iterating a real DOM/rendered-text position, not
+  // one obtained from `srcToRun`) has no way to know that answer is
+  // unreliable without checking this flag first — that's exactly what
+  // `SourceMap.isDegraded` exposes.
+  degraded: boolean
 }
 
 export interface SourceMap {
   htmlOffsetToSrc(htmlOffset: number, runId: string): number
   srcToRun(srcOffset: number): { runId: string; htmlOffset: number } | null
+  // True if `runId` fell back to a block-level guide (see `Run.degraded`).
+  // Callers MUST check this before trusting `htmlOffsetToSrc` for any
+  // rendered offset other than one they just got back from `srcToRun` for
+  // that run's own first source byte — for a degraded run, every other
+  // rendered offset still returns a number (never throws), but that number
+  // is only ever `srcStart`, regardless of which offset was asked for.
+  isDegraded(runId: string): boolean
 }
 
 // Matches exactly what mdast-util-from-markdown (via micromark) decodes
@@ -82,7 +101,14 @@ function decodeMatch(
  * own start, and every source offset except the run's first byte reports
  * "not independently addressable" (`null`), exactly like markup syntax.
  * This is a general safety net — it downgrades gracefully for *any* future
- * unmodeled transform, not just the two found so far, and never lies.
+ * unmodeled transform, not just the two found so far. The returned
+ * `degraded` flag is what makes this not a lie: `annotateSourceOffsets`
+ * carries it onto the run and `SourceMap.isDegraded(runId)` exposes it, so a
+ * caller can tell a precise-looking `htmlOffsetToSrc` answer from a
+ * block-level one *before* trusting it — without that check, a degraded
+ * run's `htmlOffsetToSrc` returns the same `srcStart` for every rendered
+ * offset beyond the first, which looks like (but is not) a real per-offset
+ * answer.
  */
 export function buildRunOffsetTables(
   sourceSlice: string,
@@ -175,7 +201,7 @@ export function annotateSourceOffsets(tree: Root, source: string): SourceMap {
     const srcStart = node.position.start.offset
     const srcEnd = node.position.end.offset
     if (srcStart == null || srcEnd == null) return
-    const { renderedText, renderedToSrc, srcToRendered } = buildRunOffsetTables(
+    const { renderedText, renderedToSrc, srcToRendered, degraded } = buildRunOffsetTables(
       source.slice(srcStart, srcEnd),
       node.value
     )
@@ -185,7 +211,8 @@ export function annotateSourceOffsets(tree: Root, source: string): SourceMap {
       srcEnd,
       renderedText,
       renderedToSrc,
-      srcToRendered
+      srcToRendered,
+      degraded
     })
   })
 
@@ -206,6 +233,11 @@ export function annotateSourceOffsets(tree: Root, source: string): SourceMap {
         )
       }
       return run.srcStart + run.renderedToSrc[htmlOffset]
+    },
+    isDegraded(runId: string): boolean {
+      const run = byId.get(runId)
+      if (!run) throw new Error(`Unknown runId ${runId}`)
+      return run.degraded
     },
     srcToRun(srcOffset: number): { runId: string; htmlOffset: number } | null {
       for (const run of runs) {

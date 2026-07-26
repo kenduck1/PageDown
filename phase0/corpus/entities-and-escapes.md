@@ -20,3 +20,18 @@ Common abbreviations like Q&A; and R&D; look exactly like character
 references to a naive scanner but are not real ones — "A" and "D" are not
 recognized entity names, so this text renders unchanged and must stay
 identity-mapped character for character, not collapsed like a real entity.
+
+Rights &copy; owned jointly by the Q&A; team must still be tracked
+accurately: this sentence deliberately mixes a real, genuinely-collapsing
+reference (`&copy;`) with a fake, reference-shaped-but-not-real one (`&A;`)
+in the _same_ text run. A per-run aggregate length comparison alone cannot
+catch a bug that wrongly collapses `&A;` here, because the real `&copy;`
+collapse already changes this run's rendered length — the fake collapse's
+own zero net length change (a non-decoding match always has the same
+length before and after) is invisible against that backdrop. This
+adversarial arrangement is required, not incidental: if this sentence were
+ever split so the real and fake references landed in separate runs, this
+specific regression coverage would silently disappear. See
+`phase0/gate1-source-offset.spec.ts`'s per-match independent check, which
+verifies each match's own byte range regardless of what else shares its
+run, and does not depend on this specific sentence structure to work.

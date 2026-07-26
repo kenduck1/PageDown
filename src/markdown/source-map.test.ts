@@ -190,16 +190,59 @@ describe('annotateSourceOffsets', () => {
       expect(sawDegradedRun).toBe(true)
     })
 
-    it('never returns a mismatched character for a degraded run, across every source offset (the whole point of the safety net)', () => {
+    it('exposes degradation via isDegraded, and htmlOffsetToSrc/srcToRun honor the block-level contract across the FULL run, not just its first byte', () => {
+      // Review found: a version of this test that only asserted inside
+      // `if (!run) continue` was tautological in the same shape the very
+      // first Gate 1 fix addressed — for a degraded run, `srcToRun` returns
+      // non-null for exactly one source offset (the run's first byte), so
+      // that loop only ever asserted on 1 offset, and the assertion itself
+      // (`source[recovered] === source[srcOffset]` where `recovered ===
+      // srcOffset` by construction for that one position) proved nothing.
+      // It also never called `isDegraded`, so a real gap (`htmlOffsetToSrc`
+      // silently returning `srcStart` for every rendered offset with no
+      // signal) went unchecked. This version checks the real, full contract.
       const source = '> Reviewers should read the brief\n> before the meeting begins.\n'
       const tree = unified().use(remarkParse).parse(source) as Root
-      const map = annotateSourceOffsets(tree, source)
 
-      for (let offset = 0; offset < source.length; offset++) {
+      let srcStart = -1
+      let srcEnd = -1
+      let renderedLength = -1
+      visit(tree, 'text', (node: Text) => {
+        const s = node.position?.start.offset
+        const e = node.position?.end.offset
+        if (s == null || e == null) return
+        srcStart = s
+        srcEnd = e
+        renderedLength = node.value.length
+      })
+      expect(srcStart).toBeGreaterThanOrEqual(0)
+      // Sanity: this fixture must actually exercise the gap (source strictly
+      // longer than rendered), or the rest of this test proves nothing.
+      expect(srcEnd - srcStart).toBeGreaterThan(renderedLength)
+
+      const map = annotateSourceOffsets(tree, source)
+      const anchor = map.srcToRun(srcStart)
+      expect(anchor).not.toBeNull()
+      const runId = anchor!.runId
+      expect(map.isDegraded(runId)).toBe(true)
+
+      // The real (limited) contract: EVERY rendered offset in this run
+      // resolves to the run's own start — checked across the full rendered
+      // length, not just offset 0.
+      for (let j = 0; j < renderedLength; j++) {
+        expect(map.htmlOffsetToSrc(j, runId)).toBe(srcStart)
+      }
+
+      // EVERY source offset in the run's span is either the anchor (first
+      // byte only) or explicitly non-addressable (null) — checked across
+      // the full source span, not just one offset.
+      for (let offset = srcStart; offset < srcEnd; offset++) {
         const run = map.srcToRun(offset)
-        if (!run) continue // not independently addressable — expected for a degraded run's interior bytes
-        const recovered = map.htmlOffsetToSrc(run.htmlOffset, run.runId)
-        expect(source[recovered]).toBe(source[offset])
+        if (offset === srcStart) {
+          expect(run).toEqual({ runId, htmlOffset: 0 })
+        } else {
+          expect(run).toBeNull()
+        }
       }
     })
   })
