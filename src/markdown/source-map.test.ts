@@ -200,42 +200,44 @@ describe('annotateSourceOffsets', () => {
       // srcOffset` by construction for that one position) proved nothing.
       // It also never called `isDegraded`, so a real gap (`htmlOffsetToSrc`
       // silently returning `srcStart` for every rendered offset with no
-      // signal) went unchecked. This version checks the real, full contract.
-      const source = '> Reviewers should read the brief\n> before the meeting begins.\n'
+      // signal) went unchecked. This version checks the real, full contract
+      // — and, per a later review round, also checks the FALSE direction of
+      // `isDegraded` (a plain paragraph before the blockquote): hardcoding
+      // `isDegraded` to always return `true` used to still pass every test
+      // in this file, because nothing ever asserted `=== false` anywhere.
+      const source =
+        'Plain paragraph, unaffected by any of this.\n\n> Reviewers should read the brief\n> before the meeting begins.\n'
       const tree = unified().use(remarkParse).parse(source) as Root
 
-      let srcStart = -1
-      let srcEnd = -1
-      let renderedLength = -1
+      const runs: { srcStart: number; srcEnd: number; renderedLength: number }[] = []
       visit(tree, 'text', (node: Text) => {
         const s = node.position?.start.offset
         const e = node.position?.end.offset
         if (s == null || e == null) return
-        srcStart = s
-        srcEnd = e
-        renderedLength = node.value.length
+        runs.push({ srcStart: s, srcEnd: e, renderedLength: node.value.length })
       })
-      expect(srcStart).toBeGreaterThanOrEqual(0)
-      // Sanity: this fixture must actually exercise the gap (source strictly
-      // longer than rendered), or the rest of this test proves nothing.
-      expect(srcEnd - srcStart).toBeGreaterThan(renderedLength)
+      expect(runs).toHaveLength(2)
+      const [plainRun, blockquoteRun] = runs
+      // Sanity: the blockquote run must actually exercise the gap (source
+      // strictly longer than rendered), or the rest of this test proves
+      // nothing; the plain run must NOT, or there's no false case to check.
+      expect(blockquoteRun.srcEnd - blockquoteRun.srcStart).toBeGreaterThan(
+        blockquoteRun.renderedLength
+      )
+      expect(plainRun.srcEnd - plainRun.srcStart).toBe(plainRun.renderedLength)
 
       const map = annotateSourceOffsets(tree, source)
+
+      // The degraded run: real, limited contract checked across the FULL
+      // rendered length and FULL source span, not a sample.
+      const { srcStart, srcEnd, renderedLength } = blockquoteRun
       const anchor = map.srcToRun(srcStart)
       expect(anchor).not.toBeNull()
       const runId = anchor!.runId
       expect(map.isDegraded(runId)).toBe(true)
-
-      // The real (limited) contract: EVERY rendered offset in this run
-      // resolves to the run's own start — checked across the full rendered
-      // length, not just offset 0.
       for (let j = 0; j < renderedLength; j++) {
         expect(map.htmlOffsetToSrc(j, runId)).toBe(srcStart)
       }
-
-      // EVERY source offset in the run's span is either the anchor (first
-      // byte only) or explicitly non-addressable (null) — checked across
-      // the full source span, not just one offset.
       for (let offset = srcStart; offset < srcEnd; offset++) {
         const run = map.srcToRun(offset)
         if (offset === srcStart) {
@@ -243,6 +245,16 @@ describe('annotateSourceOffsets', () => {
         } else {
           expect(run).toBeNull()
         }
+      }
+
+      // The plain (non-degraded) run: isDegraded must report false, and
+      // every offset in it must resolve normally — a lying "everything is
+      // degraded" accessor must fail here, not silently pass.
+      for (let offset = plainRun.srcStart; offset < plainRun.srcEnd; offset++) {
+        const run = map.srcToRun(offset)
+        expect(run).not.toBeNull()
+        expect(map.isDegraded(run!.runId)).toBe(false)
+        expect(source[map.htmlOffsetToSrc(run!.htmlOffset, run!.runId)]).toBe(source[offset])
       }
     })
   })
