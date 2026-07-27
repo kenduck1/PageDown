@@ -92,6 +92,17 @@ type OutgoingMessage = OutgoingSuccess | OutgoingError
 // tears its Previewer down implicitly on the next call (see
 // `activePreviewer` below). Reusing __pagedownResult's shape/lifecycle for
 // this would conflate two different state machines for no benefit.
+//
+// Deferred cleanup, not done as part of this Phase 0 spike: like the rest
+// of the __pagedownPhase0 bridge (src/main/index.ts), these gate7-phase1/
+// gate7-phase2 handlers ship unconditionally in this render bundle rather
+// than being gated behind a dev/test-only flag — consistent with that
+// existing precedent, but worth closing before Phase 0's scaffolding is
+// considered final. Also: `controlPreviewer`'s Polisher (created in the
+// gate7-phase2 handler below) is never `destroy()`-ed, unlike
+// `gate7Previewer`'s — a small, one-off `<style>`-element leak on top of
+// this render context's own DOM, harmless for this single-test-run spike
+// but the same class of leak Task 6 fixed for the regular 'render' path.
 interface Gate7Phase1Message {
   type: 'gate7-phase1'
   requestId: string
@@ -133,9 +144,15 @@ interface Gate7Phase2Success {
   resumeWithEditMs: number
   totalPagesAfterEdit: number
   resumedWithEditPagesText: string[]
+  // Pages [0, targetPageIndex) — the retained prefix, untouched by the
+  // resume, captured for direct comparison against `controlPrefixPagesText`
+  // (see the render context's phase-2 handler for why this is checked
+  // rather than assumed).
+  resumedPrefixPagesText: string[]
   fullEditedMs: number
   totalPagesEdited: number
   controlPagesText: string[]
+  controlPrefixPagesText: string[]
 }
 
 interface Gate7Error {
@@ -348,11 +365,25 @@ window.addEventListener('message', async (event: MessageEvent<IncomingMessage>) 
 // - `Chunker.layout(content, startAt)` (chunker.js) is a generator that
 //   DOES accept a `startAt` breakToken and resumes from it — this is not a
 //   hypothetical/patched capability, it's the exact mechanism Paged.js uses
-//   internally: `addPage()`'s `onOverflow` handler (chunker.js, inside
-//   `addPage`) reacts to a page overflowing by calling
-//   `this.removePages(index)` then `this.render(this.source, this.breakToken)`
-//   to redo layout from that point forward, all within the SAME Chunker
-//   instance and the SAME parsed content tree.
+//   internally, in `flow()`'s own cancel/retry loop (chunker.js:172-176):
+//   `let rendered = await this.render(parsed, this.breakToken); while
+//   (rendered.canceled) { this.start(); rendered = await
+//   this.render(parsed, this.breakToken); }`. When a page overflows during
+//   INITIAL layout, `addPage()`'s `onOverflow` handler (chunker.js, inside
+//   `addPage`) calls `this.stop()` and sets `this.breakToken =
+//   overflowToken` (both reachable/executed — chunker.js:439-442), which
+//   makes the in-flight `render()` call observe `this.stopped` and resolve
+//   as `{ done: true, canceled: true }`; `flow()`'s loop above then calls
+//   `this.render(parsed, this.breakToken)` AGAIN, resuming from the
+//   retained token against the SAME `parsed` content object. (`addPage()`'s
+//   onOverflow ALSO contains a second, more direct-looking
+//   `this.render(this.source, this.breakToken)` call of its own,
+//   chunker.js:447-459 — traced this closely and confirmed it is dead code:
+//   it's gated on `this.rendered === true`, immediately after an earlier
+//   `if (this.rendered) { return; }` early-out in the same synchronous
+//   callback, chunker.js:431-434 — nothing sets `this.rendered` in between,
+//   so that branch can never execute. `flow()`'s retry loop above, not this
+//   second call, is the real internal precedent for what this spike does.)
 // - The critical constraint: a BreakToken (breaktoken.js) carries a live DOM
 //   `node` reference (plus a text `offset`), not a serializable/portable
 //   position. `Chunker.flow()` always creates a brand-new `ContentParser`
@@ -387,7 +418,14 @@ window.addEventListener('message', async (event: MessageEvent<IncomingMessage>) 
 // `Previewer.preview()`) to call methods that exist for Paged.js's own
 // internal reuse, not for external callers, and depends on undocumented
 // internals (`data-ref` identity, live node identity, ancestor-rebuild
-// behavior) that aren't part of any stable contract. See
+// behavior) that aren't part of any stable contract. The "same instance"
+// requirement itself is reasoned from the source above (BreakToken.node's
+// live-identity dependency, ContentParser reparsing fresh data-ref UUIDs
+// every flow() call), not independently confirmed here by a negative
+// control (e.g. a fresh Chunker fed a retained token from another
+// instance) — this spike's phases 1/2 both always run against the ONE
+// gate7Previewer instance, so that specific failure mode was never
+// deliberately provoked and observed. See
 // docs/superpowers/plans/2026-07-25-phase0-findings.md's Gate 7 section for
 // the full writeup and phase0/gate7-incremental-relayout.spec.ts for the
 // two-phase experiment that exercises this against very-long.md.
@@ -506,11 +544,17 @@ window.addEventListener(
           .slice(targetPageIndex)
           .map((p: { element: HTMLElement }) => p.element.textContent ?? '')
 
-        // The resume-no-edit sanity check: exactly the sequence Paged.js's
-        // own onOverflow handler uses internally (see the block comment
-        // above), called from outside instead of from that internal
-        // callback, on UNCHANGED content — the simplest possible test of
-        // whether bypassing flow() this way produces correct output at all.
+        // The resume-no-edit sanity check: the same removePages(fromIndex)
+        // + render(source, breakToken) pair `flow()`'s own cancel/retry
+        // loop uses internally (see the block comment above), called from
+        // outside that loop instead of from within it, on UNCHANGED
+        // content — the simplest possible test of whether bypassing
+        // flow() this way produces correct output at all. Excluded from
+        // both this timing and the phase-2 timings below: the real cost
+        // of `removePages(targetPageIndex)` itself (destroying the
+        // pages being replaced, 147 of them here) — see this task's
+        // findings doc for why that's a documented, not re-measured,
+        // simplification.
         chunker.removePages(targetPageIndex)
         const t2 = performance.now()
         await chunker.render(chunker.source, capturedBreakToken)
@@ -567,6 +611,18 @@ window.addEventListener(
 
         const chunker = gate7Previewer.chunker
 
+        // Captured BEFORE the edit/resume below touches anything — this is
+        // the retained prefix (pages before targetPageIndex) exactly as it
+        // stood at the end of phase 1, for a direct comparison against the
+        // control run's own same-numbered pages further down. `removePages`
+        // never mutates anything below `fromIndex`, so this snapshot and
+        // the post-resume `chunker.pages[0..targetPageIndex)` are the same
+        // pages either way — this array exists as its own explicit
+        // equivalence input, not because the resume could have touched it.
+        const resumedPrefixPagesText: string[] = chunker.pages
+          .slice(0, targetPageIndex)
+          .map((p: { element: HTMLElement }) => p.element.textContent ?? '')
+
         const paragraph = findParagraphForSection(editSectionNumber, chunker.source as ParentNode)
         if (!paragraph) {
           throw new Error(`Could not find a paragraph for Section ${editSectionNumber} to edit`)
@@ -611,7 +667,14 @@ window.addEventListener(
         // laying out the equivalently-edited FULL document (built by the
         // main process via the real markdownToHtml pipeline on an edited
         // markdown string — see the spec file), for direct comparison
-        // against the resumed run above.
+        // against the resumed run above. Note this measures fullEditedMs
+        // against a DOM that still holds phase 1's 297 attached page
+        // elements (gate7Root isn't removed until after this call) — a
+        // second, independent layout/paint surface sharing the page with a
+        // large already-rendered tree, not a pristine one. Not corrected
+        // for here; see the findings doc for why this and the excluded
+        // `removePages` cost above are judged to roughly offset rather than
+        // re-measured.
         const controlRoot = makeOffscreenRoot()
         const controlPreviewer = new Previewer()
         const t2 = performance.now()
@@ -619,6 +682,16 @@ window.addEventListener(
         const t3 = performance.now()
         const controlPagesText: string[] = controlPreviewer.chunker.pages
           .slice(targetPageIndex)
+          .map((p: { element: HTMLElement }) => p.element.textContent ?? '')
+        // The control run's own pages before targetPageIndex — unaffected
+        // by the edit (which lands well downstream, at editSectionNumber),
+        // so this is directly comparable to `resumedPrefixPagesText` above:
+        // does the RETAINED prefix (never touched by the resumed run at
+        // all) actually match what a from-scratch layout of the same
+        // unedited prefix content produces, rather than just assuming it
+        // does because the resumed run "didn't touch it"?
+        const controlPrefixPagesText: string[] = controlPreviewer.chunker.pages
+          .slice(0, targetPageIndex)
           .map((p: { element: HTMLElement }) => p.element.textContent ?? '')
 
         controlRoot.remove()
@@ -634,9 +707,11 @@ window.addEventListener(
           resumeWithEditMs: t1 - t0,
           totalPagesAfterEdit,
           resumedWithEditPagesText,
+          resumedPrefixPagesText,
           fullEditedMs: t3 - t2,
           totalPagesEdited: controlFlow.total,
-          controlPagesText
+          controlPagesText,
+          controlPrefixPagesText
         }
         window.__pagedownGate7Result = result
       } catch (err) {

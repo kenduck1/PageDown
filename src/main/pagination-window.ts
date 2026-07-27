@@ -264,9 +264,11 @@ export interface Gate7Phase2Result {
   resumeWithEditMs: number
   totalPagesAfterEdit: number
   resumedWithEditPagesText: string[]
+  resumedPrefixPagesText: string[]
   fullEditedMs: number
   totalPagesEdited: number
   controlPagesText: string[]
+  controlPrefixPagesText: string[]
 }
 
 // Phase 2's from-scratch control run separately re-lays-out the full ~300
