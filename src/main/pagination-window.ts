@@ -13,6 +13,18 @@ const RENDER_SCHEME = 'pagedown-render'
 const RENDER_HOST = 'render'
 const RENDER_PARTITION = 'pagedown-render-sandbox' // no `persist:` prefix -> in-memory only
 
+// Keep this in sync with resources/pagination-render/index.html's CSP
+// <meta http-equiv> tag — they must carry the identical policy. Previously
+// the nonce was delivered ONLY via that <meta> tag; a `<meta
+// http-equiv="Content-Security-Policy">` tag only takes effect once the HTML
+// parser reaches it, so anything the parser processes before that point
+// (there is nothing that currently does, but it costs nothing to close this
+// off) would run under no CSP at all. Setting the identical policy as a
+// real `Content-Security-Policy` response header as well covers the whole
+// navigation from the very first byte, the way CSP is normally deployed.
+const CSP_POLICY_TEMPLATE =
+  "default-src 'self'; style-src 'self' 'nonce-%%CSP_STYLE_NONCE%%'; script-src 'self'; img-src 'self' data:; connect-src 'none';"
+
 let renderSession: Session | undefined
 let schemeHandlerRegistered = false
 
@@ -62,8 +74,21 @@ function ensureRenderInfraRegistered(): Session {
         return new Response('Not found', { status: 404 })
       }
 
+      // Strips ALL leading slashes, not just one: a request like
+      // pagedown-render://render//index.html (pathname "//index.html")
+      // previously left a single leading slash on relPath after only
+      // stripping one, so the `relPath === 'index.html'` exact-match below
+      // (which decides whether to run the CSP-nonce templating) would MISS
+      // it — falling through to the generic byte-for-byte file-serving
+      // branch, which would have served index.html with its
+      // %%CSP_STYLE_NONCE%% placeholders un-substituted, reproducing the
+      // original silent-hang bug. Not reachable today (this project only
+      // ever calls loadURL with a single slash), but cheap to close now
+      // rather than leave as a landmine for a future caller.
       const relPath =
-        url.pathname === '/' || url.pathname === '' ? 'index.html' : url.pathname.replace(/^\//, '')
+        url.pathname === '/' || url.pathname === ''
+          ? 'index.html'
+          : url.pathname.replace(/^\/+/, '')
       const filePath = path.join(RENDER_ROOT, relPath)
 
       // Stay inside RENDER_ROOT — this scheme only ever serves the static
@@ -85,7 +110,10 @@ function ensureRenderInfraRegistered(): Session {
           const template = await readFile(filePath, 'utf8')
           const nonce = randomBytes(16).toString('base64')
           const body = template.replaceAll('%%CSP_STYLE_NONCE%%', nonce)
-          return new Response(body, { headers: { 'Content-Type': 'text/html' } })
+          const csp = CSP_POLICY_TEMPLATE.replaceAll('%%CSP_STYLE_NONCE%%', nonce)
+          return new Response(body, {
+            headers: { 'Content-Type': 'text/html', 'Content-Security-Policy': csp }
+          })
         }
 
         const body = await readFile(filePath)
