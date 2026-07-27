@@ -83,6 +83,70 @@ interface OutgoingError {
 
 type OutgoingMessage = OutgoingSuccess | OutgoingError
 
+// --- Task 7 / Gate 7: incremental re-layout spike -------------------------
+//
+// Separate message types/result channel from the 'render'/__pagedownResult
+// pair above, deliberately: gate7 needs to keep a Previewer/Chunker instance
+// ALIVE across two separate messages (phase 1, then phase 2 — see the
+// listener below), whereas every 'render' call is fully self-contained and
+// tears its Previewer down implicitly on the next call (see
+// `activePreviewer` below). Reusing __pagedownResult's shape/lifecycle for
+// this would conflate two different state machines for no benefit.
+interface Gate7Phase1Message {
+  type: 'gate7-phase1'
+  requestId: string
+  html: string
+  targetPageIndex: number
+}
+
+interface Gate7Phase2Message {
+  type: 'gate7-phase2'
+  requestId: string
+  editSectionNumber: number
+  markerText: string
+  editedHtml: string
+  targetPageIndex: number
+}
+
+interface Gate7Phase1Success {
+  type: 'gate7-phase1-result'
+  requestId: string
+  ok: true
+  fullOriginalMs: number
+  totalPagesOriginal: number
+  // Section number (from the corpus's "## Section N" headings) nearest the
+  // captured breakToken, discovered by walking chunker.source backward from
+  // the breakToken's node to the nearest preceding <h2> — MEASURED from the
+  // real DOM, not estimated from the corpus's known sections-per-page ratio.
+  // `null` only if that walk somehow found no preceding heading at all.
+  sectionNumberAtBreakpoint: number | null
+  resumeNoEditMs: number
+  totalPagesAfterResumeNoEdit: number
+  baselinePagesText: string[]
+  resumedNoEditPagesText: string[]
+}
+
+interface Gate7Phase2Success {
+  type: 'gate7-phase2-result'
+  requestId: string
+  ok: true
+  resumeWithEditMs: number
+  totalPagesAfterEdit: number
+  resumedWithEditPagesText: string[]
+  fullEditedMs: number
+  totalPagesEdited: number
+  controlPagesText: string[]
+}
+
+interface Gate7Error {
+  type: 'gate7-error'
+  requestId: string
+  ok: false
+  error: string
+}
+
+type Gate7Result = Gate7Phase1Success | Gate7Phase2Success | Gate7Error
+
 // Marks this file as a module (rather than a global script) so the
 // `declare global` augmentation below is valid — nothing else here needs
 // to be imported/exported.
@@ -91,6 +155,7 @@ export {}
 declare global {
   interface Window {
     __pagedownResult?: OutgoingMessage
+    __pagedownGate7Result?: Gate7Result
   }
 }
 
@@ -271,3 +336,318 @@ window.addEventListener('message', async (event: MessageEvent<IncomingMessage>) 
     window.__pagedownResult = result
   }
 })
+
+// --- Task 7 / Gate 7: incremental re-layout spike -------------------------
+//
+// Investigates whether Paged.js's Chunker can resume pagination from a
+// retained breakToken/page boundary instead of always re-laying-out a
+// document from scratch. Read directly from the installed Paged.js source
+// (node_modules/pagedjs/src/chunker/chunker.js, layout.js, page.js,
+// breaktoken.js — pagedjs@0.4.3):
+//
+// - `Chunker.layout(content, startAt)` (chunker.js) is a generator that
+//   DOES accept a `startAt` breakToken and resumes from it — this is not a
+//   hypothetical/patched capability, it's the exact mechanism Paged.js uses
+//   internally: `addPage()`'s `onOverflow` handler (chunker.js, inside
+//   `addPage`) reacts to a page overflowing by calling
+//   `this.removePages(index)` then `this.render(this.source, this.breakToken)`
+//   to redo layout from that point forward, all within the SAME Chunker
+//   instance and the SAME parsed content tree.
+// - The critical constraint: a BreakToken (breaktoken.js) carries a live DOM
+//   `node` reference (plus a text `offset`), not a serializable/portable
+//   position. `Chunker.flow()` always creates a brand-new `ContentParser`
+//   (parser.js) for whatever content it's given — `parsed = new
+//   ContentParser(content); this.source = parsed;` — discarding any
+//   previous tree. A NEW ContentParser run assigns entirely NEW `data-ref`
+//   UUIDs (`ContentParser.addRefs`) to entirely NEW DOM nodes, so a
+//   breakToken captured from run N's tree has no meaningful counterpart in
+//   run N+1's freshly-reparsed tree — there is no "look up this breakToken
+//   in the new tree" operation anywhere in Paged.js.
+// - `Layout.renderTo()` (layout.js) walks the tree with `walk(start,
+//   limiter)` (utils/dom.js), using real `node.childNodes` /
+//   `node.nextSibling` / `node.parentNode` navigation bounded by identity
+//   (`node === limiter`) — it requires `start` to be a genuine descendant of
+//   `source`. `Layout.append()` calls `rebuildAncestors(node)`
+//   (utils/dom.js) when a node's rendered parent isn't already in the
+//   destination page, walking the REAL ancestor chain to reconstruct
+//   wrapping elements (list nesting, table rows, etc.) — this only produces
+//   correct output when `node`'s ancestors are the genuine, original
+//   ancestors, not a freshly-reparsed lookalike.
+//
+// Conclusion this spike tests for real: resumption is possible ONLY by
+// keeping the SAME Chunker instance and the SAME live `chunker.source` DOM
+// tree across an edit — i.e. by mutating that tree in place for the edited
+// region (leaving the untouched prefix's nodes, and the breakToken's node,
+// completely alone) and then calling `chunker.removePages(fromIndex)` +
+// `chunker.render(chunker.source, breakToken)` directly, bypassing
+// `flow()`/`preview()` entirely for the resumed call. `render` and
+// `removePages` are ordinary (non-underscored) Chunker methods, so no
+// source patching of Paged.js itself was required to call them — but doing
+// so is reaching past Paged.js's only documented entry point (`flow()`, via
+// `Previewer.preview()`) to call methods that exist for Paged.js's own
+// internal reuse, not for external callers, and depends on undocumented
+// internals (`data-ref` identity, live node identity, ancestor-rebuild
+// behavior) that aren't part of any stable contract. See
+// docs/superpowers/plans/2026-07-25-phase0-findings.md's Gate 7 section for
+// the full writeup and phase0/gate7-incremental-relayout.spec.ts for the
+// two-phase experiment that exercises this against very-long.md.
+//
+// Phase 1 (below): full paginate of the original document, capturing the
+// breakToken at `targetPageIndex` via the `afterPageLayout` hook, then an
+// immediate resume-with-NO-edit as the most basic possible sanity check
+// that bypassing flow() this way even produces correct output at all.
+// Phase 2 (a later message, same render-context module instance so
+// `gate7Previewer`/`gate7BreakToken` below are still alive): a real edit —
+// a new text node appended to an existing paragraph strictly AFTER the
+// retained breakToken, directly on the live `chunker.source` tree — then a
+// real resume, timed against a from-scratch full layout of the equivalently
+// edited document for comparison.
+
+let gate7Previewer: InstanceType<typeof Previewer> | undefined
+let gate7BreakToken: unknown
+let gate7TargetPageIndex = 0
+let gate7Root: HTMLElement | undefined
+
+// Walks `node` up via `.parentNode` until it reaches a direct child of
+// `root` (chunker.source is a flat DocumentFragment of top-level
+// h2/p/p/h2/p/p/... siblings for this corpus — see
+// phase0/corpus/generate-long.ts — so this is at most a couple of hops for
+// a breakToken whose node is a paragraph's text node).
+function findTopLevelAncestor(node: Node, root: Node): Node {
+  let current = node
+  while (current.parentNode && current.parentNode !== root) {
+    current = current.parentNode
+  }
+  return current
+}
+
+// Walks backward from `node`'s top-level position to the nearest preceding
+// "## Section N" heading, to discover (measured, not estimated from the
+// corpus's known sections-per-page ratio) which section a captured
+// breakToken actually landed in.
+function findSectionNumberNear(node: Node, root: Node): number | null {
+  let el: Node | null = findTopLevelAncestor(node, root)
+  while (el) {
+    if (el.nodeType === 1 && (el as HTMLElement).tagName === 'H2') {
+      const match = /Section (\d+)/.exec((el as HTMLElement).textContent ?? '')
+      if (match) return Number(match[1])
+    }
+    el = el.previousSibling
+  }
+  return null
+}
+
+// Finds the first <p> following the "## Section N" heading with the given
+// number, for the phase-2 edit target. Exact match on trimmed textContent
+// (not a substring match) so "Section 6" can't accidentally match inside
+// "Section 65" etc.
+function findParagraphForSection(sectionNumber: number, root: ParentNode): HTMLElement | null {
+  const headings = Array.from(root.querySelectorAll('h2')) as HTMLElement[]
+  const heading = headings.find((h) => (h.textContent ?? '').trim() === `Section ${sectionNumber}`)
+  if (!heading) return null
+  let sibling: Element | null = heading.nextElementSibling
+  while (sibling && sibling.tagName !== 'P') {
+    sibling = sibling.nextElementSibling
+  }
+  return sibling as HTMLElement | null
+}
+
+function makeOffscreenRoot(): HTMLElement {
+  // Must be attached to `document` (not a detached fragment) for Paged.js's
+  // layout measurement (getBoundingClientRect/ResizeObserver) to produce
+  // real, non-zero sizes — positioned off the visible viewport rather than
+  // `display: none` (a display:none subtree also measures as zero-size).
+  const root = document.createElement('div')
+  root.style.position = 'fixed'
+  root.style.left = '-99999px'
+  root.style.top = '0'
+  document.body.appendChild(root)
+  return root
+}
+
+window.addEventListener(
+  'message',
+  async (event: MessageEvent<Gate7Phase1Message | Gate7Phase2Message>) => {
+    if (event.data?.type === 'gate7-phase1') {
+      const { requestId, html, targetPageIndex } = event.data
+      try {
+        const previewer = new Previewer()
+
+        let capturedBreakToken: unknown
+        let capturedAtPage = -1
+        previewer.chunker.hooks.afterPageLayout.register(
+          (_pageElement: HTMLElement, page: { position: number }, breakToken: unknown) => {
+            if (capturedAtPage === -1 && page.position === targetPageIndex - 1) {
+              capturedBreakToken = breakToken
+              capturedAtPage = page.position
+            }
+          }
+        )
+
+        const root = makeOffscreenRoot()
+
+        const t0 = performance.now()
+        const flow = await previewer.preview(html, [], root)
+        const t1 = performance.now()
+
+        if (!capturedBreakToken) {
+          throw new Error(
+            `Never captured a breakToken at page index ${targetPageIndex - 1} — document only produced ${flow.total} pages`
+          )
+        }
+
+        const chunker = previewer.chunker
+        const sectionNumberAtBreakpoint = findSectionNumberNear(
+          (capturedBreakToken as { node: Node }).node,
+          chunker.source
+        )
+
+        const baselinePagesText: string[] = chunker.pages
+          .slice(targetPageIndex)
+          .map((p: { element: HTMLElement }) => p.element.textContent ?? '')
+
+        // The resume-no-edit sanity check: exactly the sequence Paged.js's
+        // own onOverflow handler uses internally (see the block comment
+        // above), called from outside instead of from that internal
+        // callback, on UNCHANGED content — the simplest possible test of
+        // whether bypassing flow() this way produces correct output at all.
+        chunker.removePages(targetPageIndex)
+        const t2 = performance.now()
+        await chunker.render(chunker.source, capturedBreakToken)
+        const t3 = performance.now()
+
+        const resumedNoEditPagesText: string[] = chunker.pages
+          .slice(targetPageIndex)
+          .map((p: { element: HTMLElement }) => p.element.textContent ?? '')
+
+        // Persist for the 'gate7-phase2' message — this module stays loaded
+        // (and its top-level state alive) between postMessage events on the
+        // same render-context page, exactly like `activePreviewer` above.
+        gate7Previewer = previewer
+        gate7BreakToken = capturedBreakToken
+        gate7TargetPageIndex = targetPageIndex
+        gate7Root = root
+
+        const result: Gate7Phase1Success = {
+          type: 'gate7-phase1-result',
+          requestId,
+          ok: true,
+          fullOriginalMs: t1 - t0,
+          totalPagesOriginal: flow.total,
+          sectionNumberAtBreakpoint,
+          resumeNoEditMs: t3 - t2,
+          totalPagesAfterResumeNoEdit: chunker.total,
+          baselinePagesText,
+          resumedNoEditPagesText
+        }
+        window.__pagedownGate7Result = result
+      } catch (err) {
+        const result: Gate7Error = {
+          type: 'gate7-error',
+          requestId,
+          ok: false,
+          error: err instanceof Error ? (err.stack ?? err.message) : String(err)
+        }
+        window.__pagedownGate7Result = result
+      }
+      return
+    }
+
+    if (event.data?.type === 'gate7-phase2') {
+      const { requestId, editSectionNumber, markerText, editedHtml, targetPageIndex } = event.data
+      try {
+        if (!gate7Previewer || !gate7BreakToken) {
+          throw new Error('gate7-phase2 received before a successful gate7-phase1 run')
+        }
+        if (targetPageIndex !== gate7TargetPageIndex) {
+          throw new Error(
+            `gate7-phase2 targetPageIndex (${targetPageIndex}) does not match the value phase 1 captured its breakToken for (${gate7TargetPageIndex})`
+          )
+        }
+
+        const chunker = gate7Previewer.chunker
+
+        const paragraph = findParagraphForSection(editSectionNumber, chunker.source as ParentNode)
+        if (!paragraph) {
+          throw new Error(`Could not find a paragraph for Section ${editSectionNumber} to edit`)
+        }
+        // The actual edit: append a new TEXT node to an EXISTING paragraph,
+        // directly on the SAME live chunker.source tree that produced the
+        // retained breakToken — not a re-parse of new HTML. A plain text
+        // node needs no `data-ref` bookkeeping (only ELEMENT nodes get one,
+        // via ContentParser.addRefs), so this is the simplest edit that
+        // stays entirely within Paged.js's existing node-identity
+        // assumptions. `editSectionNumber` is chosen by the caller to be
+        // safely after `gate7TargetPageIndex`'s breakToken (see the spec
+        // file), so the retained prefix (pages before the breakpoint) is
+        // genuinely untouched by this mutation.
+        paragraph.appendChild(document.createTextNode(' ' + markerText))
+
+        chunker.removePages(targetPageIndex)
+        const t0 = performance.now()
+        await chunker.render(chunker.source, gate7BreakToken)
+        const t1 = performance.now()
+
+        const resumedWithEditPagesText: string[] = chunker.pages
+          .slice(targetPageIndex)
+          .map((p: { element: HTMLElement }) => p.element.textContent ?? '')
+        const totalPagesAfterEdit = chunker.total
+
+        // Tear down phase 1's Previewer's Polisher-injected <style>
+        // elements before creating a second, independent Previewer below —
+        // same reasoning as the regular 'render' handler's own
+        // activePreviewer cleanup above (neither Previewer nor Polisher
+        // ever calls destroy() on its own, so without this, two Previewers'
+        // worth of base/computed pagination styles would coexist in <head>
+        // while the control run measures its own layout, which is exactly
+        // the kind of cross-run contamination that would make this spike's
+        // own control comparison suspect). Safe to do now: everything this
+        // function still needs from `gate7Previewer`/`chunker` above
+        // (resumedWithEditPagesText, totalPagesAfterEdit) has already been
+        // read into plain values.
+        gate7Previewer.polisher?.destroy()
+
+        // Control: a completely independent, from-scratch Previewer/Chunker
+        // laying out the equivalently-edited FULL document (built by the
+        // main process via the real markdownToHtml pipeline on an edited
+        // markdown string — see the spec file), for direct comparison
+        // against the resumed run above.
+        const controlRoot = makeOffscreenRoot()
+        const controlPreviewer = new Previewer()
+        const t2 = performance.now()
+        const controlFlow = await controlPreviewer.preview(editedHtml, [], controlRoot)
+        const t3 = performance.now()
+        const controlPagesText: string[] = controlPreviewer.chunker.pages
+          .slice(targetPageIndex)
+          .map((p: { element: HTMLElement }) => p.element.textContent ?? '')
+
+        controlRoot.remove()
+        gate7Root?.remove()
+        gate7Previewer = undefined
+        gate7BreakToken = undefined
+        gate7Root = undefined
+
+        const result: Gate7Phase2Success = {
+          type: 'gate7-phase2-result',
+          requestId,
+          ok: true,
+          resumeWithEditMs: t1 - t0,
+          totalPagesAfterEdit,
+          resumedWithEditPagesText,
+          fullEditedMs: t3 - t2,
+          totalPagesEdited: controlFlow.total,
+          controlPagesText
+        }
+        window.__pagedownGate7Result = result
+      } catch (err) {
+        const result: Gate7Error = {
+          type: 'gate7-error',
+          requestId,
+          ok: false,
+          error: err instanceof Error ? (err.stack ?? err.message) : String(err)
+        }
+        window.__pagedownGate7Result = result
+      }
+    }
+  }
+)

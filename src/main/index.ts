@@ -3,7 +3,7 @@ import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
 import { registerPaginationScheme } from './pagination-scheme'
-import { createPaginationHarness } from './pagination-window'
+import { createPaginationHarness, sendGate7Phase1, sendGate7Phase2 } from './pagination-window'
 import { paginateAndTime } from '../pagination/paginate'
 
 // Must run before app.whenReady() is awaited anywhere — Electron requires
@@ -25,15 +25,32 @@ registerPaginationScheme()
 // `await import('../src/pagination/paginate')` inside `app.evaluate()`,
 // which fails the same way `import('../src/main/pagination-window')` did
 // in Task 3/Gate 5 — confirmed empirically, not assumed.
+//
+// Task 7 adds `sendGate7Phase1`/`sendGate7Phase2` for the same reason again,
+// split into two functions (rather than one, like `paginateAndTime`)
+// because the Gate 7 spike genuinely needs two separate `app.evaluate()`
+// round trips: phase 1's result (the section number nearest the captured
+// breakToken) has to come back out to the *Node* test process so it can
+// build an edited markdown string and run it through `markdownToHtml`
+// (itself only reachable from a plain Node context, not from inside
+// `app.evaluate()`'s bare V8 context) before phase 2 can run. See
+// phase0/gate7-incremental-relayout.spec.ts.
 declare global {
   var __pagedownPhase0:
     | {
         createPaginationHarness: typeof createPaginationHarness
         paginateAndTime: typeof paginateAndTime
+        sendGate7Phase1: typeof sendGate7Phase1
+        sendGate7Phase2: typeof sendGate7Phase2
       }
     | undefined
 }
-globalThis.__pagedownPhase0 = { createPaginationHarness, paginateAndTime }
+globalThis.__pagedownPhase0 = {
+  createPaginationHarness,
+  paginateAndTime,
+  sendGate7Phase1,
+  sendGate7Phase2
+}
 
 function createWindow(): BrowserWindow {
   // Create the browser window.
