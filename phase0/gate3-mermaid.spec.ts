@@ -1,5 +1,5 @@
 import { test, expect, _electron as electron } from '@playwright/test'
-import { readFileSync } from 'node:fs'
+import { readFileSync, writeFileSync, mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { markdownToHtml } from '../src/markdown/pipeline'
 
@@ -232,13 +232,39 @@ test('Gate 3: oversized-diagram page-break behavior is deterministic, and CSP st
     // Gate 5's own script-injection regression test (an onerror attribute,
     // not a <script> tag — <script> inserted via innerHTML never executes
     // at all, CSP or no CSP, so it would pass vacuously).
+    //
+    // `consoleMessagesBeforeInjection` snapshots the count HERE, immediately
+    // before sending the payload — not asserted against directly, but read
+    // below to isolate violations caused BY the injection specifically.
+    // Asserting "some violation was logged" against the FULL message list
+    // (Gate 5's own check) would be vacuous here in a way it isn't there:
+    // Mermaid's own internal rendering above already logs ~970 style-src
+    // violations of its own (see the findings-doc/report writeup), so
+    // `consoleMessages.length > 0` would trivially pass regardless of
+    // whether the injection attempt produced its own violation at all —
+    // exactly the kind of "test that can't fail" shape Gate 5's own review
+    // history already flagged once. Snapshotting first and diffing after
+    // keeps this check genuinely tied to the injection, not to noise
+    // already present from an unrelated part of this same render pass.
+    const consoleMessagesBeforeInjection = consoleMessages.length
     await harness.sendDocument(
       '<img src="this-file-does-not-exist.png" onerror="window.__pwned = true">'
     )
     await new Promise((resolve) => setTimeout(resolve, 500))
     const pwned = await harness.view.webContents.executeJavaScript(`typeof (window).__pwned`)
+    const injectionViolationCount = consoleMessages
+      .slice(consoleMessagesBeforeInjection)
+      .filter((m) => /content security policy|refused to/i.test(m)).length
 
-    return { sendResult, consoleMessages, oversizedWrapperCount, pageMetrics, nonceCheck, pwned }
+    return {
+      sendResult,
+      consoleMessages,
+      oversizedWrapperCount,
+      pageMetrics,
+      nonceCheck,
+      pwned,
+      injectionViolationCount
+    }
   }, html)
 
   console.log('Gate 3 page metrics:', JSON.stringify(result.pageMetrics))
@@ -321,11 +347,44 @@ test('Gate 3: oversized-diagram page-break behavior is deterministic, and CSP st
   )
 
   // CSP-negative case: a genuine injection attempt, sent on the SAME
-  // harness right after the Mermaid render, must still be blocked. This is
-  // the assertion that actually matters for "CSP still blocks what it
-  // should" — the violation COUNT above is expected noise, not a security
-  // signal; whether a real attack is stopped is.
+  // harness right after the Mermaid render, must still be blocked — both
+  // that the payload never executed (the actual security-relevant
+  // assertion) AND that a real, attributable CSP violation was logged FOR
+  // IT specifically (isolated from Mermaid's own unrelated noise above via
+  // the before/after snapshot — see the comment where
+  // injectionViolationCount is computed). Checking both closes exactly the
+  // "assertion could never fail" shape Gate 5's own review history already
+  // found once in this app's CSP tests: a version of this test that only
+  // checked `pwned` would still pass if CSP enforcement broke in a way that
+  // stopped the specific onerror execution by some other accident (e.g. the
+  // image request itself failing before onerror could even fire) without
+  // CSP actually being the thing that blocked it.
   expect(result.pwned).toBe('undefined')
+  expect(result.injectionViolationCount).toBeGreaterThan(0)
+
+  // Committed machine-readable result, matching gate2/gate7's own pattern
+  // (phase0/results/gate2-timing.json, phase0/results/gate7-findings.json)
+  // rather than leaving these numbers to live only in prose in the findings
+  // doc and this test's console.log output.
+  mkdirSync(join(__dirname, 'results'), { recursive: true })
+  writeFileSync(
+    join(__dirname, 'results', 'gate3-mermaid-findings.json'),
+    JSON.stringify(
+      {
+        diagramBoxes: result.sendResult.diagramBoxes,
+        oversizedWrapperCount: result.oversizedWrapperCount,
+        oversizedHeights,
+        pageHeight: result.pageMetrics.pageHeight,
+        pageCount: result.pageMetrics.pageCount,
+        nonceCheck: result.nonceCheck,
+        totalCspViolations: cspViolations.length,
+        injectionViolationCount: result.injectionViolationCount,
+        pwned: result.pwned
+      },
+      null,
+      2
+    )
+  )
 
   await app.close()
 })

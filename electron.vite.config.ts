@@ -41,10 +41,14 @@ export default defineConfig({
       // with nothing importing them from main-process code yet; added here
       // pre-emptively since they're the most likely next ones (Markdown
       // round-tripping / HTML sanitization). `mermaid` is also ESM-only and
-      // in `dependencies`, but is expected to run in a renderer/render
-      // context (Task 8), not the main process — not added here for that
-      // reason, but re-check this list against `mermaid`'s actual import
-      // location once Task 8 lands.
+      // in `dependencies`, but is only ever imported from
+      // src/diagrams/render-mermaid.ts, which is only ever imported from
+      // resources/pagination-render/index.ts — the sandboxed render
+      // context's OWN separately-built bundle (scripts/build-pagination-render.ts,
+      // via esbuild), never part of this electron-vite `main` build at all.
+      // Task 8 landed and this was re-checked as promised: `mermaid` does
+      // not need excluding here — confirmed by grepping the actual built
+      // `out/main/index.js` for "mermaid", which has zero hits.
       externalizeDeps: {
         exclude: [
           'unified',
