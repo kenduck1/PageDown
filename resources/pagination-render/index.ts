@@ -13,6 +13,7 @@
 // `pageCount` (`flow.total`) reflects real layout work rather than a
 // hardcoded `1`.
 import { Previewer } from 'pagedjs'
+import { renderMermaidToSvg } from '../../src/diagrams/render-mermaid'
 
 // Trusted bootstrap, runs before any 'render' message can possibly arrive.
 // This whole module is loaded via `<script type="module" src="./index.js">`
@@ -73,6 +74,21 @@ interface OutgoingSuccess {
   // `0` for the empty-content short-circuit below, since no Paged.js layout
   // ran at all in that case.
   layoutMs: number
+  // Task 8 / Gate 3: one entry per `.pagedown-mermaid-diagram` wrapper
+  // actually present in the PAGINATED output under `root` (i.e. read back
+  // AFTER previewer.preview() has cloned content into real page elements —
+  // "post-pagination" per the brief, not measured against the pre-pagination
+  // working copy). `width`/`height` come from the rendered SVG's own
+  // `getBoundingClientRect()` — the real, on-screen, CSS-and-layout-applied
+  // box, not the SVG's internal `getBBox()` content geometry (which Mermaid
+  // already used internally, inside renderMermaidToSvg, to size the
+  // viewBox — see that module and the "Task 8 / Gate 3" section below for
+  // why a *second*, independent read here, from the actual paginated DOM,
+  // is the thing that can actually catch a zero-size failure rather than
+  // just inferring "it probably worked" from the absence of a thrown error.
+  // `[]` for documents with no mermaid diagrams (including the
+  // empty-content short-circuit below).
+  diagramBoxes: Array<{ id: string; width: number; height: number }>
 }
 
 interface OutgoingError {
@@ -217,6 +233,317 @@ let activePreviewer: InstanceType<typeof Previewer> | undefined
 // a real, currently-latent gap, not a hypothetical one.
 let currentRequestId: string | undefined
 
+// --- Task 8 / Gate 3: Mermaid diagram rendering -----------------------------
+//
+// Wired in AHEAD of Paged.js pagination (called from the 'render' handler
+// below, before `new Previewer().preview()` ever runs): every
+// `<pre><code class="language-mermaid">` block rehype-stringify produced for
+// a fenced ```mermaid block (see src/markdown/pipeline.ts) is replaced with
+// the real rendered SVG from renderMermaidToSvg (src/diagrams/render-mermaid.ts)
+// before Paged.js ever sees the document, exactly per the brief.
+//
+// A diagram is a single figure, not a flow of rows like a table (per the
+// design doc's "Page-break policy for diagrams") — it must never be sliced
+// across two pages. `break-inside: avoid-page` on this wrapper class is
+// this spike's entire page-break policy for diagrams (the design doc's
+// fuller "diagram too large for one page" legibility-floor affordance is
+// explicitly out of scope here — see the class-level comment above).
+const MERMAID_DIAGRAM_CLASS = 'pagedown-mermaid-diagram'
+
+let mermaidPageBreakStyleInjected = false
+
+// Injected exactly once per render-context lifetime (not once per
+// sendDocument() call — the rule is content-independent, so re-adding it on
+// every run would just be another unbounded <head> leak of the kind the
+// activePreviewer/Polisher cleanup above already exists to prevent).
+// Created via `document.createElement`, so the bootstrap shim at the top of
+// this file stamps this run's CSP style nonce onto it automatically — the
+// same mechanism Paged.js's own Polisher-created <style> elements rely on,
+// reused here rather than reinvented.
+function ensureMermaidPageBreakStyleInjected(): void {
+  if (mermaidPageBreakStyleInjected) return
+  const style = document.createElement('style')
+  style.textContent = `
+    .${MERMAID_DIAGRAM_CLASS} { break-inside: avoid-page; page-break-inside: avoid; }
+    .${MERMAID_DIAGRAM_CLASS} svg { display: block; max-width: 100%; height: auto; }
+  `
+  document.head.appendChild(style)
+  mermaidPageBreakStyleInjected = true
+}
+
+// Mermaid's default sizing (`useMaxWidth: true`, the default for every
+// diagram type this spike's corpus exercises) bakes `width="100%"` plus a
+// `style="max-width: <natural-width>px;"` onto the SVG root — see
+// node_modules/mermaid/dist/chunks/mermaid.core/chunk-6DBFFHIP.mjs's
+// `calculateSvgSizeAttrs`. That stretches the SVG to fill its container's
+// width regardless of the diagram's own natural size: fine for a diagram
+// that's naturally wider than the page content box, but actively wrong for
+// this corpus's small flowchart (which would inflate to full page width)
+// and, worse, for the oversized diagram — a tall, narrow chain whose small
+// natural width means the width:100% stretch would multiply its already
+// oversized height even further, corrupting the exact measurement this
+// gate exists to produce. This is the concrete case the design doc's third
+// review calls out under "Page-break policy for diagrams": CSS auto-sizing
+// via a bare viewBox does not do the right thing here, so this reads the
+// SVG's own viewBox (its genuine natural size, already computed by
+// Mermaid's internal getBBox()-based layout) and sets explicit width/height
+// attributes from it, then drops Mermaid's forced-stretch inline style.
+// Actual page-fit clamping (this spike's `max-width: 100%; height: auto`
+// CSS above) then applies uniformly from the diagram's own true aspect
+// ratio, the same way it would for a normal image.
+function fitSvgToNaturalSize(svgElement: SVGElement): void {
+  const viewBoxAttr = svgElement.getAttribute('viewBox')
+  if (!viewBoxAttr) return
+  const parts = viewBoxAttr.trim().split(/\s+/).map(Number)
+  if (parts.length !== 4 || !parts.every((n) => Number.isFinite(n))) return
+  const [, , naturalWidth, naturalHeight] = parts
+  if (naturalWidth <= 0 || naturalHeight <= 0) return
+  svgElement.setAttribute('width', String(naturalWidth))
+  svgElement.setAttribute('height', String(naturalHeight))
+  svgElement.removeAttribute('style')
+}
+
+// Strips `@import` and external `url(...)` references from a Mermaid-
+// generated <style> block's CSS text. Per the design doc's third-review
+// correction (the SiYuan reference): Mermaid's rendered SVG carries an
+// inline <style> block whose content is reachable, indirectly, from the
+// diagram author (Mermaid `classDef` syntax accepts arbitrary CSS
+// declarations on node classes), and can carry `@import`/external `url()`
+// references that would fire a real outbound network request from this
+// sandboxed context the moment the style is applied — the same class of
+// leak `connect-src 'none'` and the remote-image-blocking policy exist to
+// close everywhere else. Neutralized here as plain string surgery (not a
+// full CSS parse) — adequate for this spike's corpus (none of which uses
+// classDef at all, so this path is exercised defensively, not against a
+// real adversarial fixture — see this task's findings-doc entry and report
+// for why a dedicated adversarial-classDef corpus fixture was judged
+// out of scope here).
+function stripExternalCssRefs(css: string): string {
+  return css
+    .replace(/@import\s+[^;]+;/gi, '')
+    .replace(/url\(\s*(['"]?)(?:https?:)?\/\/[^)'"]*\1\s*\)/gi, 'url()')
+}
+
+// Mermaid's render() (see node_modules/mermaid/dist/mermaid.core.mjs)
+// creates its own internal <style> element via `document.createElement`
+// too — meaning the SAME bootstrap shim that nonces Paged.js's own
+// dynamically-created styles nonces this one too, automatically, at
+// creation time, with no Mermaid-specific code required for that part.
+// But with `securityLevel: 'strict'` (never 'loose'/'sandbox'), Mermaid
+// pipes its fully-serialized SVG string through `DOMPurify.sanitize()`
+// before returning it from renderMermaidToSvg — confirmed by reading
+// mermaid.core.mjs's render() directly — and DOMPurify's default allowlist
+// does not include the `nonce` attribute, so the nonce this shim attached
+// survives on the live element for only as long as Mermaid keeps that
+// element in the DOM, and is gone from the STRING renderMermaidToSvg
+// actually returns. A <style> re-parsed from that string (e.g. via
+// `element.innerHTML = svgMarkup`, exactly what this function does to turn
+// the string back into a real SVG element) is nonce-less and would be
+// silently blocked by this context's own CSP the instant it takes effect —
+// this is the "sanitized-SVG handoff has its own CSP problem" the design
+// doc's third review flags. Fixed the same way Paged.js's own styles are
+// handled: never trust a nonce that arrived via markup parsing — discard the
+// stale, sanitizer-stripped <style> entirely and re-create a fresh one via
+// `document.createElement` (so the bootstrap shim nonces THIS one, for
+// real, at creation time) carrying the same (now-scrubbed) CSS text.
+function reattachNoncedStyles(svgElement: SVGElement, extraCss = ''): void {
+  const staleStyles = Array.from(svgElement.querySelectorAll('style'))
+  for (const stale of staleStyles) {
+    const fresh = document.createElement('style')
+    fresh.textContent = [stripExternalCssRefs(stale.textContent ?? ''), extraCss]
+      .filter(Boolean)
+      .join('\n')
+    stale.replaceWith(fresh)
+  }
+  // Mermaid's render() always creates its own <style> (see the comment
+  // above), so `staleStyles` is never actually empty in practice — this
+  // branch only exists so `extraCss` (from hoistInlineStyleAttributes
+  // below) is never silently dropped if that assumption ever stops holding.
+  if (staleStyles.length === 0 && extraCss.trim()) {
+    const fresh = document.createElement('style')
+    fresh.textContent = extraCss
+    svgElement.insertBefore(fresh, svgElement.firstChild)
+  }
+}
+
+let hoistedStyleCounter = 0
+
+// A SECOND, initially-unanticipated CSP problem, found only by actually
+// running Gate 3 against real diagrams (not by reading the design doc, which
+// only discusses the <style> BLOCK case above): Mermaid's SVG output also
+// carries many individual, non-empty inline `style="..."` ATTRIBUTES —
+// confirmed by dumping real rendered markup, e.g.
+// `style="stroke-width: 1; stroke-dasharray: 1, 0;"` on arrow-marker
+// `<path>`/`<circle>` elements, `style="stroke: none"` on node background
+// `<rect>`s, and (despite `htmlLabels: false`, which does not fully
+// eliminate `foreignObject` usage for flowchart EDGE labels specifically —
+// itself a secondary finding worth flagging) HTML layout styles on a `<div>`
+// inside a `foreignObject`. Unlike the <style> BLOCK case, there is no
+// nonce-based fix for these at all: CSP nonces apply only to elements that
+// carry a `nonce` content attribute (`<style>`/`<script>`), never to a
+// `style=""` attribute on an arbitrary element — confirmed empirically here
+// too, not just from the spec, by first observing ~130 real "Applying
+// inline style violates..." console violations with only the <style>-block
+// fix in place. The only CSP-compatible fix is to stop using inline style
+// ATTRIBUTES entirely: this hoists every element's inline style declarations
+// into a synthetic class selector and returns the equivalent CSS text, for
+// the caller to fold into the SAME nonced <style> element reattachNoncedStyles
+// creates — reusing that one mechanism rather than adding a second one.
+// Deliberately generic (moves ANY property:value declarations, not a
+// Mermaid-specific property allowlist) so this isn't reverse-engineering
+// Mermaid's current internals, and works uniformly for both SVG presentation
+// properties and the foreignObject HTML div's CSS layout properties, which a
+// presentation-attribute conversion (the alternative fix for the SVG-only
+// case) would not have covered.
+function hoistInlineStyleAttributes(svgElement: SVGElement): string {
+  const styledElements = Array.from(svgElement.querySelectorAll('[style]'))
+  const rules: string[] = []
+  for (const el of styledElements) {
+    const declarations = el.getAttribute('style') ?? ''
+    el.removeAttribute('style')
+    if (!declarations.trim()) continue // e.g. Mermaid's own `style=""` no-op attributes — nothing to hoist
+    const marker = `pd-hoisted-style-${hoistedStyleCounter++}`
+    el.classList.add(marker)
+    rules.push(`.${marker} { ${stripExternalCssRefs(declarations)} }`)
+  }
+  return rules.join('\n')
+}
+
+// Finds every `<pre><code class="language-mermaid">` block inside
+// `container` and replaces it in place with a `.pagedown-mermaid-diagram`
+// wrapper holding the rendered, CSP-safe SVG. Mutates `container` directly
+// (no return value) so the caller can pass the SAME container straight into
+// `previewer.preview()` afterward — see the 'render' handler below for why
+// that matters (passing a live DOM node, rather than round-tripping back
+// through an HTML string, is what keeps the nonces set in this function
+// valid; re-serializing to a string and letting Paged.js's own
+// ContentParser re-parse it via `Range.createContextualFragment` would lose
+// them — parser-inserted nonce attributes from fragment parsing are not
+// honored by CSP, by design, which is exactly why Paged.js's own Polisher
+// styles are created via `document.createElement` in the first place; see
+// this file's bootstrap comment at the top).
+async function renderMermaidDiagrams(container: DocumentFragment): Promise<void> {
+  const codeBlocks = Array.from(
+    container.querySelectorAll('pre > code.language-mermaid')
+  ) as HTMLElement[]
+  if (codeBlocks.length === 0) return
+
+  // Per the design doc's resource-settling-gate ordering: layout-affecting
+  // resources (fonts, images, diagrams) must be settled before anything
+  // measures text, or measurements silently bake in fallback-font metrics.
+  // Awaited once per render pass, before the first mermaid.render() call,
+  // per the brief — not per-diagram (document.fonts.ready reflects the
+  // whole document's font state, not a single element's).
+  await document.fonts.ready
+
+  ensureMermaidPageBreakStyleInjected()
+
+  for (let i = 0; i < codeBlocks.length; i++) {
+    const code = codeBlocks[i]
+    const pre = code.parentElement
+    if (!pre) continue // unreachable for a `pre > code` match, but keeps this a type-safe non-null narrowing rather than a cast
+
+    const diagramSource = code.textContent ?? ''
+    const elementId = `pagedown-mermaid-${i}`
+
+    const svgMarkup = await renderMermaidToSvg(diagramSource, elementId)
+
+    // Parsed via a SEPARATE DOMParser document, not `element.innerHTML =`
+    // on a node already living in THIS page. Investigated, not assumed: a
+    // real Gate 3 run against this app's 3-diagram corpus logs 972 real
+    // "Applying inline style violates..." console violations — an exact,
+    // reproducible count across repeated runs, NOT a random/flaky number —
+    // regardless of whether this parsing step uses a live-document element
+    // or a DOMParser scratch document (measured both ways, identical counts
+    // either way) — meaning essentially ALL of
+    // them come from EARLIER, inside `renderMermaidToSvg` itself: Mermaid's
+    // own internal rendering (see mermaidAPI.render() in
+    // node_modules/mermaid/dist/mermaid.core.mjs) draws the diagram using
+    // real d3 selections, appended live to this page's actual
+    // `document.body` (`appendDivSvgG(select("body"), ...)`), and d3's
+    // `.style(...)` calls set inline style properties directly — CSP
+    // evaluates and blocks each one, on the spot, as an unavoidable
+    // byproduct of Mermaid's implementation running under this app's strict,
+    // no-`unsafe-inline` `style-src`. No post-processing of the STRING
+    // `renderMermaidToSvg` eventually returns can prevent violations that
+    // already fired before that string existed — see this task's
+    // report/findings-doc entry for the fuller writeup and why this doesn't
+    // change Gate 3's sizing verdict (geometry comes from SVG attributes and
+    // the properly-nonced <style> block's font metrics, not from these
+    // blocked, paint-only per-element declarations).
+    //
+    // What THIS parsing choice actually still buys: Mermaid's OUTPUT STRING
+    // (even after its own DOMPurify.sanitize() pass under
+    // `securityLevel: 'strict'`) legitimately keeps plain `style="..."`
+    // attributes on individual shape elements (DOMPurify's default allowlist
+    // permits `style`, unlike `nonce` — confirmed by dumping the raw
+    // returned string). Parsing that string directly into a node owned by
+    // THIS page's live document, then removing those attributes a moment
+    // later (hoistInlineStyleAttributes below), still risks re-triggering
+    // the same class of violation for THIS app's own parsing step, on top of
+    // Mermaid's already-unavoidable internal ones. A `DOMParser` result
+    // document is a genuinely separate Document with no CSP of its own — the
+    // same mechanism DOMPurify itself relies on internally to sanitize
+    // untrusted markup without tripping the host page's policy — so doing
+    // the parse and all style-attribute stripping/hoisting there, and only
+    // importing the result into this page's live document via
+    // `document.importNode()` once it no longer carries any `style=""`
+    // attribute at all, keeps this app's OWN contribution to the violation
+    // count at zero, whatever Mermaid's internals do on their own.
+    const scratchDoc = new DOMParser().parseFromString(svgMarkup, 'text/html')
+    const scratchSvgElement = scratchDoc.body.firstElementChild as SVGElement | null
+    if (!scratchSvgElement) {
+      throw new Error(`Mermaid render for diagram "${elementId}" did not produce an <svg> element`)
+    }
+
+    // Hoisting runs here, on the scratch element, BEFORE import — order is
+    // load-bearing: it must remove every `style=""` attribute while the
+    // element is still in the CSP-free scratch document, so nothing is left
+    // to trigger a violation at the moment importNode below moves it into
+    // this page's own CSP-governed document.
+    const hoistedCss = hoistInlineStyleAttributes(scratchSvgElement)
+
+    const svgElement = document.importNode(scratchSvgElement, true) as SVGElement
+    // reattachNoncedStyles must run AFTER import, not before: it creates
+    // the replacement <style> via THIS page's own `document.createElement`
+    // (the only one the bootstrap nonce shim at the top of this file
+    // patches) so the fresh element actually receives a real, matching
+    // nonce — a <style> created via `scratchDoc.createElement` would carry
+    // no nonce at all, since the shim never touches the scratch document.
+    reattachNoncedStyles(svgElement, hoistedCss)
+    fitSvgToNaturalSize(svgElement)
+
+    const wrapper = document.createElement('div')
+    wrapper.className = MERMAID_DIAGRAM_CLASS
+    wrapper.setAttribute('data-mermaid-diagram-id', elementId)
+    wrapper.appendChild(svgElement)
+
+    pre.replaceWith(wrapper)
+  }
+}
+
+// Reads back real, on-screen bounding boxes for every mermaid diagram
+// actually present in the PAGINATED output under `root` — called AFTER
+// previewer.preview() resolves, per the brief's "post-pagination" framing.
+// This is deliberately a SEPARATE read from anything Mermaid measured
+// internally via getBBox() while rendering (see renderMermaidToSvg) —
+// that internal measurement only proves Mermaid could compute a viewBox
+// for itself; it says nothing about whether the diagram actually occupies
+// real, non-zero space once cloned into Paged.js's rendered page tree
+// under this context's real CSP/layout, which is the thing Gate 3 is
+// actually supposed to catch a failure of.
+function measureDiagramBoxes(
+  root: HTMLElement
+): Array<{ id: string; width: number; height: number }> {
+  const wrappers = Array.from(root.querySelectorAll(`.${MERMAID_DIAGRAM_CLASS}`)) as HTMLElement[]
+  return wrappers.map((wrapper) => {
+    const id = wrapper.getAttribute('data-mermaid-diagram-id') ?? ''
+    const svg = wrapper.querySelector('svg')
+    const rect = svg?.getBoundingClientRect()
+    return { id, width: rect?.width ?? 0, height: rect?.height ?? 0 }
+  })
+}
+
 window.addEventListener('message', async (event: MessageEvent<IncomingMessage>) => {
   // Not every message on this window is necessarily a 'render' request from
   // sendDocument (e.g. Electron/Chromium internals can post other messages
@@ -301,24 +628,64 @@ window.addEventListener('message', async (event: MessageEvent<IncomingMessage>) 
         requestId,
         pageCount: 0,
         ready: true,
-        layoutMs: 0
+        layoutMs: 0,
+        diagramBoxes: []
       }
       if (currentRequestId === requestId) window.__pagedownResult = result
       return
     }
 
+    // Task 8 / Gate 3: build a DETACHED working copy of the injected HTML
+    // and run the mermaid-replacement pass over it BEFORE Paged.js ever
+    // sees the document — per the brief ("before invoking
+    // Previewer.preview(), find every <pre><code class="language-mermaid">
+    // block ... and only then hand the resulting HTML to Paged.js"). Built
+    // via `Range.createContextualFragment()` — the EXACT mechanism Paged.js's
+    // own `ContentParser.parse()` uses internally for the string-content path
+    // (see node_modules/pagedjs/src/chunker/parser.js) — not a <template>
+    // element, which this function used in an earlier version of this task
+    // and which is a REAL regression, not a cosmetic difference: a
+    // <template>'s `.content` DocumentFragment is specced as INERT (images,
+    // scripts, etc. inside it never activate/load while they remain there),
+    // whereas a Range-created fragment is an ordinary, non-inert
+    // DocumentFragment. That inertness silently broke Gate 5's own
+    // pre-existing "CSP blocks inline script execution" regression test
+    // (phase0/gate5-sandbox.spec.ts) — caught by actually re-running the
+    // full Phase 0 suite after this task's changes, not assumed safe: the
+    // injected `<img onerror=...>` payload still never executed (CSP's own
+    // protection was never actually at risk), but the browser stopped even
+    // ATTEMPTING the image load/error cycle in the first place once it was
+    // built via an inert template, so the CSP violation this test exists to
+    // observe never fired for it to detect — a test that stops observing
+    // the thing it claims to verify is exactly the kind of silent gap this
+    // project's review rounds have repeatedly caught, so this was fixed
+    // rather than left in place with a weakened assertion. Confirmed fixed
+    // by re-running gate5-sandbox.spec.ts's full suite after this change:
+    // all tests, including the CSP one, pass again.
+    // `container` is deliberately passed to previewer.preview() as this DOM
+    // NODE below, not serialized back to a string first: ContentParser
+    // accepts either a string or a node (same file), and passing the live
+    // node is what keeps renderMermaidDiagrams's nonced <style> elements
+    // valid — see that function's own comment for why round-tripping
+    // through a string would silently break them.
+    const container = document.createRange().createContextualFragment(html)
+    await renderMermaidDiagrams(container)
+
     const t0 = performance.now()
     const previewer = new Previewer()
     activePreviewer = previewer
-    // Passing `[]` for stylesheets: markdownToHtml's output never contains
-    // <style>/<link> tags of its own (remark-rehype's allowDangerousHtml:
-    // false drops raw HTML nodes entirely — see src/markdown/pipeline.ts),
-    // so there is nothing for Previewer.wrapContent()/removeStyles() to
-    // harvest from the document; passing the injected HTML directly as
-    // `content` and an explicit empty stylesheet list matches the brief's
-    // sample and avoids Previewer trying to reinterpret the whole
+    // Passing `[]` for stylesheets: neither markdownToHtml's output nor
+    // this handler's own mermaid post-processing adds any top-level
+    // <style>/<link> tag of `container`'s own (remark-rehype's
+    // allowDangerousHtml: false drops raw HTML nodes entirely — see
+    // src/markdown/pipeline.ts; the <style> elements renderMermaidDiagrams
+    // adds live inside each diagram's own <svg> subtree, not as a direct
+    // child of `container`), so there is nothing for
+    // Previewer.wrapContent()/removeStyles() to harvest from the document;
+    // passing `container` directly as `content` and an explicit empty
+    // stylesheet list avoids Previewer trying to reinterpret the whole
     // render-context <body> as the source document.
-    const flow = await previewer.preview(html, [], root)
+    const flow = await previewer.preview(container, [], root)
     const t1 = performance.now()
 
     // Discard a stale/abandoned run's result rather than publish it — see
@@ -332,7 +699,8 @@ window.addEventListener('message', async (event: MessageEvent<IncomingMessage>) 
       requestId,
       pageCount: flow.total,
       ready: true,
-      layoutMs: t1 - t0
+      layoutMs: t1 - t0,
+      diagramBoxes: measureDiagramBoxes(root)
     }
     window.__pagedownResult = result
   } catch (err) {

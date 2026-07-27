@@ -148,6 +148,15 @@ export interface PaginationResult {
   // overhead, without needing a separate, uncommitted diagnostic to find
   // out.
   layoutMs: number
+  // Task 8 / Gate 3: per-diagram bounding boxes for every
+  // `.pagedown-mermaid-diagram` actually present in the paginated output,
+  // measured via getBoundingClientRect() inside the render context AFTER
+  // pagination completes (see resources/pagination-render/index.ts's
+  // measureDiagramBoxes) — the mechanism for actually detecting a zero-size
+  // Mermaid getBBox() failure, rather than just inferring "it probably
+  // worked" from the absence of a thrown error. `[]` for documents with no
+  // mermaid diagrams.
+  diagramBoxes: Array<{ id: string; width: number; height: number }>
 }
 
 export interface PaginationHarness {
@@ -228,7 +237,12 @@ export async function createPaginationHarness(win: BaseWindow): Promise<Paginati
         if (result.type === 'error') {
           throw new Error(`Pagination failed in render context: ${result.error}`)
         }
-        return { pageCount: result.pageCount, ready: result.ready, layoutMs: result.layoutMs }
+        return {
+          pageCount: result.pageCount,
+          ready: result.ready,
+          layoutMs: result.layoutMs,
+          diagramBoxes: result.diagramBoxes ?? []
+        }
       }
       await new Promise((resolve) => setTimeout(resolve, 50))
     }
