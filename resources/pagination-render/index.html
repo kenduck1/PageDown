@@ -40,6 +40,13 @@
     (phase0/gate5-sandbox.spec.ts) still passes unmodified. img-src 'self'
     data: and connect-src 'none' are also unchanged, so even an inline style
     that somehow did get through has no network path out for exfiltration.
+
+    The identical policy is ALSO sent as a real `Content-Security-Policy`
+    response header by the protocol handler (`CSP_POLICY_TEMPLATE` in
+    src/main/pagination-window.ts) -- a <meta http-equiv> tag only takes
+    effect once the HTML parser reaches it, so anything processed before
+    that point would otherwise run under no CSP at all. Keep both copies of
+    this policy string in sync if either ever changes.
   -->
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'nonce-%%CSP_STYLE_NONCE%%'; script-src 'self'; img-src 'self' data:; connect-src 'none';">
   <meta name="csp-style-nonce" content="%%CSP_STYLE_NONCE%%">

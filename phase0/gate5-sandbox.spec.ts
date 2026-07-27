@@ -200,3 +200,151 @@ test('Gate 5: navigation away from the render context origin is blocked', async 
 
   await app.close()
 })
+
+// The three tests below regression-test Task 6's error-handling/cleanup
+// fixes end to end (real harness, real Paged.js, real timing) rather than
+// only by code inspection — added after a review found the original
+// error-handling fix left two more silent-hang paths, one of which
+// (empty/near-empty content) can permanently brick the reused harness.
+
+test('Gate 5: empty document does not hang the harness or brick it for subsequent documents', async () => {
+  const app = await electron.launch({ args: ['.'] })
+
+  const result = await app.evaluate(async ({ BaseWindow }) => {
+    const { createPaginationHarness } = (
+      globalThis as unknown as {
+        __pagedownPhase0: {
+          createPaginationHarness: (typeof import('../src/main/pagination-window'))['createPaginationHarness']
+        }
+      }
+    ).__pagedownPhase0
+    const win = new BaseWindow({ show: false })
+    const harness = await createPaginationHarness(win)
+
+    // markdownToHtml('') and frontmatter-only Markdown both produce exactly
+    // this: an empty string. Paged.js's own Previewer.preview() treats a
+    // falsy `content` argument as "none was passed" and falls back to
+    // wrapContent(), which replaces the entire <body> (including
+    // #content-root) with an inert <template> -- permanently, since nothing
+    // short of a fresh navigation restores it. Timed explicitly: the bug
+    // this regresses was a full, silent 10-second hang, not just a wrong
+    // return value.
+    const emptyStart = Date.now()
+    const emptyResult = await harness.sendDocument('')
+    const emptyElapsedMs = Date.now() - emptyStart
+
+    // The actual regression: a SUBSEQUENT real document must still work.
+    // Before the fix, #content-root was gone for good after the empty-input
+    // call, so this would hang for the harness's own full 10-second
+    // deadline.
+    const afterStart = Date.now()
+    const afterResult = await harness.sendDocument('<h1>Still alive</h1><p>Real content.</p>')
+    const afterElapsedMs = Date.now() - afterStart
+
+    return { emptyResult, emptyElapsedMs, afterResult, afterElapsedMs }
+  })
+
+  expect(result.emptyResult.ready).toBe(true)
+  expect(result.emptyResult.pageCount).toBe(0)
+  // Generous relative to the ~10s timeout this regresses against, but tight
+  // enough that a reversion back to the silent-hang path would fail this.
+  expect(result.emptyElapsedMs).toBeLessThan(5000)
+
+  expect(result.afterResult.ready).toBe(true)
+  expect(result.afterResult.pageCount).toBeGreaterThanOrEqual(1)
+  expect(result.afterElapsedMs).toBeLessThan(5000)
+
+  await app.close()
+})
+
+test('Gate 5: a render-context failure surfaces as a prompt rejection, not a 10-second hang', async () => {
+  const app = await electron.launch({ args: ['.'] })
+
+  const result = await app.evaluate(async ({ BaseWindow }) => {
+    const { createPaginationHarness } = (
+      globalThis as unknown as {
+        __pagedownPhase0: {
+          createPaginationHarness: (typeof import('../src/main/pagination-window'))['createPaginationHarness']
+        }
+      }
+    ).__pagedownPhase0
+    const win = new BaseWindow({ show: false })
+    const harness = await createPaginationHarness(win)
+
+    // Deliberately passes a non-string `html` (bypassing sendDocument's own
+    // TypeScript signature -- real callers, via paginateAndTime, can never
+    // produce this; markdownToHtml always returns a string) so that
+    // `html.trim()` throws a genuine TypeError inside the render context's
+    // try block, exercising the real catch-and-publish-error path end to
+    // end rather than only via code inspection. This is exactly the class
+    // of failure Tasks 7-10 are expected to hit for real (a rejecting
+    // previewer.preview() call), just triggered here through a reliable,
+    // synthetic input instead of a hard-to-construct real one.
+    const sendDocumentUnsafe = harness.sendDocument as unknown as (
+      html: unknown
+    ) => Promise<unknown>
+
+    const start = Date.now()
+    let errorMessage: string | null = null
+    try {
+      await sendDocumentUnsafe(null)
+    } catch (err) {
+      errorMessage = err instanceof Error ? err.message : String(err)
+    }
+    const elapsedMs = Date.now() - start
+
+    // The harness must still work afterward -- a caught, published error
+    // must not brick anything either.
+    const afterResult = await harness.sendDocument('<h1>Still alive</h1><p>Real content.</p>')
+
+    return { errorMessage, elapsedMs, afterResult }
+  })
+
+  expect(result.errorMessage).not.toBeNull()
+  expect(result.errorMessage).toMatch(/Pagination failed in render context/)
+  // The whole point: this resolves quickly, not after the full 10s deadline.
+  expect(result.elapsedMs).toBeLessThan(5000)
+  expect(result.afterResult.ready).toBe(true)
+
+  await app.close()
+})
+
+test('Gate 5: repeated sendDocument calls do not leak Polisher <style> elements into <head>', async () => {
+  const app = await electron.launch({ args: ['.'] })
+
+  const result = await app.evaluate(async ({ BaseWindow }) => {
+    const { createPaginationHarness } = (
+      globalThis as unknown as {
+        __pagedownPhase0: {
+          createPaginationHarness: (typeof import('../src/main/pagination-window'))['createPaginationHarness']
+        }
+      }
+    ).__pagedownPhase0
+    const win = new BaseWindow({ show: false })
+    const harness = await createPaginationHarness(win)
+
+    const styleCounts: number[] = []
+    for (let i = 0; i < 5; i++) {
+      await harness.sendDocument(
+        `<h1>Run ${i}</h1><p>Some real paragraph content for run ${i}.</p>`
+      )
+      const count = await harness.view.webContents.executeJavaScript(
+        `document.head.querySelectorAll('style').length`
+      )
+      styleCounts.push(count)
+    }
+
+    return { styleCounts }
+  })
+
+  // Each run's OWN Polisher is still present at the moment its count is
+  // sampled (destruction happens at the START of the NEXT run, not
+  // immediately after) -- so the assertion that matters is that the count
+  // stays flat across repeated runs, not that it's some particular small
+  // number. Before the fix, this grew by (at least) 2 on every single call,
+  // unbounded; after the fix, run N's count should equal run 1's count.
+  expect(result.styleCounts.length).toBe(5)
+  expect(new Set(result.styleCounts).size).toBe(1)
+
+  await app.close()
+})
