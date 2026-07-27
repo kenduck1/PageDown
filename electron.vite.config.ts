@@ -30,6 +30,21 @@ export default defineConfig({
       // require()-passthrough) them, which resolves the default export
       // correctly at build time instead of relying on Node's require(esm)
       // interop at runtime.
+      // NOTE for whoever adds the next main-process import: this list is a
+      // known trap, not a one-time fix. Any other ESM-only ("type":
+      // "module", no CJS entry point) package.json dependency imported from
+      // main-process code will silently break the exact same way the first
+      // time it actually runs inside the compiled app (not caught by
+      // Playwright/Vitest, which transform imports correctly on their own —
+      // see the comment above). `remark-stringify` and `hast-util-sanitize`
+      // are both already `"type": "module"` dependencies in package.json
+      // with nothing importing them from main-process code yet; added here
+      // pre-emptively since they're the most likely next ones (Markdown
+      // round-tripping / HTML sanitization). `mermaid` is also ESM-only and
+      // in `dependencies`, but is expected to run in a renderer/render
+      // context (Task 8), not the main process — not added here for that
+      // reason, but re-check this list against `mermaid`'s actual import
+      // location once Task 8 lands.
       externalizeDeps: {
         exclude: [
           'unified',
@@ -37,7 +52,9 @@ export default defineConfig({
           'remark-gfm',
           'remark-frontmatter',
           'remark-rehype',
+          'remark-stringify',
           'rehype-stringify',
+          'hast-util-sanitize',
           'unist-util-visit',
           'decode-named-character-reference',
           'micromark-util-decode-numeric-character-reference'

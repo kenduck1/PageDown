@@ -3,37 +3,46 @@
 <head>
   <meta charset="utf-8" />
   <!--
-    style-src includes 'unsafe-inline' (added in Task 6, confirmed necessary
-    by actually running Paged.js against the previous 'self'-only policy —
-    see docs/superpowers/plans/2026-07-25-phase0-findings.md's Gate 2 notes):
-    Paged.js's Previewer creates <style> elements at runtime via
-    document.createElement/appendChild to hold its computed per-document
-    pagination CSS (page-break rules, page-box dimensions, etc.) — content
-    that's necessarily unique per pagination run and can't be known ahead of
-    time, so neither a static nonce (dynamically-created elements don't
-    inherit a page-level nonce automatically; Paged.js's own code doesn't set
-    `.nonce`/`nonce="..."` on the elements it creates, and we don't patch the
-    library to do so) nor a content hash (the CSS content differs every run)
-    can cover it. Under the previous 'self'-only policy, every one of these
-    injected <style> elements was silently blocked (confirmed via captured
-    CSP-violation console messages), which left `styleEl.sheet` null and
-    made Paged.js's own code throw an uncaught, unawaited
-    `TypeError: Cannot read properties of null (reading 'insertRule')` deep
-    inside its layout internals — never rejecting the outer preview()
-    promise, so callers hung until the harness's own 10s timeout rather than
-    seeing a clean failure.
-    script-src deliberately still has NO 'unsafe-inline'/nonce — that's the
+    style-src uses a per-page-load random nonce, generated fresh on every
+    navigation by the pagedown-render:// protocol handler
+    (src/main/pagination-window.ts) and substituted into the
+    %%CSP_STYLE_NONCE%% placeholders below (this file is served dynamically
+    for exactly this reason, not as static bytes — see that handler's
+    index.html special case). Task 6 first tried a blanket
+    `style-src 'self' 'unsafe-inline'` here; a scoped nonce is a materially
+    better fix and replaces it, for two reasons:
+
+    1. Per CSP3, the mere PRESENCE of a nonce-source (or hash-source) in a
+       directive causes browsers to ignore any `'unsafe-inline'` in that
+       same directive entirely (kept only for backwards compatibility with
+       browsers that don't understand nonces). Task 8 (Mermaid) is already
+       expected, per the design doc, to need its own style nonce for
+       sanitized SVG styles. If Task 8 had added a nonce on top of this
+       file's previous blanket 'unsafe-inline', the 'unsafe-inline' would
+       have silently stopped applying and Paged.js's own non-nonced
+       injected styles would have gone right back to being blocked --
+       reproducing the exact silent 10-second hang this task spent real
+       effort diagnosing, just one task later and much harder to attribute.
+       Doing the scoped nonce now means Task 8 composes with this cleanly
+       instead of colliding with it.
+    2. It's simply narrower: 'unsafe-inline' allows ANY inline style from
+       ANY source (including attacker-controlled markup, if one ever
+       reaches this page); a nonce only allows a <style> element that
+       carries the exact per-load secret value. See index.ts's
+       document.createElement shim for how Paged.js's own dynamically
+       created <style> elements receive this nonce (they're the only thing
+       that does -- see that file for why attacker-controlled <style> tags,
+       which can only arrive via HTML parsing, never receive it).
+
+    script-src deliberately still has NO 'unsafe-inline'/nonce -- that's the
     actual XSS-relevant vector (arbitrary script execution), and Gate 5's
     "CSP blocks inline script execution" regression test
-    (phase0/gate5-sandbox.spec.ts) still passes unmodified against this
-    change, confirming script execution is still blocked. Inline *style* is
-    a materially different risk: with img-src still 'self' data: (no
-    external image loads) and connect-src still 'none' (no fetch/XHR), a
-    CSS-based data-exfiltration channel (e.g. attribute-selector + external
-    background-image url()) has no network path out even with style-src
-    relaxed.
+    (phase0/gate5-sandbox.spec.ts) still passes unmodified. img-src 'self'
+    data: and connect-src 'none' are also unchanged, so even an inline style
+    that somehow did get through has no network path out for exfiltration.
   -->
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; img-src 'self' data:; connect-src 'none';">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'nonce-%%CSP_STYLE_NONCE%%'; script-src 'self'; img-src 'self' data:; connect-src 'none';">
+  <meta name="csp-style-nonce" content="%%CSP_STYLE_NONCE%%">
   <title>PageDown Pagination Render Context</title>
 </head>
 <body>

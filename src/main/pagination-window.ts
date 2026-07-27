@@ -1,5 +1,5 @@
 import { WebContentsView, BaseWindow, session, type Session } from 'electron'
-import { randomUUID } from 'node:crypto'
+import { randomUUID, randomBytes } from 'node:crypto'
 import path from 'node:path'
 import { readFile } from 'node:fs/promises'
 
@@ -73,6 +73,21 @@ function ensureRenderInfraRegistered(): Session {
       }
 
       try {
+        // index.html is templated, not served as static bytes: it carries
+        // %%CSP_STYLE_NONCE%% placeholders (see that file's own comment)
+        // that need a fresh, unguessable value on every navigation. A
+        // single per-run nonce would be a nonce in name only — usable in
+        // any later request once observed once, no better than the earlier
+        // hardcoded-nonce mistake Task 3's review already found — so this
+        // generates one per request instead. `randomBytes(16)` is the same
+        // 128 bits of entropy CSP's own spec examples use for nonces.
+        if (relPath === 'index.html') {
+          const template = await readFile(filePath, 'utf8')
+          const nonce = randomBytes(16).toString('base64')
+          const body = template.replaceAll('%%CSP_STYLE_NONCE%%', nonce)
+          return new Response(body, { headers: { 'Content-Type': 'text/html' } })
+        }
+
         const body = await readFile(filePath)
         const contentType = filePath.endsWith('.html')
           ? 'text/html'
@@ -96,6 +111,15 @@ function ensureRenderInfraRegistered(): Session {
 export interface PaginationResult {
   pageCount: number
   ready: boolean
+  // Wall-clock time Paged.js's own `previewer.preview()` call took, measured
+  // entirely inside the render context (see
+  // resources/pagination-render/index.ts) — none of this process's
+  // executeJavaScript dispatch or the poll loop below is included. Lets a
+  // caller (e.g. the committed Gate 2 timing JSON) show how much of
+  // `sendAndPaginate` is genuine Paged.js layout work versus harness/poll
+  // overhead, without needing a separate, uncommitted diagnostic to find
+  // out.
+  layoutMs: number
 }
 
 export interface PaginationHarness {
@@ -161,7 +185,23 @@ export async function createPaginationHarness(win: BaseWindow): Promise<Paginati
       const result = await view.webContents.executeJavaScript(
         `(window.__pagedownResult && window.__pagedownResult.requestId === ${JSON.stringify(requestId)}) ? window.__pagedownResult : null`
       )
-      if (result) return { pageCount: result.pageCount, ready: result.ready }
+      if (result) {
+        // The render context publishes a distinct `type: 'error'` result
+        // (see resources/pagination-render/index.ts's try/catch) when
+        // `previewer.preview()` rejects or throws. Surfacing that
+        // immediately, with the actual error message, is the entire point —
+        // without this branch, a real pagination failure looked identical
+        // to "no result yet" and this loop just spun for the full 10-second
+        // deadline before throwing a generic, undiagnostic timeout. That
+        // exact symptom is what made this task's own CSP bug expensive to
+        // track down; later tasks stressing Paged.js with diagrams/oversized
+        // tables/a patched Chunker are exactly where a real failure like
+        // this is expected to happen again.
+        if (result.type === 'error') {
+          throw new Error(`Pagination failed in render context: ${result.error}`)
+        }
+        return { pageCount: result.pageCount, ready: result.ready, layoutMs: result.layoutMs }
+      }
       await new Promise((resolve) => setTimeout(resolve, 50))
     }
     throw new Error('Pagination harness timed out waiting for a result')

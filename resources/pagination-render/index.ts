@@ -14,13 +14,48 @@
 // hardcoded `1`.
 import { Previewer } from 'pagedjs'
 
+// Trusted bootstrap, runs before any 'render' message can possibly arrive.
+// This whole module is loaded via `<script type="module" src="./index.js">`
+// under `script-src 'self'`, and module evaluation completes synchronously
+// before `createPaginationHarness()` (which awaits this page's initial
+// navigation) ever returns control to a caller — so this always runs before
+// the first `postMessage` a caller could send.
+//
+// Stamps this page-load's CSP style nonce (generated per-request by the
+// pagedown-render:// protocol handler in src/main/pagination-window.ts,
+// published via <meta name="csp-style-nonce"> — see index.html) onto every
+// <style> element created via `document.createElement`. This is exactly how
+// Paged.js's Previewer/Polisher create their computed pagination CSS
+// (`document.createElement("style")`, never by parsing HTML — confirmed
+// against pagedjs's own source). Content this context injects from
+// untrusted Markdown-derived HTML can only ever introduce a <style> element
+// via HTML PARSING (assigning into innerHTML / Previewer's own content
+// handling), never via a `document.createElement` call made on attacker
+// data, so attacker-controlled <style> tags never receive this nonce and
+// stay blocked by CSP exactly as before. This is deliberately narrower than
+// a blanket `style-src 'unsafe-inline'`: only scripts running on this page
+// can mint a nonced <style> element at all, and only Paged.js's own code
+// does so today.
+const styleNonce =
+  document.querySelector('meta[name="csp-style-nonce"]')?.getAttribute('content') ?? ''
+if (styleNonce) {
+  const nativeCreateElement = document.createElement.bind(document)
+  document.createElement = ((tagName: string, options?: ElementCreationOptions) => {
+    const element = nativeCreateElement(tagName, options)
+    if (typeof tagName === 'string' && tagName.toLowerCase() === 'style') {
+      element.setAttribute('nonce', styleNonce)
+    }
+    return element
+  }) as typeof document.createElement
+}
+
 interface IncomingMessage {
   type: 'render'
   html: string
   requestId: string
 }
 
-interface OutgoingResult {
+interface OutgoingSuccess {
   type: 'result'
   requestId: string
   pageCount: number
@@ -29,14 +64,22 @@ interface OutgoingResult {
   // this render context, for `new Previewer().preview()` alone — i.e. real
   // Paged.js layout work, with none of the main-process round-trip
   // (executeJavaScript dispatch, the sendDocument poll loop's up-to-50ms
-  // detection granularity) folded in. Not consumed by Task 6's own
-  // `paginateAndTime` main-process stage split, but surfaced here so a
-  // reader of the timing results can sanity-check how much of the
-  // main-process-measured "sendAndPaginate" stage is genuine layout time
-  // versus harness/poll overhead. See paginate.ts and the Gate 2 findings
-  // notes for how this is used.
+  // detection granularity) folded in. Surfaced on `PaginationResult` (see
+  // src/main/pagination-window.ts) and forwarded through
+  // `paginateAndTime`'s return value so a reader of the committed timing
+  // JSON can sanity-check how much of the main-process-measured
+  // "sendAndPaginate" stage is genuine layout time versus harness/poll
+  // overhead, without needing an ad hoc/uncommitted probe to find out.
   layoutMs: number
 }
+
+interface OutgoingError {
+  type: 'error'
+  requestId: string
+  error: string
+}
+
+type OutgoingMessage = OutgoingSuccess | OutgoingError
 
 // Marks this file as a module (rather than a global script) so the
 // `declare global` augmentation below is valid — nothing else here needs
@@ -45,14 +88,40 @@ export {}
 
 declare global {
   interface Window {
-    __pagedownResult?: OutgoingResult
+    __pagedownResult?: OutgoingMessage
   }
 }
+
+// Tracks the most recently created Previewer so its Polisher's injected
+// <style> elements can be torn down before the next run starts. Neither
+// Previewer nor Polisher ever calls `Polisher.destroy()` itself — every
+// `new Previewer()` + `.preview()` call leaves at least two <style>
+// elements permanently in <head> (one for Paged.js's own base styles, one
+// for the run's computed page-box/break rules; confirmed by reading
+// pagedjs's own source, node_modules/pagedjs/src/polisher/polisher.js).
+// `root.innerHTML = ''` below only clears the rendered page CONTENT; it has
+// no effect on these <head> elements at all. Left unfixed, this leaks
+// without bound across repeated sendDocument() calls against the same
+// reused harness — exactly Task 6's own harness-reuse methodology, and
+// exactly what the real app's edit-debounce loop will do on every
+// keystroke-settle — and each run would paginate against a progressively
+// dirtier <head> than the last.
+let activePreviewer: InstanceType<typeof Previewer> | undefined
 
 window.addEventListener('message', async (event: MessageEvent<IncomingMessage>) => {
   if (event.data?.type !== 'render') return
   const root = document.getElementById('content-root')
   if (!root) return
+
+  // Destroy the previous run's Polisher-injected <style> elements before
+  // starting a new one. Safe to do here, synchronously, unconditionally:
+  // this handler only ever runs one render at a time (sendDocument's poll
+  // loop in the main process waits for this run's result before any caller
+  // can send the next 'render' message), so by the time a new message
+  // arrives, any previous previewer.preview() call has already resolved (or
+  // been caught below) and published its result — there is no in-flight
+  // work this could be destroying out from under.
+  activePreviewer?.polisher?.destroy()
 
   // Clear any previous run's rendered pages before starting a fresh one —
   // Previewer.preview() appends a new `.pagedjs_pages` container into
@@ -61,25 +130,43 @@ window.addEventListener('message', async (event: MessageEvent<IncomingMessage>) 
   // page trees underneath the new one instead of replacing them.
   root.innerHTML = ''
 
-  const t0 = performance.now()
-  const previewer = new Previewer()
-  // Passing `[]` for stylesheets: markdownToHtml's output never contains
-  // <style>/<link> tags of its own (remark-rehype's allowDangerousHtml:
-  // false drops raw HTML nodes entirely — see src/markdown/pipeline.ts), so
-  // there is nothing for Previewer.wrapContent()/removeStyles() to harvest
-  // from the document; passing the injected HTML directly as `content` and
-  // an explicit empty stylesheet list matches the brief's sample and avoids
-  // Previewer trying to reinterpret the whole render-context <body> as the
-  // source document.
-  const flow = await previewer.preview(event.data.html, [], root)
-  const t1 = performance.now()
+  try {
+    const t0 = performance.now()
+    const previewer = new Previewer()
+    activePreviewer = previewer
+    // Passing `[]` for stylesheets: markdownToHtml's output never contains
+    // <style>/<link> tags of its own (remark-rehype's allowDangerousHtml:
+    // false drops raw HTML nodes entirely — see src/markdown/pipeline.ts),
+    // so there is nothing for Previewer.wrapContent()/removeStyles() to
+    // harvest from the document; passing the injected HTML directly as
+    // `content` and an explicit empty stylesheet list matches the brief's
+    // sample and avoids Previewer trying to reinterpret the whole
+    // render-context <body> as the source document.
+    const flow = await previewer.preview(event.data.html, [], root)
+    const t1 = performance.now()
 
-  const result: OutgoingResult = {
-    type: 'result',
-    requestId: event.data.requestId,
-    pageCount: flow.total,
-    ready: true,
-    layoutMs: t1 - t0
+    const result: OutgoingSuccess = {
+      type: 'result',
+      requestId: event.data.requestId,
+      pageCount: flow.total,
+      ready: true,
+      layoutMs: t1 - t0
+    }
+    window.__pagedownResult = result
+  } catch (err) {
+    // Without this, a rejected/thrown previewer.preview() (which Tasks 7-10
+    // will stress with diagrams, oversized tables, and a patched Chunker)
+    // never sets window.__pagedownResult at all, and the main process's
+    // poll loop just spins for its full 10-second deadline before reporting
+    // a generic, undiagnostic timeout — exactly the symptom that made this
+    // task's own CSP bug expensive to track down. Publishing a distinct
+    // error result lets sendDocument (src/main/pagination-window.ts) detect
+    // and surface the failure immediately instead of waiting it out.
+    const result: OutgoingError = {
+      type: 'error',
+      requestId: event.data.requestId,
+      error: err instanceof Error ? (err.stack ?? err.message) : String(err)
+    }
+    window.__pagedownResult = result
   }
-  window.__pagedownResult = result
 })
