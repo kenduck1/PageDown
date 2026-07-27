@@ -237,3 +237,108 @@ export async function createPaginationHarness(win: BaseWindow): Promise<Paginati
 
   return { view, sendDocument }
 }
+
+// --- Task 7 / Gate 7: incremental re-layout spike -------------------------
+//
+// Separate postMessage/poll pair from `sendDocument` above, deliberately:
+// gate7's two phases need to keep ONE Previewer/Chunker instance alive in
+// the render context between two round trips (see
+// resources/pagination-render/index.ts's `gate7Previewer` module state),
+// whereas `sendDocument` is fully self-contained per call. Reusing
+// `sendDocument`/`__pagedownResult`'s shape for this would conflate two
+// different lifecycles for no benefit — see that file's block comment above
+// its gate7 message handlers for the full Chunker-internals writeup this is
+// exercising.
+
+export interface Gate7Phase1Result {
+  fullOriginalMs: number
+  totalPagesOriginal: number
+  sectionNumberAtBreakpoint: number | null
+  resumeNoEditMs: number
+  totalPagesAfterResumeNoEdit: number
+  baselinePagesText: string[]
+  resumedNoEditPagesText: string[]
+}
+
+export interface Gate7Phase2Result {
+  resumeWithEditMs: number
+  totalPagesAfterEdit: number
+  resumedWithEditPagesText: string[]
+  fullEditedMs: number
+  totalPagesEdited: number
+  controlPagesText: string[]
+}
+
+// Phase 2's from-scratch control run separately re-lays-out the full ~300
+// page document (see gate2's ~2.5s measurement for that alone), on top of
+// phase 1's own full run and two partial resumes — comfortably over
+// sendDocument's 10s deadline in the worst case, hence the longer budget
+// here rather than reusing that constant.
+const GATE7_POLL_DEADLINE_MS = 30_000
+
+async function pollGate7Result<T>(
+  view: WebContentsView,
+  requestId: string,
+  resultType: string
+): Promise<T> {
+  const deadline = Date.now() + GATE7_POLL_DEADLINE_MS
+  while (Date.now() < deadline) {
+    const result = await view.webContents.executeJavaScript(
+      `(window.__pagedownGate7Result && window.__pagedownGate7Result.requestId === ${JSON.stringify(requestId)}) ? window.__pagedownGate7Result : null`
+    )
+    if (result) {
+      if (result.ok === false) {
+        throw new Error(`Gate 7 spike failed in render context: ${result.error}`)
+      }
+      if (result.type !== resultType) {
+        throw new Error(
+          `Gate 7 spike returned an unexpected result type: expected ${resultType}, got ${result.type}`
+        )
+      }
+      return result as T
+    }
+    await new Promise((resolve) => setTimeout(resolve, 50))
+  }
+  throw new Error('Gate 7 spike timed out waiting for a result')
+}
+
+// Phase 1: full paginate `html`, capture the breakToken at `targetPageIndex`
+// via the afterPageLayout hook, then an immediate resume-with-no-edit
+// sanity check. See resources/pagination-render/index.ts for what actually
+// runs; this is just the postMessage/poll plumbing to reach it.
+export async function sendGate7Phase1(
+  harness: PaginationHarness,
+  html: string,
+  targetPageIndex: number
+): Promise<Gate7Phase1Result> {
+  const requestId = randomUUID()
+  await harness.view.webContents.executeJavaScript(
+    `window.postMessage(${JSON.stringify({ type: 'gate7-phase1', requestId, html, targetPageIndex })}, '*')`
+  )
+  return pollGate7Result<Gate7Phase1Result>(harness.view, requestId, 'gate7-phase1-result')
+}
+
+// Phase 2: apply a real edit to the SAME live chunker.source tree phase 1
+// left alive (a new text node appended to the paragraph after
+// "## Section {editSectionNumber}"), resume from the retained breakToken,
+// and time that against a from-scratch full layout of `editedHtml` (built
+// by the caller via the real markdownToHtml pipeline on an edited markdown
+// string, so the control run lays out genuinely equivalent content). Must
+// be called with the same `targetPageIndex` phase 1 was called with, and
+// only after phase 1 has resolved successfully — see the render context's
+// own checks for both.
+export async function sendGate7Phase2(
+  harness: PaginationHarness,
+  payload: {
+    editSectionNumber: number
+    markerText: string
+    editedHtml: string
+    targetPageIndex: number
+  }
+): Promise<Gate7Phase2Result> {
+  const requestId = randomUUID()
+  await harness.view.webContents.executeJavaScript(
+    `window.postMessage(${JSON.stringify({ type: 'gate7-phase2', requestId, ...payload })}, '*')`
+  )
+  return pollGate7Result<Gate7Phase2Result>(harness.view, requestId, 'gate7-phase2-result')
+}

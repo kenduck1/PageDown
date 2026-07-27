@@ -1,0 +1,38 @@
+{
+  "chunkerEntryPointFound": "Chunker.render(source, breakToken) + Chunker.removePages(fromIndex), bypassing flow()/Previewer.preview() entirely for the resumed call. This is the exact sequence Paged.js's own addPage() onOverflow handler (node_modules/pagedjs/src/chunker/chunker.js) uses internally to recover from a page overflowing during its own initial layout — this spike invokes it from outside that internal callback instead. No source patching of Paged.js itself was required to CALL render()/removePages() (they are ordinary, non-underscored Chunker prototype methods) — the real constraint is that BOTH calls must run against the SAME Chunker instance and the SAME live chunker.source DOM tree that produced the retained breakToken (breaktoken.js's BreakToken.node is a live DOM node reference, not a portable position; Chunker.flow() always builds a brand-new ContentParser -- and therefore an unrelated tree with fresh data-ref UUIDs -- from whatever content it is given, so a breakToken from one flow() run has no meaningful counterpart in a later, independently re-parsed run).",
+  "resumptionAttempted": true,
+  "resumptionWorked": true,
+  "targetPageIndex": 150,
+  "sectionNumberAtBreakpoint": 651,
+  "editSectionNumber": 671,
+  "timings": {
+    "fullOriginalMs": 2486.7999999523163,
+    "resumeNoEditMs": 1237.2000000476837,
+    "resumeWithEditMs": 1220.1000001430511,
+    "fullEditedMs": 2508,
+    "speedupRatio": 2.0555692153970564
+  },
+  "pageCounts": {
+    "totalPagesOriginal": 297,
+    "totalPagesAfterResumeNoEdit": 297,
+    "totalPagesAfterEdit": 297,
+    "totalPagesEdited": 297
+  },
+  "equivalenceChecks": {
+    "resumeNoEdit": {
+      "allMatch": true,
+      "lengthMatch": true,
+      "pagesCompared": 147,
+      "mismatchCount": 0,
+      "firstMismatchIndex": -1
+    },
+    "resumeWithEditVsControl": {
+      "allMatch": true,
+      "lengthMatch": true,
+      "pagesCompared": 147,
+      "mismatchCount": 0,
+      "firstMismatchIndex": -1
+    }
+  },
+  "notes": "See docs/superpowers/plans/2026-07-25-phase0-findings.md Gate 7 section for the full writeup. Patch surface required to reach this point: none to Paged.js's own source (render()/removePages() are called as-is); the surface actually required is manual DOM manipulation of chunker.source performed by CALLING CODE (this spike's render-context handler in resources/pagination-render/index.ts) to apply an edit strictly after the retained breakToken while leaving the retained prefix's nodes untouched -- which for THIS spike's edit (a new text node appended to an existing paragraph) needed no extra data-ref bookkeeping, but a general \"splice in freshly-parsed content\" edit would (new elements need data-ref UUIDs assigned exactly the way ContentParser.addRefs does it internally, an unexported/undocumented implementation detail). An edit occurring BEFORE targetPageIndex is NOT just a slower case -- it is actively UNSAFE with this mechanism as tested: resuming from a retained breakToken reuses pages[0..targetPageIndex-1] completely as-is, so if the edit fell upstream of the checkpoint those reused pages would silently show stale, pre-edit content while pages resumed from the checkpoint onward reflect the edit -- an internally inconsistent document, not merely a missed optimization. A real implementation MUST know, for every retained checkpoint, whether a given edit falls before or after it (via the source-offset mapping Task 4/Gate 1 already built) and fall back to a full re-layout (or resume from an earlier still-valid checkpoint) whenever it does not. This was not separately measured here -- it follows directly from how the mechanism replays only from the checkpoint forward, not from an untested assumption -- but any production use of this finding must treat it as a hard correctness requirement, not an optimization detail."
+}
