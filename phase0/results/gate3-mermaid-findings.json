@@ -1,0 +1,53 @@
+{
+  "diagramBoxes": [
+    {
+      "id": "pagedown-mermaid-0",
+      "width": 258.890625,
+      "height": 356.5859375
+    },
+    {
+      "id": "pagedown-mermaid-1",
+      "width": 624,
+      "height": 532.796875
+    },
+    {
+      "id": "pagedown-mermaid-2",
+      "width": 131.546875,
+      "height": 1936
+    },
+    {
+      "id": "pagedown-mermaid-2",
+      "width": 131.546875,
+      "height": 1936
+    },
+    {
+      "id": "pagedown-mermaid-2",
+      "width": 131.546875,
+      "height": 1936
+    }
+  ],
+  "oversizedWrapperCount": 3,
+  "oversizedHeights": [
+    1936
+  ],
+  "pageHeight": 1056,
+  "pageCount": 5,
+  "nonceCheck": {
+    "nonce": "7rV7saZ/dKqx8u1v1rjVRg==",
+    "styleCount": 3,
+    "styleNonces": [
+      "7rV7saZ/dKqx8u1v1rjVRg==",
+      "7rV7saZ/dKqx8u1v1rjVRg==",
+      "7rV7saZ/dKqx8u1v1rjVRg=="
+    ],
+    "styleAttrCount": 0,
+    "hoistedRuleCounts": [
+      15,
+      24,
+      46
+    ]
+  },
+  "totalCspViolations": 972,
+  "injectionViolationCount": 2,
+  "pwned": "undefined"
+}

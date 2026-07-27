@@ -28,15 +28,50 @@ import { renderMermaidToSvg } from '../../src/diagrams/render-mermaid'
 // <style> element created via `document.createElement`. This is exactly how
 // Paged.js's Previewer/Polisher create their computed pagination CSS
 // (`document.createElement("style")`, never by parsing HTML — confirmed
-// against pagedjs's own source). Content this context injects from
-// untrusted Markdown-derived HTML can only ever introduce a <style> element
-// via HTML PARSING (assigning into innerHTML / Previewer's own content
-// handling), never via a `document.createElement` call made on attacker
-// data, so attacker-controlled <style> tags never receive this nonce and
-// stay blocked by CSP exactly as before. This is deliberately narrower than
-// a blanket `style-src 'unsafe-inline'`: only scripts running on this page
-// can mint a nonced <style> element at all, and only Paged.js's own code
-// does so today.
+// against pagedjs's own source), and is deliberately narrower than a
+// blanket `style-src 'unsafe-inline'`: only scripts running on this page can
+// mint a nonced <style> element at all.
+//
+// Corrected (Task 8 review) — the invariant this shim enforces is narrower
+// than an earlier version of this comment claimed. It is NOT "content that
+// arrived via HTML parsing can never end up nonced": `reattachNoncedStyles`
+// (below, Task 8 / Gate 3) does exactly that for Mermaid's own theme CSS —
+// takes text that Mermaid produced (and that DOMPurify's sanitize() pass,
+// itself parsing/serializing HTML, already ran over) and re-creates it as a
+// fresh `<style>` via this same `document.createElement`, which nonces it.
+// The real invariant is narrower and CODE-PATH-based, not
+// parsing-vs-scripting-based: only THIS RENDER CONTEXT'S OWN trusted code
+// (this file, and the pinned mermaid dependency it calls) ever calls
+// `document.createElement('style')` at all — attacker-controlled Markdown
+// content, which only ever becomes DOM via `Range.createContextualFragment`
+// (see the 'render' handler below) or Mermaid's internal parsing of a
+// ```mermaid code block's TEXT, never gets a chance to have ITS OWN
+// `document.createElement` calls run, so it still can't mint an
+// attacker-authored `<style>` tag directly.
+//
+// This narrower invariant does leave one real, bounded-severity residual
+// path this shim's own re-nonce of Mermaid's theme CSS opens, found on
+// review, not by this task's own testing (the corpus contains no diagram
+// that exercises it): Mermaid's `%%{init: {...}}%%` frontmatter directive
+// (parsed from the ```mermaid code block's own text, before rendering) lets
+// a diagram author set `themeCSS`, and `themeCSS` is not in Mermaid's own
+// "secure keys" init-sanitization list — so a diagram could embed
+// `%%{init: {"themeCSS": "..."}}%%` and have that CSS text end up inside
+// the theme `<style>` block this shim then nonces on Mermaid's behalf.
+// Bounded, not unrestricted: this is CSS only (script-src is completely
+// unaffected — nothing here ever nonces a <script>), `stripExternalCssRefs`
+// (Task 8 / Gate 3) already strips `@import`/external `url(...)` from
+// exactly this text before it reaches the nonced style block, and
+// `connect-src 'none'` / `img-src 'self' data:` / `default-src 'self'`
+// still block any other egress path a raw CSS injection could otherwise
+// exploit (font/background `url()` fetches, etc. — the same class of
+// attack `stripExternalCssRefs` targets). This is also, per the design
+// doc's own Mermaid section, the PRESCRIBED mechanism (render once, strip
+// dangerous refs, re-attach with the document's nonce) — not a new gap
+// introduced by accident, but its actual blast radius (arbitrary
+// same-origin-scoped CSS applied inside the render context, via a
+// mermaid-authored diagram) is worth a future task's attention rather than
+// treating this comment's account of it as the final word.
 const styleNonce =
   document.querySelector('meta[name="csp-style-nonce"]')?.getAttribute('content') ?? ''
 if (styleNonce) {
@@ -291,6 +326,17 @@ function ensureMermaidPageBreakStyleInjected(): void {
 // Actual page-fit clamping (this spike's `max-width: 100%; height: auto`
 // CSS above) then applies uniformly from the diagram's own true aspect
 // ratio, the same way it would for a normal image.
+//
+// `removeAttribute('style')` below is now purely DEFENSIVE, not load-bearing
+// (Task 8 review correction) — this function is always called AFTER
+// hoistInlineStyleAttributes, which already scans `svgElement` itself (not
+// just its descendants) and removes/hoists any `style=""` it carries,
+// nonce-safely, before this function ever runs. Kept here anyway as a
+// second, cheap guarantee that this function's own successful path never
+// leaves a stray inline style behind, independent of hoisting's own
+// correctness — but the actual CSP-relevant removal, on EVERY path through
+// this function including the early returns below, already happened
+// upstream.
 function fitSvgToNaturalSize(svgElement: SVGElement): void {
   const viewBoxAttr = svgElement.getAttribute('viewBox')
   if (!viewBoxAttr) return
@@ -395,8 +441,40 @@ let hoistedStyleCounter = 0
 // properties and the foreignObject HTML div's CSS layout properties, which a
 // presentation-attribute conversion (the alternative fix for the SVG-only
 // case) would not have covered.
+//
+// Untested risk, flagged on review rather than chased down here: this
+// changes CSS SPECIFICITY, not just mechanism — an inline `style=""`
+// attribute always wins the cascade unbeatable by any selector-based rule
+// short of `!important`; a `.pd-hoisted-style-N { ... }` class rule does
+// not. For THIS corpus (no diagram uses Mermaid's `classDef` syntax, which
+// is how a diagram author would apply their OWN class-selector-based CSS to
+// a node) this is inert — there is nothing else competing for specificity
+// on these elements. A diagram that DOES use `classDef` could, in
+// principle, have its own class-based styling interact differently with a
+// hoisted rule than it would have with the original inline attribute
+// (equal-specificity class-vs-class rules resolve by SOURCE ORDER, not by
+// "inline always wins," once the inline attribute is gone) — not verified
+// either way here. Worth an explicit classDef fixture in Task 9's
+// pixel-identical (editor/preview/export) comparison, not assumed safe by
+// extension from this corpus's result.
+//
+// Includes `svgElement` ITSELF, not just its descendants (Task 8 review
+// fix) — `svgElement.querySelectorAll('[style]')` only matches descendants
+// by definition, but Mermaid's own `configureSvgSize`/`calculateSvgSizeAttrs`
+// (see fitSvgToNaturalSize's comment above) sets a `style="max-width:...px"`
+// attribute directly on the SVG ROOT, which was being silently missed by
+// this scan entirely. On this app's own happy path that root style
+// attribute gets removed anyway, as a side effect of
+// fitSvgToNaturalSize()'s own `removeAttribute('style')` call — but every
+// EARLY-RETURN path through that function (missing/malformed viewBox,
+// non-positive dimensions) previously left that un-hoisted, un-nonced
+// `style=""` attribute sitting in the final output, uncovered by CSP,
+// entirely by omission, not by any deliberate exception. Scanning the root
+// here means the root's style is ALWAYS hoisted into the same nonced
+// mechanism as every other element's, regardless of which path
+// fitSvgToNaturalSize takes afterward.
 function hoistInlineStyleAttributes(svgElement: SVGElement): string {
-  const styledElements = Array.from(svgElement.querySelectorAll('[style]'))
+  const styledElements: Element[] = [svgElement, ...svgElement.querySelectorAll('[style]')]
   const rules: string[] = []
   for (const el of styledElements) {
     const declarations = el.getAttribute('style') ?? ''
@@ -434,6 +512,25 @@ async function renderMermaidDiagrams(container: DocumentFragment): Promise<void>
   // Awaited once per render pass, before the first mermaid.render() call,
   // per the brief — not per-diagram (document.fonts.ready reflects the
   // whole document's font state, not a single element's).
+  //
+  // Honest limitation (Task 8 review) — this await is present per the
+  // brief's literal instruction, but it does NOT actually validate the
+  // resource-settling gate the design doc describes: `container` at this
+  // point is still the DETACHED fragment built above, not yet part of any
+  // rendered layout, and `document.fonts.ready` only reflects fonts the
+  // document has already REQUESTED via currently-laid-out content — which
+  // is exactly the unreliable-immediately-after-injecting-new-HTML case the
+  // design doc's own resource-settling-gate section warns about (it
+  // prescribes an explicit `document.fonts.load(...)` per declared face,
+  // not just an await on `.ready`, for exactly this reason). No actual
+  // `PageDownSans` font is bundled in this Phase 0 spike (see
+  // render-mermaid.ts's own comment), so there was nothing concrete to
+  // `.load()` here yet, and this await was not separately verified to do
+  // anything beyond "resolve immediately" against this corpus — it is
+  // scaffolding matching the brief's shape, not a validated gate. A real
+  // font-loading implementation, landing alongside the actual bundled font,
+  // needs to build the fuller gate the design doc describes, not assume
+  // this line already is one.
   await document.fonts.ready
 
   ensureMermaidPageBreakStyleInjected()
