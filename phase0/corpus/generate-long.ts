@@ -16,6 +16,20 @@ function generate(sections: number, title: string): string {
   return out
 }
 
-writeFileSync(new URL('./long.md', import.meta.url), generate(120, 'Long Reference Report'))
-writeFileSync(new URL('./very-long.md', import.meta.url), generate(300, 'Very Long Reference Report'))
+// Section counts calibrated (not guessed) against the real render pipeline
+// to actually paginate to ~100 / ~300 pages under Paged.js's current default
+// page box (no @page CSS is wired in yet -- see Task 6's Gate 2 findings),
+// not just named as if they did. The original counts (120 / 300) were a
+// Task 2 naming assumption that never got verified against a real
+// Previewer run; Task 6's Gate 2 measured the true ratio at exactly
+// 4.2857 sections/page for this paragraph pool (120 sections -> 28 pages,
+// 300 sections -> 70 pages, identical ratio both times), and these counts
+// are that ratio times 100 and 300 respectively, then confirmed empirically
+// (see docs/superpowers/plans/2026-07-25-phase0-findings.md's Gate 2
+// section) to land within a page or two of the intended target.
+writeFileSync(new URL('./long.md', import.meta.url), generate(429, 'Long Reference Report'))
+writeFileSync(
+  new URL('./very-long.md', import.meta.url),
+  generate(1286, 'Very Long Reference Report')
+)
 console.log('Wrote phase0/corpus/long.md and phase0/corpus/very-long.md')

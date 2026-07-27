@@ -8,10 +8,16 @@ import type { PaginationHarness } from '../main/pagination-window'
 // sendDocument). Task 7's incremental relayout work and later Phase 0 gates
 // reuse this exact `{ stages, pageCount }` shape, so keep it minimal: no
 // break-quality handling, no Mermaid integration, no retries — just timing.
+// `layoutMs` is an additive, optional field (Paged.js's own internal
+// preview() timing, forwarded from `PaginationResult` — see
+// pagination-window.ts) added after the fact so committed timing results
+// can show how much of `sendAndPaginate` is genuine layout work versus
+// harness/poll overhead; it does not change or remove anything in the
+// pinned `{ stages, pageCount }` shape Task 7 depends on.
 export async function paginateAndTime(
   harness: PaginationHarness,
   markdown: string
-): Promise<{ stages: Record<string, number>; pageCount: number }> {
+): Promise<{ stages: Record<string, number>; pageCount: number; layoutMs: number }> {
   const stages: Record<string, number> = {}
 
   let t = performance.now()
@@ -22,5 +28,5 @@ export async function paginateAndTime(
   const result = await harness.sendDocument(html)
   stages.sendAndPaginate = performance.now() - t
 
-  return { stages, pageCount: result.pageCount }
+  return { stages, pageCount: result.pageCount, layoutMs: result.layoutMs }
 }

@@ -465,7 +465,23 @@ test('Gate 1 (independent oracle): the offset-correction table decodes every rea
   // still parses without throwing can leave a count like "> 0" satisfied at
   // some other, wrong number — confirmed in review that a ">0" bound alone
   // survived a corrupted-decoder reproduction at several different counts.
-  expect(totalRuns).toBe(1440)
+  //
+  // totalRuns was 1,440 through Task 4/5 and the start of Task 6; it's
+  // 5,325 as of Task 6's Gate 2 fix, which regenerated `long.md`/
+  // `very-long.md` at ~4x their previous section counts (120->429,
+  // 300->1286) so they'd actually paginate to their intended ~100/~300
+  // pages under Paged.js — see
+  // docs/superpowers/plans/2026-07-25-phase0-findings.md's Gate 2 section.
+  // Re-derived by temporarily logging the real totals from a fresh run
+  // against the regenerated corpus (not guessed/computed by hand) with the
+  // mismatches assertion above already passing — i.e. this is a legitimate
+  // re-pin against a deliberately larger corpus, not a weakened assertion:
+  // totalMatches/totalMultiCodeUnitMatches below are unchanged (all 16
+  // matches and the one multi-code-unit decode still live in
+  // entities-and-escapes.md, which Task 6 did not touch), and the
+  // exhaustive per-byte/per-offset mismatch check just above still reports
+  // zero mismatches across all 5,325 runs.
+  expect(totalRuns).toBe(5325)
   expect(totalMatches).toBe(16)
   // Every run that reached the exhaustive check genuinely was not degraded
   // (checked via `isDegraded` above, not merely implied).
