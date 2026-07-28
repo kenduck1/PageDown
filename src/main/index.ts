@@ -11,6 +11,7 @@ import {
 } from './pagination-window'
 import { paginateAndTime } from '../pagination/paginate'
 import { exportToPdf } from '../export/export-pdf'
+import { openFileDialog, readFileByPath, saveFile, getRecentFiles, addRecentFile } from './file-io'
 
 // Must run before app.whenReady() is awaited anywhere — Electron requires
 // protocol.registerSchemesAsPrivileged() to be called before the `ready`
@@ -127,6 +128,26 @@ app.whenReady().then(() => {
 
   // IPC test
   ipcMain.on('ping', () => console.log('pong'))
+
+  ipcMain.handle('file:open', async () => {
+    const result = await openFileDialog()
+    if (result) await addRecentFile(app.getPath('userData'), result.filePath)
+    return result
+  })
+
+  ipcMain.handle('file:openPath', async (_event, filePath: string) => {
+    const result = await readFileByPath(filePath)
+    await addRecentFile(app.getPath('userData'), result.filePath)
+    return result
+  })
+
+  ipcMain.handle('file:save', async (_event, filePath: string | null, content: string) => {
+    const result = await saveFile(filePath, content)
+    if (result) await addRecentFile(app.getPath('userData'), result.filePath)
+    return result
+  })
+
+  ipcMain.handle('file:getRecents', () => getRecentFiles(app.getPath('userData')))
 
   const mainWindow = createWindow()
 
