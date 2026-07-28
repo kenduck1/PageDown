@@ -215,6 +215,64 @@ interface Gate7Error {
 
 type Gate7Result = Gate7Phase1Success | Gate7Phase2Success | Gate7Error
 
+// --- Task 9 / Gate 4: header/footer artifact-vs-content tagging probe -----
+//
+// A separate, deliberately narrow message type/result channel, added ONLY
+// because of what Gate 4 found by actually running it: this harness's
+// regular 'render' path (above) always calls `previewer.preview(container,
+// [], root)` — an explicitly EMPTY stylesheet array (see the 'render'
+// handler's own comment on why `[]`, not falsy, matters: Previewer.preview()
+// only calls its own `removeStyles()` auto-detection when `stylesheets` is
+// falsy, and `[]` is truthy) — which means NO `@page` at-rule ever reaches
+// Paged.js's Polisher for ANY document this harness paginates today. Traced
+// directly (not assumed): `node_modules/pagedjs/src/chunker/page.js` never
+// creates the per-page margin-box DOM elements; that template lives in
+// `chunker.js`'s page template (14 `.pagedjs_margin-*` divs, always present,
+// always empty absent a matching `@page` rule) and is populated only by
+// `src/modules/paged-media/atpage.js`'s `@page`-rule handler — which never
+// runs here, since there is no stylesheet for it to read. Net effect: this
+// harness's on-screen render and PDF export never contain ANY running
+// header/footer/page-number content for ANY corpus document today (a real,
+// separate gap from this task's own scope — Gate 2's findings doc already
+// flagged that frontmatter page/margin metadata isn't wired into an `@page`
+// stylesheet at all). That means the design doc's "are running
+// headers/footers/page numbers tagged as content vs. artifacts" Gate 4
+// criterion has literally nothing to inspect against this harness's regular
+// output — not a pass, not a fail, just no signal at all. This probe exists
+// solely to manufacture that missing signal: it accepts an explicit `css`
+// string (containing real `@page`/`@top-center`/`@bottom-center` rules) and
+// forwards it to `previewer.preview()` as a real, non-empty stylesheet —
+// something no other code path in this render context does — so
+// `phase0/gate4-export.spec.ts` has actual generated running-header/footer
+// content to export and inspect the tagging of. Reuses the SAME
+// `activePreviewer`/`currentRequestId` module state as the 'render' handler
+// above (Polisher-cleanup-before-next-run and stale-result-discarding both
+// still apply — this is still just a `previewer.preview()` call under the
+// hood), but skips the Mermaid preprocessing pass and the empty-content
+// short-circuit, neither of which this probe's own callers need.
+interface Gate4ProbeMessage {
+  type: 'gate4-header-footer-probe'
+  requestId: string
+  html: string
+  css: string
+}
+
+interface Gate4ProbeSuccess {
+  type: 'gate4-header-footer-probe-result'
+  requestId: string
+  ok: true
+  pageCount: number
+}
+
+interface Gate4ProbeError {
+  type: 'gate4-header-footer-probe-error'
+  requestId: string
+  ok: false
+  error: string
+}
+
+type Gate4ProbeResult = Gate4ProbeSuccess | Gate4ProbeError
+
 // Marks this file as a module (rather than a global script) so the
 // `declare global` augmentation below is valid — nothing else here needs
 // to be imported/exported.
@@ -224,6 +282,7 @@ declare global {
   interface Window {
     __pagedownResult?: OutgoingMessage
     __pagedownGate7Result?: Gate7Result
+    __pagedownGate4ProbeResult?: Gate4ProbeResult
   }
 }
 
@@ -1191,3 +1250,62 @@ window.addEventListener(
     }
   }
 )
+
+// --- Task 9 / Gate 4: header/footer artifact-vs-content tagging probe -----
+// See the block comment above the Gate4Probe*/`__pagedownGate4ProbeResult`
+// type declarations for why this exists at all. Mirrors the regular
+// 'render' handler's own try/catch-everything/discard-stale-results
+// structure (same rationale: a silent hang here is exactly as expensive to
+// diagnose as it was for that handler — see this file's Task 6 commentary),
+// deliberately without the Mermaid preprocessing pass or the empty-content
+// short-circuit, neither of which any caller of this probe needs.
+window.addEventListener('message', async (event: MessageEvent<Gate4ProbeMessage>) => {
+  if (event.data?.type !== 'gate4-header-footer-probe') return
+
+  const { requestId, html, css } = event.data
+  currentRequestId = requestId
+
+  try {
+    if (activePreviewer) {
+      const previous = activePreviewer
+      activePreviewer = undefined
+      previous.polisher?.destroy()
+    }
+
+    const root = document.getElementById('content-root')
+    if (!root) {
+      throw new Error('content-root element is missing from the document')
+    }
+    root.innerHTML = ''
+
+    const container = document.createRange().createContextualFragment(html)
+    const previewer = new Previewer()
+    activePreviewer = previewer
+    // The one thing this probe exists to do differently from the regular
+    // 'render' handler: a REAL, non-empty stylesheet (an object keyed by a
+    // synthetic href, exactly the shape Previewer.preview()/Polisher.add()
+    // already expect — see previewer.js's own `removeStyles()`, which
+    // builds this same `{ [href]: cssText }` shape from real `<style>`
+    // elements) so Paged.js's `@page`-rule handler (atpage.js) actually has
+    // something to read and populate the per-page margin boxes with.
+    const flow = await previewer.preview(container, [{ 'gate4-probe-stylesheet': css }], root)
+
+    if (currentRequestId !== requestId) return
+    const result: Gate4ProbeSuccess = {
+      type: 'gate4-header-footer-probe-result',
+      requestId,
+      ok: true,
+      pageCount: flow.total
+    }
+    window.__pagedownGate4ProbeResult = result
+  } catch (err) {
+    if (currentRequestId !== requestId) return
+    const result: Gate4ProbeError = {
+      type: 'gate4-header-footer-probe-error',
+      requestId,
+      ok: false,
+      error: err instanceof Error ? (err.stack ?? err.message) : String(err)
+    }
+    window.__pagedownGate4ProbeResult = result
+  }
+})
