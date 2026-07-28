@@ -32,5 +32,9 @@ export async function writeRecentFiles(
   userDataDir: string,
   entries: RecentFileEntry[]
 ): Promise<void> {
-  await writeFile(join(userDataDir, RECENT_FILES_FILENAME), JSON.stringify(entries, null, 2), 'utf8')
+  await writeFile(
+    join(userDataDir, RECENT_FILES_FILENAME),
+    JSON.stringify(entries, null, 2),
+    'utf8'
+  )
 }
