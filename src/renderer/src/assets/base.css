@@ -1,34 +1,68 @@
-:root {
-  --ev-c-white: #ffffff;
-  --ev-c-white-soft: #f8f8f8;
-  --ev-c-white-mute: #f2f2f2;
+@import 'tailwindcss';
 
-  --ev-c-black: #1b1b1f;
-  --ev-c-black-soft: #222222;
-  --ev-c-black-mute: #282828;
-
-  --ev-c-gray-1: #515c67;
-  --ev-c-gray-2: #414853;
-  --ev-c-gray-3: #32363f;
-
-  --ev-c-text-1: rgba(255, 255, 245, 0.86);
-  --ev-c-text-2: rgba(235, 235, 245, 0.6);
-  --ev-c-text-3: rgba(235, 235, 245, 0.38);
-
-  --ev-button-alt-border: transparent;
-  --ev-button-alt-text: var(--ev-c-text-1);
-  --ev-button-alt-bg: var(--ev-c-gray-3);
-  --ev-button-alt-hover-border: transparent;
-  --ev-button-alt-hover-text: var(--ev-c-text-1);
-  --ev-button-alt-hover-bg: var(--ev-c-gray-2);
+@font-face {
+  font-family: 'Source Serif 4';
+  font-style: normal;
+  font-weight: 200 900;
+  font-display: swap;
+  src: url('./fonts/source-serif-4-variable.woff2') format('woff2-variations');
 }
 
-:root {
-  --color-background: var(--ev-c-black);
-  --color-background-soft: var(--ev-c-black-soft);
-  --color-background-mute: var(--ev-c-black-mute);
+@theme {
+  /* Colors -- docs/superpowers/specs/2026-07-28-token-foundation-app-shell-design.md */
+  --color-chrome-dark: #ececee;
+  --color-chrome-light: #f6f6f7;
+  --color-canvas: #e6e6ea;
+  --color-page: #ffffff;
+  --color-border-subtle: #e2e2e6;
+  --color-border-chrome: #dcdce0;
+  --color-text-primary: #202124;
+  --color-text-secondary: #5f6368;
+  --color-text-tertiary: #9aa0a6;
+  --color-text-faint: #c2c4c8;
+  --color-accent: #2461c0;
+  --color-accent-hover: #1d4ea3;
+  --color-success: #2f7d46;
+  --color-scrim: rgba(20, 20, 22, 0.4);
 
-  --color-text: var(--ev-c-text-1);
+  /* Font families */
+  --font-sans: -apple-system, 'Segoe UI', system-ui, sans-serif;
+  --font-serif: 'Source Serif 4', serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+
+  /* Font sizes -- named by exact value, not a t-shirt scale (see plan's Global Constraints) */
+  --text-11: 11px;
+  --text-11-5: 11.5px;
+  --text-12: 12px;
+  --text-12-5: 12.5px;
+  --text-13: 13px;
+  --text-14: 14px;
+  --text-15: 15px;
+  --text-15-5: 15.5px;
+  --text-20: 20px;
+  --text-21: 21px;
+
+  /* Radius scale */
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-full: 999px;
+
+  /* Shadow scale */
+  --shadow-flat: 0 1px 3px rgba(0, 0, 0, 0.08);
+  --shadow-page: 0 2px 14px rgba(0, 0, 0, 0.12);
+  --shadow-float-sm: 0 6px 20px rgba(0, 0, 0, 0.18);
+  --shadow-float-lg: 0 8px 24px rgba(0, 0, 0, 0.14);
+  --shadow-modal: 0 30px 80px rgba(0, 0, 0, 0.35);
+  --shadow-glow-accent: 0 2px 8px rgba(36, 97, 192, 0.25);
+}
+
+@utility text-eyebrow {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--color-text-secondary);
 }
 
 *,
@@ -36,32 +70,15 @@
 *::after {
   box-sizing: border-box;
   margin: 0;
-  font-weight: normal;
 }
 
-ul {
-  list-style: none;
+html,
+body {
+  height: 100%;
 }
 
 body {
-  min-height: 100vh;
-  color: var(--color-text);
-  background: var(--color-background);
-  line-height: 1.6;
-  font-family:
-    Inter,
-    -apple-system,
-    BlinkMacSystemFont,
-    'Segoe UI',
-    Roboto,
-    Oxygen,
-    Ubuntu,
-    Cantarell,
-    'Fira Sans',
-    'Droid Sans',
-    'Helvetica Neue',
-    sans-serif;
-  text-rendering: optimizeLegibility;
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
+  font-family: var(--font-sans);
+  color: var(--color-text-primary);
+  font-size: var(--text-13);
 }
