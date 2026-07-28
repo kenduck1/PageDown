@@ -24,26 +24,33 @@
       "id": "pagedown-mermaid-2",
       "width": 131.546875,
       "height": 1936
+    },
+    {
+      "id": "pagedown-mermaid-2",
+      "width": 131.546875,
+      "height": 1936
     }
   ],
-  "oversizedWrapperCount": 3,
+  "oversizedWrapperCount": 4,
   "oversizedHeights": [
     1936
   ],
   "pageHeight": 1056,
-  "pageCount": 5,
+  "pageCount": 6,
   "nonceCheck": {
-    "nonce": "7rV7saZ/dKqx8u1v1rjVRg==",
-    "styleCount": 3,
+    "nonce": "wN1LE3mrtnei03eEW4mD9g==",
+    "styleCount": 4,
     "styleNonces": [
-      "7rV7saZ/dKqx8u1v1rjVRg==",
-      "7rV7saZ/dKqx8u1v1rjVRg==",
-      "7rV7saZ/dKqx8u1v1rjVRg=="
+      "wN1LE3mrtnei03eEW4mD9g==",
+      "wN1LE3mrtnei03eEW4mD9g==",
+      "wN1LE3mrtnei03eEW4mD9g==",
+      "wN1LE3mrtnei03eEW4mD9g=="
     ],
     "styleAttrCount": 0,
     "hoistedRuleCounts": [
       15,
       24,
+      46,
       46
     ]
   },

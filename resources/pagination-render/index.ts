@@ -14,6 +14,20 @@
 // hardcoded `1`.
 import { Previewer } from 'pagedjs'
 import { renderMermaidToSvg } from '../../src/diagrams/render-mermaid'
+import { registerBreakHandlers } from '../../src/pagination/break-handlers'
+
+// Task 10 / Gate 6: register the first-party keep-with-next/table-
+// continuation handlers exactly once, before the first `new Previewer()`
+// below is ever constructed. Per src/pagination/break-handlers.ts's own
+// top comment (grounded in reading node_modules/pagedjs/src/polyfill/
+// previewer.js and utils/handlers.js directly): Paged.js has no
+// per-Previewer-instance handler option — `registerHandlers(...)` mutates
+// a module-level array that EVERY `new Previewer().preview()` call reads
+// from, so this belongs at module scope here, not inside the per-request
+// 'render' handler below (which would re-register, and therefore
+// re-instantiate and re-fire, these handlers once per past render on every
+// subsequent call).
+registerBreakHandlers()
 
 // Trusted bootstrap, runs before any 'render' message can possibly arrive.
 // This whole module is loaded via `<script type="module" src="./index.js">`
