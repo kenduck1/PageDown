@@ -136,8 +136,13 @@ app.whenReady().then(() => {
   })
 
   ipcMain.handle('file:openPath', async (_event, filePath: string) => {
+    const userDataDir = app.getPath('userData')
+    const recents = await getRecentFiles(userDataDir)
+    if (!recents.some((entry) => entry.filePath === filePath)) {
+      throw new Error('Requested path is not a known recent file')
+    }
     const result = await readFileByPath(filePath)
-    await addRecentFile(app.getPath('userData'), result.filePath)
+    await addRecentFile(userDataDir, result.filePath)
     return result
   })
 
