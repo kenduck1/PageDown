@@ -8,7 +8,10 @@
       "pageCountMatch": true,
       "textCategory": "subsequence",
       "textMatch": true,
-      "firstMismatchDetail": null
+      "firstMismatchDetail": null,
+      "textDeltaSample": "1.1.2.1.",
+      "exportMs": 56,
+      "imgInfo": []
     },
     {
       "file": "entities-and-escapes.md",
@@ -18,7 +21,10 @@
       "pageCountMatch": true,
       "textCategory": "exact",
       "textMatch": true,
-      "firstMismatchDetail": null
+      "firstMismatchDetail": null,
+      "textDeltaSample": "",
+      "exportMs": 59,
+      "imgInfo": []
     },
     {
       "file": "foreign-frontmatter.md",
@@ -28,7 +34,10 @@
       "pageCountMatch": true,
       "textCategory": "exact",
       "textMatch": true,
-      "firstMismatchDetail": null
+      "firstMismatchDetail": null,
+      "textDeltaSample": "",
+      "exportMs": 54,
+      "imgInfo": []
     },
     {
       "file": "headings-near-page-bottom.md",
@@ -38,7 +47,10 @@
       "pageCountMatch": true,
       "textCategory": "exact",
       "textMatch": true,
-      "firstMismatchDetail": null
+      "firstMismatchDetail": null,
+      "textDeltaSample": "",
+      "exportMs": 55,
+      "imgInfo": []
     },
     {
       "file": "images-and-diagrams.md",
@@ -48,7 +60,18 @@
       "pageCountMatch": true,
       "textCategory": "subsequence",
       "textMatch": true,
-      "firstMismatchDetail": null
+      "firstMismatchDetail": null,
+      "textDeltaSample": "Diagramoftheproposedsitelayout,showingthemainentranceonthenorthsideandparkingtotheeast.",
+      "exportMs": 55,
+      "imgInfo": [
+        {
+          "src": "pagedown-render://render/assets/diagram-placeholder.png",
+          "alt": "Diagram of the proposed site layout, showing the main entrance on the north side and parking to the east.",
+          "complete": true,
+          "naturalWidth": 0,
+          "naturalHeight": 0
+        }
+      ]
     },
     {
       "file": "long.md",
@@ -58,7 +81,10 @@
       "pageCountMatch": true,
       "textCategory": "exact",
       "textMatch": true,
-      "firstMismatchDetail": null
+      "firstMismatchDetail": null,
+      "textDeltaSample": "",
+      "exportMs": 217,
+      "imgInfo": []
     },
     {
       "file": "mermaid-diagrams.md",
@@ -68,7 +94,10 @@
       "pageCountMatch": true,
       "textCategory": "exact",
       "textMatch": true,
-      "firstMismatchDetail": null
+      "firstMismatchDetail": null,
+      "textDeltaSample": "",
+      "exportMs": 70,
+      "imgInfo": []
     },
     {
       "file": "mixed.md",
@@ -78,7 +107,18 @@
       "pageCountMatch": true,
       "textCategory": "subsequence",
       "textMatch": true,
-      "firstMismatchDetail": null
+      "firstMismatchDetail": null,
+      "textDeltaSample": "Siteplan1.2.",
+      "exportMs": 56,
+      "imgInfo": [
+        {
+          "src": "pagedown-render://render/assets/diagram-placeholder.png",
+          "alt": "Site plan",
+          "complete": true,
+          "naturalWidth": 0,
+          "naturalHeight": 0
+        }
+      ]
     },
     {
       "file": "nested-lists.md",
@@ -88,7 +128,10 @@
       "pageCountMatch": true,
       "textCategory": "subsequence",
       "textMatch": true,
-      "firstMismatchDetail": null
+      "firstMismatchDetail": null,
+      "textDeltaSample": "1.1.2.2.1.2.3.1.2.",
+      "exportMs": 53,
+      "imgInfo": []
     },
     {
       "file": "reference-links-and-footnotes.md",
@@ -98,7 +141,10 @@
       "pageCountMatch": true,
       "textCategory": "subsequence",
       "textMatch": true,
-      "firstMismatchDetail": null
+      "firstMismatchDetail": null,
+      "textDeltaSample": "1.",
+      "exportMs": 56,
+      "imgInfo": []
     },
     {
       "file": "short.md",
@@ -108,7 +154,10 @@
       "pageCountMatch": true,
       "textCategory": "exact",
       "textMatch": true,
-      "firstMismatchDetail": null
+      "firstMismatchDetail": null,
+      "textDeltaSample": "",
+      "exportMs": 57,
+      "imgInfo": []
     },
     {
       "file": "tables-spanning-pages.md",
@@ -118,7 +167,10 @@
       "pageCountMatch": true,
       "textCategory": "exact",
       "textMatch": true,
-      "firstMismatchDetail": null
+      "firstMismatchDetail": null,
+      "textDeltaSample": "",
+      "exportMs": 60,
+      "imgInfo": []
     },
     {
       "file": "very-long.md",
@@ -128,8 +180,31 @@
       "pageCountMatch": true,
       "textCategory": "exact",
       "textMatch": true,
-      "firstMismatchDetail": null
+      "firstMismatchDetail": null,
+      "textDeltaSample": "",
+      "exportMs": 585,
+      "imgInfo": []
     }
   ],
-  "mermaidDiagramContentLossConfirmed": true
+  "mermaidDiagramContentLossConfirmed": true,
+  "mermaidDiagramDomEvidence": [
+    {
+      "instance": 0,
+      "rects": 0,
+      "texts": 0,
+      "paths": 13
+    },
+    {
+      "instance": 1,
+      "rects": 0,
+      "texts": 0,
+      "paths": 0
+    },
+    {
+      "instance": 2,
+      "rects": 0,
+      "texts": 0,
+      "paths": 9
+    }
+  ]
 }

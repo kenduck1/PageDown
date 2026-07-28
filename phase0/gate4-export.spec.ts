@@ -50,22 +50,34 @@ function normalizeText(s: string): string {
 }
 
 // True if every character of `needle`, in order, appears somewhere (not
-// necessarily contiguously) in `haystack`. Used below for the corpus files
-// where the exported PDF's text is expected to contain real, EXTRA content
-// beyond what the on-screen DOM's `.textContent` reports (ordered-list/
-// footnote `::marker` counters, `<img alt="...">` fallback text for an
-// image that failed to load — both real, visible, printed text that never
-// appears in `.textContent` by DOM spec, not an export bug — see Test 1's
-// own comment for the concrete evidence). This proves the meaningful
-// invariant even when exact equality doesn't hold: nothing the on-screen
-// render shows is MISSING from the export, only content the export
-// legitimately adds.
-function isSubsequence(needle: string, haystack: string): boolean {
+// necessarily contiguously) in `haystack` — AND, alongside that boolean,
+// the actual extra characters of `haystack` that were NOT consumed by that
+// greedy match (every haystack character skipped while `needle`'s cursor
+// wasn't waiting on it). Used below for the corpus files where the exported
+// PDF's text is expected to contain real, EXTRA content beyond what the
+// on-screen DOM's `.textContent` reports (ordered-list/footnote `::marker`
+// counters, `<img alt="...">` fallback text for an image that failed to
+// load — both real, visible, printed text that never appears in
+// `.textContent` by DOM spec, not an export bug — see Test 1's own comment
+// for the concrete evidence). `isSubsequence` alone proves the meaningful
+// invariant even when exact equality doesn't hold (nothing on-screen is
+// MISSING from the export); `extra` makes WHAT was added self-evidencing —
+// written into the committed `gate4-findings.json` per file below, rather
+// than living only in this task's own report narrative.
+function subsequenceDelta(
+  needle: string,
+  haystack: string
+): { isSubsequence: boolean; extra: string } {
   let i = 0
-  for (let j = 0; j < haystack.length && i < needle.length; j++) {
-    if (needle[i] === haystack[j]) i++
+  let extra = ''
+  for (let j = 0; j < haystack.length; j++) {
+    if (i < needle.length && needle[i] === haystack[j]) {
+      i++
+    } else {
+      extra += haystack[j]
+    }
   }
-  return i === needle.length
+  return { isSubsequence: i === needle.length, extra }
 }
 
 interface StructNode {
@@ -255,6 +267,27 @@ test('Gate 4: exported PDF page count and per-page text match the on-screen Page
     textCategory: 'exact' | 'subsequence'
     textMatch: boolean
     firstMismatchDetail: string | null
+    textDeltaSample: string
+    exportMs: number
+    imgInfo: Array<{
+      src: string
+      alt: string
+      complete: boolean
+      naturalWidth: number
+      naturalHeight: number
+    }>
+  }> = []
+
+  // Captured only for `mermaid-diagrams.md`'s own loop iteration, while its
+  // DOM is still live — the harness moves on to the next document each
+  // subsequent iteration, so this is the only point this evidence is
+  // reachable at all. Used by the dedicated content-loss assertions after
+  // the loop below.
+  let mermaidDiagramDomEvidence: Array<{
+    instance: number
+    rects: number
+    texts: number
+    paths: number
   }> = []
 
   for (const file of files) {
@@ -289,20 +322,74 @@ test('Gate 4: exported PDF page count and per-page text match the on-screen Page
           return clone.textContent
         })
       `)
+      // Durable DOM-side evidence for the two bugs this task found, turned
+      // into standing test data (not just a one-time manual observation) —
+      // cheap: both queries are no-ops (empty arrays) for every file that
+      // doesn't happen to contain an `<img>` or the oversized diagram's
+      // wrapper, so this runs unconditionally for every corpus file rather
+      // than needing a per-file branch here.
+      const imgInfo = await harness.view.webContents.executeJavaScript(`
+        Array.from(document.querySelectorAll('img')).map(img => ({
+          src: img.src,
+          alt: img.alt,
+          complete: img.complete,
+          naturalWidth: img.naturalWidth,
+          naturalHeight: img.naturalHeight
+        }))
+      `)
+      const mermaidOversizedDiagramInfo = await harness.view.webContents.executeJavaScript(`
+        Array.from(document.querySelectorAll('[data-mermaid-diagram-id="pagedown-mermaid-2"]')).map((wrapper, instance) => {
+          const svg = wrapper.querySelector('svg')
+          return {
+            instance,
+            rects: svg ? svg.querySelectorAll('rect').length : -1,
+            texts: svg ? svg.querySelectorAll('text').length : -1,
+            paths: svg ? svg.querySelectorAll('path').length : -1
+          }
+        })
+      `)
       const bridge = (
         globalThis as unknown as {
           __pagedownPhase0: { exportToPdf: typeof import('../src/export/export-pdf').exportToPdf }
         }
       ).__pagedownPhase0
+      // Real, measured export timing (not an uncommitted, ad hoc scratch
+      // number) — `Date.now()` around the SAME `exportToPdf` call every
+      // other check in this test already makes, so this costs nothing
+      // beyond two timestamps.
+      const exportStart = Date.now()
       const pdf = await bridge.exportToPdf(harness)
-      return { sendResult, pagesText, pdfBase64: pdf.toString('base64') }
+      const exportMs = Date.now() - exportStart
+      return {
+        sendResult,
+        pagesText,
+        imgInfo,
+        mermaidOversizedDiagramInfo,
+        exportMs,
+        pdfBase64: pdf.toString('base64')
+      }
     }, html)
 
-    const { sendResult, pagesText, pdfBase64 } = evalResult as {
-      sendResult: { pageCount: number }
-      pagesText: string[]
-      pdfBase64: string
-    }
+    const { sendResult, pagesText, imgInfo, mermaidOversizedDiagramInfo, exportMs, pdfBase64 } =
+      evalResult as {
+        sendResult: { pageCount: number }
+        pagesText: string[]
+        imgInfo: Array<{
+          src: string
+          alt: string
+          complete: boolean
+          naturalWidth: number
+          naturalHeight: number
+        }>
+        mermaidOversizedDiagramInfo: Array<{
+          instance: number
+          rects: number
+          texts: number
+          paths: number
+        }>
+        exportMs: number
+        pdfBase64: string
+      }
     const pdfBuffer = Buffer.from(pdfBase64, 'base64')
 
     // Save specific PDFs as durable, openable evidence — the brief's own
@@ -318,6 +405,27 @@ test('Gate 4: exported PDF page count and per-page text match the on-screen Page
     if (file === 'mermaid-diagrams.md') {
       mkdirSync(RESULTS_DIR, { recursive: true })
       writeFileSync(join(RESULTS_DIR, 'gate4-mermaid-diagrams-export.pdf'), pdfBuffer)
+      mermaidDiagramDomEvidence = mermaidOversizedDiagramInfo
+    }
+
+    // Durable regression guard for the image-loading gap this task found
+    // (previously only a manual, scratch-directory observation): every
+    // corpus image reference 404s against the `pagedown-render://` scheme
+    // (it only serves `out/pagination-render/`, not `phase0/corpus/
+    // assets/`), so `naturalWidth`/`naturalHeight` read 0 despite
+    // `complete === true` — the classic "image failed to load" signature.
+    // Asserted here, for the two files that actually reference an image,
+    // rather than left as a comment only — if this harness's image-serving
+    // is ever wired up, this assertion (not just a report's prose) is what
+    // will need updating, and will fail loudly in the meantime if it isn't.
+    if (file === 'mixed.md' || file === 'images-and-diagrams.md') {
+      expect(imgInfo.length, `${file}: expected at least one <img> element`).toBeGreaterThan(0)
+      for (const img of imgInfo) {
+        expect(
+          img.naturalWidth === 0 && img.naturalHeight === 0 && img.complete === true,
+          `${file}: <img src="${img.src}"> is expected to have FAILED to load in this harness (naturalWidth/Height 0 despite complete=true) — this is the real, separate, previously-undocumented gap this task found (the pagedown-render:// scheme doesn't serve phase0/corpus/assets/); if this now loads for real, the image-serving gap has been closed and this assertion (and the alt-text-fallback explanation for this file's SUBSEQUENCE_ONLY_FILES membership) need updating`
+        ).toBe(true)
+      }
     }
 
     const onscreenPageCount = pagesText.length
@@ -344,6 +452,15 @@ test('Gate 4: exported PDF page count and per-page text match the on-screen Page
     const category: 'exact' | 'subsequence' = EXACT_MATCH_FILES.has(file) ? 'exact' : 'subsequence'
     let textMatch = true
     let firstMismatchDetail: string | null = null
+    // Accumulated, per-page "extra" characters the PDF's text has that the
+    // on-screen text doesn't (see `subsequenceDelta`'s own comment) — for
+    // `exact`-category files this is always empty by construction (exact
+    // equality leaves nothing unconsumed); for `subsequence`-category files
+    // this is the actual, computed evidence for WHY they're in that
+    // category (list/footnote markers, image alt-text fallback), written
+    // into the committed findings JSON below rather than only asserted by
+    // this task's own report narrative.
+    const textDeltaParts: string[] = []
     for (let i = 0; i < onscreenPageCount; i++) {
       const page = await pdfjsDoc.getPage(i + 1)
       const textContent = await page.getTextContent()
@@ -352,8 +469,9 @@ test('Gate 4: exported PDF page count and per-page text match the on-screen Page
       )
       const onscreenText = normalizeText(pagesText[i])
 
-      const ok =
-        category === 'exact' ? onscreenText === pdfText : isSubsequence(onscreenText, pdfText)
+      const { isSubsequence, extra } = subsequenceDelta(onscreenText, pdfText)
+      if (extra) textDeltaParts.push(extra)
+      const ok = category === 'exact' ? onscreenText === pdfText : isSubsequence
       if (!ok) {
         textMatch = false
         firstMismatchDetail = `page ${i + 1} (${category} check failed): onscreen=${JSON.stringify(onscreenText.slice(0, 120))} pdf=${JSON.stringify(pdfText.slice(0, 120))}`
@@ -362,6 +480,17 @@ test('Gate 4: exported PDF page count and per-page text match the on-screen Page
     }
 
     expect(textMatch, `${file}: ${firstMismatchDetail}`).toBe(true)
+    // The delta itself must be empty for `exact`-category files — a
+    // real, second confirmation of that category assignment (not just the
+    // equality check above), and a sanity check on `subsequenceDelta`
+    // itself: an exact match by definition consumes the whole haystack via
+    // in-order matching against an identical needle, leaving nothing extra.
+    if (category === 'exact') {
+      expect(
+        textDeltaParts.join(''),
+        `${file}: exact-match files must have an empty text delta`
+      ).toBe('')
+    }
 
     perFileResults.push({
       file,
@@ -371,7 +500,13 @@ test('Gate 4: exported PDF page count and per-page text match the on-screen Page
       pageCountMatch: pdfLibPageCount === onscreenPageCount && pdfjsPageCount === onscreenPageCount,
       textCategory: category,
       textMatch,
-      firstMismatchDetail
+      firstMismatchDetail,
+      // Truncated for readability in the committed JSON — the point is to
+      // make the KIND of extra content self-evidencing (marker digits,
+      // alt text, ...), not to store an unbounded blob.
+      textDeltaSample: textDeltaParts.join('').slice(0, 300),
+      exportMs,
+      imgInfo
     })
   }
 
@@ -431,13 +566,42 @@ test('Gate 4: exported PDF page count and per-page text match the on-screen Page
     'the oversized diagram\'s "Stage N" node labels are expected to be ENTIRELY absent from the exported PDF (a real, both-sides content-loss bug found by this task — see the comment above) — if this now includes "Stage", either the bug was fixed (update this assertion) or something else changed'
   ).toBe(false)
 
+  // The DOM-side half of the same finding, made durable rather than left as
+  // a one-time manual observation: every page-clone instance of the
+  // oversized diagram's `<svg>` is asserted here to have ZERO `<rect>` and
+  // ZERO `<text>` elements (only `<path>` edge lines survive, inconsistently
+  // — logged, not asserted on an exact count, since the exact per-clone
+  // split of which paths survive was observed to vary run-to-run in a way
+  // the rect/text absence did not). Captured during the loop above, at the
+  // one point `mermaid-diagrams.md`'s own DOM is still live (see
+  // `mermaidDiagramDomEvidence`'s own comment).
+  console.log(
+    'Gate 4 mermaid-diagrams.md oversized-diagram DOM evidence (rect/text/path counts per page-clone instance):',
+    JSON.stringify(mermaidDiagramDomEvidence)
+  )
+  expect(
+    mermaidDiagramDomEvidence.length,
+    'expected at least one page-clone instance of the oversized diagram — an empty array would make the assertions below vacuous'
+  ).toBeGreaterThan(0)
+  for (const instance of mermaidDiagramDomEvidence) {
+    expect(
+      instance.rects,
+      `mermaid-diagrams.md oversized-diagram page-clone instance ${instance.instance}: expected ZERO <rect> elements (the real, both-sides content-loss bug this task found) — if this is now > 0, the bug may have been fixed`
+    ).toBe(0)
+    expect(
+      instance.texts,
+      `mermaid-diagrams.md oversized-diagram page-clone instance ${instance.instance}: expected ZERO <text> elements (the real, both-sides content-loss bug this task found) — if this is now > 0, the bug may have been fixed`
+    ).toBe(0)
+  }
+
   mkdirSync(RESULTS_DIR, { recursive: true })
   writeFileSync(
     join(RESULTS_DIR, 'gate4-findings.json'),
     JSON.stringify(
       {
         perFileResults,
-        mermaidDiagramContentLossConfirmed: !mermaidFullText.includes('Stage')
+        mermaidDiagramContentLossConfirmed: !mermaidFullText.includes('Stage'),
+        mermaidDiagramDomEvidence
       },
       null,
       2
@@ -620,7 +784,7 @@ test('Gate 4: running header/footer/page-number content is excluded from the tag
 
   // 45 short body paragraphs — enough to force several real pages so the
   // running header/footer this probe's @page stylesheet generates actually
-  // repeats more than once (measured: 4 pages). See
+  // repeats more than once (measured: 2 pages). See
   // src/main/pagination-window.ts's `sendGate4HeaderFooterProbe` and
   // resources/pagination-render/index.ts's 'gate4-header-footer-probe'
   // handler for WHY this probe exists at all: this harness's regular
@@ -731,8 +895,8 @@ test('Gate 4: running header/footer/page-number content is excluded from the tag
   // tree and count how many /P elements exist in total. There are exactly
   // 45 real body paragraphs; if the header/footer text were tagged as
   // ordinary content, it would show up as additional /P (or /Span, /Div,
-  // etc.) struct elements beyond those 45 — repeated once per page (4
-  // pages x 2 margin boxes = 8 extra elements, if tagged at all).
+  // etc.) struct elements beyond those 45 — repeated once per page (2
+  // pages x 2 margin boxes = 4 extra elements, if tagged at all).
   const catalog = pdfDoc.catalog
   const structRootRef = catalog.get(PDFName.of('StructTreeRoot'))
   expect(structRootRef, 'the probe export must also produce a real /StructTreeRoot').toBeTruthy()
@@ -743,16 +907,78 @@ test('Gate 4: running header/footer/page-number content is excluded from the tag
     tagCounts.P,
     `struct tree /P count must equal exactly the ${paragraphCount} real body paragraphs — any more would mean header/footer text leaked into the tagged structure as ordinary content`
   ).toBe(paragraphCount)
-  // No struct element of ANY kind should carry visible header/footer text.
-  // A blunt but decisive confirmation on top of the exact /P count above:
-  // nothing anywhere in the tag tree's own text should mention "PageDown
-  // Gate 4 Probe Header" or a "Page N of" pattern, since none of it should
-  // be reachable via the structure tree at all.
   const allTagNames = Object.keys(tagCounts)
   console.log(
     'Gate 4 header/footer probe — all distinct struct roles present:',
     JSON.stringify(allTagNames)
   )
+
+  // The exact /P count above proves no EXTRA struct elements exist, but by
+  // itself it doesn't prove which TEXT ended up inside the ones that do
+  // exist — a real assertion for that (the comment on an earlier version of
+  // this test claimed this check without actually implementing it; fixed
+  // here) needs the tag tree's own TEXT, not just its role names.
+  // `getTextContent({ includeMarkedContent: true })` interleaves
+  // `beginMarkedContent(Props)`/`endMarkedContent` markers with the regular
+  // text items in real stream order — confirmed directly (dumped this
+  // probe's own page 1 during this fix): the header/footer's two text runs
+  // ("PageDown Gate 4 Probe Header", "Page 1 of 2") appear BEFORE any
+  // `beginMarkedContent`, and every subsequent text run is nested inside a
+  // `beginMarkedContentProps("NonStruct", ...)`/`endMarkedContent` pair.
+  // Bucketing every text item by whether it falls inside (`insideTaggedText`
+  // — i.e. reachable via the tag tree) or outside (`outsideTaggedText`) any
+  // marked-content span gives a real, walked answer to "does the tag tree's
+  // own text ever contain the header/footer strings," not just a role-name
+  // count or a logged-but-unchecked observation.
+  const markedTextContent = await (
+    await pdfjsDoc.getPage(1)
+  ).getTextContent({ includeMarkedContent: true })
+  let markedContentDepth = 0
+  let insideTaggedText = ''
+  let outsideTaggedText = ''
+  for (const item of markedTextContent.items) {
+    if ('type' in item) {
+      if (item.type === 'beginMarkedContent' || item.type === 'beginMarkedContentProps') {
+        markedContentDepth++
+      } else if (item.type === 'endMarkedContent') {
+        markedContentDepth = Math.max(0, markedContentDepth - 1)
+      }
+    } else if ('str' in item) {
+      if (markedContentDepth > 0) insideTaggedText += item.str
+      else outsideTaggedText += item.str
+    }
+  }
+  console.log(
+    'Gate 4 probe page 1 marked-content text bucketing:',
+    JSON.stringify({
+      outsideTaggedText: outsideTaggedText.slice(0, 200),
+      insideTaggedTextSample: insideTaggedText.slice(0, 200)
+    })
+  )
+  // Non-vacuousness check: the header/footer text must actually be found
+  // OUTSIDE any marked-content span — if this failed, the assertions below
+  // (checking it's absent INSIDE) would pass trivially for the wrong reason
+  // (the text simply not being anywhere in this walk at all).
+  expect(
+    outsideTaggedText,
+    'the running header text is expected OUTSIDE any marked-content span — if absent here, the "not inside the tag tree" checks below would be vacuous'
+  ).toContain('PageDown Gate 4 Probe Header')
+  expect(
+    outsideTaggedText,
+    'the page-number footer text is expected OUTSIDE any marked-content span — if absent here, the "not inside the tag tree" checks below would be vacuous'
+  ).toMatch(/Page \d+ of/)
+  // THE assertion the comment on an earlier version of this test claimed
+  // but never actually implemented: no text found INSIDE a marked-content
+  // span (i.e. reachable via the struct tree) mentions the header or the
+  // page-number footer pattern.
+  expect(
+    insideTaggedText,
+    'no text inside any marked-content span (i.e. reachable via the tag tree) should mention the running header'
+  ).not.toContain('PageDown Gate 4 Probe Header')
+  expect(
+    insideTaggedText,
+    'no text inside any marked-content span (i.e. reachable via the tag tree) should match the page-number footer pattern'
+  ).not.toMatch(/Page \d+ of/)
 
   // Third, independent confirmation at the lowest level available: the raw
   // marked-content operator stream (BDC/EMC-equivalent — pdfjs surfaces
@@ -791,6 +1017,19 @@ test('Gate 4: running header/footer/page-number content is excluded from the tag
     showTextOpsBeforeFirstBegin,
     'the header/footer text is expected to be drawn via real showText operators BEFORE any marked-content sequence begins (i.e. outside the tag tree entirely) — 0 here would mean this page draws no header/footer text at all, which would make this check vacuous'
   ).toBeGreaterThan(0)
+  // The nuance this whole section's comment (and the findings doc's own
+  // write-up) most relies on, now actually guarded rather than only logged:
+  // header/footer content is excluded from the tag tree, but NOT via an
+  // explicit /Artifact marked-content tag — genuinely untagged, not the
+  // fully PDF/UA-conformant "everything is either tagged content or
+  // explicit Artifact" construct. If a future Electron/Chromium version
+  // starts using /Artifact for this (arguably an improvement), this
+  // assertion is what will need updating — without it, that change could
+  // happen silently with no test noticing.
+  expect(
+    sawArtifactTag,
+    'header/footer content is expected to be drawn with NO explicit /Artifact marked-content tag anywhere on this page (excluded from the tag tree by omission, not via /Artifact) — if this is now true, Chromium may have started using /Artifact for @page margin-box content, which would be worth updating the findings doc over'
+  ).toBe(false)
 
   await app.close()
 })
