@@ -67,7 +67,13 @@ export default defineConfig({
       }
     }
   },
-  preload: {},
+  preload: {
+    build: {
+      externalizeDeps: {
+        exclude: ['@electron-toolkit/preload']
+      }
+    }
+  },
   renderer: {
     resolve: {
       alias: {
