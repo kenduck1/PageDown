@@ -1004,7 +1004,18 @@ test('Gate 4: running header/footer/page-number content is excluded from the tag
     if (fn === OPS.beginMarkedContentProps || fn === OPS.beginMarkedContent) {
       sawFirstMarkedContentBegin = true
       const args = opList.argsArray[i] as unknown[]
-      if (args[0] === 'Artifact') sawArtifactTag = true
+      // pdfjs represents the marked-content tag name two different ways
+      // depending on which PDF op produced it: `beginMarkedContentProps`
+      // (a tag WITH a properties dict, e.g. `/Artifact <</Type
+      // /Pagination>> BDC`) normalizes args[0] to a plain string; bare
+      // `beginMarkedContent` (a tag with NO properties dict, e.g.
+      // `/Artifact BMC`) leaves args[0] as pdfjs's raw Name object instead.
+      // Checking only the string form is blind to the second, equally
+      // legal encoding — checked both here so this assertion can't be
+      // fooled by which op Chromium happens to emit.
+      const tag = args[0]
+      const tagName = typeof tag === 'string' ? tag : (tag as { name?: string } | undefined)?.name
+      if (tagName === 'Artifact') sawArtifactTag = true
     } else if (!sawFirstMarkedContentBegin && (fn === OPS.showText || fn === OPS.showSpacedText)) {
       showTextOpsBeforeFirstBegin++
     }
