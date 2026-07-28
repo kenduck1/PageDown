@@ -5,6 +5,9 @@ out
 .eslintcache
 *.log*
 
+# Subagent-driven-development scratch workspace (ledgers, briefs, review packages)
+.superpowers
+
 # Vitest
 coverage
 
