@@ -358,3 +358,44 @@ export async function sendGate7Phase2(
   )
   return pollGate7Result<Gate7Phase2Result>(harness.view, requestId, 'gate7-phase2-result')
 }
+
+// --- Task 9 / Gate 4: header/footer artifact-vs-content tagging probe -----
+//
+// See resources/pagination-render/index.ts's block comment above its
+// 'gate4-header-footer-probe' handler for why this exists: this harness's
+// regular sendDocument() path always calls previewer.preview() with an
+// empty stylesheet array, so no corpus document ever gets real `@page`
+// running-header/footer/page-number content to inspect the tagging of.
+// This sends real `@page` CSS (containing @top-center/@bottom-center margin
+// box rules) alongside the body HTML so the render context actually
+// generates that content once, for phase0/gate4-export.spec.ts to export
+// and inspect.
+export interface Gate4ProbeResult {
+  pageCount: number
+}
+
+export async function sendGate4HeaderFooterProbe(
+  harness: PaginationHarness,
+  html: string,
+  css: string
+): Promise<Gate4ProbeResult> {
+  const requestId = randomUUID()
+  await harness.view.webContents.executeJavaScript(
+    `window.postMessage(${JSON.stringify({ type: 'gate4-header-footer-probe', requestId, html, css })}, '*')`
+  )
+
+  const deadline = Date.now() + 10_000
+  while (Date.now() < deadline) {
+    const result = await harness.view.webContents.executeJavaScript(
+      `(window.__pagedownGate4ProbeResult && window.__pagedownGate4ProbeResult.requestId === ${JSON.stringify(requestId)}) ? window.__pagedownGate4ProbeResult : null`
+    )
+    if (result) {
+      if (result.ok === false) {
+        throw new Error(`Gate 4 header/footer probe failed in render context: ${result.error}`)
+      }
+      return { pageCount: result.pageCount }
+    }
+    await new Promise((resolve) => setTimeout(resolve, 50))
+  }
+  throw new Error('Gate 4 header/footer probe timed out waiting for a result')
+}

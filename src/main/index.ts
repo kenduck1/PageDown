@@ -3,8 +3,14 @@ import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
 import { registerPaginationScheme } from './pagination-scheme'
-import { createPaginationHarness, sendGate7Phase1, sendGate7Phase2 } from './pagination-window'
+import {
+  createPaginationHarness,
+  sendGate7Phase1,
+  sendGate7Phase2,
+  sendGate4HeaderFooterProbe
+} from './pagination-window'
 import { paginateAndTime } from '../pagination/paginate'
+import { exportToPdf } from '../export/export-pdf'
 
 // Must run before app.whenReady() is awaited anywhere — Electron requires
 // protocol.registerSchemesAsPrivileged() to be called before the `ready`
@@ -35,6 +41,14 @@ registerPaginationScheme()
 // (itself only reachable from a plain Node context, not from inside
 // `app.evaluate()`'s bare V8 context) before phase 2 can run. See
 // phase0/gate7-incremental-relayout.spec.ts.
+//
+// Task 9 adds `exportToPdf` for the same reason again: its own consumer
+// (phase0/gate4-export.spec.ts) needs to call `harness.view.webContents
+// .printToPDF(...)` from inside `app.evaluate()`, which requires reaching
+// `exportToPdf` itself the same bridged way every other main-process-only
+// function on this object already is. `sendGate4HeaderFooterProbe` is
+// added alongside it for the same reason as `sendGate7Phase1`/`Phase2` —
+// see pagination-window.ts's own comment on why this probe exists at all.
 declare global {
   var __pagedownPhase0:
     | {
@@ -42,6 +56,8 @@ declare global {
         paginateAndTime: typeof paginateAndTime
         sendGate7Phase1: typeof sendGate7Phase1
         sendGate7Phase2: typeof sendGate7Phase2
+        exportToPdf: typeof exportToPdf
+        sendGate4HeaderFooterProbe: typeof sendGate4HeaderFooterProbe
       }
     | undefined
 }
@@ -49,7 +65,9 @@ globalThis.__pagedownPhase0 = {
   createPaginationHarness,
   paginateAndTime,
   sendGate7Phase1,
-  sendGate7Phase2
+  sendGate7Phase2,
+  exportToPdf,
+  sendGate4HeaderFooterProbe
 }
 
 function createWindow(): BrowserWindow {

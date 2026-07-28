@@ -1,0 +1,135 @@
+{
+  "perFileResults": [
+    {
+      "file": "continuation-prefixes.md",
+      "onscreenPageCount": 1,
+      "pdfLibPageCount": 1,
+      "pdfjsPageCount": 1,
+      "pageCountMatch": true,
+      "textCategory": "subsequence",
+      "textMatch": true,
+      "firstMismatchDetail": null
+    },
+    {
+      "file": "entities-and-escapes.md",
+      "onscreenPageCount": 1,
+      "pdfLibPageCount": 1,
+      "pdfjsPageCount": 1,
+      "pageCountMatch": true,
+      "textCategory": "exact",
+      "textMatch": true,
+      "firstMismatchDetail": null
+    },
+    {
+      "file": "foreign-frontmatter.md",
+      "onscreenPageCount": 1,
+      "pdfLibPageCount": 1,
+      "pdfjsPageCount": 1,
+      "pageCountMatch": true,
+      "textCategory": "exact",
+      "textMatch": true,
+      "firstMismatchDetail": null
+    },
+    {
+      "file": "headings-near-page-bottom.md",
+      "onscreenPageCount": 1,
+      "pdfLibPageCount": 1,
+      "pdfjsPageCount": 1,
+      "pageCountMatch": true,
+      "textCategory": "exact",
+      "textMatch": true,
+      "firstMismatchDetail": null
+    },
+    {
+      "file": "images-and-diagrams.md",
+      "onscreenPageCount": 1,
+      "pdfLibPageCount": 1,
+      "pdfjsPageCount": 1,
+      "pageCountMatch": true,
+      "textCategory": "subsequence",
+      "textMatch": true,
+      "firstMismatchDetail": null
+    },
+    {
+      "file": "long.md",
+      "onscreenPageCount": 99,
+      "pdfLibPageCount": 99,
+      "pdfjsPageCount": 99,
+      "pageCountMatch": true,
+      "textCategory": "exact",
+      "textMatch": true,
+      "firstMismatchDetail": null
+    },
+    {
+      "file": "mermaid-diagrams.md",
+      "onscreenPageCount": 5,
+      "pdfLibPageCount": 5,
+      "pdfjsPageCount": 5,
+      "pageCountMatch": true,
+      "textCategory": "exact",
+      "textMatch": true,
+      "firstMismatchDetail": null
+    },
+    {
+      "file": "mixed.md",
+      "onscreenPageCount": 1,
+      "pdfLibPageCount": 1,
+      "pdfjsPageCount": 1,
+      "pageCountMatch": true,
+      "textCategory": "subsequence",
+      "textMatch": true,
+      "firstMismatchDetail": null
+    },
+    {
+      "file": "nested-lists.md",
+      "onscreenPageCount": 1,
+      "pdfLibPageCount": 1,
+      "pdfjsPageCount": 1,
+      "pageCountMatch": true,
+      "textCategory": "subsequence",
+      "textMatch": true,
+      "firstMismatchDetail": null
+    },
+    {
+      "file": "reference-links-and-footnotes.md",
+      "onscreenPageCount": 1,
+      "pdfLibPageCount": 1,
+      "pdfjsPageCount": 1,
+      "pageCountMatch": true,
+      "textCategory": "subsequence",
+      "textMatch": true,
+      "firstMismatchDetail": null
+    },
+    {
+      "file": "short.md",
+      "onscreenPageCount": 1,
+      "pdfLibPageCount": 1,
+      "pdfjsPageCount": 1,
+      "pageCountMatch": true,
+      "textCategory": "exact",
+      "textMatch": true,
+      "firstMismatchDetail": null
+    },
+    {
+      "file": "tables-spanning-pages.md",
+      "onscreenPageCount": 1,
+      "pdfLibPageCount": 1,
+      "pdfjsPageCount": 1,
+      "pageCountMatch": true,
+      "textCategory": "exact",
+      "textMatch": true,
+      "firstMismatchDetail": null
+    },
+    {
+      "file": "very-long.md",
+      "onscreenPageCount": 297,
+      "pdfLibPageCount": 297,
+      "pdfjsPageCount": 297,
+      "pageCountMatch": true,
+      "textCategory": "exact",
+      "textMatch": true,
+      "firstMismatchDetail": null
+    }
+  ],
+  "mermaidDiagramContentLossConfirmed": true
+}
