@@ -8,13 +8,16 @@ type SplitLeftMode = 'source' | 'format'
 const MIN_SPLIT_RATIO = 25
 const MAX_SPLIT_RATIO = 75
 
-interface AppState {
+interface AppStateValues {
   screen: Screen
   viewMode: ViewMode
   sidebarTab: SidebarTab
   splitLeftMode: SplitLeftMode
   splitRatio: number
   pageSetupOpen: boolean
+}
+
+interface AppState extends AppStateValues {
   goEditor: () => void
   goHome: () => void
   setViewMode: (mode: ViewMode) => void
@@ -25,17 +28,22 @@ interface AppState {
   closePageSetup: () => void
 }
 
-function clampSplitRatio(percent: number): number {
-  return Math.min(MAX_SPLIT_RATIO, Math.max(MIN_SPLIT_RATIO, percent))
-}
-
-export const useAppStore = create<AppState>()((set) => ({
+export const initialAppState: AppStateValues = {
   screen: 'home',
   viewMode: 'format',
   sidebarTab: 'pages',
   splitLeftMode: 'format',
   splitRatio: 50,
-  pageSetupOpen: false,
+  pageSetupOpen: false
+}
+
+function clampSplitRatio(percent: number): number {
+  if (Number.isNaN(percent)) return MIN_SPLIT_RATIO
+  return Math.min(MAX_SPLIT_RATIO, Math.max(MIN_SPLIT_RATIO, percent))
+}
+
+export const useAppStore = create<AppState>()((set) => ({
+  ...initialAppState,
   goEditor: () => set({ screen: 'editor' }),
   goHome: () => set({ screen: 'home' }),
   setViewMode: (mode) => set({ viewMode: mode }),

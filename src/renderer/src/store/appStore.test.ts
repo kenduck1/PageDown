@@ -1,15 +1,8 @@
 import { describe, it, expect, beforeEach } from 'vitest'
-import { useAppStore } from './appStore'
+import { useAppStore, initialAppState } from './appStore'
 
 function resetStore(): void {
-  useAppStore.setState({
-    screen: 'home',
-    viewMode: 'format',
-    sidebarTab: 'pages',
-    splitLeftMode: 'format',
-    splitRatio: 50,
-    pageSetupOpen: false
-  })
+  useAppStore.setState(initialAppState)
 }
 
 beforeEach(() => {
@@ -17,6 +10,10 @@ beforeEach(() => {
 })
 
 describe('useAppStore', () => {
+  it('starts with the documented initial state', () => {
+    expect(useAppStore.getState()).toMatchObject(initialAppState)
+  })
+
   it('goEditor switches screen to editor without touching other state', () => {
     useAppStore.getState().setViewMode('source')
     useAppStore.getState().goEditor()
@@ -64,6 +61,11 @@ describe('useAppStore', () => {
   it('setSplitRatio passes through in-range values unchanged', () => {
     useAppStore.getState().setSplitRatio(60)
     expect(useAppStore.getState().splitRatio).toBe(60)
+  })
+
+  it('setSplitRatio falls back to the minimum when given NaN', () => {
+    useAppStore.getState().setSplitRatio(NaN)
+    expect(useAppStore.getState().splitRatio).toBe(25)
   })
 
   it('openPageSetup and closePageSetup toggle pageSetupOpen', () => {
