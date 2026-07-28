@@ -11,7 +11,7 @@ function HomeScreen(): React.JSX.Element {
       </p>
       <button
         onClick={goEditor}
-        className="rounded-md bg-accent px-4 py-2 text-13 font-semibold text-white"
+        className="rounded-md bg-accent px-4 py-2 text-13 font-semibold text-on-accent"
       >
         New document
       </button>
