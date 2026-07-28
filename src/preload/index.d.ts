@@ -1,8 +1,20 @@
 import { ElectronAPI } from '@electron-toolkit/preload'
 
+export interface RecentFileEntry {
+  filePath: string
+  editedAt: string
+}
+
+export interface FileApi {
+  openFile: () => Promise<{ filePath: string; content: string } | null>
+  openPath: (filePath: string) => Promise<{ filePath: string; content: string }>
+  saveFile: (filePath: string | null, content: string) => Promise<{ filePath: string } | null>
+  getRecentFiles: () => Promise<RecentFileEntry[]>
+}
+
 declare global {
   interface Window {
     electron: ElectronAPI
-    api: unknown
+    api: FileApi
   }
 }
