@@ -1,0 +1,75 @@
+import { describe, it, expect, beforeEach } from 'vitest'
+import { useAppStore } from './appStore'
+
+function resetStore(): void {
+  useAppStore.setState({
+    screen: 'home',
+    viewMode: 'format',
+    sidebarTab: 'pages',
+    splitLeftMode: 'format',
+    splitRatio: 50,
+    pageSetupOpen: false
+  })
+}
+
+beforeEach(() => {
+  resetStore()
+})
+
+describe('useAppStore', () => {
+  it('goEditor switches screen to editor without touching other state', () => {
+    useAppStore.getState().setViewMode('source')
+    useAppStore.getState().goEditor()
+    expect(useAppStore.getState().screen).toBe('editor')
+    expect(useAppStore.getState().viewMode).toBe('source')
+  })
+
+  it('goHome switches screen back to home', () => {
+    useAppStore.getState().goEditor()
+    useAppStore.getState().goHome()
+    expect(useAppStore.getState().screen).toBe('home')
+  })
+
+  it('setViewMode changes viewMode without resetting sidebarTab', () => {
+    useAppStore.getState().setSidebarTab('outline')
+    useAppStore.getState().setViewMode('split')
+    expect(useAppStore.getState().viewMode).toBe('split')
+    expect(useAppStore.getState().sidebarTab).toBe('outline')
+  })
+
+  it('setSidebarTab changes sidebarTab without resetting viewMode', () => {
+    useAppStore.getState().setViewMode('source')
+    useAppStore.getState().setSidebarTab('outline')
+    expect(useAppStore.getState().sidebarTab).toBe('outline')
+    expect(useAppStore.getState().viewMode).toBe('source')
+  })
+
+  it('setSplitLeftMode changes independently of viewMode', () => {
+    useAppStore.getState().setViewMode('split')
+    useAppStore.getState().setSplitLeftMode('source')
+    expect(useAppStore.getState().splitLeftMode).toBe('source')
+    expect(useAppStore.getState().viewMode).toBe('split')
+  })
+
+  it('setSplitRatio clamps values below the minimum to 25', () => {
+    useAppStore.getState().setSplitRatio(10)
+    expect(useAppStore.getState().splitRatio).toBe(25)
+  })
+
+  it('setSplitRatio clamps values above the maximum to 75', () => {
+    useAppStore.getState().setSplitRatio(90)
+    expect(useAppStore.getState().splitRatio).toBe(75)
+  })
+
+  it('setSplitRatio passes through in-range values unchanged', () => {
+    useAppStore.getState().setSplitRatio(60)
+    expect(useAppStore.getState().splitRatio).toBe(60)
+  })
+
+  it('openPageSetup and closePageSetup toggle pageSetupOpen', () => {
+    useAppStore.getState().openPageSetup()
+    expect(useAppStore.getState().pageSetupOpen).toBe(true)
+    useAppStore.getState().closePageSetup()
+    expect(useAppStore.getState().pageSetupOpen).toBe(false)
+  })
+})
