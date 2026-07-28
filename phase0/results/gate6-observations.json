@@ -1,0 +1,119 @@
+{
+  "tables-spanning-pages.md": {
+    "pageCount": 1,
+    "perPageHeadings": [
+      [
+        {
+          "tag": "H1",
+          "text": "Quarterly Expense Ledger",
+          "breakAfterAvoid": true
+        }
+      ]
+    ],
+    "tableCount": 1,
+    "splitTableCount": 0,
+    "orderedListCount": 0,
+    "diagramBoxes": []
+  },
+  "headings-near-page-bottom.md": {
+    "pageCount": 1,
+    "perPageHeadings": [
+      [
+        {
+          "tag": "H1",
+          "text": "Annual Review",
+          "breakAfterAvoid": true
+        },
+        {
+          "tag": "H2",
+          "text": "Compensation Review",
+          "breakAfterAvoid": true
+        }
+      ]
+    ],
+    "tableCount": 0,
+    "splitTableCount": 0,
+    "orderedListCount": 0,
+    "diagramBoxes": []
+  },
+  "mermaid-diagrams.md": {
+    "pageCount": 6,
+    "perPageHeadings": [
+      [
+        {
+          "tag": "H1",
+          "text": "Small Flowchart",
+          "breakAfterAvoid": true
+        }
+      ],
+      [
+        {
+          "tag": "H1",
+          "text": "Larger Sequence Diagram",
+          "breakAfterAvoid": true
+        }
+      ],
+      [
+        {
+          "tag": "H1",
+          "text": "Oversized Diagram",
+          "breakAfterAvoid": true
+        }
+      ],
+      [],
+      [],
+      []
+    ],
+    "tableCount": 0,
+    "splitTableCount": 0,
+    "orderedListCount": 0,
+    "diagramBoxes": [
+      {
+        "id": "pagedown-mermaid-0",
+        "width": 258.890625,
+        "height": 356.5859375
+      },
+      {
+        "id": "pagedown-mermaid-1",
+        "width": 624,
+        "height": 532.796875
+      },
+      {
+        "id": "pagedown-mermaid-2",
+        "width": 131.546875,
+        "height": 1936
+      },
+      {
+        "id": "pagedown-mermaid-2",
+        "width": 131.546875,
+        "height": 1936
+      },
+      {
+        "id": "pagedown-mermaid-2",
+        "width": 131.546875,
+        "height": 1936
+      },
+      {
+        "id": "pagedown-mermaid-2",
+        "width": 131.546875,
+        "height": 1936
+      }
+    ]
+  },
+  "nested-lists.md": {
+    "pageCount": 1,
+    "perPageHeadings": [
+      [
+        {
+          "tag": "H1",
+          "text": "Project Checklist",
+          "breakAfterAvoid": true
+        }
+      ]
+    ],
+    "tableCount": 0,
+    "splitTableCount": 0,
+    "orderedListCount": 4,
+    "diagramBoxes": []
+  }
+}

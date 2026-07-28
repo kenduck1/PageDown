@@ -723,22 +723,47 @@ test('Gate 4: split-block fragmentation — a table split across a page boundary
   // All 61 real rows (1 header + 60 data) must still be PRESENT somewhere
   // in the tree — content is duplicated in structure (2 Tables) but not
   // lost or duplicated in substance.
+  //
+  // Updated to 62 by Task 10 (Gate 6) — a real, intended change, not a
+  // regression: Task 10's `TableContinuationHandler`
+  // (src/pagination/break-handlers.ts) now clones the original table's
+  // <thead> onto this table's continuation (second-page) fragment, exactly
+  // fixing the accessibility gap this test's own comment below used to
+  // describe. The extra TR is that repeated header row's own <tr> — genuine
+  // intentional duplication of the header specifically (not a data-row
+  // duplication bug): 61 original rows (1 header + 60 data) + 1 repeated
+  // header row on the continuation fragment = 62.
   expect(
     trNodes.length,
-    'total TR count across both fragments should equal 1 header row + 60 data rows'
-  ).toBe(61)
+    'total TR count across both fragments should equal 1 header row + 60 data rows + 1 repeated header row (Task 10)'
+  ).toBe(62)
 
-  // The accessibility-relevant consequence of the fragmentation above,
-  // checked directly rather than left implicit: only ONE header row's
-  // worth of TH elements exists in the ENTIRE tree (this synthetic table
-  // has exactly 4 columns) — meaning the header row is NOT repeated as its
-  // own tagged TH group for the second page's Table fragment. A screen
-  // reader navigating the second page's continuation rows has no
-  // accessible column-header association for them at all.
+  // Updated by Task 10 (Gate 6) — this now documents the FIX, not the gap.
+  // Before Task 10: only ONE header row's worth of TH elements existed in
+  // the entire tree (the header was NOT repeated into the second page's
+  // Table fragment — no accessible column-header association for the
+  // continuation rows). Task 10's `TableContinuationHandler` fixes exactly
+  // this for a table that splits across 2 pages (verified here): 8 TH
+  // elements (4 columns × 2 fragments), confirming the repeated header row
+  // is itself correctly tagged in the structure tree, not just visually
+  // present.
+  //
+  // Not a claim that repeats for EVERY continuation page of every split
+  // table — see this task's report/findings-doc entry: for a table
+  // spanning 3+ pages, TableContinuationHandler deliberately repeats the
+  // header ONLY on the LAST continuation fragment (a real, bounded
+  // limitation found and worked around during Task 10 — inserting a
+  // populated <thead> into a MIDDLE continuation page reproducibly
+  // corrupted that page's own last row's visual position, a genuine
+  // Chromium table-layout interaction with Paged.js's mid-row
+  // break-completion mechanism, not something safe to ship). This
+  // synthetic table splits across exactly 2 pages, so its one continuation
+  // fragment is also its LAST one — the case Task 10's handler always
+  // fixes.
   expect(
     thNodes.length,
-    "the table header row is expected to NOT be duplicated into the second page-fragment's Table (no repeated column-header context for the continuation rows) — if this is now 8 (4 columns x 2 fragments), header repetition may have been added"
-  ).toBe(4)
+    'the table header row is expected to be repeated into the second (and, for this 2-page split, also LAST) page-fragment Table as of Task 10 — 8 = 4 columns x 2 fragments'
+  ).toBe(8)
 
   // Confirm the two Table fragments really do point at two DIFFERENT
   // pages (the "two different page containers" half of the design doc's

@@ -23,7 +23,7 @@
       "textMatch": true,
       "firstMismatchDetail": null,
       "textDeltaSample": "",
-      "exportMs": 59,
+      "exportMs": 58,
       "imgInfo": []
     },
     {
@@ -36,7 +36,7 @@
       "textMatch": true,
       "firstMismatchDetail": null,
       "textDeltaSample": "",
-      "exportMs": 56,
+      "exportMs": 54,
       "imgInfo": []
     },
     {
@@ -49,7 +49,7 @@
       "textMatch": true,
       "firstMismatchDetail": null,
       "textDeltaSample": "",
-      "exportMs": 57,
+      "exportMs": 54,
       "imgInfo": []
     },
     {
@@ -62,7 +62,7 @@
       "textMatch": true,
       "firstMismatchDetail": null,
       "textDeltaSample": "Diagramoftheproposedsitelayout,showingthemainentranceonthenorthsideandparkingtotheeast.",
-      "exportMs": 55,
+      "exportMs": 54,
       "imgInfo": [
         {
           "src": "pagedown-render://render/assets/diagram-placeholder.png",
@@ -75,9 +75,9 @@
     },
     {
       "file": "long.md",
-      "onscreenPageCount": 99,
-      "pdfLibPageCount": 99,
-      "pdfjsPageCount": 99,
+      "onscreenPageCount": 108,
+      "pdfLibPageCount": 108,
+      "pdfjsPageCount": 108,
       "pageCountMatch": true,
       "textCategory": "exact",
       "textMatch": true,
@@ -88,15 +88,15 @@
     },
     {
       "file": "mermaid-diagrams.md",
-      "onscreenPageCount": 5,
-      "pdfLibPageCount": 5,
-      "pdfjsPageCount": 5,
+      "onscreenPageCount": 6,
+      "pdfLibPageCount": 6,
+      "pdfjsPageCount": 6,
       "pageCountMatch": true,
       "textCategory": "exact",
       "textMatch": true,
       "firstMismatchDetail": null,
       "textDeltaSample": "",
-      "exportMs": 60,
+      "exportMs": 63,
       "imgInfo": []
     },
     {
@@ -130,7 +130,7 @@
       "textMatch": true,
       "firstMismatchDetail": null,
       "textDeltaSample": "1.1.2.2.1.2.3.1.2.",
-      "exportMs": 56,
+      "exportMs": 53,
       "imgInfo": []
     },
     {
@@ -143,7 +143,7 @@
       "textMatch": true,
       "firstMismatchDetail": null,
       "textDeltaSample": "1.",
-      "exportMs": 57,
+      "exportMs": 55,
       "imgInfo": []
     },
     {
@@ -156,7 +156,7 @@
       "textMatch": true,
       "firstMismatchDetail": null,
       "textDeltaSample": "",
-      "exportMs": 58,
+      "exportMs": 56,
       "imgInfo": []
     },
     {
@@ -169,20 +169,20 @@
       "textMatch": true,
       "firstMismatchDetail": null,
       "textDeltaSample": "",
-      "exportMs": 59,
+      "exportMs": 62,
       "imgInfo": []
     },
     {
       "file": "very-long.md",
-      "onscreenPageCount": 297,
-      "pdfLibPageCount": 297,
-      "pdfjsPageCount": 297,
+      "onscreenPageCount": 322,
+      "pdfLibPageCount": 322,
+      "pdfjsPageCount": 322,
       "pageCountMatch": true,
       "textCategory": "exact",
       "textMatch": true,
       "firstMismatchDetail": null,
       "textDeltaSample": "",
-      "exportMs": 595,
+      "exportMs": 626,
       "imgInfo": []
     }
   ],
@@ -192,16 +192,22 @@
       "instance": 0,
       "rects": 0,
       "texts": 0,
-      "paths": 13
+      "paths": 0
     },
     {
       "instance": 1,
       "rects": 0,
       "texts": 0,
-      "paths": 0
+      "paths": 13
     },
     {
       "instance": 2,
+      "rects": 0,
+      "texts": 0,
+      "paths": 0
+    },
+    {
+      "instance": 3,
       "rects": 0,
       "texts": 0,
       "paths": 9

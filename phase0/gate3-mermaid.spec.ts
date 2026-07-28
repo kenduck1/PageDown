@@ -271,13 +271,31 @@ test('Gate 3: oversized-diagram page-break behavior is deterministic, and CSP st
   console.log('Gate 3 mermaid style nonce check:', JSON.stringify(result.nonceCheck))
 
   // Measured (across repeated runs — see this task's report) at exactly 3
-  // page-clone instances for this fixture's oversized diagram, every time —
-  // i.e. the split itself IS deterministic, even though it is a split
-  // (break-inside: avoid-page does not prevent it). Pinned to the actual
-  // observed value, not a loose `> 1`, so a change in this number (e.g.
-  // from a future page-size/margin change) is visible here rather than
-  // silently drifting.
-  expect(result.oversizedWrapperCount).toBe(3)
+  // page-clone instances for this fixture's oversized diagram at the time
+  // this gate was written, every time — i.e. the split itself IS
+  // deterministic, even though it is a split (break-inside: avoid-page does
+  // not prevent it). Pinned to the actual observed value, not a loose
+  // `> 1`, so a change in this number (e.g. from a future page-size/margin
+  // change) is visible here rather than silently drifting.
+  //
+  // Updated to 4 by Task 10 (Gate 6) — a real, expected, and correctly
+  // understood shift, not a silent drift papered over: Task 10's
+  // `KeepWithNextHandler` (src/pagination/break-handlers.ts) fixes this
+  // exact fixture's "# Oversized Diagram" H1 being stranded alone at the
+  // bottom of a page (measured directly, both before and after: without
+  // the handler, the heading sat at the end of one page while the diagram
+  // itself started fresh on the next; with it, the heading now correctly
+  // starts the SAME page as the diagram's first page-clone). Pulling the
+  // heading down by one page's worth of a few lines shifts where the
+  // diagram's own overflow-based page-splitting boundaries land for the
+  // rest of its (independently oversized, break-inside-avoid-page-not-
+  // withstanding) content — one more page-clone instance is needed to fit
+  // the same diagram content once the heading occupies space at the top of
+  // its starting page. This is the expected, correct cost of not stranding
+  // the heading, not a regression in this gate's own diagram-splitting
+  // finding above, which is otherwise unchanged (still a real split, still
+  // not honoring break-inside: avoid-page for oversized content).
+  expect(result.oversizedWrapperCount).toBe(4)
 
   const oversizedBoxes = result.sendResult.diagramBoxes.filter(
     (b: DiagramBox) => b.id === 'pagedown-mermaid-2'
@@ -305,7 +323,25 @@ test('Gate 3: oversized-diagram page-break behavior is deterministic, and CSP st
   // see resources/pagination-render/index.ts) must carry a real, matching
   // nonce.
   expect(result.nonceCheck.nonce).toBeTruthy()
-  expect(result.nonceCheck.styleCount).toBe(3) // one <style> per diagram, per mermaid.render()
+  // Not literally "one <style> per diagram, per mermaid.render()" despite
+  // the comment this replaced — only ONE of the oversized diagram's 3 (now
+  // 4, see the oversizedWrapperCount comment above) page-clone instances
+  // happens to retain its own <style> block across Paged.js's
+  // overflow-splitting (Range.extractContents()); the other clones lose it
+  // the same way Task 9/Gate 4 found they lose <rect>/<text> content on
+  // split. Measured at 3 (small=1 + sequence=1 + oversized=1-of-3) before
+  // Task 10's KeepWithNextHandler shifted the oversized diagram's own split
+  // boundaries (see oversizedWrapperCount above): with the heading now
+  // pulled onto the diagram's starting page, a SECOND of the oversized
+  // diagram's 4 clones also happens to retain its <style> block post-split
+  // (small=1 + sequence=1 + oversized=2-of-4 = 4) — visible directly in
+  // `hoistedRuleCounts` below, which now has two `46`s instead of one.
+  // This is the same content-loss-on-split behavior Gate 4 already
+  // documents, landing on a different clone once the split boundary moved;
+  // not a new bug, and not something this gate's own CSP/nonce assertions
+  // depend on being any particular count beyond "every retained <style>
+  // carries a real, matching nonce" (checked below, unconditionally).
+  expect(result.nonceCheck.styleCount).toBe(4)
   for (const styleNonce of result.nonceCheck.styleNonces) {
     expect(styleNonce).toBe(result.nonceCheck.nonce)
   }
