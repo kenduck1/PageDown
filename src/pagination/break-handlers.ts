@@ -162,10 +162,13 @@ function nextDisplayedElement(node: Element): Element | null {
 // and committed to fit the page bounds (`Layout.findOverflow` already
 // decided which rows belong on this page before this hook ever runs) — so
 // the extra `<thead>` height is never accounted for by Paged.js's own
-// overflow measurement. For a table that splits across exactly 2 pages this
-// was harmless in practice (verified: the second/last page of a 2-page
-// split always has slack, since it's whatever remainder didn't fit on page
-// 1, not a page packed to the boundary). But for a table spanning 3+ pages,
+// overflow measurement. For the specific table tested at a 2-page split
+// this was harmless in practice (verified directly, not assumed) — but NOT
+// because a table's remainder page is structurally guaranteed to have
+// slack (it isn't: nothing prevents a table's last page from happening to
+// fill almost exactly to the boundary too). The real structural reason
+// this case is safe is the row-completion mechanism described below, not
+// leftover space. But for a table spanning 3+ pages,
 // inserting a per-row-content `<thead>` on a MIDDLE continuation page (one
 // packed tight to the page boundary, per Paged.js's own overflow packing)
 // reproducibly broke Chromium's table layout: the LAST `<tr>` on that page

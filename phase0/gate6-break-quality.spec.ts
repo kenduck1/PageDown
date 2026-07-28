@@ -258,6 +258,8 @@ test('Gate 6: KeepWithNextHandler prevents a stranded heading in mermaid-diagram
     strandedCount,
     'no heading should be stranded on a different page than the content immediately following it'
   ).toBe(0)
+
+  await app.close()
 })
 
 test('Gate 6: TableContinuationHandler repeats the header on a simple 2-page split, with no clipping or row misplacement', async () => {
@@ -533,14 +535,20 @@ test("Gate 6: nested ordered list numbering (Paged.js's own built-in Lists handl
 
     // For every <ol> on every page: its `start`, its first child's
     // `data-item-num` (must equal `start` if Lists.afterPageLayout ran
-    // correctly), and whether it's the (single) top-level list or one of
-    // the per-item nested ones.
+    // correctly), whether it's the (single) top-level list or one of the
+    // per-item nested ones, and its first rendered item's own TEXT --
+    // captured so the assertions below can derive an expected number from
+    // the actual source content independently of Paged.js's own
+    // `data-item-num` bookkeeping (see the comment below on why comparing
+    // `start` only against `data-item-num` would be partially circular:
+    // both come from the same Lists handler).
     const perPageLists = await harness.view.webContents.executeJavaScript(`
       Array.from(document.querySelectorAll('.pagedjs_page')).map((page) =>
         Array.from(page.querySelectorAll('ol')).map((ol) => ({
           start: ol.start,
           firstItemNum: ol.firstElementChild ? Number(ol.firstElementChild.dataset.itemNum) : null,
-          isTopLevel: ol.parentElement.tagName !== 'LI'
+          isTopLevel: ol.parentElement.tagName !== 'LI',
+          firstItemText: ol.firstElementChild ? ol.firstElementChild.textContent : null
         }))
       )
     `)
@@ -553,6 +561,7 @@ test("Gate 6: nested ordered list numbering (Paged.js's own built-in Lists handl
     start: number
     firstItemNum: number | null
     isTopLevel: boolean
+    firstItemText: string | null
   }
   const perPageLists = result.perPageLists as ListInfo[][]
 
@@ -561,14 +570,49 @@ test("Gate 6: nested ordered list numbering (Paged.js's own built-in Lists handl
     'the 40-item nested list must split across at least 2 pages for this check to mean anything'
   ).toBeGreaterThan(1)
 
+  // Independent ground truth, NOT derived from Paged.js's own bookkeeping:
+  // this synthetic fixture's source text is deliberately predictable
+  // ("Top-level item N ...", "Sub-item N.M") specifically so the expected
+  // position of any rendered <li> can be recovered from its own visible
+  // text alone. Comparing `start`/`data-item-num` only against EACH OTHER
+  // (as an earlier version of this test did) is partially circular -- both
+  // values are computed by the same `Lists` handler (afterParsed stamps
+  // data-item-num, afterPageLayout sets start from it), so a bug in HOW
+  // data-item-num itself gets assigned in the first place would not be
+  // caught by checking that the two agree with each other. Parsing the
+  // expected number back out of the rendered text closes that gap: it
+  // validates against what a reader/screen-reader actually SEES, not just
+  // Paged.js's own internal counter.
+  function expectedPositionFromText(text: string, isTopLevel: boolean): number | null {
+    if (isTopLevel) {
+      // The common case: a fresh (unsplit) top-level <li> whose own text
+      // starts with "Top-level item N ...".
+      const direct = /Top-level item (\d+)/.exec(text)
+      if (direct) return Number(direct[1])
+      // Real, observed case (not hypothetical): when a top-level item's
+      // OWN text was long enough to have already been fully rendered on
+      // the PREVIOUS page before the split occurred, the continuation
+      // page's first top-level <li> contains only the remaining nested
+      // "Sub-item N.M" children -- no "Top-level item N" text survives on
+      // this page at all. N is still recoverable from that nested text's
+      // own N (not its M) -- e.g. firstItemText "Sub-item 11.2Sub-item
+      // 11.3" means this continuation IS top-level item 11.
+      const fromNested = /Sub-item (\d+)\.\d+/.exec(text)
+      return fromNested ? Number(fromNested[1]) : null
+    }
+    const m = /Sub-item \d+\.(\d+)/.exec(text)
+    return m ? Number(m[1]) : null
+  }
+
   // THE assertion this test exists to make, per the design doc's own named
   // risk ("ordered lists restart numbering on continuation"): for every
   // <ol> found anywhere in the paginated output -- top-level or nested --
-  // its `start` attribute must equal its own first rendered item's
-  // original position in the source list (captured via `data-item-num`,
-  // Paged.js's own built-in bookkeeping), never 1 unless it genuinely is
-  // the list's first page. A restart-to-1 bug would show up here as
-  // `start === 1` for a continuation list whose `firstItemNum` is > 1.
+  // its `start` attribute must equal both (a) its own first rendered
+  // item's `data-item-num` (Paged.js's own internal bookkeeping) AND (b)
+  // the position independently recovered from that item's own visible
+  // text, never 1 unless it genuinely is the list's first page. A
+  // restart-to-1 bug would show up here as `start === 1` for a
+  // continuation list whose real position is > 1 either way.
   let anyContinuationListFound = false
   for (const pageLists of perPageLists) {
     for (const list of pageLists) {
@@ -578,8 +622,19 @@ test("Gate 6: nested ordered list numbering (Paged.js's own built-in Lists handl
       ).not.toBeNull()
       expect(
         list.start,
-        `<ol> (isTopLevel=${list.isTopLevel}) start must match its first item's real position (${list.firstItemNum}), not restart at 1`
+        `<ol> (isTopLevel=${list.isTopLevel}) start must match its first item's data-item-num (${list.firstItemNum}), not restart at 1`
       ).toBe(list.firstItemNum)
+
+      const expectedFromText = expectedPositionFromText(list.firstItemText ?? '', list.isTopLevel)
+      expect(
+        expectedFromText,
+        `<ol> (isTopLevel=${list.isTopLevel}) first item's own text ("${list.firstItemText}") must match the expected "Top-level item N"/"Sub-item N.M" pattern`
+      ).not.toBeNull()
+      expect(
+        list.start,
+        `<ol> (isTopLevel=${list.isTopLevel}) start (${list.start}) must match the position independently recovered from its first item's own VISIBLE TEXT (${expectedFromText}), not just agree with Paged.js's own data-item-num bookkeeping`
+      ).toBe(expectedFromText)
+
       if ((list.firstItemNum ?? 1) > 1) anyContinuationListFound = true
     }
   }

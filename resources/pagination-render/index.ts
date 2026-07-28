@@ -1090,8 +1090,9 @@ window.addEventListener(
         // flow() this way produces correct output at all. Excluded from
         // both this timing and the phase-2 timings below: the real cost
         // of `removePages(targetPageIndex)` itself (destroying the
-        // pages being replaced, 147 of them here) — see this task's
-        // findings doc for why that's a documented, not re-measured,
+        // pages being replaced, 172 of them here — was 147 before Task 10's
+        // KeepWithNextHandler shifted very-long.md's page count) — see this
+        // task's findings doc for why that's a documented, not re-measured,
         // simplification.
         chunker.removePages(targetPageIndex)
         const t2 = performance.now()
@@ -1206,8 +1207,10 @@ window.addEventListener(
         // main process via the real markdownToHtml pipeline on an edited
         // markdown string — see the spec file), for direct comparison
         // against the resumed run above. Note this measures fullEditedMs
-        // against a DOM that still holds phase 1's 297 attached page
-        // elements (gate7Root isn't removed until after this call) — a
+        // against a DOM that still holds phase 1's ~322 attached page
+        // elements (was ~297 before Task 10's KeepWithNextHandler shifted
+        // very-long.md's page count — see the findings doc's Gate 2/Gate 7
+        // update notes) (gate7Root isn't removed until after this call) — a
         // second, independent layout/paint surface sharing the page with a
         // large already-rendered tree, not a pristine one. Not corrected
         // for here; see the findings doc for why this and the excluded
