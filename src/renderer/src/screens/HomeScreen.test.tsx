@@ -67,4 +67,18 @@ describe('HomeScreen', () => {
     expect(await screen.findByText('Permission denied')).toBeInTheDocument()
     expect(useAppStore.getState().screen).toBe('home')
   })
+
+  it('clears the error when "Dismiss" is clicked', async () => {
+    vi.mocked(window.api.openFile).mockRejectedValue(new Error('Permission denied'))
+    const user = userEvent.setup()
+    render(<HomeScreen />)
+
+    await user.click(screen.getByRole('button', { name: 'Open file…' }))
+    expect(await screen.findByText('Permission denied')).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'Dismiss' }))
+
+    expect(useDocumentStore.getState().error).toBeNull()
+    expect(screen.queryByText('Permission denied')).not.toBeInTheDocument()
+  })
 })
