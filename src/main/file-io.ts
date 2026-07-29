@@ -1,7 +1,11 @@
 import { dialog } from 'electron'
 import { readFile, writeFile } from 'node:fs/promises'
-import { mergeRecentFiles, readRecentFiles, writeRecentFiles } from './recent-files'
+import { mergeRecentFiles, readRecentFiles, writeRecentFiles, isKnownPath } from './recent-files'
 import type { RecentFileEntry } from './recent-files'
+
+// Re-exported so src/main/index.ts imports every file-I/O primitive from one
+// place, matching its existing single-import pattern.
+export { isKnownPath } from './recent-files'
 
 const MARKDOWN_FILTERS = [{ name: 'Markdown', extensions: ['md', 'markdown'] }]
 
@@ -39,6 +43,23 @@ export async function saveFile(
   }
   await writeFile(targetPath, content, 'utf8')
   return { filePath: targetPath }
+}
+
+export async function saveFileToKnownOrChosenPath(
+  userDataDir: string,
+  filePath: string | null,
+  content: string
+): Promise<{ filePath: string } | null> {
+  if (filePath !== null && !(await isKnownPath(userDataDir, filePath))) {
+    // filePath isn't (or is no longer) in the allowlist -- rather than
+    // silently writing to an unvetted path, or permanently refusing to
+    // save, fall back to a real Save-As dialog so the user is never
+    // trapped with an unsaveable document. This preserves the security
+    // property (never write to a path we didn't get from the user via a
+    // native dialog or an already-vetted path) without ever blocking them.
+    return saveFile(null, content)
+  }
+  return saveFile(filePath, content)
 }
 
 export async function getRecentFiles(userDataDir: string): Promise<RecentFileEntry[]> {

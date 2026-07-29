@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { mergeRecentFiles, readRecentFiles, writeRecentFiles } from './recent-files'
+import { isKnownPath, mergeRecentFiles, readRecentFiles, writeRecentFiles } from './recent-files'
 
 describe('mergeRecentFiles', () => {
   it('prepends a new entry', () => {
@@ -62,6 +62,71 @@ describe('readRecentFiles / writeRecentFiles', () => {
       const { writeFile } = await import('node:fs/promises')
       await writeFile(join(dir, 'recent-files.json'), 'not valid json{{{', 'utf8')
       expect(await readRecentFiles(dir)).toEqual([])
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('filters out malformed entries from an otherwise-valid JSON array', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'pagedown-recent-files-'))
+    try {
+      const { writeFile } = await import('node:fs/promises')
+      await writeFile(
+        join(dir, 'recent-files.json'),
+        '[{"filePath":"/a.md","editedAt":"2026-01-01T00:00:00.000Z"},{"filePath":123,"editedAt":"x"},null]',
+        'utf8'
+      )
+      expect(await readRecentFiles(dir)).toEqual([
+        { filePath: '/a.md', editedAt: '2026-01-01T00:00:00.000Z' }
+      ])
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('leaves no leftover temp file behind after an atomic write', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'pagedown-recent-files-'))
+    try {
+      await writeRecentFiles(dir, [{ filePath: '/a.md', editedAt: '2026-01-01T00:00:00.000Z' }])
+      const { readdir } = await import('node:fs/promises')
+      expect(await readdir(dir)).toEqual(['recent-files.json'])
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+})
+
+describe('isKnownPath', () => {
+  it('returns true for a path in the persisted list and false for one that is not', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'pagedown-recent-files-'))
+    try {
+      await writeRecentFiles(dir, [
+        { filePath: '/a.md', editedAt: '2026-01-01T00:00:00.000Z' },
+        { filePath: '/b.md', editedAt: '2026-01-02T00:00:00.000Z' }
+      ])
+      expect(await isKnownPath(dir, '/a.md')).toBe(true)
+      expect(await isKnownPath(dir, '/b.md')).toBe(true)
+      expect(await isKnownPath(dir, '/etc/passwd')).toBe(false)
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('returns false when no recent-files list exists yet', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'pagedown-recent-files-'))
+    try {
+      expect(await isKnownPath(dir, '/a.md')).toBe(false)
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('returns false for a path that only appears in a malformed entry', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'pagedown-recent-files-'))
+    try {
+      const { writeFile } = await import('node:fs/promises')
+      await writeFile(join(dir, 'recent-files.json'), '[{"filePath":"/a.md"}]', 'utf8')
+      expect(await isKnownPath(dir, '/a.md')).toBe(false)
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
