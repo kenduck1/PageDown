@@ -6,6 +6,7 @@ function HomeScreen(): React.JSX.Element {
   const newDocument = useDocumentStore((state) => state.newDocument)
   const openFile = useDocumentStore((state) => state.openFile)
   const error = useDocumentStore((state) => state.error)
+  const clearError = useDocumentStore((state) => state.clearError)
 
   const handleNewDocument = (): void => {
     newDocument()
@@ -37,7 +38,14 @@ function HomeScreen(): React.JSX.Element {
           Open file…
         </button>
       </div>
-      {error && <p className="text-13 text-red-600">{error}</p>}
+      {error && (
+        <div className="flex items-center gap-3 text-13 text-red-600">
+          <span>{error}</span>
+          <button onClick={clearError} className="font-semibold">
+            Dismiss
+          </button>
+        </div>
+      )}
     </div>
   )
 }
