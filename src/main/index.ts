@@ -11,7 +11,14 @@ import {
 } from './pagination-window'
 import { paginateAndTime } from '../pagination/paginate'
 import { exportToPdf } from '../export/export-pdf'
-import { openFileDialog, readFileByPath, saveFile, getRecentFiles, addRecentFile } from './file-io'
+import {
+  openFileDialog,
+  readFileByPath,
+  saveFileToKnownOrChosenPath,
+  getRecentFiles,
+  addRecentFile,
+  isKnownPath
+} from './file-io'
 
 // Must run before app.whenReady() is awaited anywhere — Electron requires
 // protocol.registerSchemesAsPrivileged() to be called before the `ready`
@@ -129,33 +136,47 @@ app.whenReady().then(() => {
   // IPC test
   ipcMain.on('ping', () => console.log('pong'))
 
+  // Recording a recent file is a nicety, not part of the open/save contract:
+  // addRecentFile can genuinely throw (disk full, permissions, removed userData
+  // dir), and letting that reject the handler would report an already-completed
+  // read/write to the renderer as a failure — leaving the Document Store with a
+  // stale filePath and isDirty still set after a successful save.
   ipcMain.handle('file:open', async () => {
     const result = await openFileDialog()
-    if (result) await addRecentFile(app.getPath('userData'), result.filePath)
+    if (result) {
+      try {
+        await addRecentFile(app.getPath('userData'), result.filePath)
+      } catch (err) {
+        console.error('Failed to record recent file', err)
+      }
+    }
     return result
   })
 
   ipcMain.handle('file:openPath', async (_event, filePath: string) => {
     const userDataDir = app.getPath('userData')
-    const recents = await getRecentFiles(userDataDir)
-    if (!recents.some((entry) => entry.filePath === filePath)) {
+    if (!(await isKnownPath(userDataDir, filePath))) {
       throw new Error('Requested path is not a known recent file')
     }
     const result = await readFileByPath(filePath)
-    await addRecentFile(userDataDir, result.filePath)
+    try {
+      await addRecentFile(userDataDir, result.filePath)
+    } catch (err) {
+      console.error('Failed to record recent file', err)
+    }
     return result
   })
 
   ipcMain.handle('file:save', async (_event, filePath: string | null, content: string) => {
     const userDataDir = app.getPath('userData')
-    if (filePath !== null) {
-      const recents = await getRecentFiles(userDataDir)
-      if (!recents.some((entry) => entry.filePath === filePath)) {
-        throw new Error('Requested path is not a known file for this app to save to')
+    const result = await saveFileToKnownOrChosenPath(userDataDir, filePath, content)
+    if (result) {
+      try {
+        await addRecentFile(userDataDir, result.filePath)
+      } catch (err) {
+        console.error('Failed to record recent file', err)
       }
     }
-    const result = await saveFile(filePath, content)
-    if (result) await addRecentFile(userDataDir, result.filePath)
     return result
   })
 
