@@ -5,7 +5,8 @@
     "src/renderer/src/**/*",
     "src/renderer/src/**/*.tsx",
     "src/preload/*.d.ts",
-    "resources/pagination-render/**/*"
+    "resources/pagination-render/**/*",
+    "phase1/**/*"
   ],
   "compilerOptions": {
     "composite": true,
