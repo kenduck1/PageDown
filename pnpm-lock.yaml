@@ -14,6 +14,21 @@ importers:
       '@electron-toolkit/utils':
         specifier: ^4.0.0
         version: 4.0.0(electron@39.8.10)
+      '@milkdown/core':
+        specifier: 7.21.3
+        version: 7.21.3
+      '@milkdown/ctx':
+        specifier: 7.21.3
+        version: 7.21.3
+      '@milkdown/preset-commonmark':
+        specifier: 7.21.3
+        version: 7.21.3
+      '@milkdown/preset-gfm':
+        specifier: 7.21.3
+        version: 7.21.3
+      '@milkdown/utils':
+        specifier: 7.21.3
+        version: 7.21.3
       decode-named-character-reference:
         specifier: ^1.3.0
         version: 1.3.0
@@ -830,6 +845,30 @@ packages:
 
   '@mermaid-js/parser@0.3.0':
     resolution: {integrity: sha512-HsvL6zgE5sUPGgkIDlmAWR1HTNHz2Iy11BAWPTa4Jjabkpguy4Ze2gzfLrg6pdRuBvFwgUYyxiaNqZwrEEXepA==}
+
+  '@milkdown/core@7.21.3':
+    resolution: {integrity: sha512-84CYaJEAFZtG6tXilYM/SIG7WKQ56GMQLDC8+HBmilaHqqQuReqYlngAVA0bkDrDEsy/UMNTWsw0pEk00VTfVw==}
+
+  '@milkdown/ctx@7.21.3':
+    resolution: {integrity: sha512-3mYsMdYsK1JbiHAo1LMqjyVYbVqOmNXHRI97w4m09Y+1Md6O74Z2snqKVRbbJQq8eKwN4GMOYdjF9hcasJVCJg==}
+
+  '@milkdown/exception@7.21.3':
+    resolution: {integrity: sha512-+Mne/hJ8Wjfdl4dCG5+Sm+BXWK5StacyP4pcQkCvPw/sBbNAP9eTF7+TC/KRJw/b5Bz60wqztbNkSlDuqd2fSQ==}
+
+  '@milkdown/preset-commonmark@7.21.3':
+    resolution: {integrity: sha512-/ql3XfWDksB6ZwvpHH0nd5KwQwAme5efgm3qWvofxyS7bMPCa4rl31d8oUeO9OXMbv+8Yh7utM2vEAL6DnER+Q==}
+
+  '@milkdown/preset-gfm@7.21.3':
+    resolution: {integrity: sha512-f4MUUKEF5jS2HX7kqXGfGawqoCS+IbuzlQXbeqdNaEy14Fu3u1I/ParSiCGraTC4WPbq0hOSfDm5GRnIhMUYaQ==}
+
+  '@milkdown/prose@7.21.3':
+    resolution: {integrity: sha512-yEDOZ5S1eY2n0EyQ4i+MZ0Y/bpsi8FMYMoMTbJjxS3cHWMQSIyA8cjd0/DWF+ShAY+DhaCcQya2SGK04r908sA==}
+
+  '@milkdown/transformer@7.21.3':
+    resolution: {integrity: sha512-0OmceNYpmLwZYZLLwI+ABtVh3GdbRGBGVsfgCprqp0f6L+Y+qZcnAEDPExPqIXDEBuuyaz57UHxBmaskN7CRNg==}
+
+  '@milkdown/utils@7.21.3':
+    resolution: {integrity: sha512-pJxcEy1cJKRT4CsDLJ8OlokKww2PMBdlULCtFM4ccN+7EBc//fpR8ZnnOzoSnPxtgsbijaLzSSWiXBE5BdlolQ==}
 
   '@napi-rs/canvas-android-arm64@1.0.2':
     resolution: {integrity: sha512-IMXKVQod0ol4vt3gmClUfXz4JAgHYESGPCUqmH3lQxBoL0K/2greJaQE1HVBVxWWFKfLc4OLZVdxg7kXVyXv+g==}
@@ -3044,6 +3083,9 @@ packages:
     resolution: {integrity: sha512-/IXtbwEk5HTPyEwyKX6hGkYXxM9nbj64B+ilVJnC/R6B0pH5G4V3b0pVbL7DBj4tkhBAppbQUlf6F6Xl9LHu1g==}
     engines: {node: '>= 0.4'}
 
+  mdast-util-definitions@6.0.0:
+    resolution: {integrity: sha512-scTllyX6pnYNZH/AIp/0ePz6s4cZtARxImwoPJ7kS42n+MnVsI4XbnG6d4ibehRIldYMWM2LD7ImQblVhUejVQ==}
+
   mdast-util-find-and-replace@3.0.2:
     resolution: {integrity: sha512-Tmd1Vg/m3Xz43afeNxDIhWRtFZgM2VLyaf4vSTYwudTyeuTneoL3qtWMA5jeLyz/O1vDJmmV4QuScFCA2tBPwg==}
 
@@ -3245,6 +3287,11 @@ packages:
     engines: {node: ^10 || ^12 || ^13.7 || ^14 || >=15.0.1}
     hasBin: true
 
+  nanoid@5.1.16:
+    resolution: {integrity: sha512-kVrnsrJqMR8+oLJnGEmSWw9BivK5mt7H3FZatVRjrc5wGqFYuBxX1yG7+A7Gi5AefkX6t/oCkizcQgpu0cY1dQ==}
+    engines: {node: ^18 || >=20}
+    hasBin: true
+
   natural-compare@1.4.0:
     resolution: {integrity: sha512-OWND8ei3VtNC9h7V60qff3SVobHr996CTwgxubgyQYEpg290h9J0buyECNNJexkFm5sOajh5G116RYA1c8ZMSw==}
 
@@ -3321,6 +3368,9 @@ packages:
   optionator@0.9.4:
     resolution: {integrity: sha512-6IpQ7mKUxRcZNLIObR0hz7lxsapSSIYNZJwXPGeF0mTVqGKFIXj1DQcMoT22S3ROcLyY/rz0PWaWZ9ayWmad9g==}
     engines: {node: '>= 0.8.0'}
+
+  orderedmap@2.1.1:
+    resolution: {integrity: sha512-TvAWxi0nDe1j/rtMcWcIj94+Ffe6n7zhow33h40SKxmsmozs6dz/e+EajymfoFcHd7sxNn8yHM8839uixMOV6g==}
 
   own-keys@1.0.2:
     resolution: {integrity: sha512-19YVAg7T+WTrxggPukVq7DjTv6+PJ867TmhCvBsYwmbFCsZd344rq2Ld1p0wo8f8Qrrhgp82c6FJRqdXWtSEhg==}
@@ -3480,6 +3530,48 @@ packages:
   property-information@7.2.0:
     resolution: {integrity: sha512-IAtzIB6sUiWaJYrX9smp3V46pBGbBeLFRGdh25kg1334VcBlD8HzhPeNIWQH9zhGmo2itIe25EHt9dQP7G5hmg==}
 
+  prosemirror-changeset@2.4.1:
+    resolution: {integrity: sha512-96WBLhOaYhJ+kPhLg3uW359Tz6I/MfcrQfL4EGv4SrcqKEMC1gmoGrXHecPE8eOwTVCJ4IwgfzM8fFad25wNfw==}
+
+  prosemirror-commands@1.7.1:
+    resolution: {integrity: sha512-rT7qZnQtx5c0/y/KlYaGvtG411S97UaL6gdp6RIZ23DLHanMYLyfGBV5DtSnZdthQql7W+lEVbpSfwtO8T+L2w==}
+
+  prosemirror-dropcursor@1.8.3:
+    resolution: {integrity: sha512-FoYbsJR8gK+DGlqhNoE29Loa38eIZPzQRIb1VMaDNBoo4OLP6vVof/jR8qFY/6XvUd6Dhug8MDCHl2a/h8RTfQ==}
+
+  prosemirror-gapcursor@1.4.1:
+    resolution: {integrity: sha512-pMdYaEnjNMSwl11yjEGtgTmLkR08m/Vl+Jj443167p9eB3HVQKhYCc4gmHVDsLPODfZfjr/MmirsdyZziXbQKw==}
+
+  prosemirror-history@1.5.0:
+    resolution: {integrity: sha512-zlzTiH01eKA55UAf1MEjtssJeHnGxO0j4K4Dpx+gnmX9n+SHNlDqI2oO1Kv1iPN5B1dm5fsljCfqKF9nFL6HRg==}
+
+  prosemirror-inputrules@1.5.1:
+    resolution: {integrity: sha512-7wj4uMjKaXWAQ1CDgxNzNtR9AlsuwzHfdFH1ygEHA2KHF2DOEaXl1CJfNPAKCg9qNEh4rum975QLaCiQPyY6Fw==}
+
+  prosemirror-keymap@1.2.3:
+    resolution: {integrity: sha512-4HucRlpiLd1IPQQXNqeo81BGtkY8Ai5smHhKW9jjPKRc2wQIxksg7Hl1tTI2IfT2B/LgX6bfYvXxEpJl7aKYKw==}
+
+  prosemirror-model@1.25.11:
+    resolution: {integrity: sha512-QWg9RhnpLlogAmp3p96uEFrE5txQpFynd4vhBAELkwgOCWQs/X0yCzB3/hrHqiPwf91RG5KyWq6553zs9JqIOQ==}
+
+  prosemirror-safari-ime-span@1.0.2:
+    resolution: {integrity: sha512-QJqD8s1zE/CuK56kDsUhndh5hiHh/gFnAuPOA9ytva2s85/ZEt2tNWeALTJN48DtWghSKOmiBsvVn2OlnJ5H2w==}
+
+  prosemirror-schema-list@1.5.1:
+    resolution: {integrity: sha512-927lFx/uwyQaGwJxLWCZRkjXG0p48KpMj6ueoYiu4JX05GGuGcgzAy62dfiV8eFZftgyBUvLx76RsMe20fJl+Q==}
+
+  prosemirror-state@1.4.4:
+    resolution: {integrity: sha512-6jiYHH2CIGbCfnxdHbXZ12gySFY/fz/ulZE333G6bPqIZ4F+TXo9ifiR86nAHpWnfoNjOb3o5ESi7J8Uz1jXHw==}
+
+  prosemirror-tables@1.8.5:
+    resolution: {integrity: sha512-V/0cDCsHKHe/tfWkeCmthNUcEp1IVO3p6vwN8XtwE9PZQLAZJigbw3QoraAdfJPir4NKJtNvOB8oYGKRl+t0Dw==}
+
+  prosemirror-transform@1.12.0:
+    resolution: {integrity: sha512-GxboyN4AMIsoHNtz5uf2r2Ru551i5hWeCMD6E2Ib4Eogqoub0NflniaBPVQ4MrGE5yZ8JV9tUHg9qcZTTrcN4w==}
+
+  prosemirror-view@1.42.2:
+    resolution: {integrity: sha512-Pdg0l5kXm8aLDquFAnQFTCITg0q44sLqBlHlpsVLD9segdOao8TOfQdAhCrCXyVgPSRr6UDDROOIWA3bIrN9YQ==}
+
   pump@3.0.4:
     resolution: {integrity: sha512-VS7sjc6KR7e1ukRFhQSY5LM2uBWAUPiOPa/A3mkKmiMwSmRFUITt0xuj+/lesgnCv+dPIEYlkzrcyXgquIHMcA==}
 
@@ -3551,6 +3643,9 @@ packages:
   remark-gfm@4.0.1:
     resolution: {integrity: sha512-1quofZ2RQ9EWdeN34S79+KExV1764+wCUGop5CPL1WGdD0ocPpu91lzPGbwWMECpEpd42kJGQwzRfyov9j4yNg==}
 
+  remark-inline-links@7.0.0:
+    resolution: {integrity: sha512-4uj1pPM+F495ySZhTIB6ay2oSkTsKgmYaKk/q5HIdhX2fuyLEegpjWa0VdJRJ01sgOqAFo7MBKdDUejIYBMVMQ==}
+
   remark-parse@11.0.0:
     resolution: {integrity: sha512-FCxlKLNGknS5ba/1lmpYijMUzX2esxW5xQqjWxw2eHFfS2MSdaHVINFmhjo+qN1WhZhNimq0dZATN9pH0IDrpA==}
 
@@ -3559,6 +3654,9 @@ packages:
 
   remark-stringify@11.0.0:
     resolution: {integrity: sha512-1OSmLd3awB/t8qdoEOMazZkNsfVTeY4fTsgzcQFdXNq8ToTN4ZGwrMnlda4K6smTFKD+GRV6O48i6Z4iKgPPpw==}
+
+  remark@15.0.1:
+    resolution: {integrity: sha512-Eht5w30ruCXgFmxVUSlNWQ9iiimq07URKeFS3hNc8cUWy1llX4KDWfyEDZRycMc+znsN9Ux5/tJ/BFdgdOwA3A==}
 
   require-directory@2.1.1:
     resolution: {integrity: sha512-fGxEI7+wsG9xrvdjsrlmL22OMTTiHRwAMroiEeMgq8gzoLC/PQr7RsRDSTLUg/bZAZtF+TVIkHc6/4RIKrui+Q==}
@@ -3607,6 +3705,9 @@ packages:
     resolution: {integrity: sha512-Gu0c0iH9FzgX1L1t7ByIbbS3Vmdz+6KHm/EsqmmC71gUQ82yvZRkTK6XzrFObSka91WUVdynqp6nsfilzr5k6Q==}
     engines: {node: '>=18.0.0', npm: '>=8.0.0'}
     hasBin: true
+
+  rope-sequence@1.3.4:
+    resolution: {integrity: sha512-UT5EDe2cu2E/6O4igUr5PSFs23nvvukicWHx6GnOPlHAiiYbzNuCRQCuiUdHJQcqKalLKlrYJnjY0ySGsXNQXQ==}
 
   roughjs@4.6.6:
     resolution: {integrity: sha512-ZUz/69+SYpFN/g/lUlo2FXcIjRkSu3nDarreVdGGndHEBJ6cXPdKguS8JGxwj5HA5xIbVKSmLgr5b3AWxtRfvQ==}
@@ -4111,6 +4212,9 @@ packages:
 
   vscode-uri@3.0.8:
     resolution: {integrity: sha512-AyFQ0EVmsOZOlAnxoFOGOq1SQDWAB7C6aqMGS23svWAllfOaxbuFvcT8D1i8z3Gyn8fraVeZNNmN6e9bxxXkKw==}
+
+  w3c-keyname@2.2.8:
+    resolution: {integrity: sha512-dpojBhNsCNN7T82Tm7k26A6G9ML3NkhDsnw9n/eoxSRlVBB4CEtIQ/KTCLI2Fwf3ataSXRhYFkQi3SlnFwPvPQ==}
 
   w3c-xmlserializer@5.0.0:
     resolution: {integrity: sha512-o8qghlI8NZHU1lLPrpi2+Uq7abh4GGPpYANlalzWxyWteJOCsr/P+oPBA49TOLu5FTZO4d3F9MnWJfiMo4BkmA==}
@@ -4853,6 +4957,89 @@ snapshots:
   '@mermaid-js/parser@0.3.0':
     dependencies:
       langium: 3.0.0
+
+  '@milkdown/core@7.21.3':
+    dependencies:
+      '@milkdown/ctx': 7.21.3
+      '@milkdown/exception': 7.21.3
+      '@milkdown/prose': 7.21.3
+      '@milkdown/transformer': 7.21.3
+      remark-parse: 11.0.0
+      remark-stringify: 11.0.0
+      unified: 11.0.5
+    transitivePeerDependencies:
+      - supports-color
+
+  '@milkdown/ctx@7.21.3':
+    dependencies:
+      '@milkdown/exception': 7.21.3
+
+  '@milkdown/exception@7.21.3': {}
+
+  '@milkdown/preset-commonmark@7.21.3':
+    dependencies:
+      '@milkdown/core': 7.21.3
+      '@milkdown/ctx': 7.21.3
+      '@milkdown/exception': 7.21.3
+      '@milkdown/prose': 7.21.3
+      '@milkdown/transformer': 7.21.3
+      '@milkdown/utils': 7.21.3
+      remark-inline-links: 7.0.0
+      unist-util-visit: 5.1.0
+      unist-util-visit-parents: 6.0.2
+    transitivePeerDependencies:
+      - supports-color
+
+  '@milkdown/preset-gfm@7.21.3':
+    dependencies:
+      '@milkdown/core': 7.21.3
+      '@milkdown/ctx': 7.21.3
+      '@milkdown/exception': 7.21.3
+      '@milkdown/preset-commonmark': 7.21.3
+      '@milkdown/prose': 7.21.3
+      '@milkdown/transformer': 7.21.3
+      '@milkdown/utils': 7.21.3
+      prosemirror-safari-ime-span: 1.0.2
+      remark-gfm: 4.0.1
+    transitivePeerDependencies:
+      - supports-color
+
+  '@milkdown/prose@7.21.3':
+    dependencies:
+      '@milkdown/exception': 7.21.3
+      prosemirror-changeset: 2.4.1
+      prosemirror-commands: 1.7.1
+      prosemirror-dropcursor: 1.8.3
+      prosemirror-gapcursor: 1.4.1
+      prosemirror-history: 1.5.0
+      prosemirror-inputrules: 1.5.1
+      prosemirror-keymap: 1.2.3
+      prosemirror-model: 1.25.11
+      prosemirror-schema-list: 1.5.1
+      prosemirror-state: 1.4.4
+      prosemirror-tables: 1.8.5
+      prosemirror-transform: 1.12.0
+      prosemirror-view: 1.42.2
+
+  '@milkdown/transformer@7.21.3':
+    dependencies:
+      '@milkdown/exception': 7.21.3
+      '@milkdown/prose': 7.21.3
+      remark: 15.0.1
+      unified: 11.0.5
+    transitivePeerDependencies:
+      - supports-color
+
+  '@milkdown/utils@7.21.3':
+    dependencies:
+      '@milkdown/core': 7.21.3
+      '@milkdown/ctx': 7.21.3
+      '@milkdown/exception': 7.21.3
+      '@milkdown/prose': 7.21.3
+      '@milkdown/transformer': 7.21.3
+      nanoid: 5.1.16
+    transitivePeerDependencies:
+      - supports-color
 
   '@napi-rs/canvas-android-arm64@1.0.2':
     optional: true
@@ -7354,6 +7541,12 @@ snapshots:
 
   math-intrinsics@1.1.0: {}
 
+  mdast-util-definitions@6.0.0:
+    dependencies:
+      '@types/mdast': 4.0.4
+      '@types/unist': 3.0.3
+      unist-util-visit: 5.1.0
+
   mdast-util-find-and-replace@3.0.2:
     dependencies:
       '@types/mdast': 4.0.4
@@ -7759,6 +7952,8 @@ snapshots:
 
   nanoid@3.3.16: {}
 
+  nanoid@5.1.16: {}
+
   natural-compare@1.4.0: {}
 
   next-tick@1.1.0: {}
@@ -7851,6 +8046,8 @@ snapshots:
       prelude-ls: 1.2.1
       type-check: 0.4.0
       word-wrap: 1.2.5
+
+  orderedmap@2.1.1: {}
 
   own-keys@1.0.2:
     dependencies:
@@ -8014,6 +8211,85 @@ snapshots:
 
   property-information@7.2.0: {}
 
+  prosemirror-changeset@2.4.1:
+    dependencies:
+      prosemirror-transform: 1.12.0
+
+  prosemirror-commands@1.7.1:
+    dependencies:
+      prosemirror-model: 1.25.11
+      prosemirror-state: 1.4.4
+      prosemirror-transform: 1.12.0
+
+  prosemirror-dropcursor@1.8.3:
+    dependencies:
+      prosemirror-state: 1.4.4
+      prosemirror-transform: 1.12.0
+      prosemirror-view: 1.42.2
+
+  prosemirror-gapcursor@1.4.1:
+    dependencies:
+      prosemirror-keymap: 1.2.3
+      prosemirror-model: 1.25.11
+      prosemirror-state: 1.4.4
+      prosemirror-view: 1.42.2
+
+  prosemirror-history@1.5.0:
+    dependencies:
+      prosemirror-state: 1.4.4
+      prosemirror-transform: 1.12.0
+      prosemirror-view: 1.42.2
+      rope-sequence: 1.3.4
+
+  prosemirror-inputrules@1.5.1:
+    dependencies:
+      prosemirror-state: 1.4.4
+      prosemirror-transform: 1.12.0
+
+  prosemirror-keymap@1.2.3:
+    dependencies:
+      prosemirror-state: 1.4.4
+      w3c-keyname: 2.2.8
+
+  prosemirror-model@1.25.11:
+    dependencies:
+      orderedmap: 2.1.1
+
+  prosemirror-safari-ime-span@1.0.2:
+    dependencies:
+      prosemirror-state: 1.4.4
+      prosemirror-view: 1.42.2
+
+  prosemirror-schema-list@1.5.1:
+    dependencies:
+      prosemirror-model: 1.25.11
+      prosemirror-state: 1.4.4
+      prosemirror-transform: 1.12.0
+
+  prosemirror-state@1.4.4:
+    dependencies:
+      prosemirror-model: 1.25.11
+      prosemirror-transform: 1.12.0
+      prosemirror-view: 1.42.2
+
+  prosemirror-tables@1.8.5:
+    dependencies:
+      prosemirror-keymap: 1.2.3
+      prosemirror-model: 1.25.11
+      prosemirror-state: 1.4.4
+      prosemirror-transform: 1.12.0
+      prosemirror-view: 1.42.2
+
+  prosemirror-transform@1.12.0:
+    dependencies:
+      prosemirror-model: 1.25.11
+
+  prosemirror-view@1.42.2:
+    dependencies:
+      prosemirror-model: 1.25.11
+      prosemirror-state: 1.4.4
+      prosemirror-transform: 1.12.0
+
   pump@3.0.4:
     dependencies:
       end-of-stream: 1.4.5
@@ -8113,6 +8389,12 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
+  remark-inline-links@7.0.0:
+    dependencies:
+      '@types/mdast': 4.0.4
+      mdast-util-definitions: 6.0.0
+      unist-util-visit: 5.1.0
+
   remark-parse@11.0.0:
     dependencies:
       '@types/mdast': 4.0.4
@@ -8135,6 +8417,15 @@ snapshots:
       '@types/mdast': 4.0.4
       mdast-util-to-markdown: 2.1.2
       unified: 11.0.5
+
+  remark@15.0.1:
+    dependencies:
+      '@types/mdast': 4.0.4
+      remark-parse: 11.0.0
+      remark-stringify: 11.0.0
+      unified: 11.0.5
+    transitivePeerDependencies:
+      - supports-color
 
   require-directory@2.1.1: {}
 
@@ -8209,6 +8500,8 @@ snapshots:
       '@rollup/rollup-win32-x64-gnu': 4.62.3
       '@rollup/rollup-win32-x64-msvc': 4.62.3
       fsevents: 2.3.3
+
+  rope-sequence@1.3.4: {}
 
   roughjs@4.6.6:
     dependencies:
@@ -8731,6 +9024,8 @@ snapshots:
       vscode-languageserver-protocol: 3.17.5
 
   vscode-uri@3.0.8: {}
+
+  w3c-keyname@2.2.8: {}
 
   w3c-xmlserializer@5.0.0:
     dependencies:
