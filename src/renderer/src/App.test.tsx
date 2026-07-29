@@ -24,11 +24,11 @@ describe('App', () => {
     render(<App />)
 
     await user.click(screen.getByRole('button', { name: 'New document' }))
-    expect(screen.getByText('Editor placeholder')).toBeInTheDocument()
+    expect(screen.getByText('Untitled')).toBeInTheDocument()
     expect(screen.queryByText('PageDown')).not.toBeInTheDocument()
 
     await user.click(screen.getByRole('button', { name: '← Home' }))
     expect(screen.getByText('PageDown')).toBeInTheDocument()
-    expect(screen.queryByText('Editor placeholder')).not.toBeInTheDocument()
+    expect(screen.queryByText('Untitled')).not.toBeInTheDocument()
   })
 })
