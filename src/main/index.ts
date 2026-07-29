@@ -147,8 +147,15 @@ app.whenReady().then(() => {
   })
 
   ipcMain.handle('file:save', async (_event, filePath: string | null, content: string) => {
+    const userDataDir = app.getPath('userData')
+    if (filePath !== null) {
+      const recents = await getRecentFiles(userDataDir)
+      if (!recents.some((entry) => entry.filePath === filePath)) {
+        throw new Error('Requested path is not a known file for this app to save to')
+      }
+    }
     const result = await saveFile(filePath, content)
-    if (result) await addRecentFile(app.getPath('userData'), result.filePath)
+    if (result) await addRecentFile(userDataDir, result.filePath)
     return result
   })
 
