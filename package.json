@@ -30,6 +30,7 @@
     "build:mac": "electron-vite build && pnpm run build:pagination-render && electron-builder --mac",
     "build:linux": "electron-vite build && pnpm run build:pagination-render && electron-builder --linux",
     "test:unit": "vitest run",
+    "test:phase1:vitest": "vitest run --config vitest.phase1.config.ts",
     "pretest:phase0": "pnpm run build",
     "test:phase0": "playwright test"
   },

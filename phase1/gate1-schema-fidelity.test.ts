@@ -26,8 +26,8 @@ describe('Gate 1: Milkdown schema completeness & round-trip fidelity', () => {
       // Re-parse both sides for a semantic comparison rather than a raw string
       // diff, per the design doc's own correction (a bare string diff fails on
       // cosmetically-different-but-equivalent output, e.g. list marker style).
-      const inputWords = source.match(/\S+/g) ?? []
-      const outputWords = output.match(/\S+/g) ?? []
+      const inputWords: string[] = source.match(/\S+/g) ?? []
+      const outputWords: string[] = output.match(/\S+/g) ?? []
       const missingWords = inputWords.filter((word) => !outputWords.includes(word))
 
       // This assertion is deliberately loose (word-presence, not exact-match) --
