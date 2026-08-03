@@ -42,4 +42,27 @@ describe('remarkPagebreak', () => {
     const tree = parse('One.\n\n<!-- pagebreak -->\n\nTwo.\n\n<!-- pagebreak -->\n\nThree.')
     expect(countNodesOfType(tree, 'pagebreak')).toBe(2)
   })
+
+  it('does not promote an occurrence embedded in a heading', () => {
+    const tree = parse('# Heading <!-- pagebreak -->\n\nBody text.')
+    expect(countNodesOfType(tree, 'pagebreak')).toBe(0)
+    expect(countNodesOfType(tree, 'html')).toBe(1)
+  })
+
+  it('does not promote an occurrence embedded in emphasis/strong text', () => {
+    const tree = parse('This is **bold <!-- pagebreak --> text** here.')
+    expect(countNodesOfType(tree, 'pagebreak')).toBe(0)
+    expect(countNodesOfType(tree, 'html')).toBe(1)
+  })
+
+  it('does not promote an occurrence inside a list item (unsupported in v1)', () => {
+    const tree = parse('- Item one\n\n  <!-- pagebreak -->\n\n- Item two')
+    expect(countNodesOfType(tree, 'pagebreak')).toBe(0)
+    expect(countNodesOfType(tree, 'html')).toBe(1)
+  })
+
+  it('promotes an occurrence inside a blockquote', () => {
+    const tree = parse('> Quoted text.\n>\n> <!-- pagebreak -->\n>\n> More quoted text.')
+    expect(countNodesOfType(tree, 'pagebreak')).toBe(1)
+  })
 })
