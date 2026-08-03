@@ -51,8 +51,8 @@ import { markdownToHtml } from '../src/markdown/pipeline'
 // than chosen. phase1/fixtures/milkdown-compare.html replicates exactly
 // that -- 624px width, zero font CSS of its own -- and its own top-of-file
 // comment documents the same finding. This is itself a real Phase 1
-// finding, of the same shape as Task 1's frontmatter-destruction result
-// and Task 4's broken vitest command: a brief assumption ("there is CSS to
+// finding, of the same shape as Task 4/Gate 1's frontmatter-destruction
+// result and its broken vitest command: a brief assumption ("there is CSS to
 // extract here") that doesn't hold once actually checked, surfaced here
 // instead of silently working around it by inventing a plausible-looking
 // font stack that neither surface actually uses today.
@@ -102,8 +102,9 @@ import { markdownToHtml } from '../src/markdown/pipeline'
 // differences (different Chromium point-release, different subpixel text
 // shaping) are the only class of difference this tolerance is meant to
 // absorb -- not real structural/CSS differences. See this file's own
-// findings, recorded in the printed comparison table and this task's
-// report, for whether that held.
+// findings, recorded in the printed comparison table and in
+// docs/superpowers/plans/2026-07-28-phase1-findings.md (Gate 3 section),
+// for whether that held.
 
 const fixturesDir = join(__dirname, 'fixtures')
 const milkdownCompareHtml = join(fixturesDir, 'milkdown-compare.html')
@@ -256,10 +257,12 @@ test('Gate 3: editor/paginator layout parity for mixed.md top-level blocks', asy
     // from the DOM shape Editor.make()/rootCtx's own types imply. This
     // wrapper is itself one concrete instance of the "Milkdown node-view
     // chrome" this gate's brief anticipated as a possible source of
-    // mismatch -- see this file's header/report for whether it actually
-    // shifts any measured block position (a bare, unstyled <div> has no
-    // default margin/padding/border, so per CSS box-model rules it should
-    // not, but this gate measures rather than assumes that).
+    // mismatch -- a bare, unstyled <div> has no default margin/padding/
+    // border, so per CSS box-model rules it should not shift any measured
+    // block position, but this gate measures rather than assumes that. See
+    // this file's header, and docs/superpowers/plans/
+    // 2026-07-28-phase1-findings.md (Gate 3 section), for the measured
+    // answer.
     const editorRoot = document.querySelector('#content-root .ProseMirror')
     if (!editorRoot) return JSON.stringify({ error: 'no .ProseMirror element found' })
     const rootTop = editorRoot.getBoundingClientRect().top
@@ -311,15 +314,17 @@ test('Gate 3: editor/paginator layout parity for mixed.md top-level blocks', asy
   })
 
   // This table IS the recorded finding this gate exists to produce; see
-  // this task's report for the committed copy of a real run's output.
+  // docs/superpowers/plans/2026-07-28-phase1-findings.md (Gate 3 section)
+  // for the committed copy of a real run's output.
   console.log('\nGate 3 per-block layout comparison (tolerance: ' + TOLERANCE_PX + 'px):')
   console.table(rows)
 
   const mismatches = rows.filter((r) => !r.tagsMatch || !r.withinTolerance)
   if (mismatches.length > 0) {
     console.log(
-      `\n${mismatches.length}/${rows.length} block(s) mismatched -- see this task's report for the ` +
-        `per-block hypothesis of why.`
+      `\n${mismatches.length}/${rows.length} block(s) mismatched -- see ` +
+        `docs/superpowers/plans/2026-07-28-phase1-findings.md (Gate 3 section) ` +
+        `for the per-block hypothesis of why.`
     )
   }
 
@@ -339,8 +344,9 @@ test('Gate 3: editor/paginator layout parity for mixed.md top-level blocks', asy
   // downgraded to a soft log, so a real regression (or a real finding of
   // non-parity) fails the test rather than passing silently. If this
   // fails, that IS the valuable finding this gate exists to produce -- see
-  // this task's report for the interpretation, not a tolerance widened
-  // after the fact to make it pass.
+  // docs/superpowers/plans/2026-07-28-phase1-findings.md (Gate 3 section)
+  // for the interpretation, not a tolerance widened after the fact to make
+  // it pass.
   for (const row of rows) {
     expect(
       row.deltaPx,

@@ -35,7 +35,11 @@ describe('Gate 1: Milkdown schema completeness & round-trip fidelity', () => {
       // entirely), not to enforce byte-identical formatting (the known
       // tight-list-becomes-loose gap is a formatting difference, not content
       // loss, and is expected to still show up here as informational content
-      // in the report below, not a failure).
+      // rather than a failure). Its known blind spot -- word-presence cannot
+      // see STRUCTURAL loss, which is exactly why the frontmatter destruction
+      // this gate found was invisible to it -- and the per-file interpretation
+      // of every failure below are recorded in
+      // docs/superpowers/plans/2026-07-28-phase1-findings.md (Gate 1 section).
       expect(missingWords, `Words present in ${file} but missing from round-trip output`).toEqual(
         []
       )
