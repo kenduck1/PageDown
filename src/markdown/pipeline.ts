@@ -8,6 +8,7 @@ import type { Root } from 'mdast'
 import { annotateSourceOffsets, type SourceMap } from './source-map'
 import { remarkPagebreak } from './pagebreak-plugin'
 import { pagebreakToHast } from './pagebreak-to-hast'
+import { sanitizeRawHtmlToHast } from './sanitize-raw-html'
 
 export type { SourceMap }
 
@@ -34,7 +35,7 @@ export function markdownToHtml(source: string): { html: string; sourceMap: Sourc
   const hastTree = unified()
     .use(remarkRehype, {
       allowDangerousHtml: false,
-      handlers: { pagebreak: pagebreakToHast }
+      handlers: { pagebreak: pagebreakToHast, html: sanitizeRawHtmlToHast }
     })
     .runSync(tree)
   const html = unified().use(rehypeStringify).stringify(hastTree)
