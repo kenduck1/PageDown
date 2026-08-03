@@ -4,3 +4,8 @@ pnpm-lock.yaml
 LICENSE.md
 tsconfig.json
 tsconfig.*.json
+
+# esbuild output generated at test-run time by phase1/gate3-layout-parity.spec.ts
+# (gitignored, but Prettier doesn't read .gitignore). Kept in sync with the
+# matching `ignores` entry in eslint.config.mjs.
+phase1/fixtures/*.js
