@@ -6,11 +6,11 @@
   "sectionNumberAtBreakpoint": 601,
   "editSectionNumber": 621,
   "timings": {
-    "fullOriginalMs": 2690.7000000476837,
-    "resumeNoEditMs": 1443.1000001430511,
-    "resumeWithEditMs": 1423.5,
-    "fullEditedMs": 2716.5999999046326,
-    "speedupRatio": 1.9083948014784915
+    "fullOriginalMs": 2697.9000000953674,
+    "resumeNoEditMs": 1441.4000000953674,
+    "resumeWithEditMs": 1426.5999999046326,
+    "fullEditedMs": 2724.9000000953674,
+    "speedupRatio": 1.910065891124019
   },
   "pageCounts": {
     "totalPagesOriginal": 322,

@@ -160,7 +160,7 @@ const RESULTS_DIR = join(__dirname, 'results')
 // on-screen `.pagedjs_page` element's `textContent` (after cloning and
 // stripping any `<style>` descendants — see that fix's own comment below)
 // against the exported PDF's `pdfjs-dist`-extracted per-page text, both
-// normalized by stripping all whitespace: 8 of 13 files match EXACTLY,
+// normalized by stripping all whitespace: 9 of 14 files match EXACTLY,
 // character-for-character. The other 5 do not match exactly, but in EVERY
 // case the on-screen text is a subsequence of the exported PDF's text (see
 // `isSubsequence` above) — i.e. the export never DROPS anything the preview
@@ -207,7 +207,17 @@ const EXACT_MATCH_FILES = new Set([
   // found in this file specifically (see the dedicated assertion below,
   // near the end of Test 1) — both sides are symmetrically missing the
   // same content, which is what "matches" is actually checking here.
-  'mermaid-diagrams.md'
+  'mermaid-diagrams.md',
+  // Added by the Phase 1 Milkdown spike (Task 3), which introduced this
+  // corpus fixture. Measured (not assumed) by a real run of this gate: it
+  // matches exactly. It contains no lists and no images, so neither of the
+  // two `::marker`/alt-text causes above applies; its raw HTML and HTML
+  // comments are dropped symmetrically by `markdownToHtml`
+  // (`allowDangerousHtml: false`, src/markdown/pipeline.ts:21) BEFORE either
+  // side sees them, so the on-screen render and the PDF export are generated
+  // from the same already-HTML-free HTML — there is no asymmetry for this
+  // check to find.
+  'raw-html.md'
 ])
 const SUBSEQUENCE_ONLY_FILES = new Set([
   'mixed.md',

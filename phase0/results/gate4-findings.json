@@ -10,7 +10,7 @@
       "textMatch": true,
       "firstMismatchDetail": null,
       "textDeltaSample": "1.1.2.1.",
-      "exportMs": 55,
+      "exportMs": 75,
       "imgInfo": []
     },
     {
@@ -23,7 +23,7 @@
       "textMatch": true,
       "firstMismatchDetail": null,
       "textDeltaSample": "",
-      "exportMs": 58,
+      "exportMs": 62,
       "imgInfo": []
     },
     {
@@ -62,7 +62,7 @@
       "textMatch": true,
       "firstMismatchDetail": null,
       "textDeltaSample": "Diagramoftheproposedsitelayout,showingthemainentranceonthenorthsideandparkingtotheeast.",
-      "exportMs": 54,
+      "exportMs": 56,
       "imgInfo": [
         {
           "src": "pagedown-render://render/assets/diagram-placeholder.png",
@@ -83,7 +83,7 @@
       "textMatch": true,
       "firstMismatchDetail": null,
       "textDeltaSample": "",
-      "exportMs": 223,
+      "exportMs": 224,
       "imgInfo": []
     },
     {
@@ -96,7 +96,7 @@
       "textMatch": true,
       "firstMismatchDetail": null,
       "textDeltaSample": "",
-      "exportMs": 63,
+      "exportMs": 62,
       "imgInfo": []
     },
     {
@@ -134,6 +134,19 @@
       "imgInfo": []
     },
     {
+      "file": "raw-html.md",
+      "onscreenPageCount": 1,
+      "pdfLibPageCount": 1,
+      "pdfjsPageCount": 1,
+      "pageCountMatch": true,
+      "textCategory": "exact",
+      "textMatch": true,
+      "firstMismatchDetail": null,
+      "textDeltaSample": "",
+      "exportMs": 53,
+      "imgInfo": []
+    },
+    {
       "file": "reference-links-and-footnotes.md",
       "onscreenPageCount": 1,
       "pdfLibPageCount": 1,
@@ -143,7 +156,7 @@
       "textMatch": true,
       "firstMismatchDetail": null,
       "textDeltaSample": "1.",
-      "exportMs": 55,
+      "exportMs": 59,
       "imgInfo": []
     },
     {
@@ -156,7 +169,7 @@
       "textMatch": true,
       "firstMismatchDetail": null,
       "textDeltaSample": "",
-      "exportMs": 56,
+      "exportMs": 54,
       "imgInfo": []
     },
     {
@@ -169,7 +182,7 @@
       "textMatch": true,
       "firstMismatchDetail": null,
       "textDeltaSample": "",
-      "exportMs": 62,
+      "exportMs": 56,
       "imgInfo": []
     },
     {
@@ -182,7 +195,7 @@
       "textMatch": true,
       "firstMismatchDetail": null,
       "textDeltaSample": "",
-      "exportMs": 626,
+      "exportMs": 642,
       "imgInfo": []
     }
   ],
