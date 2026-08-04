@@ -10,6 +10,8 @@ export interface FileApi {
   openPath: (filePath: string) => Promise<{ filePath: string; content: string }>
   saveFile: (filePath: string | null, content: string) => Promise<{ filePath: string } | null>
   getRecentFiles: () => Promise<RecentFileEntry[]>
+  getThumbnail: (filePath: string) => Promise<{ dataUrl: string; pageCount: number }>
+  getTemplateThumbnail: (content: string) => Promise<{ dataUrl: string; pageCount: number }>
 }
 
 declare global {

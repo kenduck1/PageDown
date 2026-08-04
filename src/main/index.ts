@@ -191,6 +191,19 @@ app.whenReady().then(() => {
 
   const mainWindow = createWindow()
 
+  ipcMain.handle('file:getThumbnail', async (_event, filePath: string) => {
+    const userDataDir = app.getPath('userData')
+    if (!(await isKnownPath(userDataDir, filePath))) {
+      throw new Error('Requested path is not a known recent file')
+    }
+    const { content } = await readFileByPath(filePath)
+    return getThumbnail(mainWindow, content, userDataDir)
+  })
+
+  ipcMain.handle('template:getThumbnail', async (_event, content: string) => {
+    return getThumbnail(mainWindow, content, app.getPath('userData'))
+  })
+
   // Phase 0 spike wiring: prove the sandboxed pagination render harness
   // (Gate 5, see src/main/pagination-window.ts) constructs successfully
   // under real app startup, not just under the Playwright test's
