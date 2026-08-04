@@ -8,6 +8,10 @@ out
 # Subagent-driven-development scratch workspace (ledgers, briefs, review packages)
 .superpowers
 
+# Harness-managed worktrees/scratch state (includes full node_modules copies
+# for isolated worktrees — never intended for source control)
+.claude
+
 # Vitest
 coverage
 
