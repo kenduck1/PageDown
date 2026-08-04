@@ -3,7 +3,8 @@ import { Editor, rootCtx, defaultValueCtx, remarkStringifyOptionsCtx } from '@mi
 import { commonmark } from '@milkdown/preset-commonmark'
 import { gfm } from '@milkdown/preset-gfm'
 import { listener, listenerCtx } from '@milkdown/plugin-listener'
-import { getMarkdown } from '@milkdown/utils'
+import { $prose, getMarkdown } from '@milkdown/utils'
+import { Plugin } from '@milkdown/prose/state'
 import { frontmatterRemark, frontmatterNode } from './nodes/frontmatter'
 import { pagebreakRemark, pagebreakRemarkToMarkdown, pagebreakNode } from './nodes/pagebreak'
 import { PINNED_STRINGIFY_OPTIONS } from './stringify-options'
@@ -20,7 +21,22 @@ export interface MilkdownEditorHandle {
   // (see CLAUDE.md's "Quirk" note on markdownUpdated). Callers that need
   // the true up-to-date markdown for a one-off read -- Save, in particular
   // -- must use this instead of trusting onChange to have already landed.
-  // Returns null if the editor hasn't finished mounting yet.
+  //
+  // Returns null in TWO distinct cases, deliberately collapsed into one
+  // signal because every current caller (EditorScreen's Save handler) only
+  // ever wants to know "is there anything new to sync into the store right
+  // now": (1) the editor hasn't finished mounting yet, or (2) the editor
+  // has mounted but no real edit (a transaction with `docChanged` or
+  // `storedMarksSet`, tracked by the editedTrackerProse plugin below) has
+  // happened since mount. Case (2) matters because Milkdown's own
+  // remark-stringify serialization is not always byte-identical to the
+  // original `content` prop even with zero edits (verified: it silently
+  // rewrites e.g. `*`-bullets/single-asterisk emphasis/`~~~` fences to the
+  // canonical form pinned in stringify-options.ts, and always normalizes a
+  // missing trailing newline) -- gating on a real edit having occurred is
+  // what keeps clicking Save on an untouched document a true no-op instead
+  // of silently rewriting the file to Milkdown's canonical markdown form.
+  // See this sub-project's task-8-report.md for the verified finding.
   getMarkdown: () => string | null
 }
 
@@ -28,6 +44,30 @@ const MilkdownEditor = forwardRef<MilkdownEditorHandle, MilkdownEditorProps>(
   function MilkdownEditor({ content, onChange, onError }, ref) {
     const rootRef = useRef<HTMLDivElement>(null)
     const editorRef = useRef<Editor | null>(null)
+    // Set synchronously (inside a ProseMirror plugin's `apply`, not through
+    // @milkdown/plugin-listener's debounced path) the first time a real
+    // edit lands since this editor instance mounted. The predicate is the
+    // exact same one plugin-listener's own `apply` checks before scheduling
+    // its 200ms-debounced handler (confirmed by reading
+    // node_modules/.pnpm/@milkdown+plugin-listener@7.21.3/.../lib/index.js):
+    // `(tr.docChanged || tr.storedMarksSet) && tr.getMeta('addToHistory')
+    // !== false`. The `addToHistory !== false` half is NOT optional --
+    // verified empirically (see task-8-report.md) that without it, this
+    // flag false-positives on every single mount: @milkdown/preset-commonmark
+    // ships its own internal heading-ID-assignment plugin
+    // (`MILKDOWN_HEADING_ID$`) that dispatches a synthetic post-mount
+    // transaction with `docChanged: true` but `addToHistory: false` --
+    // Milkdown's own convention (also relied on elsewhere in its source) for
+    // "not a real user edit." Matching plugin-listener's full filter, not
+    // just half of it, means this flag is true if and only if
+    // plugin-listener would eventually fire markdownUpdated for the same
+    // transaction -- a much stronger invariant than an ad-hoc predicate.
+    // This project currently wires no undo/redo (`prosemirror-history` is
+    // not used anywhere in src/), so there is no real edit path that could
+    // ever set `addToHistory: false` and get silently excluded here; if
+    // undo/redo is added later, re-verify this exclusion still can't hide a
+    // genuine content change.
+    const editedSinceMountRef = useRef(false)
     // Edits fire through whichever onChange was current at mount time
     // otherwise -- captured in a ref so the listener callback (registered
     // once, at construction) always calls the latest prop without needing to
@@ -41,7 +81,10 @@ const MilkdownEditor = forwardRef<MilkdownEditorHandle, MilkdownEditorProps>(
     })
 
     useImperativeHandle(ref, () => ({
-      getMarkdown: () => (editorRef.current ? editorRef.current.action(getMarkdown()) : null)
+      getMarkdown: () =>
+        editorRef.current && editedSinceMountRef.current
+          ? editorRef.current.action(getMarkdown())
+          : null
     }))
 
     useEffect(() => {
@@ -49,6 +92,30 @@ const MilkdownEditor = forwardRef<MilkdownEditorHandle, MilkdownEditorProps>(
       if (!root) return
 
       let cancelled = false
+
+      // A tiny custom ProseMirror plugin (via @milkdown/utils' `$prose`,
+      // the same composable idiom nodes/frontmatter.ts and nodes/pagebreak.ts
+      // already use for $nodeSchema/$remark) whose only job is flipping
+      // editedSinceMountRef synchronously -- well before plugin-listener's
+      // 200ms debounce could matter -- the first time a real edit occurs.
+      // Constructed fresh per effect run so it closes over this mount's own
+      // editedSinceMountRef (a brand-new ref every time the component
+      // remounts via `key`, so no explicit reset is needed between
+      // documents).
+      const editedTrackerProse = $prose(
+        () =>
+          new Plugin({
+            state: {
+              init: () => null,
+              apply: (tr) => {
+                if ((tr.docChanged || tr.storedMarksSet) && tr.getMeta('addToHistory') !== false) {
+                  editedSinceMountRef.current = true
+                }
+                return null
+              }
+            }
+          })
+      )
 
       Editor.make()
         .config((ctx) => {
@@ -67,6 +134,7 @@ const MilkdownEditor = forwardRef<MilkdownEditorHandle, MilkdownEditorProps>(
         .use(pagebreakRemarkToMarkdown)
         .use(pagebreakNode)
         .use(listener)
+        .use(editedTrackerProse)
         .create()
         .then((created) => {
           if (cancelled) {
