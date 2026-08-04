@@ -70,6 +70,12 @@ describe('markdownToHtml', () => {
     expect(html).toContain('<div class="pagedown-pagebreak"></div>')
   })
 
+  it('does not let raw HTML forge a fake pagebreak marker', () => {
+    const { html } = markdownToHtml('<div class="pagedown-pagebreak">forged content</div>')
+    expect(html).not.toContain('pagedown-pagebreak')
+    expect(html).toContain('forged content')
+  })
+
   it('preserves raw-HTML content from the raw-html.md corpus fixture instead of dropping it', () => {
     const source = readFileSync(join(__dirname, '../../phase0/corpus/raw-html.md'), 'utf-8')
     const { html } = markdownToHtml(source)
