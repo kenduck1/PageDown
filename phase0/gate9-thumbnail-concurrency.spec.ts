@@ -37,8 +37,21 @@ import {
 // first, which is a real race — confirmed directly: it returned the
 // pagination-harness window instead of the app shell in a live repro,
 // causing every subsequent `window.api` access to hang until timeout.
-// `getMainWindow` below polls every open window explicitly and picks the one
-// that is NOT the sandboxed scheme, so it's correct regardless of load order.
+// `getMainWindow` below polls every open window explicitly and picks the
+// real app shell instead.
+//
+// Matched by a POSITIVE `file://` check, not a negative "isn't
+// pagedown-render://" exclusion: every window starts on `about:blank` before
+// its real navigation completes, and `about:blank` also satisfies a
+// negative "!startsWith('pagedown-render://')" filter — so a negative-only
+// filter has its own narrow race where an un-navigated sandboxed window
+// could be misidentified as the app shell, reproducing the exact
+// hang-until-timeout class of failure this helper exists to eliminate. This
+// app always launches the built production app here (`out/main/index.js`),
+// whose real window loads via `mainWindow.loadFile(...)` in
+// src/main/index.ts's `createWindow()` — i.e. always a `file://` URL — so
+// requiring that positively rules out both `about:blank` and
+// `pagedown-render://` at once, with no separate `about:blank` case needed.
 async function getMainWindow(app: ElectronApplication): Promise<Page> {
   const deadline = Date.now() + 20000
   while (Date.now() < deadline) {
@@ -48,7 +61,7 @@ async function getMainWindow(app: ElectronApplication): Promise<Page> {
       } catch {
         continue
       }
-      if (!candidate.url().startsWith('pagedown-render://')) {
+      if (candidate.url().startsWith('file://')) {
         return candidate
       }
     }
