@@ -55,28 +55,60 @@ describe('EditorScreen', () => {
 
     await user.click(screen.getByRole('button', { name: 'Save' }))
 
-    // Task 8 finding (deviates from the task-8 brief's prediction): in this
-    // test environment, userEvent.click's own microtask/act flushing gives
-    // Milkdown's async Editor.create() enough time to resolve before the
-    // click fires, so editorRef.current is non-null by the time handleSave
-    // runs -- unlike the brief's assumption that it "has [no] realistic
-    // chance to resolve" yet. handleSave then calls getMarkdown(), and the
-    // round-trip through Milkdown's pinned remark-stringify options is NOT
-    // byte-identical to the '# Report' fixture: remark-stringify always
-    // emits exactly one trailing newline, which the no-trailing-newline
-    // fixture lacks. That makes latest !== content true, so handleSave's
-    // guard (correctly) calls updateContent(latest) before saving, and the
-    // saved content picks up the trailing newline. Real disk-loaded files
-    // almost always already end in '\n' (confirmed by reading the load
-    // path: src/main/file-io.ts's readFileByPath does a raw, untrimmed
-    // `readFile(filePath, 'utf8')`, and every step from there to
-    // documentStore.content is a straight pass-through), so this exact
-    // mismatch is mostly a fixture artifact, not a common real-document
-    // case -- but it's real, verified behavior of the exact-code-as-given
-    // fix, not a bug to paper over, so the expectation below reflects the
-    // true saved value rather than the pre-Task-8 one.
-    expect(window.api.saveFile).toHaveBeenCalledWith('/tmp/report.md', '# Report\n')
+    // Task 8 finding, later closed by a Task 8 review-round fix (see
+    // task-8-report.md): in this test environment, userEvent.click's own
+    // microtask/act flushing gives Milkdown's async Editor.create() enough
+    // time to resolve before the click fires, so editorRef.current is
+    // non-null by the time handleSave runs. Without a real-edit gate,
+    // handleSave's getMarkdown() would re-serialize through Milkdown's
+    // pinned remark-stringify options even with zero edits, which is NOT
+    // byte-identical to this '# Report' fixture (remark-stringify always
+    // emits a trailing newline the fixture lacks) -- silently rewriting an
+    // untouched document's saved bytes on every Save click. MilkdownEditor's
+    // getMarkdown() now returns null unless a real ProseMirror transaction
+    // (docChanged/storedMarksSet, excluding Milkdown's own internal
+    // addToHistory:false synthetic transactions -- see MilkdownEditor.tsx's
+    // editedSinceMountRef comment) has landed since mount, so handleSave's
+    // `latest !== null` guard correctly skips updateContent here and the
+    // original, unmodified content is what actually gets saved. See
+    // 'does not touch the saved content when Save is clicked with zero
+    // edits' below for the test written specifically to lock this in.
+    expect(window.api.saveFile).toHaveBeenCalledWith('/tmp/report.md', '# Report')
     expect(useDocumentStore.getState().isDirty).toBe(false)
+  })
+
+  it('does not touch the saved content when Save is clicked with zero edits, even if the editor has mounted', async () => {
+    // Deliberately uses non-canonical markdown that Milkdown's PINNED_STRINGIFY_OPTIONS
+    // (stringify-options.ts: '-' bullets, '_' emphasis, '`' fences) would
+    // silently rewrite if handleSave ever re-serialized it: '*'-bullets,
+    // single-asterisk emphasis, and a '~~~' fence are all common, valid
+    // Markdown that Milkdown's canonical form does not preserve verbatim.
+    // If this fix regresses (i.e. handleSave syncs live editor content on
+    // every Save regardless of whether an edit occurred), this exact
+    // content would come back rewritten to '-' bullets / '_' emphasis /
+    // '`' fences -- not byte-identical -- and this assertion would catch it.
+    const ORIGINAL = '# Report\n\n* one\n* two\n\n*italic*\n\n~~~\ncode\n~~~\n'
+    vi.mocked(window.api.saveFile).mockResolvedValue({ filePath: '/tmp/report.md' })
+    useDocumentStore.setState({ filePath: '/tmp/report.md', content: ORIGINAL, isDirty: true })
+    const user = userEvent.setup()
+    render(<EditorScreen />)
+
+    await waitFor(() => {
+      expect(screen.getByTestId('document-content')).toHaveTextContent('one')
+    })
+    // Give the editor's async Editor.create() every chance to have resolved
+    // by click time -- the whole point of this test is proving that even a
+    // fully-mounted, idle editor doesn't cause Save to rewrite the file.
+    await waitFor(() => {
+      expect(document.querySelector('.milkdown-mount .ProseMirror')).toBeInTheDocument()
+    })
+
+    await user.click(screen.getByRole('button', { name: 'Save' }))
+
+    await waitFor(() => {
+      expect(window.api.saveFile).toHaveBeenCalled()
+    })
+    expect(window.api.saveFile).toHaveBeenCalledWith('/tmp/report.md', ORIGINAL)
   })
 
   it('adopts the fallback path when Save-As returns a different path than requested', async () => {

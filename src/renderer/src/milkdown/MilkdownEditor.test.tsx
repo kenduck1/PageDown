@@ -169,6 +169,18 @@ describe('MilkdownEditor', () => {
       return el as HTMLElement
     })
 
+    // Review-round finding (see task-8-report.md): getMarkdown() must be
+    // null right after mount, before any edit -- otherwise every Save click
+    // on an untouched document would silently re-serialize it through
+    // Milkdown's canonical stringify form. This also guards against the
+    // concrete false positive that was found and fixed here:
+    // preset-commonmark's own internal heading-ID-assignment plugin
+    // dispatches a synthetic post-mount transaction with `docChanged: true`
+    // (but `addToHistory: false`), which without the addToHistory filter in
+    // MilkdownEditor.tsx's editedTrackerProse plugin would incorrectly flip
+    // the edited flag on every single mount, not just on a real user edit.
+    expect(ref.current?.getMarkdown()).toBeNull()
+
     const h1 = proseMirror.querySelector('h1')
     if (!h1?.firstChild) throw new Error('expected a text node inside the mounted h1')
     const range = document.createRange()
