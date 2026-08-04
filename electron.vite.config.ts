@@ -60,6 +60,7 @@ export default defineConfig({
           'remark-stringify',
           'rehype-stringify',
           'hast-util-sanitize',
+          'hast-util-raw',
           'unist-util-visit',
           'decode-named-character-reference',
           'micromark-util-decode-numeric-character-reference'

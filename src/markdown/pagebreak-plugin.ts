@@ -15,6 +15,8 @@ declare module 'mdast' {
 
 const PAGEBREAK_MARKER = '<!-- pagebreak -->'
 
+export const PAGEBREAK_CLASS = 'pagedown-pagebreak'
+
 // Only these mdast node types admit block-level HTML as a direct child per
 // CommonMark's own grammar. Deliberately an allowlist, not a denylist of
 // known phrasing-content types (paragraph, heading, strong, emphasis,
@@ -29,15 +31,41 @@ const PAGEBREAK_MARKER = '<!-- pagebreak -->'
 // `html`, never reaching a block-container parent at all.
 const BLOCK_CONTAINER_TYPES = new Set(['root', 'blockquote', 'footnoteDefinition'])
 
+function isMatchingHtml(node: { type: string; value?: string }): node is Html {
+  return node.type === 'html' && (node as Html).value.trim() === PAGEBREAK_MARKER
+}
+
 export function remarkPagebreak() {
   return (tree: Root): void => {
-    visit(tree, 'html', (node: Html, index, parent: Parent | undefined) => {
+    visit(tree, (node, index, parent: Parent | undefined) => {
       if (index === undefined || !parent) return
-      if (!BLOCK_CONTAINER_TYPES.has(parent.type)) return
-      if (node.value.trim() !== PAGEBREAK_MARKER) return
 
-      const pagebreak: Pagebreak = { type: 'pagebreak', position: node.position }
-      parent.children[index] = pagebreak
+      if (isMatchingHtml(node) && BLOCK_CONTAINER_TYPES.has(parent.type)) {
+        const pagebreak: Pagebreak = { type: 'pagebreak', position: node.position }
+        parent.children[index] = pagebreak
+        return
+      }
+
+      // preset-commonmark's remarkHtmlTransformer reparents a block-level
+      // html node into `paragraph { children: [html] }` before this plugin
+      // runs, inside Milkdown's internal pipeline only — markdownToHtml's
+      // plain remark-parse pipeline never produces this shape at all,
+      // verified directly (neither a real block-level marker, which parses
+      // as a direct root>html child, nor a mid-paragraph inline occurrence,
+      // which stays embedded among text siblings, ever produces a paragraph
+      // whose SOLE child is a matching html node) — so matching it here is
+      // safe without checking which pipeline produced it.
+      if (
+        node.type === 'paragraph' &&
+        (node as Parent).children.length === 1 &&
+        isMatchingHtml((node as Parent).children[0])
+      ) {
+        const pagebreak: Pagebreak = {
+          type: 'pagebreak',
+          position: (node as Parent).children[0].position
+        }
+        parent.children[index] = pagebreak
+      }
     })
   }
 }

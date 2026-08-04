@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { getMarkdown } from '@milkdown/utils'
+import { editorViewCtx } from '@milkdown/core'
 import { createTestEditor } from '../test-editor'
 import { pagebreakNode, pagebreakRemark, pagebreakRemarkToMarkdown } from './pagebreak'
 
@@ -33,5 +34,15 @@ describe('Milkdown pagebreak node', () => {
 
     const result = editor.action(getMarkdown())
     expect(result).toBe(markdown + '\n')
+  })
+
+  it('produces a real pagebreak ProseMirror node, not an inert html node (regression test for the Critical finding this fix wave addresses)', async () => {
+    const markdown = 'Paragraph one.\n\n<!-- pagebreak -->\n\nParagraph two.'
+    const editor = await createTestEditor(markdown, PLUGINS)
+
+    const view = editor.ctx.get(editorViewCtx)
+    const childTypes: string[] = []
+    view.state.doc.forEach((node) => childTypes.push(node.type.name))
+    expect(childTypes).toContain('pagebreak')
   })
 })

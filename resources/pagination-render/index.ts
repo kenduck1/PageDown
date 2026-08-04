@@ -846,15 +846,18 @@ window.addEventListener('message', async (event: MessageEvent<IncomingMessage>) 
     activePreviewer = previewer
     // Passing `[]` for stylesheets: neither markdownToHtml's output nor
     // this handler's own mermaid post-processing adds any top-level
-    // <style>/<link> tag of `container`'s own (remark-rehype's
-    // allowDangerousHtml: false drops raw HTML nodes entirely — see
-    // src/markdown/pipeline.ts; the <style> elements renderMermaidDiagrams
-    // adds live inside each diagram's own <svg> subtree, not as a direct
-    // child of `container`), so there is nothing for
-    // Previewer.wrapContent()/removeStyles() to harvest from the document;
-    // passing `container` directly as `content` and an explicit empty
-    // stylesheet list avoids Previewer trying to reinterpret the whole
-    // render-context <body> as the source document.
+    // <style>/<link> tag of `container`'s own — markdownToHtml's sanitize
+    // schema (src/markdown/pipeline.ts) explicitly strips `style` (and
+    // `link` was never in hast-util-sanitize's defaultSchema.tagNames to
+    // begin with), so raw HTML containing either tag never survives into
+    // rendered output regardless of what an author's Markdown source
+    // contains (the <style> elements renderMermaidDiagrams adds live
+    // inside each diagram's own <svg> subtree, not as a direct child of
+    // `container`), so there is nothing for Previewer.wrapContent()/
+    // removeStyles() to harvest from the document; passing `container`
+    // directly as `content` and an explicit empty stylesheet list avoids
+    // Previewer trying to reinterpret the whole render-context <body> as
+    // the source document.
     const flow = await previewer.preview(container, [], root)
     const t1 = performance.now()
 

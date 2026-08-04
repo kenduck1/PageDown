@@ -211,12 +211,13 @@ const EXACT_MATCH_FILES = new Set([
   // Added by the Phase 1 Milkdown spike (Task 3), which introduced this
   // corpus fixture. Measured (not assumed) by a real run of this gate: it
   // matches exactly. It contains no lists and no images, so neither of the
-  // two `::marker`/alt-text causes above applies; its raw HTML and HTML
-  // comments are dropped symmetrically by `markdownToHtml`
-  // (`allowDangerousHtml: false`, src/markdown/pipeline.ts:21) BEFORE either
-  // side sees them, so the on-screen render and the PDF export are generated
-  // from the same already-HTML-free HTML — there is no asymmetry for this
-  // check to find.
+  // two `::marker`/alt-text causes above applies; its raw HTML, HTML
+  // comments, and pagebreak markers are all preserved (not dropped) by
+  // markdownToHtml's whole-tree sanitize pipeline
+  // (src/markdown/pipeline.ts) — the same, single markdownToHtml call
+  // generates the HTML for both the on-screen preview and the PDF export,
+  // so both sides see identical output by construction, and there is no
+  // asymmetry for this check to find.
   'raw-html.md'
 ])
 const SUBSEQUENCE_ONLY_FILES = new Set([
