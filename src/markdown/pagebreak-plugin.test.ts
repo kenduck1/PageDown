@@ -1,9 +1,10 @@
 import { describe, it, expect } from 'vitest'
 import { unified } from 'unified'
 import remarkParse from 'remark-parse'
+import remarkStringify from 'remark-stringify'
 import { visit } from 'unist-util-visit'
 import type { Root } from 'mdast'
-import { remarkPagebreak } from './pagebreak-plugin'
+import { remarkPagebreak, remarkPagebreakToMarkdown } from './pagebreak-plugin'
 
 function parse(markdown: string): Root {
   const processor = unified().use(remarkParse).use(remarkPagebreak)
@@ -129,5 +130,89 @@ describe('remarkPagebreak', () => {
       children: Root['children']
     }
     expect(listItem.children[0].type).toBe('paragraph')
+  })
+})
+
+describe('alternate page-break syntax: \\newpage', () => {
+  it('promotes a standalone \\newpage to a pagebreak node', () => {
+    const tree = parse('Paragraph one.\n\n\\newpage\n\nParagraph two.')
+    expect(countNodesOfType(tree, 'pagebreak')).toBe(1)
+  })
+
+  it('does not promote \\newpage embedded mid-sentence', () => {
+    const tree = parse('Some text mentioning \\newpage inline.')
+    expect(countNodesOfType(tree, 'pagebreak')).toBe(0)
+  })
+
+  it('does not promote \\newpage inside a list item (unsupported in v1)', () => {
+    const tree = parse('- Item one\n\n  \\newpage\n\n- Item two')
+    expect(countNodesOfType(tree, 'pagebreak')).toBe(0)
+  })
+
+  it('is case-sensitive and does not promote a differently-cased variant', () => {
+    const tree = parse('Paragraph one.\n\n\\Newpage\n\nParagraph two.')
+    expect(countNodesOfType(tree, 'pagebreak')).toBe(0)
+  })
+})
+
+describe('alternate page-break syntax: \\pagebreak', () => {
+  it('promotes a standalone \\pagebreak to a pagebreak node', () => {
+    const tree = parse('Paragraph one.\n\n\\pagebreak\n\nParagraph two.')
+    expect(countNodesOfType(tree, 'pagebreak')).toBe(1)
+  })
+})
+
+describe('alternate page-break syntax: page-break-after div', () => {
+  it('promotes the exact documented div convention', () => {
+    const tree = parse(
+      'Paragraph one.\n\n<div style="page-break-after: always;"></div>\n\nParagraph two.'
+    )
+    expect(countNodesOfType(tree, 'pagebreak')).toBe(1)
+    expect(countNodesOfType(tree, 'html')).toBe(0)
+  })
+
+  it('tolerates single quotes and no trailing semicolon', () => {
+    const tree = parse(
+      "Paragraph one.\n\n<div style='page-break-after: always'></div>\n\nParagraph two."
+    )
+    expect(countNodesOfType(tree, 'pagebreak')).toBe(1)
+  })
+
+  it('does not promote a div with extra attributes or content', () => {
+    const tree = parse(
+      'Paragraph one.\n\n<div class="x" style="page-break-after: always;"></div>\n\nParagraph two.'
+    )
+    expect(countNodesOfType(tree, 'pagebreak')).toBe(0)
+    expect(countNodesOfType(tree, 'html')).toBe(1)
+  })
+
+  it('does not promote a div inside a list item (unsupported in v1)', () => {
+    const tree = parse(
+      '- Item one\n\n  <div style="page-break-after: always;"></div>\n\n- Item two'
+    )
+    expect(countNodesOfType(tree, 'pagebreak')).toBe(0)
+  })
+})
+
+describe('alternate syntaxes normalize to the canonical marker on serialize', () => {
+  it('remarkPagebreakToMarkdown emits the canonical marker regardless of which syntax matched', () => {
+    for (const source of [
+      'Paragraph one.\n\n\\newpage\n\nParagraph two.\n',
+      'Paragraph one.\n\n\\pagebreak\n\nParagraph two.\n',
+      'Paragraph one.\n\n<div style="page-break-after: always;"></div>\n\nParagraph two.\n'
+    ]) {
+      const processor = unified()
+        .use(remarkParse)
+        .use(remarkPagebreak)
+        .use(remarkPagebreakToMarkdown)
+        .use(remarkStringify)
+      const tree = processor.parse(source)
+      const transformed = processor.runSync(tree)
+      const output = processor.stringify(transformed)
+      expect(output).toContain('<!-- pagebreak -->')
+      expect(output).not.toContain('\\newpage')
+      expect(output).not.toContain('\\pagebreak')
+      expect(output).not.toContain('page-break-after')
+    }
   })
 })
