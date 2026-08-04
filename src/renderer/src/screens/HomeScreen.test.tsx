@@ -139,12 +139,15 @@ describe('HomeScreen', () => {
     const user = userEvent.setup()
     render(<HomeScreen />)
 
-    const scrollIntoViewSpy = vi.fn()
-    Element.prototype.scrollIntoView = scrollIntoViewSpy
+    const scrollIntoViewSpy = vi
+      .spyOn(Element.prototype, 'scrollIntoView')
+      .mockImplementation(() => {})
 
     await user.click(screen.getByRole('button', { name: 'Templates' }))
 
     expect(scrollIntoViewSpy).toHaveBeenCalledWith({ behavior: 'smooth', block: 'start' })
     expect(useAppStore.getState().homeActiveSection).toBe('templates')
+
+    scrollIntoViewSpy.mockRestore()
   })
 })

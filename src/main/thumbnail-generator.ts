@@ -84,6 +84,18 @@ async function cachePaths(
   return { pngPath: join(dir, `${hash}.png`), jsonPath: join(dir, `${hash}.json`) }
 }
 
+async function withTimeout<T>(promise: Promise<T>, ms: number, timeoutMessage: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(timeoutMessage)), ms)
+  })
+  try {
+    return await Promise.race([promise, timeout])
+  } finally {
+    if (timer !== undefined) clearTimeout(timer)
+  }
+}
+
 export async function getThumbnail(
   win: BaseWindow,
   content: string,
@@ -115,8 +127,12 @@ export async function getThumbnail(
     // after) is the standard "wait for the next real paint" pattern.
     // Without this, a mis-timed capture could be cached permanently under
     // the wrong content's hash.
-    await harness.view.webContents.executeJavaScript(
-      'new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)))'
+    await withTimeout(
+      harness.view.webContents.executeJavaScript(
+        'new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)))'
+      ),
+      5_000,
+      'Timed out waiting for the render context to paint before capturing a thumbnail'
     )
 
     const image = await harness.view.webContents.capturePage()
