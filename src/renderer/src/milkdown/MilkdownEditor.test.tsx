@@ -45,9 +45,10 @@ describe('Milkdown listener plugin — API pattern verification', () => {
   })
 })
 
+import { createRef } from 'react'
 import { cleanup, render, waitFor } from '@testing-library/react'
 import { afterEach, vi } from 'vitest'
-import MilkdownEditor from './MilkdownEditor'
+import MilkdownEditor, { type MilkdownEditorHandle } from './MilkdownEditor'
 
 describe('MilkdownEditor', () => {
   afterEach(() => {
@@ -152,5 +153,48 @@ describe('MilkdownEditor', () => {
       expect(onError).toHaveBeenCalled()
     })
     expect(onError.mock.calls[0]?.[0]).toEqual(expect.stringContaining('Doc type error'))
+  })
+
+  it('getMarkdown (via ref) reflects a real edit before the debounced onChange fires', async () => {
+    const onChange = vi.fn()
+    const onError = vi.fn()
+    const ref = createRef<MilkdownEditorHandle>()
+    const { container } = render(
+      <MilkdownEditor ref={ref} content="# Hello" onChange={onChange} onError={onError} />
+    )
+
+    const proseMirror = await waitFor(() => {
+      const el = container.querySelector('.ProseMirror')
+      if (!el) throw new Error('not mounted yet')
+      return el as HTMLElement
+    })
+
+    const h1 = proseMirror.querySelector('h1')
+    if (!h1?.firstChild) throw new Error('expected a text node inside the mounted h1')
+    const range = document.createRange()
+    range.selectNodeContents(h1)
+    range.collapse(false)
+    const selection = window.getSelection()
+    selection?.removeAllRanges()
+    selection?.addRange(range)
+    h1.firstChild.textContent = `${h1.firstChild.textContent} World`
+
+    // ProseMirror's own MutationObserver needs one tick to turn the DOM
+    // mutation into a real transaction (same mechanism the existing "real
+    // edit" test above already relies on) -- but this wait must stay well
+    // under plugin-listener's 200ms debounce, which is exactly the property
+    // under test. If this is flaky at 100ms, that's useful information about
+    // the actual mutation-to-transaction latency in this jsdom environment --
+    // adjust the timeout empirically rather than widening it past ~150ms,
+    // which would stop distinguishing this test from the debounced case.
+    await waitFor(
+      () => {
+        expect(ref.current?.getMarkdown()).toContain('World')
+      },
+      { timeout: 100 }
+    )
+    // The whole point of this fix: getMarkdown() via the ref must see the
+    // edit before onChange's debounce has had any chance to fire.
+    expect(onChange).not.toHaveBeenCalled()
   })
 })

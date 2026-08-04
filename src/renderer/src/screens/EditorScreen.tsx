@@ -1,6 +1,7 @@
+import { useRef } from 'react'
 import { useAppStore } from '../store/appStore'
 import { useDocumentStore } from '../store/documentStore'
-import MilkdownEditor from '../milkdown/MilkdownEditor'
+import MilkdownEditor, { type MilkdownEditorHandle } from '../milkdown/MilkdownEditor'
 
 function EditorScreen(): React.JSX.Element {
   const goHome = useAppStore((state) => state.goHome)
@@ -11,6 +12,21 @@ function EditorScreen(): React.JSX.Element {
   const error = useDocumentStore((state) => state.error)
   const clearError = useDocumentStore((state) => state.clearError)
   const save = useDocumentStore((state) => state.save)
+  const editorRef = useRef<MilkdownEditorHandle>(null)
+
+  const handleSave = async (): Promise<void> => {
+    // @milkdown/plugin-listener's onChange fires through an internal 200ms
+    // debounce (see CLAUDE.md) -- if the user clicks Save within that
+    // window of their last keystroke, documentStore.content can still hold
+    // the PRE-edit value. Pull the editor's true current markdown directly
+    // and sync it into the store before saving, rather than trusting
+    // onChange to have already landed.
+    const latest = editorRef.current?.getMarkdown()
+    if (latest !== undefined && latest !== null && latest !== content) {
+      updateContent(latest)
+    }
+    await save()
+  }
 
   return (
     <div className="flex h-full flex-col bg-canvas font-sans text-text-primary">
@@ -19,7 +35,10 @@ function EditorScreen(): React.JSX.Element {
           ← Home
         </button>
         <span className="text-12 text-text-secondary">{filePath ?? 'Untitled'}</span>
-        <button onClick={() => void save()} className="ml-auto text-12 font-semibold text-accent">
+        <button
+          onClick={() => void handleSave()}
+          className="ml-auto text-12 font-semibold text-accent"
+        >
           Save
         </button>
       </div>
@@ -33,6 +52,7 @@ function EditorScreen(): React.JSX.Element {
       )}
       <div data-testid="document-content" className="flex-1 overflow-auto">
         <MilkdownEditor
+          ref={editorRef}
           key={revision}
           content={content}
           onChange={updateContent}
