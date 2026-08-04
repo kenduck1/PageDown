@@ -1,9 +1,10 @@
 import { create } from 'zustand'
 
-type Screen = 'home' | 'editor'
+type Screen = 'home' | 'editor' | 'settings'
 type ViewMode = 'format' | 'split' | 'source'
 type SidebarTab = 'pages' | 'outline'
 type SplitLeftMode = 'source' | 'format'
+type HomeActiveSection = 'recent' | 'templates'
 
 const MIN_SPLIT_RATIO = 25
 const MAX_SPLIT_RATIO = 75
@@ -15,17 +16,20 @@ interface AppStateValues {
   splitLeftMode: SplitLeftMode
   splitRatio: number
   pageSetupOpen: boolean
+  homeActiveSection: HomeActiveSection
 }
 
 interface AppState extends AppStateValues {
   goEditor: () => void
   goHome: () => void
+  goSettings: () => void
   setViewMode: (mode: ViewMode) => void
   setSidebarTab: (tab: SidebarTab) => void
   setSplitLeftMode: (mode: SplitLeftMode) => void
   setSplitRatio: (percent: number) => void
   openPageSetup: () => void
   closePageSetup: () => void
+  setHomeActiveSection: (section: HomeActiveSection) => void
 }
 
 export const initialAppState: AppStateValues = {
@@ -34,7 +38,8 @@ export const initialAppState: AppStateValues = {
   sidebarTab: 'pages',
   splitLeftMode: 'format',
   splitRatio: 50,
-  pageSetupOpen: false
+  pageSetupOpen: false,
+  homeActiveSection: 'recent'
 }
 
 function clampSplitRatio(percent: number): number {
@@ -46,10 +51,12 @@ export const useAppStore = create<AppState>()((set) => ({
   ...initialAppState,
   goEditor: () => set({ screen: 'editor' }),
   goHome: () => set({ screen: 'home' }),
+  goSettings: () => set({ screen: 'settings' }),
   setViewMode: (mode) => set({ viewMode: mode }),
   setSidebarTab: (tab) => set({ sidebarTab: tab }),
   setSplitLeftMode: (mode) => set({ splitLeftMode: mode }),
   setSplitRatio: (percent) => set({ splitRatio: clampSplitRatio(percent) }),
   openPageSetup: () => set({ pageSetupOpen: true }),
-  closePageSetup: () => set({ pageSetupOpen: false })
+  closePageSetup: () => set({ pageSetupOpen: false }),
+  setHomeActiveSection: (section) => set({ homeActiveSection: section })
 }))
