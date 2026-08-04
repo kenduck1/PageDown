@@ -12,6 +12,7 @@ import {
 import { paginateAndTime } from '../pagination/paginate'
 import { exportToPdf } from '../export/export-pdf'
 import { getThumbnail } from './thumbnail-generator'
+import { exportDocumentToPdf } from './pdf-exporter'
 import {
   openFileDialog,
   readFileByPath,
@@ -206,6 +207,16 @@ app.whenReady().then(() => {
   })
 
   ipcMain.handle('dialog:confirmDiscard', () => confirmDiscardChanges(mainWindow))
+
+  // Real Export PDF plumbing (see src/main/pdf-exporter.ts): no isKnownPath
+  // check needed here, unlike file:save/file:openPath -- the destination
+  // path comes from a real dialog.showSaveDialog() result inside
+  // exportDocumentToPdf, not from a renderer-supplied path, so it's already
+  // vetted the same way a Save-As dialog's chosen path is (see CLAUDE.md's
+  // File I/O security invariant section).
+  ipcMain.handle('file:exportPdf', (_event, content: string) =>
+    exportDocumentToPdf(mainWindow, content)
+  )
 
   // Phase 0 spike wiring: prove the sandboxed pagination render harness
   // (Gate 5, see src/main/pagination-window.ts) constructs successfully

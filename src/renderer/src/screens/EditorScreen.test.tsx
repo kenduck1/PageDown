@@ -15,7 +15,8 @@ beforeEach(() => {
     getRecentFiles: vi.fn(),
     getThumbnail: vi.fn(),
     getTemplateThumbnail: vi.fn(),
-    confirmDiscardChanges: vi.fn()
+    confirmDiscardChanges: vi.fn(),
+    exportPdf: vi.fn()
   }
 })
 

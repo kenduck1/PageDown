@@ -15,7 +15,8 @@ beforeEach(() => {
     getTemplateThumbnail: vi
       .fn()
       .mockResolvedValue({ dataUrl: 'data:image/png;base64,x', pageCount: 1 }),
-    confirmDiscardChanges: vi.fn()
+    confirmDiscardChanges: vi.fn(),
+    exportPdf: vi.fn()
   }
 })
 
