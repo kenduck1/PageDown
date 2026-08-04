@@ -5,6 +5,7 @@ interface DocumentStateValues {
   filePath: string | null
   isDirty: boolean
   error: string | null
+  revision: number
 }
 
 interface DocumentState extends DocumentStateValues {
@@ -13,6 +14,7 @@ interface DocumentState extends DocumentStateValues {
   openFile: () => Promise<boolean>
   openPath: (filePath: string) => Promise<boolean>
   save: () => Promise<void>
+  updateContent: (content: string) => void
   clearError: () => void
 }
 
@@ -20,7 +22,8 @@ export const initialDocumentState: DocumentStateValues = {
   content: '',
   filePath: null,
   isDirty: false,
-  error: null
+  error: null,
+  revision: 0
 }
 
 function errorMessage(err: unknown): string {
@@ -30,8 +33,21 @@ function errorMessage(err: unknown): string {
 export const useDocumentStore = create<DocumentState>()((set, get) => ({
   ...initialDocumentState,
   newDocument: (initialContent = '') =>
-    set({ content: initialContent, filePath: null, isDirty: false, error: null }),
-  loadDocument: (filePath, content) => set({ content, filePath, isDirty: false, error: null }),
+    set((state) => ({
+      content: initialContent,
+      filePath: null,
+      isDirty: false,
+      error: null,
+      revision: state.revision + 1
+    })),
+  loadDocument: (filePath, content) =>
+    set((state) => ({
+      content,
+      filePath,
+      isDirty: false,
+      error: null,
+      revision: state.revision + 1
+    })),
   openFile: async () => {
     try {
       const result = await window.api.openFile()
@@ -62,5 +78,6 @@ export const useDocumentStore = create<DocumentState>()((set, get) => ({
       set({ error: errorMessage(err) })
     }
   },
+  updateContent: (content) => set({ content, isDirty: true }),
   clearError: () => set({ error: null })
 }))

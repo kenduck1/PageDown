@@ -94,4 +94,27 @@ describe('useDocumentStore', () => {
     useDocumentStore.getState().clearError()
     expect(useDocumentStore.getState().error).toBeNull()
   })
+
+  it('newDocument increments revision', () => {
+    const before = useDocumentStore.getState().revision
+    useDocumentStore.getState().newDocument()
+    expect(useDocumentStore.getState().revision).toBe(before + 1)
+  })
+
+  it('loadDocument increments revision', () => {
+    const before = useDocumentStore.getState().revision
+    useDocumentStore.getState().loadDocument('/a.md', '# A')
+    expect(useDocumentStore.getState().revision).toBe(before + 1)
+  })
+
+  it('updateContent sets content and marks the document dirty without touching revision', () => {
+    useDocumentStore.setState({ content: 'old', isDirty: false })
+    const before = useDocumentStore.getState().revision
+    useDocumentStore.getState().updateContent('new content')
+    expect(useDocumentStore.getState()).toMatchObject({
+      content: 'new content',
+      isDirty: true,
+      revision: before
+    })
+  })
 })
