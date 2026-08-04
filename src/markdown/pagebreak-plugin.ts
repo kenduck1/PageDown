@@ -1,5 +1,5 @@
 import { visit } from 'unist-util-visit'
-import type { Root, Html, Parent } from 'mdast'
+import type { Root, Html, Text, Parent } from 'mdast'
 import type { Node } from 'unist'
 import type { Processor } from 'unified'
 
@@ -14,6 +14,21 @@ declare module 'mdast' {
 }
 
 const PAGEBREAK_MARKER = '<!-- pagebreak -->'
+
+// Common alternate page-break conventions from other Markdown toolchains,
+// recognized on parse and normalized to the canonical PAGEBREAK_MARKER on
+// serialize (remarkPagebreakToMarkdown below already always emits
+// PAGEBREAK_MARKER regardless of which syntax matched here -- no change
+// needed there) -- per the master design doc's File Format section.
+// Tolerant of quote style, internal whitespace, and an optional trailing
+// semicolon, but otherwise matches this exact, narrow convention -- not an
+// open-ended "any div mentioning page-break-after" matcher.
+const PAGE_BREAK_DIV_RE =
+  /^<div\s+style\s*=\s*(["'])page-break-after\s*:\s*always\s*;?\s*\1\s*>\s*<\/div>$/i
+
+// LaTeX/Pandoc raw commands. Case-sensitive -- these are literal command
+// names, not free text a user might casually capitalize differently.
+const PAGEBREAK_TEXT_COMMANDS = new Set(['\\newpage', '\\pagebreak'])
 
 export const PAGEBREAK_CLASS = 'pagedown-pagebreak'
 
@@ -32,7 +47,20 @@ export const PAGEBREAK_CLASS = 'pagedown-pagebreak'
 const BLOCK_CONTAINER_TYPES = new Set(['root', 'blockquote', 'footnoteDefinition'])
 
 function isMatchingHtml(node: { type: string; value?: string }): node is Html {
-  return node.type === 'html' && (node as Html).value.trim() === PAGEBREAK_MARKER
+  if (node.type !== 'html') return false
+  const trimmed = (node as Html).value.trim()
+  return trimmed === PAGEBREAK_MARKER || PAGE_BREAK_DIV_RE.test(trimmed)
+}
+
+function isMatchingTextCommand(node: { type: string; value?: string }): node is Text {
+  return node.type === 'text' && PAGEBREAK_TEXT_COMMANDS.has((node as Text).value.trim())
+}
+
+// A leaf that counts as a pagebreak when it's the sole content of its
+// paragraph -- either raw HTML (the comment or the div convention) or a
+// raw-text LaTeX/Pandoc command.
+function isPagebreakLeaf(node: { type: string; value?: string }): boolean {
+  return isMatchingHtml(node) || isMatchingTextCommand(node)
 }
 
 export function remarkPagebreak() {
@@ -40,35 +68,32 @@ export function remarkPagebreak() {
     visit(tree, (node, index, parent: Parent | undefined) => {
       if (index === undefined || !parent) return
 
+      // Raw HTML (the comment or the div convention) as a direct child of a
+      // block container -- the shape plain remark-parse produces for
+      // block-level HTML. \newpage/\pagebreak never reach this branch: as
+      // plain text they can only ever be paragraph content, never a direct,
+      // unwrapped child of root/blockquote/footnoteDefinition.
       if (isMatchingHtml(node) && BLOCK_CONTAINER_TYPES.has(parent.type)) {
         const pagebreak: Pagebreak = { type: 'pagebreak', position: node.position }
         parent.children[index] = pagebreak
         return
       }
 
-      // preset-commonmark's remarkHtmlTransformer reparents a block-level
-      // html node into `paragraph { children: [html] }` before this plugin
-      // runs, inside Milkdown's internal pipeline only — markdownToHtml's
-      // plain remark-parse pipeline never produces this shape at all,
-      // verified directly (neither a real block-level marker, which parses
-      // as a direct root>html child, nor a mid-paragraph inline occurrence,
-      // which stays embedded among text siblings, ever produces a paragraph
-      // whose SOLE child is a matching html node) — so matching it here is
-      // safe without checking which pipeline produced it. `parent` here is
-      // the paragraph's OWN parent — i.e. what would have been the html
-      // node's grandparent before preset-commonmark's reparenting — so the
-      // same BLOCK_CONTAINER_TYPES check applies: preset-commonmark's own
-      // reparenting trigger includes `listItem` (not just `root`/
-      // `blockquote`), and without this check a marker inside a list item
-      // would incorrectly activate here even though it's excluded above and
-      // "unsupported in v1" per the design doc — verified this exact gap
-      // empirically before adding this check (a real Milkdown editor
-      // instance produced a `pagebreak` node inside a `list_item` without
-      // it, and correctly left it inert with it).
+      // A paragraph whose SOLE child is a matching leaf. Two structurally
+      // distinct reasons this shape arises, both handled by the same check:
+      // (1) preset-commonmark's remarkHtmlTransformer reparents a block-level
+      // html node into paragraph{[html]} before this plugin runs, inside
+      // Milkdown's internal pipeline only -- markdownToHtml's plain
+      // remark-parse pipeline never produces this shape for raw HTML at all
+      // (a real block-level marker parses as a direct root>html child, not
+      // paragraph-wrapped). (2) \newpage/\pagebreak, being plain text, are
+      // ALWAYS paragraph content in every pipeline -- CommonMark has no
+      // "bare text" block type -- so this branch is what promotes them,
+      // identically in markdownToHtml's plain pipeline and Milkdown's.
       if (
         node.type === 'paragraph' &&
         (node as Parent).children.length === 1 &&
-        isMatchingHtml((node as Parent).children[0]) &&
+        isPagebreakLeaf((node as Parent).children[0]) &&
         BLOCK_CONTAINER_TYPES.has(parent.type)
       ) {
         const pagebreak: Pagebreak = {
