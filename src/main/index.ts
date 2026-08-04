@@ -11,6 +11,7 @@ import {
 } from './pagination-window'
 import { paginateAndTime } from '../pagination/paginate'
 import { exportToPdf } from '../export/export-pdf'
+import { getThumbnail } from './thumbnail-generator'
 import {
   openFileDialog,
   readFileByPath,
@@ -57,6 +58,10 @@ registerPaginationScheme()
 // function on this object already is. `sendGate4HeaderFooterProbe` is
 // added alongside it for the same reason as `sendGate7Phase1`/`Phase2` —
 // see pagination-window.ts's own comment on why this probe exists at all.
+//
+// Task 4 (Home Screen) adds `getThumbnail` for the same reason again:
+// phase0/gate8-thumbnail-generation.spec.ts needs to call it from inside
+// `app.evaluate()`'s bare V8 context, same as every other entry here.
 declare global {
   var __pagedownPhase0:
     | {
@@ -66,6 +71,7 @@ declare global {
         sendGate7Phase2: typeof sendGate7Phase2
         exportToPdf: typeof exportToPdf
         sendGate4HeaderFooterProbe: typeof sendGate4HeaderFooterProbe
+        getThumbnail: typeof getThumbnail
       }
     | undefined
 }
@@ -75,7 +81,8 @@ globalThis.__pagedownPhase0 = {
   sendGate7Phase1,
   sendGate7Phase2,
   exportToPdf,
-  sendGate4HeaderFooterProbe
+  sendGate4HeaderFooterProbe,
+  getThumbnail
 }
 
 function createWindow(): BrowserWindow {
