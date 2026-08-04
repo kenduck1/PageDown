@@ -290,4 +290,158 @@ describe('applyPageConfig', () => {
       footer: { left: trickyValue, center: '', right: '' }
     })
   })
+
+  // --- Regression: Bug 1 (critical, fix-wave review) ------------------
+  // An indented YAML comment immediately following an owned key's own
+  // line was previously swallowed as if it were part of that key's value
+  // block (the original bug: "any indented line continues the block"),
+  // silently deleting the comment on the very next unrelated write.
+
+  it('regression (Bug 1): preserves an indented comment directly beneath a scalar key being rewritten', () => {
+    const raw = [
+      'title: X',
+      'theme: default',
+      '  # this indented note describes something else entirely',
+      'tags:',
+      '  - a',
+      'draft: true'
+    ].join('\n')
+
+    const result = applyPageConfig(raw, { theme: 'resume' })
+
+    expect(result).toBe(
+      [
+        'title: X',
+        'theme: resume',
+        '  # this indented note describes something else entirely',
+        'tags:',
+        '  - a',
+        'draft: true'
+      ].join('\n')
+    )
+  })
+
+  it('regression (Bug 1): preserves an indented comment directly beneath the legacy bare-scalar margins shorthand', () => {
+    const raw = ['title: X', 'margins: 1in', '  # a note about margins', 'draft: true'].join('\n')
+
+    const result = applyPageConfig(raw, {
+      margins: { top: 1, bottom: 1, left: 1, right: 1 }
+    })
+
+    expect(result).toBe(
+      [
+        'title: X',
+        'margins:',
+        '  top: 1',
+        '  bottom: 1',
+        '  left: 1',
+        '  right: 1',
+        '  # a note about margins',
+        'draft: true'
+      ].join('\n')
+    )
+  })
+
+  it('regression (Bug 1): a comment genuinely interior to a nested block is not left as an orphaned duplicate', () => {
+    // A comment *inside* margins' own 4-line block (between two of its
+    // sub-lines, not after the whole block) is bounded together with the
+    // block per findBlockEnd's documented interior-comment rule -- the
+    // important guarantee here is no corruption (no leftover orphaned
+    // `bottom:`/`left:`/`right:` lines causing a duplicate-key parse
+    // failure), not preservation of that specific interior comment.
+    const raw = [
+      'margins:',
+      '  top: 1',
+      '  # a comment about the bottom margin',
+      '  bottom: 1',
+      '  left: 1',
+      '  right: 1',
+      'draft: true'
+    ].join('\n')
+
+    const result = applyPageConfig(raw, {
+      margins: { top: 2, bottom: 2, left: 2, right: 2 }
+    })
+
+    expect(() => extractPageConfig(result)).not.toThrow()
+    expect(extractPageConfig(result)).toEqual({
+      margins: { top: 2, bottom: 2, left: 2, right: 2 }
+    })
+    // No orphaned/duplicate margin sub-lines left behind.
+    expect(result.match(/^\s*(top|bottom|left|right):/gm)).toHaveLength(4)
+  })
+
+  // --- Regression: Bug 2 (critical, fix-wave review) -------------------
+  // js-yaml accepts `key : value` (whitespace before the colon) as an
+  // ordinary key. The original matcher regex required an unspaced `key:`,
+  // so an existing `page : Letter` key was never found -- a *second*
+  // `page: ...` line got appended instead, producing a duplicate mapping
+  // key that js-yaml then refuses to parse at all.
+
+  it('regression (Bug 2): finds and replaces an existing key written with whitespace before the colon, instead of duplicating it', () => {
+    const raw = 'page : Letter\ndraft: true'
+    const result = applyPageConfig(raw, { pageSize: 'A4' })
+
+    expect(result).toBe('page: A4\ndraft: true')
+    // Exactly one `page` mapping key in the output.
+    expect(result.match(/^page\s*:/gm)).toHaveLength(1)
+
+    // The previous bug corrupted the block so badly that js-yaml threw on
+    // the very next parse (duplicate mapping key), silently reverting
+    // every owned key to defaults. Confirm that no longer happens.
+    expect(() => extractPageConfig(result)).not.toThrow()
+    expect(extractPageConfig(result)).toEqual({ pageSize: 'A4' })
+  })
+
+  it('regression (Bug 2): whitespace-before-colon also works for the margins block anchor line', () => {
+    const raw = 'margins :\n  top: 1\n  bottom: 1\n  left: 1\n  right: 1\ndraft: true'
+    const result = applyPageConfig(raw, {
+      margins: { top: 2, bottom: 2, left: 2, right: 2 }
+    })
+
+    expect(result).toBe(
+      ['margins:', '  top: 2', '  bottom: 2', '  left: 2', '  right: 2', 'draft: true'].join('\n')
+    )
+    expect(extractPageConfig(result)).toEqual({
+      margins: { top: 2, bottom: 2, left: 2, right: 2 }
+    })
+  })
+
+  // --- Optional (lower priority): multi-line flow-style margins --------
+
+  it('optional: replaces a multi-line flow-style margins value (closing brace on its own unindented line) without leaving an orphaned bracket', () => {
+    const raw = [
+      'margins: {',
+      '  top: 1,',
+      '  bottom: 1,',
+      '  left: 1,',
+      '  right: 1',
+      '}',
+      'draft: true'
+    ].join('\n')
+
+    const result = applyPageConfig(raw, {
+      margins: { top: 2, bottom: 2, left: 1.5, right: 1.5 }
+    })
+
+    expect(result).toBe(
+      ['margins:', '  top: 2', '  bottom: 2', '  left: 1.5', '  right: 1.5', 'draft: true'].join(
+        '\n'
+      )
+    )
+    expect(() => extractPageConfig(result)).not.toThrow()
+    expect(extractPageConfig(result)).toEqual({
+      margins: { top: 2, bottom: 2, left: 1.5, right: 1.5 }
+    })
+  })
+
+  it('optional: replaces a single-line flow-style margins value in place', () => {
+    const raw = 'margins: { top: 1, bottom: 1, left: 1, right: 1 }\ndraft: true'
+    const result = applyPageConfig(raw, {
+      margins: { top: 2, bottom: 2, left: 2, right: 2 }
+    })
+    expect(result).toBe(
+      ['margins:', '  top: 2', '  bottom: 2', '  left: 2', '  right: 2', 'draft: true'].join('\n')
+    )
+  })
 })

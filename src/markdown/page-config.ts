@@ -93,6 +93,33 @@
 // `frontmatter` node) if the document didn't have a frontmatter block at
 // all; this module only ever deals in the raw YAML text itself, matching
 // `frontmatterNode`'s own `value`-attribute boundary.
+//
+// Known limitations of the surgical write path (accepted, not bugs)
+// --------------------------------------------------------------------
+// - Flow-style values: a hand-authored `margins: { top: 1, bottom: 1,
+//   left: 1, right: 1 }` all on one line round-trips fine (the whole thing
+//   is one line, no special handling needed). A flow value deliberately
+//   split across *several* lines with its closing `}`/`]` on its own line
+//   is bounded by bracket-depth counting (`findBlockEnd`/`bracketDelta`
+//   below) rather than indentation, since a flow collection's closing
+//   bracket has no required indentation at all -- this is a best-effort,
+//   quote/comment-aware character scan, not a real YAML tokenizer, so a
+//   sufficiently adversarial line (e.g. an unbalanced bracket inside a
+//   single-quoted string containing an escaped quote) can still miscount.
+//   Considered low-risk: this module's own writer never produces flow
+//   style, so it only matters for a document some other tool authored
+//   this way before PageDown ever touched it.
+// - A YAML comment or blank line that sits *inside* one of PageDown's own
+//   multi-line blocks (e.g. between `margins`'s `top:` and `bottom:`
+//   sub-lines, rather than after the whole block) is treated as part of
+//   that block and does not survive a rewrite of that key -- only a
+//   comment/blank line that has no further structural continuation after
+//   it (i.e. it truly follows the block, not sits inside it) is preserved.
+//   This is a deliberate, narrower trade-off than the alternative of
+//   treating every indented line as part of the block regardless of
+//   structure, which is what previously caused an unrelated comment
+//   directly beneath a scalar key to be deleted entirely on that key's
+//   next write -- see `findBlockEnd`'s own comment for the exact rule.
 
 import { load } from 'js-yaml'
 
@@ -327,6 +354,105 @@ function buildOwnedLines(updates: Partial<PageConfig>): OwnedLine[] {
   return lines
 }
 
+// A line counts as a genuine structural continuation of the immediately
+// preceding owned key's own nested value -- a mapping sub-entry
+// (`  key: value`, including a bare `  key:`) or a sequence item
+// (`  - value` / a bare `  -`) -- not merely "anything indented". This is
+// what distinguishes an owned key's own multi-line block (e.g. `margins`'s
+// 4 sub-lines) from an unrelated YAML comment or blank line that merely
+// happens to be indented for readability directly beneath it.
+//
+// Fix-wave note: the original implementation treated *any* indented line
+// as a continuation, which silently deleted such a comment on the very
+// next unrelated write -- a real, reviewer-confirmed data-loss bug (see
+// page-config.test.ts's "preserves an indented comment" tests).
+const STRUCTURAL_CONTINUATION = /^[ \t]+(?:-(?:[ \t]|$)|[^\s:#][^:]*:(?:[ \t]|$))/
+
+function isCommentOrBlankLine(line: string): boolean {
+  const trimmed = line.trim()
+  return trimmed === '' || trimmed.startsWith('#')
+}
+
+// Counts unbalanced flow-collection brackets (`{`/`[` vs `}`/`]`) on a
+// single line, ignoring bracket characters inside a quoted string and
+// anything after an unquoted `#` (a real YAML comment). Deliberately not a
+// full YAML tokenizer -- good enough to track whether a flow-style value
+// (e.g. `margins: {` with the rest spanning several further lines) is
+// still "open", which is the one shape column-0-indentation-based
+// scanning can never bound correctly on its own: a flow collection's
+// closing bracket has no required indentation at all, and may legally sit
+// at column 0.
+function bracketDelta(line: string): number {
+  let delta = 0
+  let quote: '"' | "'" | null = null
+  for (const ch of line) {
+    if (quote) {
+      if (ch === quote) quote = null
+      continue
+    }
+    if (ch === '"' || ch === "'") {
+      quote = ch
+      continue
+    }
+    if (ch === '#') break
+    if (ch === '{' || ch === '[') delta += 1
+    else if (ch === '}' || ch === ']') delta -= 1
+  }
+  return delta
+}
+
+// Returns the (exclusive) end index of the block of `lines` that belongs
+// to the owned key whose own line is `lines[startIndex]` -- i.e. the range
+// `[startIndex, findBlockEnd(lines, startIndex))` is exactly what gets
+// replaced or removed for that key, and everything from the returned
+// index onward is untouched.
+function findBlockEnd(lines: string[], startIndex: number): number {
+  const openFlowDepth = bracketDelta(lines[startIndex])
+  if (openFlowDepth > 0) {
+    // Flow-style value left open on the key's own line (e.g.
+    // `margins: {`): bounded by bracket balance, not indentation. Lower
+    // priority, documented edge case -- see the file-level comment's
+    // "Flow-style values" note for this helper's known limits (no real
+    // YAML tokenization, just a best-effort quote/comment-aware bracket
+    // count).
+    let depth = openFlowDepth
+    let index = startIndex + 1
+    while (index < lines.length && depth > 0) {
+      depth += bracketDelta(lines[index])
+      index += 1
+    }
+    return index
+  }
+
+  // Block-style value: its own line plus any immediately-following lines
+  // that are genuine structural continuations (nested mapping entries or
+  // sequence items). A comment/blank line *interior* to such a run (i.e.
+  // more structural continuation lines follow after it) is swallowed too,
+  // since it's describing content that belongs to the block being
+  // replaced -- but a comment/blank line with no further structural
+  // continuation after it belongs to whatever comes *after* the block,
+  // not the block itself, and is left alone.
+  let index = startIndex + 1
+  while (index < lines.length) {
+    if (STRUCTURAL_CONTINUATION.test(lines[index])) {
+      index += 1
+      continue
+    }
+    if (isCommentOrBlankLine(lines[index])) {
+      let lookahead = index
+      while (lookahead < lines.length && isCommentOrBlankLine(lines[lookahead])) {
+        lookahead += 1
+      }
+      if (lookahead < lines.length && STRUCTURAL_CONTINUATION.test(lines[lookahead])) {
+        index = lookahead + 1
+        continue
+      }
+    }
+    break
+  }
+  return index
+}
+
 /**
  * Takes the existing raw YAML frontmatter text and a set of new PageConfig
  * values, and returns updated YAML text where PageDown's own keys are
@@ -359,8 +485,17 @@ export function applyPageConfig(rawFrontmatterYaml: string, updates: Partial<Pag
     // happens to share a name with one PageDown owns (e.g. some other
     // tool's own sub-field literally named `page:`) is never mistaken for
     // PageDown's top-level key -- only a line with zero leading
-    // whitespace whose first characters are exactly `key:` can match.
-    const topLevelPattern = new RegExp(`^${key}:`)
+    // whitespace whose first characters are `key` can match. `[ \t]*:`
+    // (rather than a bare `:`) tolerates whitespace before the colon
+    // (`page : Letter`, which js-yaml itself accepts as an ordinary
+    // `page: Letter`) -- fix-wave note: the original unspaced `:` missed
+    // this form entirely, so an existing `page : Letter` key was never
+    // found and a *second* `page: ...` line got appended instead,
+    // producing a duplicate mapping key that js-yaml then refuses to
+    // parse at all on the next read (a real, reviewer-confirmed
+    // corruption bug -- see page-config.test.ts's "space before colon"
+    // tests).
+    const topLevelPattern = new RegExp(`^${key}[ \t]*:`)
     const startIndex = lines.findIndex((line) => topLevelPattern.test(line))
 
     if (startIndex === -1) {
@@ -368,19 +503,7 @@ export function applyPageConfig(rawFrontmatterYaml: string, updates: Partial<Pag
       continue
     }
 
-    // A key's "block" is its own line plus any immediately-following
-    // lines indented deeper than column 0. This covers both a plain
-    // scalar line (block length 1) and a nested block like `margins:`
-    // (block length 1 + however many indented sub-lines it currently
-    // has) -- including the legacy single-line `margins: 1in` scalar
-    // (block length 1, no indented continuation) being upgraded in place
-    // to the structured 5-line form.
-    let endIndex = startIndex + 1
-    while (endIndex < lines.length && /^[ \t]/.test(lines[endIndex])) {
-      endIndex += 1
-    }
-
-    lines.splice(startIndex, endIndex - startIndex, ...text.split('\n'))
+    lines.splice(startIndex, findBlockEnd(lines, startIndex) - startIndex, ...text.split('\n'))
   }
 
   for (const text of appended) {

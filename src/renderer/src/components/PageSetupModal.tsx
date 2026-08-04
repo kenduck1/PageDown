@@ -348,6 +348,16 @@ function PageSetupModal({
           </button>
         </div>
 
+        {/* Real, user-visible restatement of the file-level LIMITATION note
+            above -- fix-wave item: this used to exist only in code comments
+            and the track report, which a real user never sees. Placed
+            outside the scrollable settings column (not inside it) so it
+            stays visible regardless of scroll position. */}
+        <div className="border-b border-border-subtle bg-accent/6 px-5 py-2 text-11-5 text-text-secondary">
+          These settings are saved to the document, but don&apos;t change the page layout in the
+          preview or exported PDF yet.
+        </div>
+
         <div className="flex flex-1 overflow-hidden">
           <div className="flex-1 overflow-y-auto p-5">
             <section className="mb-6">
