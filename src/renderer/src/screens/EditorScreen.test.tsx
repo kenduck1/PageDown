@@ -2,9 +2,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import EditorScreen from './EditorScreen'
+import { useAppStore, initialAppState } from '../store/appStore'
 import { useDocumentStore, initialDocumentState } from '../store/documentStore'
 
 beforeEach(() => {
+  useAppStore.setState(initialAppState)
   useDocumentStore.setState(initialDocumentState)
   window.api = {
     openFile: vi.fn(),
@@ -12,7 +14,8 @@ beforeEach(() => {
     saveFile: vi.fn(),
     getRecentFiles: vi.fn(),
     getThumbnail: vi.fn(),
-    getTemplateThumbnail: vi.fn()
+    getTemplateThumbnail: vi.fn(),
+    confirmDiscardChanges: vi.fn()
   }
 })
 
@@ -172,5 +175,46 @@ describe('EditorScreen', () => {
 
     expect(useDocumentStore.getState().error).toBeNull()
     expect(screen.queryByText('File not found')).not.toBeInTheDocument()
+  })
+
+  it('prompts before navigating Home when the document is dirty, and stays if cancelled', async () => {
+    // Real navigation state, not just "EditorScreen happens to be rendered
+    // in a test" -- App.tsx only ever mounts EditorScreen while
+    // screen === 'editor', so that's the realistic precondition for
+    // "Home was clicked while viewing the editor."
+    useAppStore.setState({ screen: 'editor' })
+    useDocumentStore.setState({ content: '# Report', isDirty: true })
+    vi.mocked(window.api.confirmDiscardChanges).mockResolvedValue('cancel')
+    const user = userEvent.setup()
+    render(<EditorScreen />)
+
+    await user.click(screen.getByRole('button', { name: '← Home' }))
+
+    expect(window.api.confirmDiscardChanges).toHaveBeenCalled()
+    expect(useAppStore.getState().screen).toBe('editor')
+  })
+
+  it('navigates Home without prompting when the document is not dirty', async () => {
+    useAppStore.setState({ screen: 'editor' })
+    useDocumentStore.setState({ content: '# Report', isDirty: false })
+    const user = userEvent.setup()
+    render(<EditorScreen />)
+
+    await user.click(screen.getByRole('button', { name: '← Home' }))
+
+    expect(window.api.confirmDiscardChanges).not.toHaveBeenCalled()
+    expect(useAppStore.getState().screen).toBe('home')
+  })
+
+  it('discards and navigates Home when the user chooses "Don\'t Save"', async () => {
+    useAppStore.setState({ screen: 'editor' })
+    useDocumentStore.setState({ content: '# Report', isDirty: true })
+    vi.mocked(window.api.confirmDiscardChanges).mockResolvedValue('discard')
+    const user = userEvent.setup()
+    render(<EditorScreen />)
+
+    await user.click(screen.getByRole('button', { name: '← Home' }))
+
+    await waitFor(() => expect(useAppStore.getState().screen).toBe('home'))
   })
 })

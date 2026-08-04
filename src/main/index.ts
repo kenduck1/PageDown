@@ -18,7 +18,8 @@ import {
   saveFileToKnownOrChosenPath,
   getRecentFiles,
   addRecentFile,
-  isKnownPath
+  isKnownPath,
+  confirmDiscardChanges
 } from './file-io'
 
 // Must run before app.whenReady() is awaited anywhere — Electron requires
@@ -203,6 +204,8 @@ app.whenReady().then(() => {
   ipcMain.handle('template:getThumbnail', async (_event, content: string) => {
     return getThumbnail(mainWindow, content, app.getPath('userData'))
   })
+
+  ipcMain.handle('dialog:confirmDiscard', () => confirmDiscardChanges(mainWindow))
 
   // Phase 0 spike wiring: prove the sandboxed pagination render harness
   // (Gate 5, see src/main/pagination-window.ts) constructs successfully

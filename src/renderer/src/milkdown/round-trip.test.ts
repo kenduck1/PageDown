@@ -3,23 +3,25 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { getMarkdown } from '@milkdown/utils'
 import { createTestEditor } from './test-editor'
-import { frontmatterRemark, frontmatterNode } from './nodes/frontmatter'
-import { pagebreakRemark, pagebreakRemarkToMarkdown, pagebreakNode } from './nodes/pagebreak'
+import { EDITOR_SCHEMA_PLUGINS } from './plugins'
 
 const CORPUS_DIR = join(__dirname, '..', '..', '..', '..', 'phase0', 'corpus')
 
-// $remark()/$nodeSchema() return heterogeneous 2-tuples ([$Ctx, MilkdownPlugin]),
-// not a bare MilkdownPlugin -- same fix as
+// EDITOR_SCHEMA_PLUGINS is the exact composition MilkdownEditor.tsx (the
+// real, mounted editor) builds -- shared so this test's composition cannot
+// silently drift from what's actually shipped. $remark()/$nodeSchema()
+// return heterogeneous 2-tuples ([$Ctx, MilkdownPlugin]), not a bare
+// MilkdownPlugin -- same fix as
 // src/renderer/src/milkdown/nodes/frontmatter.test.ts and
 // src/renderer/src/milkdown/nodes/pagebreak.test.ts, so this typechecks
-// against createTestEditor's MilkdownPlugin[] parameter.
-const PLUGINS = [
-  frontmatterRemark,
-  frontmatterNode,
-  pagebreakRemark,
-  pagebreakRemarkToMarkdown,
-  pagebreakNode
-].flat()
+// against createTestEditor's MilkdownPlugin[] parameter. commonmark/gfm are
+// re-included here even though createTestEditor's own builder already adds
+// them unconditionally -- Milkdown's `.use()` is idempotent per plugin
+// instance (confirmed: re-using the same already-installed plugin instance
+// is a documented no-op, not a duplicate-registration error), so this stays
+// harmless while keeping PLUGINS a faithful, literal copy of
+// EDITOR_SCHEMA_PLUGINS rather than a hand-filtered subset that could drift.
+const PLUGINS = EDITOR_SCHEMA_PLUGINS.flat()
 
 async function roundTrip(markdown: string): Promise<string> {
   const editor = await createTestEditor(markdown, PLUGINS)

@@ -19,8 +19,9 @@ export const pagebreakNode = $nodeSchema('pagebreak', () => ({
     'div',
     {
       'data-type': 'pagebreak',
-      class: `${PAGEBREAK_CLASS} my-2 border-t border-dashed border-border-chrome text-center text-11 uppercase tracking-[.05em] text-text-tertiary`
-    }
+      class: `${PAGEBREAK_CLASS} my-2 border-t border-dashed border-border-chrome text-center text-eyebrow text-text-tertiary`
+    },
+    'Page break'
   ],
   parseMarkdown: {
     match: ({ type }) => type === 'pagebreak',

@@ -9,7 +9,8 @@ const api = {
     ipcRenderer.invoke('file:save', filePath, content),
   getRecentFiles: () => ipcRenderer.invoke('file:getRecents'),
   getThumbnail: (filePath: string) => ipcRenderer.invoke('file:getThumbnail', filePath),
-  getTemplateThumbnail: (content: string) => ipcRenderer.invoke('template:getThumbnail', content)
+  getTemplateThumbnail: (content: string) => ipcRenderer.invoke('template:getThumbnail', content),
+  confirmDiscardChanges: () => ipcRenderer.invoke('dialog:confirmDiscard')
 }
 
 // Use `contextBridge` APIs to expose Electron APIs to

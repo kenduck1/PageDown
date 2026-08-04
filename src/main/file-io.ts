@@ -1,4 +1,4 @@
-import { dialog } from 'electron'
+import { dialog, type BrowserWindow } from 'electron'
 import { readFile, writeFile } from 'node:fs/promises'
 import { mergeRecentFiles, readRecentFiles, writeRecentFiles, isKnownPath } from './recent-files'
 import type { RecentFileEntry } from './recent-files'
@@ -60,6 +60,20 @@ export async function saveFileToKnownOrChosenPath(
     return saveFile(null, content)
   }
   return saveFile(filePath, content)
+}
+
+export type DiscardChangesChoice = 'save' | 'discard' | 'cancel'
+
+export async function confirmDiscardChanges(win: BrowserWindow): Promise<DiscardChangesChoice> {
+  const result = await dialog.showMessageBox(win, {
+    type: 'warning',
+    buttons: ['Save', "Don't Save", 'Cancel'],
+    defaultId: 0,
+    cancelId: 2,
+    message: 'Do you want to save the changes you made?',
+    detail: "Your changes will be lost if you don't save them."
+  })
+  return (['save', 'discard', 'cancel'] as const)[result.response]
 }
 
 export async function getRecentFiles(userDataDir: string): Promise<RecentFileEntry[]> {

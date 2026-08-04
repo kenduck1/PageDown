@@ -1,12 +1,9 @@
 import { forwardRef, useEffect, useImperativeHandle, useRef } from 'react'
 import { Editor, rootCtx, defaultValueCtx, remarkStringifyOptionsCtx } from '@milkdown/core'
-import { commonmark } from '@milkdown/preset-commonmark'
-import { gfm } from '@milkdown/preset-gfm'
 import { listener, listenerCtx } from '@milkdown/plugin-listener'
 import { $prose, getMarkdown } from '@milkdown/utils'
 import { Plugin } from '@milkdown/prose/state'
-import { frontmatterRemark, frontmatterNode } from './nodes/frontmatter'
-import { pagebreakRemark, pagebreakRemarkToMarkdown, pagebreakNode } from './nodes/pagebreak'
+import { EDITOR_SCHEMA_PLUGINS } from './plugins'
 import { PINNED_STRINGIFY_OPTIONS } from './stringify-options'
 
 interface MilkdownEditorProps {
@@ -16,28 +13,28 @@ interface MilkdownEditorProps {
 }
 
 export interface MilkdownEditorHandle {
-  // Reads the editor's CURRENT document and serializes it right now,
-  // bypassing @milkdown/plugin-listener's internal 200ms debounce entirely
-  // (see CLAUDE.md's "Quirk" note on markdownUpdated). Callers that need
-  // the true up-to-date markdown for a one-off read -- Save, in particular
-  // -- must use this instead of trusting onChange to have already landed.
+  // Synchronously serializes and pushes the editor's CURRENT document
+  // through onChange -- IF AND ONLY IF a real edit has landed since mount
+  // (tracked independently of @milkdown/plugin-listener's own internal
+  // 200ms debounce; see editedSinceMountRef below). A no-op otherwise, so
+  // it's always safe to call defensively. Two callers need this: Save
+  // (EditorScreen), so a fast edit-then-save isn't silently dropped by the
+  // debounce; and this component's own unmount cleanup, so a fast
+  // edit-then-navigate-away isn't dropped by plugin-listener's destroy()
+  // (which cancels its pending debounced call rather than flushing it --
+  // confirmed by reading its source).
   //
-  // Returns null in TWO distinct cases, deliberately collapsed into one
-  // signal because every current caller (EditorScreen's Save handler) only
-  // ever wants to know "is there anything new to sync into the store right
-  // now": (1) the editor hasn't finished mounting yet, or (2) the editor
-  // has mounted but no real edit (a transaction with `docChanged` or
-  // `storedMarksSet`, tracked by the editedTrackerProse plugin below) has
-  // happened since mount. Case (2) matters because Milkdown's own
+  // The "only if a real edit happened" gate matters because Milkdown's own
   // remark-stringify serialization is not always byte-identical to the
   // original `content` prop even with zero edits (verified: it silently
   // rewrites e.g. `*`-bullets/single-asterisk emphasis/`~~~` fences to the
   // canonical form pinned in stringify-options.ts, and always normalizes a
   // missing trailing newline) -- gating on a real edit having occurred is
-  // what keeps clicking Save on an untouched document a true no-op instead
-  // of silently rewriting the file to Milkdown's canonical markdown form.
-  // See this sub-project's task-8-report.md for the verified finding.
-  getMarkdown: () => string | null
+  // what keeps calling flush() on an untouched document a true no-op
+  // instead of silently rewriting the file to Milkdown's canonical
+  // markdown form. See this sub-project's task-8-report.md for the
+  // verified finding.
+  flush: () => void
 }
 
 const MilkdownEditor = forwardRef<MilkdownEditorHandle, MilkdownEditorProps>(
@@ -76,15 +73,24 @@ const MilkdownEditor = forwardRef<MilkdownEditorHandle, MilkdownEditorProps>(
     // render) per eslint-plugin-react-hooks' react-hooks/refs rule -- mutating
     // ref.current during render is flagged even for this "latest ref" pattern.
     const onChangeRef = useRef(onChange)
+    // Same latest-ref treatment as onChangeRef above, applied to onError for
+    // consistency -- harmless today only because every current caller
+    // passes a referentially-stable onError, but there's no reason for the
+    // two callback props to be handled inconsistently.
+    const onErrorRef = useRef(onError)
     useEffect(() => {
       onChangeRef.current = onChange
+      onErrorRef.current = onError
     })
 
+    // Set once the editor has finished constructing (inside the mount
+    // effect's `.then`, alongside `editorRef.current`); cleared on unmount.
+    // Holds the actual flush logic so both the imperative handle and this
+    // component's own unmount cleanup can share one implementation.
+    const flushRef = useRef<(() => void) | null>(null)
+
     useImperativeHandle(ref, () => ({
-      getMarkdown: () =>
-        editorRef.current && editedSinceMountRef.current
-          ? editorRef.current.action(getMarkdown())
-          : null
+      flush: () => flushRef.current?.()
     }))
 
     useEffect(() => {
@@ -126,13 +132,7 @@ const MilkdownEditor = forwardRef<MilkdownEditorHandle, MilkdownEditorProps>(
             onChangeRef.current(markdown)
           })
         })
-        .use(commonmark)
-        .use(gfm)
-        .use(frontmatterRemark)
-        .use(frontmatterNode)
-        .use(pagebreakRemark)
-        .use(pagebreakRemarkToMarkdown)
-        .use(pagebreakNode)
+        .use(EDITOR_SCHEMA_PLUGINS.flat())
         .use(listener)
         .use(editedTrackerProse)
         .create()
@@ -142,15 +142,24 @@ const MilkdownEditor = forwardRef<MilkdownEditorHandle, MilkdownEditorProps>(
             return
           }
           editorRef.current = created
+          flushRef.current = () => {
+            if (editedSinceMountRef.current) {
+              const markdown = created.action(getMarkdown())
+              editedSinceMountRef.current = false
+              onChangeRef.current(markdown)
+            }
+          }
         })
         .catch((err: unknown) => {
           if (!cancelled) {
-            onError(err instanceof Error ? err.message : String(err))
+            onErrorRef.current(err instanceof Error ? err.message : String(err))
           }
         })
 
       return () => {
         cancelled = true
+        flushRef.current?.()
+        flushRef.current = null
         if (editorRef.current) {
           void editorRef.current.destroy()
           editorRef.current = null
