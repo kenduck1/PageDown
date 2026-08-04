@@ -7,7 +7,9 @@ const api = {
   openPath: (filePath: string) => ipcRenderer.invoke('file:openPath', filePath),
   saveFile: (filePath: string | null, content: string) =>
     ipcRenderer.invoke('file:save', filePath, content),
-  getRecentFiles: () => ipcRenderer.invoke('file:getRecents')
+  getRecentFiles: () => ipcRenderer.invoke('file:getRecents'),
+  getThumbnail: (filePath: string) => ipcRenderer.invoke('file:getThumbnail', filePath),
+  getTemplateThumbnail: (content: string) => ipcRenderer.invoke('template:getThumbnail', content)
 }
 
 // Use `contextBridge` APIs to expose Electron APIs to

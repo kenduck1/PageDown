@@ -10,7 +10,9 @@ beforeEach(() => {
     openFile: vi.fn(),
     openPath: vi.fn(),
     saveFile: vi.fn(),
-    getRecentFiles: vi.fn()
+    getRecentFiles: vi.fn(),
+    getThumbnail: vi.fn(),
+    getTemplateThumbnail: vi.fn()
   }
 })
 
