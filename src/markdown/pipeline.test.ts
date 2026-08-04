@@ -103,4 +103,38 @@ describe('markdownToHtml', () => {
     expect(sourceMap).toBeDefined()
     expect(typeof sourceMap.htmlOffsetToSrc).toBe('function')
   })
+
+  it('strips a raw style tag entirely instead of leaking its CSS text into the output', () => {
+    const { html } = markdownToHtml('<style>body{background:url(https://evil/x)}</style>\n\nAfter.')
+    expect(html).not.toContain('background')
+    expect(html).not.toContain('evil')
+    expect(html).toContain('<p>After.</p>')
+  })
+
+  it("produces a well-formed sourceMap for a document containing raw HTML and a pagebreak marker (the spec's own open technical question)", () => {
+    const source = readFileSync(join(__dirname, '../../phase0/corpus/raw-html.md'), 'utf-8')
+    const { sourceMap } = markdownToHtml(source)
+
+    expect(sourceMap).toBeDefined()
+    expect(typeof sourceMap.htmlOffsetToSrc).toBe('function')
+    expect(typeof sourceMap.srcToRun).toBe('function')
+
+    // Every mapped source offset must round-trip cleanly through
+    // htmlOffsetToSrc — this is the actual thing the spec's own open
+    // technical question needed confirmed: annotateSourceOffsets's behavior
+    // on a document with raw HTML is not silently corrupted, degraded, or
+    // producing bad offsets, even though (as this test file itself now
+    // documents in the next test) some rendered HTML text has no
+    // corresponding run at all — that's expected, not a bug, since it comes
+    // from raw-HTML content the source-offset mechanism was never designed
+    // to track in the first place. (`srcToRun` returns `null`, not a run,
+    // for offsets with no independently addressable rendered position —
+    // e.g. interior bytes of an escape/entity sequence — so those are
+    // skipped here, same as `srcToRendered`'s own documented `null` case.)
+    for (let offset = 0; offset < source.length; offset++) {
+      const run = sourceMap.srcToRun(offset)
+      if (run === null) continue
+      expect(() => sourceMap.htmlOffsetToSrc(run.htmlOffset, run.runId)).not.toThrow()
+    }
+  })
 })

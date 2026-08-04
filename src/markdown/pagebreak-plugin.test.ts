@@ -65,4 +65,35 @@ describe('remarkPagebreak', () => {
     const tree = parse('> Quoted text.\n>\n> <!-- pagebreak -->\n>\n> More quoted text.')
     expect(countNodesOfType(tree, 'pagebreak')).toBe(1)
   })
+
+  it('promotes a marker even after being reparented into a paragraph (the shape preset-commonmark produces before this plugin runs, inside Milkdown)', () => {
+    const tree: Root = {
+      type: 'root',
+      children: [
+        {
+          type: 'paragraph',
+          children: [{ type: 'html', value: '<!-- pagebreak -->' }]
+        }
+      ]
+    }
+    remarkPagebreak()(tree)
+    expect(tree.children[0].type).toBe('pagebreak')
+  })
+
+  it('does not promote a paragraph with the marker plus other content', () => {
+    const tree: Root = {
+      type: 'root',
+      children: [
+        {
+          type: 'paragraph',
+          children: [
+            { type: 'html', value: '<!-- pagebreak -->' },
+            { type: 'text', value: ' and more text' }
+          ]
+        }
+      ]
+    }
+    remarkPagebreak()(tree)
+    expect(tree.children[0].type).toBe('paragraph')
+  })
 })

@@ -11,12 +11,10 @@ import type { Schema } from 'hast-util-sanitize'
 import type { Root as HastRoot } from 'hast'
 import type { Root } from 'mdast'
 import { annotateSourceOffsets, type SourceMap } from './source-map'
-import { remarkPagebreak } from './pagebreak-plugin'
+import { remarkPagebreak, PAGEBREAK_CLASS } from './pagebreak-plugin'
 import { createPagebreakToHast } from './pagebreak-to-hast'
 
 export type { SourceMap }
-
-const PAGEBREAK_CLASS = 'pagedown-pagebreak'
 
 export function markdownToHtml(source: string): { html: string; sourceMap: SourceMap } {
   // unified's `.parse()` only performs the parse phase — it does NOT run
@@ -75,6 +73,17 @@ export function markdownToHtml(source: string): { html: string; sourceMap: Sourc
   // `code`/task-list class exceptions (node_modules/hast-util-sanitize/lib/schema.js).
   const schema: Schema = {
     ...defaultSchema,
+    strip: [
+      ...(defaultSchema.strip ?? []),
+      'style',
+      'textarea',
+      'title',
+      'iframe',
+      'noembed',
+      'noframes',
+      'xmp',
+      'plaintext'
+    ],
     attributes: {
       ...defaultSchema.attributes,
       div: [...(defaultSchema.attributes?.div ?? []), ['className', tokenClassName]]

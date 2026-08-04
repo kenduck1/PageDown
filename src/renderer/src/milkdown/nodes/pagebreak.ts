@@ -1,5 +1,9 @@
 import { $nodeSchema, $remark } from '@milkdown/utils'
-import { remarkPagebreak, remarkPagebreakToMarkdown } from '../../../../markdown/pagebreak-plugin'
+import {
+  remarkPagebreak,
+  remarkPagebreakToMarkdown,
+  PAGEBREAK_CLASS
+} from '../../../../markdown/pagebreak-plugin'
 
 export const pagebreakRemark = $remark('remarkPagebreak', () => remarkPagebreak)
 export const pagebreakRemarkToMarkdown = $remark(
@@ -11,7 +15,7 @@ export const pagebreakNode = $nodeSchema('pagebreak', () => ({
   group: 'block',
   atom: true,
   parseDOM: [{ tag: 'div[data-type="pagebreak"]' }],
-  toDOM: () => ['div', { 'data-type': 'pagebreak', class: 'pagedown-pagebreak' }],
+  toDOM: () => ['div', { 'data-type': 'pagebreak', class: PAGEBREAK_CLASS }],
   parseMarkdown: {
     match: ({ type }) => type === 'pagebreak',
     runner: (state, _node, type) => {
