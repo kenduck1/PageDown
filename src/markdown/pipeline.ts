@@ -4,13 +4,33 @@ import remarkGfm from 'remark-gfm'
 import remarkFrontmatter from 'remark-frontmatter'
 import remarkRehype from 'remark-rehype'
 import rehypeStringify from 'rehype-stringify'
+import { raw } from 'hast-util-raw'
+import { sanitize, defaultSchema } from 'hast-util-sanitize'
+import type { Schema } from 'hast-util-sanitize'
+import type { Root as HastRoot } from 'hast'
 import type { Root } from 'mdast'
 import { annotateSourceOffsets, type SourceMap } from './source-map'
 import { remarkPagebreak } from './pagebreak-plugin'
 import { pagebreakToHast } from './pagebreak-to-hast'
-import { sanitizeRawHtmlToHast } from './sanitize-raw-html'
 
 export type { SourceMap }
+
+// hast-util-sanitize's default (GitHub-style) schema doesn't allow a plain
+// `class` on `div` at all — reasonable for arbitrary author-supplied raw
+// HTML, but pagebreakToHast (pagebreak-to-hast.ts) deliberately generates
+// its OWN trusted `<div class="pagedown-pagebreak">`, which is app-controlled
+// output, not raw author HTML, and must survive sanitization. This adds one
+// precise exception (the exact value, not a general className allowance)
+// rather than loosening `class` generally — the same pattern hast-util-sanitize's
+// own defaultSchema uses for its GFM `code`/task-list class exceptions
+// (node_modules/hast-util-sanitize/lib/schema.js).
+const schema: Schema = {
+  ...defaultSchema,
+  attributes: {
+    ...defaultSchema.attributes,
+    div: [...(defaultSchema.attributes?.div ?? []), ['className', 'pagedown-pagebreak']]
+  }
+}
 
 export function markdownToHtml(source: string): { html: string; sourceMap: SourceMap } {
   // unified's `.parse()` only performs the parse phase — it does NOT run
@@ -32,13 +52,27 @@ export function markdownToHtml(source: string): { html: string; sourceMap: Sourc
 
   const sourceMap = annotateSourceOffsets(tree, source)
 
+  // allowDangerousHtml: true here does NOT mean unsafe output — it means
+  // "don't drop raw HTML, turn it into `raw` hast nodes for `raw()` and
+  // `sanitize()` below to resolve and clean up." `pagebreak`-typed nodes are
+  // unaffected either way: remarkPagebreak already promoted every matching
+  // marker away from `type: 'html'` before this stage ever runs, so they
+  // reach `pagebreakToHast` via the `handlers` map exactly as before.
   const hastTree = unified()
     .use(remarkRehype, {
-      allowDangerousHtml: false,
-      handlers: { pagebreak: pagebreakToHast, html: sanitizeRawHtmlToHast }
+      allowDangerousHtml: true,
+      handlers: { pagebreak: pagebreakToHast }
     })
-    .runSync(tree)
-  const html = unified().use(rehypeStringify).stringify(hastTree)
+    .runSync(tree) as HastRoot
+
+  // Re-serializes the whole tree (including the `raw` nodes above) to one
+  // HTML string and re-parses it as a real document — this is what actually
+  // fixes interleaved/split raw-HTML tags, since resolving them correctly
+  // requires seeing the whole document at once, not one fragment at a time.
+  const rawProcessed = raw(hastTree) as HastRoot
+  const sanitized = sanitize(rawProcessed, schema) as HastRoot
+
+  const html = unified().use(rehypeStringify).stringify(sanitized)
 
   return { html, sourceMap }
 }
