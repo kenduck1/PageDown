@@ -77,4 +77,8 @@
     color: var(--color-text-primary);
     font-size: var(--text-13);
   }
+
+  .milkdown-mount td > p {
+    margin: 0;
+  }
 }
