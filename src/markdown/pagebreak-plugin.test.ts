@@ -153,11 +153,21 @@ describe('alternate page-break syntax: \\newpage', () => {
     const tree = parse('Paragraph one.\n\n\\Newpage\n\nParagraph two.')
     expect(countNodesOfType(tree, 'pagebreak')).toBe(0)
   })
+
+  it('promotes \\newpage inside a blockquote', () => {
+    const tree = parse('> Quoted text.\n>\n> \\newpage\n>\n> More quoted text.')
+    expect(countNodesOfType(tree, 'pagebreak')).toBe(1)
+  })
 })
 
 describe('alternate page-break syntax: \\pagebreak', () => {
   it('promotes a standalone \\pagebreak to a pagebreak node', () => {
     const tree = parse('Paragraph one.\n\n\\pagebreak\n\nParagraph two.')
+    expect(countNodesOfType(tree, 'pagebreak')).toBe(1)
+  })
+
+  it('promotes \\pagebreak inside a blockquote', () => {
+    const tree = parse('> Quoted text.\n>\n> \\pagebreak\n>\n> More quoted text.')
     expect(countNodesOfType(tree, 'pagebreak')).toBe(1)
   })
 })
@@ -191,6 +201,14 @@ describe('alternate page-break syntax: page-break-after div', () => {
       '- Item one\n\n  <div style="page-break-after: always;"></div>\n\n- Item two'
     )
     expect(countNodesOfType(tree, 'pagebreak')).toBe(0)
+    expect(countNodesOfType(tree, 'html')).toBe(1)
+  })
+
+  it('promotes the div convention inside a blockquote', () => {
+    const tree = parse(
+      '> Quoted text.\n>\n> <div style="page-break-after: always;"></div>\n>\n> More quoted text.'
+    )
+    expect(countNodesOfType(tree, 'pagebreak')).toBe(1)
   })
 })
 
@@ -214,5 +232,29 @@ describe('alternate syntaxes normalize to the canonical marker on serialize', ()
       expect(output).not.toContain('\\pagebreak')
       expect(output).not.toContain('page-break-after')
     }
+  })
+})
+
+describe('non-matching occurrences survive a full round trip unchanged', () => {
+  // Confirmed empirically (per the design brief) rather than assumed: the
+  // third fixture uses a `*` bullet marker, not `-`, because this suite's
+  // processor -- unlike pipeline.ts's pinned remark-stringify options --
+  // stringifies with remark-stringify's own default bullet, which is `*`.
+  // A `-` source would fail this round-trip on that unrelated normalization,
+  // not on anything pagebreak-related.
+  it.each([
+    'Some text mentioning \\newpage inline.\n',
+    'Use `\\newpage` to break a page.\n',
+    '* Item one\n\n  \\newpage\n\n* Item two\n'
+  ])('round-trips %s byte-identically', (source) => {
+    const processor = unified()
+      .use(remarkParse)
+      .use(remarkPagebreak)
+      .use(remarkPagebreakToMarkdown)
+      .use(remarkStringify)
+    const tree = processor.parse(source)
+    const transformed = processor.runSync(tree)
+    const output = processor.stringify(transformed)
+    expect(output).toBe(source)
   })
 })
