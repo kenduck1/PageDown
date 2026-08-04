@@ -37,7 +37,13 @@ function EditorScreen(): React.JSX.Element {
     if (choice === 'save') {
       editorRef.current?.flush()
       await save()
-      if (useDocumentStore.getState().error) return // save failed -- stay, don't lose the document
+      // documentStore.save() only ever clears isDirty on a genuine
+      // successful save -- checking isDirty (not error) here also catches
+      // the case a thrown error wouldn't: the user cancelling the native
+      // Save-As dialog for a never-saved document, which resolves save()
+      // with no error at all and leaves isDirty untouched. Either way,
+      // don't navigate away from a document that wasn't actually written.
+      if (useDocumentStore.getState().isDirty) return
     }
     goHome()
   }
