@@ -52,6 +52,14 @@ describe('Full node-set round trip (frontmatter + pagebreak + commonmark + gfm t
     expect(output).toContain('<!-- pagebreak -->')
   })
 
+  it('normalizes an alternate \\newpage marker to the canonical pagebreak marker on save', async () => {
+    const source = 'Before.\n\n\\newpage\n\nAfter.\n'
+    const output = await roundTrip(source)
+
+    expect(output).toContain('<!-- pagebreak -->')
+    expect(output).not.toContain('\\newpage')
+  })
+
   it('round-trips a document containing both frontmatter and a pagebreak together', async () => {
     const source = `---\ntitle: Combined Test\npage: Letter\n---\n\n# Heading\n\nBefore.\n\n<!-- pagebreak -->\n\nAfter.\n`
     const output = await roundTrip(source)

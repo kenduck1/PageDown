@@ -70,6 +70,13 @@ describe('markdownToHtml', () => {
     expect(html).toContain('<div class="pagedown-pagebreak"></div>')
   })
 
+  it('recognizes \\newpage as equivalent to the canonical pagebreak marker', () => {
+    const canonical = markdownToHtml('Paragraph one.\n\n<!-- pagebreak -->\n\nParagraph two.')
+    const alternate = markdownToHtml('Paragraph one.\n\n\\newpage\n\nParagraph two.')
+    expect(alternate.html).toContain('<div class="pagedown-pagebreak"></div>')
+    expect(alternate.html).toBe(canonical.html)
+  })
+
   it('does not let raw HTML forge a fake pagebreak marker', () => {
     const { html } = markdownToHtml('<div class="pagedown-pagebreak">forged content</div>')
     expect(html).not.toContain('pagedown-pagebreak')
