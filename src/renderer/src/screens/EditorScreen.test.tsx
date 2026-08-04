@@ -217,4 +217,44 @@ describe('EditorScreen', () => {
 
     await waitFor(() => expect(useAppStore.getState().screen).toBe('home'))
   })
+
+  it('does not navigate Home if Save was chosen but the user cancelled the Save-As dialog', async () => {
+    // Real navigation state, matching the sibling dirty-check tests above --
+    // without this, useAppStore's initial screen ('home') would make the
+    // "stayed on editor" assertion below pass trivially even if the fix
+    // were wrong, since it was never 'editor' to begin with.
+    useAppStore.setState({ screen: 'editor' })
+    useDocumentStore.setState({ filePath: null, content: '# New Doc', isDirty: true })
+    vi.mocked(window.api.confirmDiscardChanges).mockResolvedValue('save')
+    vi.mocked(window.api.saveFile).mockResolvedValue(null) // user cancelled Save-As
+    const user = userEvent.setup()
+    render(<EditorScreen />)
+
+    await user.click(screen.getByRole('button', { name: '← Home' }))
+
+    await waitFor(() => {
+      expect(window.api.saveFile).toHaveBeenCalled()
+    })
+    expect(useAppStore.getState().screen).toBe('editor')
+    expect(useDocumentStore.getState().isDirty).toBe(true)
+  })
+
+  it('navigates Home after a successful Save from the discard-confirmation dialog', async () => {
+    // Same reasoning as above: without an explicit non-'home' starting
+    // screen, "ends up on home" would be trivially true from
+    // initialAppState alone, proving nothing about navigation actually
+    // happening.
+    useAppStore.setState({ screen: 'editor' })
+    useDocumentStore.setState({ filePath: '/tmp/report.md', content: '# Report', isDirty: true })
+    vi.mocked(window.api.confirmDiscardChanges).mockResolvedValue('save')
+    vi.mocked(window.api.saveFile).mockResolvedValue({ filePath: '/tmp/report.md' })
+    const user = userEvent.setup()
+    render(<EditorScreen />)
+
+    await user.click(screen.getByRole('button', { name: '← Home' }))
+
+    await waitFor(() => {
+      expect(useAppStore.getState().screen).toBe('home')
+    })
+  })
 })
