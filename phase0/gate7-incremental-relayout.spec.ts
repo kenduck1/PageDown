@@ -1,7 +1,8 @@
-import { test, _electron as electron } from '@playwright/test'
+import { test } from '@playwright/test'
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { markdownToHtml } from '../src/markdown/pipeline'
+import { launchIsolatedApp } from './electron-launch'
 
 // Same reasoning as gate1-source-offset.spec.ts/gate2-performance.spec.ts
 // for both mechanical deviations from a hypothetical literal brief sample:
@@ -106,7 +107,7 @@ function comparePageTexts(
 }
 
 test('Gate 7: attempt incremental re-layout from a retained breakToken', async () => {
-  const app = await electron.launch({ args: ['.'] })
+  const { app, close } = await launchIsolatedApp(['.'])
 
   const fullMarkdown = readFileSync(join(__dirname, 'corpus', 'very-long.md'), 'utf8')
   const { html: fullHtml } = markdownToHtml(fullMarkdown)
@@ -194,7 +195,7 @@ test('Gate 7: attempt incremental re-layout from a retained breakToken', async (
         2
       )
     )
-    await app.close()
+    await close()
     throw new Error(
       'Phase 1 could not determine a section number near the captured breakToken — see phase0/results/gate7-findings.json for partial results'
     )
@@ -327,5 +328,5 @@ test('Gate 7: attempt incremental re-layout from a retained breakToken', async (
     JSON.stringify(findings, null, 2)
   )
 
-  await app.close()
+  await close()
 })

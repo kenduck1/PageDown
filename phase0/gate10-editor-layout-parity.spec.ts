@@ -1,12 +1,7 @@
-import {
-  test,
-  expect,
-  _electron as electron,
-  type ElectronApplication,
-  type Page
-} from '@playwright/test'
+import { test, expect, type ElectronApplication, type Page } from '@playwright/test'
 import { markdownToHtml } from '../src/markdown/pipeline'
 import { REPORT_TEMPLATE } from '../src/renderer/src/templates/report.md'
+import { launchIsolatedApp } from './electron-launch'
 
 // Phase 1 Gate 3 (docs/superpowers/plans/2026-07-28-phase1-findings.md)
 // measured editor/pagination layout parity against a throwaway
@@ -74,7 +69,7 @@ test('Gate 10: editor/paginator layout parity for the real mounted Milkdown canv
 
   test.setTimeout(60_000)
 
-  const app = await electron.launch({ args: ['out/main/index.js'] })
+  const { app, close } = await launchIsolatedApp(['out/main/index.js'])
 
   // --- Pagination side: real harness, same document -----------------------
   // No type annotation on the destructured Electron-namespace param -- it's
@@ -168,7 +163,7 @@ test('Gate 10: editor/paginator layout parity for the real mounted Milkdown canv
     throw new Error(milkdownParsed.error)
   }
 
-  await app.close()
+  await close()
 
   // --- Per-block comparison -------------------------------------------------
   const rows = paginationResult.blocks.map((pagBlock, i) => {

@@ -1,14 +1,9 @@
-import {
-  test,
-  expect,
-  _electron as electron,
-  type ElectronApplication,
-  type Page
-} from '@playwright/test'
-import { mkdtemp, readFile, writeFile, rm } from 'node:fs/promises'
+import { test, expect, type ElectronApplication, type Page } from '@playwright/test'
+import { mkdtemp, readFile, writeFile, rm, realpath } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { mergeRecentFiles, readRecentFiles, writeRecentFiles } from '../src/main/recent-files'
+import { launchIsolatedApp } from './electron-launch'
 
 // This is the permanent version of the finding Task 8 fixed and verified
 // with two throwaway, deleted-after-use Playwright scripts (see
@@ -59,11 +54,25 @@ async function getMainWindow(app: ElectronApplication): Promise<Page> {
 test('Gate 11: Save picks up a real edit made well within the 200ms onChange debounce window', async () => {
   test.setTimeout(60_000)
 
-  const app = await electron.launch({ args: ['out/main/index.js'] })
+  const {
+    app,
+    close,
+    userDataDir: expectedUserDataDir
+  } = await launchIsolatedApp(['out/main/index.js'])
   const win = await getMainWindow(app)
   await win.waitForFunction(() => (window as unknown as { api?: unknown }).api !== undefined)
 
+  // Direct, non-vacuous proof that launchIsolatedApp's --user-data-dir
+  // switch actually took effect for the app instance THIS test launched --
+  // same check, same reasoning (including the macOS /var vs /private/var
+  // symlink wrinkle that requires realpath() on both sides before
+  // comparing) as phase0/gate5-sandbox.spec.ts's identical proof. userDataDir
+  // below is read from the real running main process via app.evaluate(),
+  // and is also the value the rest of this test uses to seed/restore the
+  // real recent-files.json allowlist -- not a separate, unused value only
+  // computed for this assertion.
   const userDataDir = await app.evaluate(({ app }) => app.getPath('userData'))
+  expect(await realpath(userDataDir)).toBe(await realpath(expectedUserDataDir))
 
   // A real fixture file on disk, in a real OS temp directory -- NOT userData
   // (userData is reserved for the app's own state, e.g. recent-files.json
@@ -151,5 +160,5 @@ test('Gate 11: Save picks up a real edit made well within the 200ms onChange deb
     await rm(fixtureDir, { recursive: true, force: true })
   }
 
-  await app.close()
+  await close()
 })

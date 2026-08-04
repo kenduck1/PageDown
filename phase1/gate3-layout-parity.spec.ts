@@ -1,8 +1,9 @@
-import { test, expect, _electron as electron, chromium } from '@playwright/test'
+import { test, expect, chromium } from '@playwright/test'
 import { readFileSync, mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { build } from 'esbuild'
 import { markdownToHtml } from '../src/markdown/pipeline'
+import { launchIsolatedApp } from '../phase0/electron-launch'
 
 // Same mechanical deviations from a hypothetical literal brief sample as
 // every other Phase 0/1 gate spec (see phase0/gate1/gate5/gate7's own
@@ -159,7 +160,7 @@ test('Gate 3: editor/paginator layout parity for mixed.md top-level blocks', asy
   })
 
   // --- Pagination side: real Electron app, real harness -------------------
-  const app = await electron.launch({ args: ['.'] })
+  const { app, close } = await launchIsolatedApp(['.'])
 
   await app.evaluate(async ({ BaseWindow }) => {
     const bridge = (
@@ -210,7 +211,7 @@ test('Gate 3: editor/paginator layout parity for mixed.md top-level blocks', asy
     return { sendResult, blocks: JSON.parse(raw) as BlockMeasurement[] }
   }, html)) as { sendResult: { pageCount: number }; blocks: BlockMeasurement[] }
 
-  await app.close()
+  await close()
 
   expect(
     paginationResult.sendResult.pageCount,

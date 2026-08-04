@@ -1,16 +1,20 @@
-import { test, expect, _electron as electron, type ElectronApplication } from '@playwright/test'
+import { test, expect, type ElectronApplication } from '@playwright/test'
 import { readdir, stat } from 'node:fs/promises'
 import { join } from 'node:path'
+import { launchIsolatedApp } from './electron-launch'
 
 let app: ElectronApplication
+let close: () => Promise<void>
 
 test.beforeAll(async () => {
-  app = await electron.launch({ args: ['out/main/index.js'] })
+  const isolated = await launchIsolatedApp(['out/main/index.js'])
+  app = isolated.app
+  close = isolated.close
   await app.firstWindow()
 })
 
 test.afterAll(async () => {
-  await app.close()
+  await close()
 })
 
 test('Gate 8: getThumbnail generates a real PNG, caches it, and reports a correct page count', async () => {
