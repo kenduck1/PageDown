@@ -1,7 +1,8 @@
-import { test, expect, _electron as electron } from '@playwright/test'
+import { test, expect } from '@playwright/test'
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { markdownToHtml } from '../src/markdown/pipeline'
+import { launchIsolatedApp } from './electron-launch'
 
 // Same mechanical deviations from a hypothetical literal brief sample as
 // every other Phase 0 gate spec (see gate1/gate2/gate5/gate7's own
@@ -60,7 +61,7 @@ interface FixtureObservation {
 
 test('Gate 6: render every break-quality fixture and capture per-page structure for manual review', async () => {
   test.setTimeout(60_000)
-  const app = await electron.launch({ args: ['.'] })
+  const { app, close } = await launchIsolatedApp(['.'])
 
   const observations: Record<string, FixtureObservation> = {}
 
@@ -156,12 +157,12 @@ test('Gate 6: render every break-quality fixture and capture per-page structure 
     "mermaid-diagrams.md is the one fixture that DOES span multiple pages (see Task 8/Gate 3 and this gate's own keep-with-next test below) — 6 pages as of Task 10's KeepWithNextHandler (was 5 before it; see phase0/gate3-mermaid.spec.ts's updated oversizedWrapperCount comment for why)"
   ).toBe(6)
 
-  await app.close()
+  await close()
 })
 
 test('Gate 6: KeepWithNextHandler prevents a stranded heading in mermaid-diagrams.md, the one fixture that spans pages', async () => {
   test.setTimeout(60_000)
-  const app = await electron.launch({ args: ['.'] })
+  const { app, close } = await launchIsolatedApp(['.'])
 
   const markdown = readFileSync(join(__dirname, 'corpus', 'mermaid-diagrams.md'), 'utf8')
   const { html } = markdownToHtml(markdown)
@@ -259,12 +260,12 @@ test('Gate 6: KeepWithNextHandler prevents a stranded heading in mermaid-diagram
     'no heading should be stranded on a different page than the content immediately following it'
   ).toBe(0)
 
-  await app.close()
+  await close()
 })
 
 test('Gate 6: TableContinuationHandler repeats the header on a simple 2-page split, with no clipping or row misplacement', async () => {
   test.setTimeout(60_000)
-  const app = await electron.launch({ args: ['.'] })
+  const { app, close } = await launchIsolatedApp(['.'])
 
   // Same synthetic-table shape as Task 9/Gate 4's own split-block
   // fragmentation test (phase0/gate4-export.spec.ts) — 60 rows forces a
@@ -370,12 +371,12 @@ test('Gate 6: TableContinuationHandler repeats the header on a simple 2-page spl
   const totalRows = perPage.reduce((sum, p) => sum + p.rowCount, 0)
   expect(totalRows, '60 data rows + 1 original header + 1 repeated header').toBe(62)
 
-  await app.close()
+  await close()
 })
 
 test('Gate 6: TableContinuationHandler on a 3+ page split only repeats the header on the LAST fragment, and never misplaces a row', async () => {
   test.setTimeout(60_000)
-  const app = await electron.launch({ args: ['.'] })
+  const { app, close } = await launchIsolatedApp(['.'])
 
   // 150 rows forces a real 5-page split at this harness's default page
   // box — deliberately larger than Gate 4's 60-row/2-page fixture so this
@@ -489,12 +490,12 @@ test('Gate 6: TableContinuationHandler on a 3+ page split only repeats the heade
     ).toBe(false)
   }
 
-  await app.close()
+  await close()
 })
 
 test("Gate 6: nested ordered list numbering (Paged.js's own built-in Lists handler) stays correct across a real page split, including mid-item", async () => {
   test.setTimeout(60_000)
-  const app = await electron.launch({ args: ['.'] })
+  const { app, close } = await launchIsolatedApp(['.'])
 
   // Not a custom Task 10 handler -- Paged.js's own built-in `Lists` module
   // (node_modules/pagedjs/src/modules/paged-media/lists.js, always active
@@ -647,5 +648,5 @@ test("Gate 6: nested ordered list numbering (Paged.js's own built-in Lists handl
     'at least one <ol> across the split document must be a genuine continuation (first item number > 1) for this check to be non-vacuous'
   ).toBe(true)
 
-  await app.close()
+  await close()
 })

@@ -1,4 +1,6 @@
-import { test, expect, _electron as electron } from '@playwright/test'
+import { test, expect } from '@playwright/test'
+import { realpath } from 'node:fs/promises'
+import { launchIsolatedApp } from './electron-launch'
 
 // electronApplication.evaluate() runs each callback below in a bare V8
 // context reached via CDP — no `require`, no working dynamic `import()`
@@ -12,7 +14,38 @@ import { test, expect, _electron as electron } from '@playwright/test'
 // below rather than factored out.
 
 test('Gate 5: sandboxed render context loads under its own origin and completes a data round trip', async () => {
-  const app = await electron.launch({ args: ['.'] })
+  const { app, close, userDataDir } = await launchIsolatedApp(['.'])
+
+  // Direct, non-vacuous proof that launchIsolatedApp's --user-data-dir
+  // switch actually took effect for the app instance THIS test launched —
+  // not inferred indirectly (e.g. snapshotting the real recent-files.json
+  // before/after and hoping it stayed byte-identical, which says nothing
+  // for a gate that never calls file:open/file:save in the first place; see
+  // this task's own report for why that check was rejected as too weak).
+  // `app.getPath('userData')`, read from the real running main process via
+  // a fresh app.evaluate() call, is Electron's own runtime source of truth
+  // for where this instance believes its userData directory is. Comparing
+  // it against the EXACT temp directory launchIsolatedApp created (not just
+  // asserting it's "some" temp path) also rules out a bug where the switch
+  // is silently ignored in favor of some other default — if isolation had
+  // silently failed, this would resolve to the developer's real
+  // ~/Library/Application Support/pagedown instead.
+  //
+  // Both sides are run through realpath() before comparing: on macOS,
+  // node:os's tmpdir() (what launchIsolatedApp's mkdtemp() is rooted under)
+  // returns a path through the /var symlink, but Electron's own
+  // app.getPath('userData') resolves it to the real, symlink-free
+  // /private/var target — confirmed empirically (the unresolved comparison
+  // fails with exactly that /var vs /private/var prefix mismatch, on an
+  // otherwise-identical path). Not a sign isolation failed; realpath()
+  // normalizes both sides the same way Electron already normalizes its own
+  // side, so the comparison stays a genuine equality check rather than
+  // silently passing via a loosened assertion (e.g. suffix-only matching).
+  const actualUserDataDir = await app.evaluate(({ app: electronApp }) =>
+    electronApp.getPath('userData')
+  )
+  const expectedUserDataDir = await realpath(userDataDir)
+  expect(await realpath(actualUserDataDir)).toBe(expectedUserDataDir)
 
   const result = await app.evaluate(async ({ BaseWindow }) => {
     const { createPaginationHarness } = (
@@ -98,11 +131,11 @@ test('Gate 5: sandboxed render context loads under its own origin and completes 
     ipcRenderer: 'undefined'
   })
 
-  await app.close()
+  await close()
 })
 
 test('Gate 5: CSP blocks inline script execution in rendered content', async () => {
-  const app = await electron.launch({ args: ['.'] })
+  const { app, close } = await launchIsolatedApp(['.'])
 
   const result = await app.evaluate(async ({ BaseWindow }) => {
     const { createPaginationHarness } = (
@@ -157,11 +190,11 @@ test('Gate 5: CSP blocks inline script execution in rendered content', async () 
   )
   expect(cspViolations.length).toBeGreaterThan(0)
 
-  await app.close()
+  await close()
 })
 
 test('Gate 5: navigation away from the render context origin is blocked', async () => {
-  const app = await electron.launch({ args: ['.'] })
+  const { app, close } = await launchIsolatedApp(['.'])
 
   const result = await app.evaluate(async ({ BaseWindow }) => {
     const { createPaginationHarness } = (
@@ -198,7 +231,7 @@ test('Gate 5: navigation away from the render context origin is blocked', async 
   expect(result.urlBefore).toBe('pagedown-render://render/index.html')
   expect(result.urlAfter).toBe('pagedown-render://render/index.html')
 
-  await app.close()
+  await close()
 })
 
 // The three tests below regression-test Task 6's error-handling/cleanup
@@ -208,7 +241,7 @@ test('Gate 5: navigation away from the render context origin is blocked', async 
 // (empty/near-empty content) can permanently brick the reused harness.
 
 test('Gate 5: empty document does not hang the harness or brick it for subsequent documents', async () => {
-  const app = await electron.launch({ args: ['.'] })
+  const { app, close } = await launchIsolatedApp(['.'])
 
   const result = await app.evaluate(async ({ BaseWindow }) => {
     const { createPaginationHarness } = (
@@ -254,11 +287,11 @@ test('Gate 5: empty document does not hang the harness or brick it for subsequen
   expect(result.afterResult.pageCount).toBeGreaterThanOrEqual(1)
   expect(result.afterElapsedMs).toBeLessThan(5000)
 
-  await app.close()
+  await close()
 })
 
 test('Gate 5: a render-context failure surfaces as a prompt rejection, not a 10-second hang', async () => {
-  const app = await electron.launch({ args: ['.'] })
+  const { app, close } = await launchIsolatedApp(['.'])
 
   const result = await app.evaluate(async ({ BaseWindow }) => {
     const { createPaginationHarness } = (
@@ -306,11 +339,11 @@ test('Gate 5: a render-context failure surfaces as a prompt rejection, not a 10-
   expect(result.elapsedMs).toBeLessThan(5000)
   expect(result.afterResult.ready).toBe(true)
 
-  await app.close()
+  await close()
 })
 
 test('Gate 5: repeated sendDocument calls do not leak Polisher <style> elements into <head>', async () => {
-  const app = await electron.launch({ args: ['.'] })
+  const { app, close } = await launchIsolatedApp(['.'])
 
   const result = await app.evaluate(async ({ BaseWindow }) => {
     const { createPaginationHarness } = (
@@ -346,5 +379,5 @@ test('Gate 5: repeated sendDocument calls do not leak Polisher <style> elements 
   expect(result.styleCounts.length).toBe(5)
   expect(new Set(result.styleCounts).size).toBe(1)
 
-  await app.close()
+  await close()
 })
