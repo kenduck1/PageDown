@@ -58,7 +58,7 @@ export function remarkPagebreak() {
 // This mirrors remark-frontmatter's actual real source
 // (node_modules/remark-frontmatter/lib/index.js), which reads `this.data()`
 // directly in its attacher body and returns nothing, not a transformer.
-export function remarkPagebreakToMarkdown(this: Processor) {
+export function remarkPagebreakToMarkdown(this: Processor): void {
   const data = this.data() as { toMarkdownExtensions?: unknown[] }
   const extensions = data.toMarkdownExtensions ?? (data.toMarkdownExtensions = [])
   extensions.push({
