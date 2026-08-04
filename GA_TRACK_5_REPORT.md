@@ -197,7 +197,8 @@ Untracked files: src/markdown/page-config.test.ts, src/markdown/page-config.ts,
 
 ## Test summary
 
-34 new tests, all passing: 30 in `src/markdown/page-config.test.ts`
+39 new tests, all passing (30 + 9 — corrected; see the fix-wave addendum below
+for counts after the subsequent review round): 30 in `src/markdown/page-config.test.ts`
 (extraction validity/malformed-fallback/legacy-shorthand/adversarial-quoting
 cases; write-path exact-string round-trip/preserve-ordering/append/
 missing-frontmatter/trailing-newline/adversarial-quoting cases) + 9 in
@@ -206,3 +207,141 @@ missing-frontmatter/trailing-newline/adversarial-quoting cases) + 9 in
 `×`/scrim close without Apply, click-inside-dialog not bubbling to scrim,
 re-seed-on-reopen). Full existing suite (`pnpm test:unit`) still passes at
 192/192 — no regressions.
+
+---
+
+## Fix-wave addendum: review round 2 (CHANGES NEEDED → resolved)
+
+Commit before this fix wave: `b8361c4cc04d1ff7c1c0c6908484105505e7a805`.
+
+Review came back with two critical, independently-demonstrated data-
+corruption bugs in `applyPageConfig`, plus two smaller items. All four are
+fixed below; the optional lower-priority item was also addressed.
+
+### Bug 1 (Critical) — indented comment after an owned key was deleted
+
+**Confirmed repro** (reviewer's exact case, verified against real `js-yaml`
+before fixing): the original block-boundary scan treated *any* line
+indented deeper than column 0 immediately following an owned key's own line
+as part of that key's value — so a YAML comment merely indented for
+readability (not actually nested under the key) was silently swallowed and
+deleted on the next unrelated write to that key. Reproduced for both a plain
+scalar key (`theme:`) and the legacy `margins: 1in` shorthand, exactly as
+reported.
+
+**Fix**: replaced the "any indented line continues the block" rule with a
+structural check (`STRUCTURAL_CONTINUATION` in `src/markdown/page-config.ts`)
+that only treats a line as a genuine continuation if it's actually a nested
+mapping entry (`  key: value` / `  key:`) or sequence item (`  - value` /
+`  -`) — never a bare comment or blank line. A comment/blank line is only
+swallowed if it's interior to a real continuation run (more structural lines
+follow after it); a trailing comment with nothing structural after it is
+left untouched. This is implemented in the new `findBlockEnd`/
+`isCommentOrBlankLine` helpers, which replace the old inline `while
+(/^[ \t]/.test(...))` loop.
+
+**New regression tests** (`src/markdown/page-config.test.ts`):
+- `regression (Bug 1): preserves an indented comment directly beneath a scalar key being rewritten`
+- `regression (Bug 1): preserves an indented comment directly beneath the legacy bare-scalar margins shorthand`
+- `regression (Bug 1): a comment genuinely interior to a nested block is not left as an orphaned duplicate` (documents the accepted narrower trade-off: a comment truly *inside* a multi-line block like `margins` doesn't survive that key's own rewrite, but no corruption/duplicate-key result is left behind either)
+
+### Bug 2 (Critical) — `key : value` (space before colon) caused duplicate keys
+
+**Confirmed repro** (verified `yaml.load('page : Letter\ndraft: true')` →
+`{page: "Letter", draft: true}` before fixing, matching the reviewer's
+claim): the key-matching regex was the unspaced `^key:`, so an existing
+`page : Letter` key was never found, and a second `page: ...` line was
+appended instead — producing a duplicate mapping key. `js-yaml` throws on
+duplicate keys, so the very next `extractPageConfig` call on that corrupted
+block returned `{}`, silently reverting every owned key to defaults.
+
+**Fix**: the matcher is now `` `^${key}[ \t]*:` `` (tolerates any amount of
+whitespace before the colon), so an existing key in this form is found and
+replaced in place instead of duplicated.
+
+**New regression tests**:
+- `regression (Bug 2): finds and replaces an existing key written with whitespace before the colon, instead of duplicating it` — asserts exactly one `page` key in the output and that `extractPageConfig` no longer throws/reverts to defaults afterward
+- `regression (Bug 2): whitespace-before-colon also works for the margins block anchor line`
+
+### Item 3 — UI honesty gap (fixed)
+
+`src/renderer/src/components/PageSetupModal.tsx` now renders a real, always-
+visible notice banner directly beneath the header row (outside the
+scrollable settings column, so it can't be scrolled out of view): "These
+settings are saved to the document, but don't change the page layout in the
+preview or exported PDF yet." Previously this limitation existed only in
+code comments and this report, never in the actual rendered UI. Covered by
+a new test: `shows a visible, persistent notice that these settings do not
+yet affect rendering`.
+
+### Item 4 — test-count typo (fixed)
+
+The original "Test summary" section said "34 new tests" for a 30+9 split;
+corrected to 39 above (confirmed via `grep -c "  it("` at the time).
+
+### Optional item — multi-line flow-style margins (addressed, not just documented)
+
+Given the bracket-aware scanning already needed to be introduced cleanly
+alongside the Bug 1 structural-continuation fix, this was cheap enough to
+fix rather than merely document. `findBlockEnd` now detects when an owned
+key's own line opens an unbalanced flow bracket (`{`/`[`) and, in that case,
+bounds the block by running bracket-depth balance (`bracketDelta`) across
+subsequent lines — regardless of indentation — until the depth returns to
+zero, rather than by indentation at all. This correctly captures a
+multi-line `margins: { ... }` whose closing `}` sits on its own unindented
+line, which previously left an orphaned `}` behind (a second corruption
+vector in the same family as Bug 2 — the stray bracket breaks the next
+`yaml.load`, reverting every owned key to defaults).
+
+This is explicitly a best-effort, quote/comment-aware character scan, not a
+real YAML tokenizer — documented as a known limitation in the file-level
+comment ("Known limitations of the surgical write path") rather than
+claimed as fully general.
+
+**New tests**:
+- `optional: replaces a multi-line flow-style margins value (closing brace on its own unindented line) without leaving an orphaned bracket`
+- `optional: replaces a single-line flow-style margins value in place` (confirms the common, already-working case wasn't broken by the new bracket-depth code path)
+
+### Verification commands run (this worktree, after the fix wave)
+
+```
+$ pnpm exec eslint src/markdown/page-config.ts src/markdown/page-config.test.ts \
+    src/renderer/src/components/PageSetupModal.tsx src/renderer/src/components/PageSetupModal.test.tsx
+(no output — clean)
+
+$ pnpm run typecheck
+> tsc --noEmit -p tsconfig.node.json --composite false
+> tsc --noEmit -p tsconfig.web.json --composite false
+(both clean, no output)
+
+$ pnpm test:unit
+ Test Files  20 passed (20)
+      Tests  200 passed (200)
+
+$ pnpm exec prettier --check src/markdown/page-config.ts src/markdown/page-config.test.ts \
+    src/renderer/src/components/PageSetupModal.tsx src/renderer/src/components/PageSetupModal.test.tsx
+Checking formatting...
+All matched files use Prettier code style!
+
+$ pnpm run lint   # full eslint --cache . over the whole repo
+(no output — clean)
+
+$ grep -c "  it(" src/markdown/page-config.test.ts
+37
+$ grep -c "  it(" src/renderer/src/components/PageSetupModal.test.tsx
+10
+```
+
+### Confirmation both Critical bugs no longer reproduce
+
+- Bug 1: `applyPageConfig('title: X\ntheme: default\n  # this indented note describes something else entirely\ntags:\n  - a\ndraft: true', { theme: 'resume' })` now preserves the comment line byte-for-byte, only replacing `theme: default` → `theme: resume` — asserted exactly by the new regression test.
+- Bug 2: `applyPageConfig('page : Letter\ndraft: true', { pageSize: 'A4' })` now produces `'page: A4\ndraft: true'` (one `page` key, no duplicate), and `extractPageConfig` on the result no longer throws or reverts to defaults — asserted exactly by the new regression test.
+
+### Updated test summary (post fix-wave)
+
+47 tests total across both files, all passing: 37 in
+`src/markdown/page-config.test.ts` (30 original + 7 new: 3 for Bug 1, 2 for
+Bug 2, 2 for the optional flow-style case) + 10 in
+`src/renderer/src/components/PageSetupModal.test.tsx` (9 original + 1 new,
+the visible-notice test). Full existing suite (`pnpm test:unit`) passes at
+200/200 — no regressions.

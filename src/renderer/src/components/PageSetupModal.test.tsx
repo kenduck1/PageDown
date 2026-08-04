@@ -29,6 +29,15 @@ describe('PageSetupModal', () => {
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
   })
 
+  it('shows a visible, persistent notice that these settings do not yet affect rendering', () => {
+    render(
+      <PageSetupModal open={true} initialConfig={CONFIG} onApply={vi.fn()} onClose={vi.fn()} />
+    )
+    expect(
+      screen.getByText(/don.t change the page layout in the preview or exported PDF yet/i)
+    ).toBeInTheDocument()
+  })
+
   it("renders with initialConfig's values pre-filled", () => {
     render(
       <PageSetupModal open={true} initialConfig={CONFIG} onApply={vi.fn()} onClose={vi.fn()} />
