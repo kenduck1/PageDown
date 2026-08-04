@@ -18,7 +18,13 @@ export const frontmatterNode = $nodeSchema('frontmatter', () => ({
   ],
   toDOM: (node) => [
     'div',
-    { 'data-type': 'frontmatter', 'data-value': node.attrs.value, contenteditable: 'false' },
+    {
+      'data-type': 'frontmatter',
+      'data-value': node.attrs.value,
+      contenteditable: 'false',
+      class:
+        'mb-4 rounded border border-border-chrome bg-chrome-light px-3 py-2 text-12 text-text-secondary'
+    },
     `Frontmatter (${String(node.attrs.value).split('\n').length} lines)`
   ],
   parseMarkdown: {
