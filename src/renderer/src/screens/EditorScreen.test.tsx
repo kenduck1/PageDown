@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, render, screen } from '@testing-library/react'
+import { cleanup, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import EditorScreen from './EditorScreen'
 import { useDocumentStore, initialDocumentState } from '../store/documentStore'
@@ -26,20 +26,25 @@ describe('EditorScreen', () => {
     expect(screen.getByText('Untitled')).toBeInTheDocument()
   })
 
-  it('shows the real file path and content for a loaded document', () => {
+  it('shows the real file path and content for a loaded document', async () => {
     useDocumentStore.setState({ filePath: '/tmp/report.md', content: '# Report\n\nBody text' })
     render(<EditorScreen />)
     expect(screen.getByText('/tmp/report.md')).toBeInTheDocument()
-    expect(screen.getByTestId('document-content')).toHaveTextContent('# Report')
+    await waitFor(() => {
+      expect(screen.getByTestId('document-content')).toHaveTextContent('Report')
+      expect(screen.getByTestId('document-content')).toHaveTextContent('Body text')
+    })
   })
 
-  it('shows the error message alongside content when the store has an error', () => {
+  it('shows the error message alongside content when the store has an error', async () => {
     useDocumentStore.setState({ error: 'File not found', content: '# Report' })
     render(<EditorScreen />)
     expect(screen.getByText('File not found')).toBeInTheDocument()
     // The error is a banner above the content, not a replacement for it: a
     // failed *save* says nothing about whether the loaded content is valid.
-    expect(screen.getByTestId('document-content')).toHaveTextContent('# Report')
+    await waitFor(() => {
+      expect(screen.getByTestId('document-content')).toHaveTextContent('Report')
+    })
   })
 
   it('saves the current document through window.api when "Save" is clicked', async () => {
