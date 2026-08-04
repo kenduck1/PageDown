@@ -45,8 +45,15 @@ test('Gate 8: getThumbnail generates a real PNG, caches it, and reports a correc
   expect(stats.size).toBeGreaterThan(0)
 
   // Second call for identical content must be a cache hit: same dataUrl,
-  // and — the actual proof it didn't regenerate — no new file appears.
+  // no new file appears, and — the real proof it didn't regenerate, since
+  // the deterministic hash-derived filename and deterministic render output
+  // mean a regression that always regenerates would still produce the same
+  // filename and likely the same bytes — the existing file's mtime is
+  // unchanged (an overwrite-on-regenerate would bump it even if the bytes
+  // happened to come out identical).
   const filesBefore = (await readdir(join(userDataDir, 'thumbnails'))).length
+  const statsBeforeSecondCall = await stat(join(userDataDir, 'thumbnails', pngFile))
+  const mtimeBeforeSecondCall = statsBeforeSecondCall.mtimeMs
   const second = await app.evaluate(async ({ BrowserWindow }, dir) => {
     const win = BrowserWindow.getAllWindows()[0]
     const globalAny = global as unknown as {
@@ -69,4 +76,7 @@ test('Gate 8: getThumbnail generates a real PNG, caches it, and reports a correc
   expect(second.dataUrl).toBe(first.dataUrl)
   expect(second.pageCount).toBe(first.pageCount)
   expect(filesAfter).toBe(filesBefore)
+
+  const statsAfterSecondCall = await stat(join(userDataDir, 'thumbnails', pngFile))
+  expect(statsAfterSecondCall.mtimeMs).toBe(mtimeBeforeSecondCall)
 })
