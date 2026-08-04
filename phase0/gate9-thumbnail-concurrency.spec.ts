@@ -1,10 +1,5 @@
-import {
-  test,
-  expect,
-  _electron as electron,
-  type ElectronApplication,
-  type Page
-} from '@playwright/test'
+import { test, expect, type ElectronApplication, type Page } from '@playwright/test'
+import { launchIsolatedApp } from './electron-launch'
 
 // Regression test for a real, verified bug: `src/main/thumbnail-generator.ts`'s
 // `getThumbnail` drives a single shared sandboxed pagination harness
@@ -72,9 +67,12 @@ async function getMainWindow(app: ElectronApplication): Promise<Page> {
 
 let app: ElectronApplication
 let win: Page
+let close: () => Promise<void>
 
 test.beforeAll(async () => {
-  app = await electron.launch({ args: ['out/main/index.js'] })
+  const isolated = await launchIsolatedApp(['out/main/index.js'])
+  app = isolated.app
+  close = isolated.close
   win = await getMainWindow(app)
   // Belt-and-suspenders: `getMainWindow` already waits for
   // 'domcontentloaded', but the preload script's contextBridge calls
@@ -84,7 +82,7 @@ test.beforeAll(async () => {
 })
 
 test.afterAll(async () => {
-  await app.close()
+  await close()
 })
 
 test('Gate 9: concurrent getTemplateThumbnail calls all succeed (no harness race)', async () => {
