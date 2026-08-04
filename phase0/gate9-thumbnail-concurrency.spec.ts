@@ -134,4 +134,18 @@ test('Gate 9: concurrent getTemplateThumbnail calls all succeed (no harness race
     expect(result.dataUrl).toMatch(/^data:image\/png;base64,/)
     expect(result.pageCount).toBeGreaterThanOrEqual(1)
   }
+
+  // The real property this gate exists to prove isn't just "three promises
+  // resolved" — it's "three callers each got their OWN document's page,"
+  // not three copies of whichever one happened to win a race. Three
+  // distinct dataUrls is direct evidence of that; three identical ones
+  // (even if each individually looks like a plausible PNG) would mean the
+  // harness silently served one caller's result to multiple callers.
+  const dataUrls = results
+    .filter(
+      (r): r is { status: 'fulfilled'; dataUrl: string; pageCount: number } =>
+        r.status === 'fulfilled'
+    )
+    .map((r) => r.dataUrl)
+  expect(new Set(dataUrls).size).toBe(3)
 })

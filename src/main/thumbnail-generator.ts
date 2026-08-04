@@ -59,6 +59,16 @@ function getHarness(win: BaseWindow): Promise<PaginationHarness> {
   if (!harnessPromise) {
     harnessPromise = createPaginationHarness(win).then((harness) => {
       harness.view.setBounds({ x: -9999, y: -9999, width: 816, height: 1056 })
+      // If the underlying WebContentsView is ever destroyed (e.g. its
+      // parent BaseWindow closes — see CLAUDE.md's note on the
+      // file:getThumbnail/template:getThumbnail handlers closing over a
+      // single mainWindow with no macOS re-activate rebinding), drop the
+      // memoized promise so the NEXT getThumbnail call creates a fresh
+      // harness instead of silently failing every cache-miss request for
+      // the rest of the app session against a dead view.
+      harness.view.webContents.once('destroyed', () => {
+        harnessPromise = null
+      })
       return harness
     })
   }
@@ -97,7 +107,22 @@ export async function getThumbnail(
     const { html } = markdownToHtml(content)
     const result = await harness.sendDocument(html)
 
+    // sendDocument resolves once the render context publishes its result,
+    // immediately after Paged.js finishes mutating the DOM — nothing
+    // guarantees the compositor has actually painted that frame yet.
+    // Waiting two animation frames (not one — the first rAF fires before
+    // the current frame is presented, the callback passed to it fires
+    // after) is the standard "wait for the next real paint" pattern.
+    // Without this, a mis-timed capture could be cached permanently under
+    // the wrong content's hash.
+    await harness.view.webContents.executeJavaScript(
+      'new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)))'
+    )
+
     const image = await harness.view.webContents.capturePage()
+    if (image.isEmpty()) {
+      throw new Error('Captured thumbnail image was empty — refusing to cache a blank result')
+    }
     const resized = image.resize({ width: THUMBNAIL_WIDTH })
     const png = resized.toPNG()
 

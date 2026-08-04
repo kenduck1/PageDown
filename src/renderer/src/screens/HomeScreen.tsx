@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useAppStore } from '../store/appStore'
 import { useDocumentStore } from '../store/documentStore'
 import { useThumbnail } from '../hooks/useThumbnail'
@@ -59,7 +59,7 @@ function RecentRow({
   onSelect: () => void
 }): React.JSX.Element {
   const thumbnail = useThumbnail(entry.filePath, () => window.api.getThumbnail(entry.filePath))
-  const filename = entry.filePath.split('/').pop() ?? entry.filePath
+  const filename = entry.filePath.split(/[/\\]/).pop() ?? entry.filePath
 
   return (
     <button
@@ -92,6 +92,8 @@ function HomeScreen(): React.JSX.Element {
   const clearError = useDocumentStore((state) => state.clearError)
 
   const [recentFiles, setRecentFiles] = useState<RecentFileEntry[]>([])
+  const templatesSectionRef = useRef<HTMLElement>(null)
+  const recentSectionRef = useRef<HTMLElement>(null)
 
   useEffect(() => {
     window.api.getRecentFiles().then(setRecentFiles)
@@ -100,6 +102,12 @@ function HomeScreen(): React.JSX.Element {
   const handleNewDocument = (content?: string): void => {
     newDocument(content)
     goEditor()
+  }
+
+  const handleNavClick = (section: 'recent' | 'templates'): void => {
+    setHomeActiveSection(section)
+    const target = section === 'recent' ? recentSectionRef.current : templatesSectionRef.current
+    target?.scrollIntoView({ behavior: 'smooth', block: 'start' })
   }
 
   const handleOpenFile = async (): Promise<void> => {
@@ -129,13 +137,13 @@ function HomeScreen(): React.JSX.Element {
           Open file…
         </button>
         <button
-          onClick={() => setHomeActiveSection('recent')}
+          onClick={() => handleNavClick('recent')}
           className={`rounded-md px-3 py-2 text-left text-13 ${homeActiveSection === 'recent' ? 'bg-accent/9 font-semibold text-accent' : 'text-text-primary'}`}
         >
           Recent
         </button>
         <button
-          onClick={() => setHomeActiveSection('templates')}
+          onClick={() => handleNavClick('templates')}
           className={`rounded-md px-3 py-2 text-left text-13 ${homeActiveSection === 'templates' ? 'bg-accent/9 font-semibold text-accent' : 'text-text-primary'}`}
         >
           Templates
@@ -158,7 +166,7 @@ function HomeScreen(): React.JSX.Element {
           </div>
         )}
 
-        <section className="mb-8">
+        <section ref={templatesSectionRef} className="mb-8">
           <h2 className="mb-3 text-11 font-bold uppercase tracking-[.05em] text-text-secondary">
             Start new
           </h2>
@@ -173,7 +181,7 @@ function HomeScreen(): React.JSX.Element {
           </div>
         </section>
 
-        <section>
+        <section ref={recentSectionRef}>
           <h2 className="mb-3 text-11 font-bold uppercase tracking-[.05em] text-text-secondary">
             Recent
           </h2>

@@ -134,4 +134,17 @@ describe('HomeScreen', () => {
     await user.click(screen.getByRole('button', { name: 'Settings' }))
     expect(useAppStore.getState().screen).toBe('settings')
   })
+
+  it('scrolls to the Templates section when the Templates nav item is clicked', async () => {
+    const user = userEvent.setup()
+    render(<HomeScreen />)
+
+    const scrollIntoViewSpy = vi.fn()
+    Element.prototype.scrollIntoView = scrollIntoViewSpy
+
+    await user.click(screen.getByRole('button', { name: 'Templates' }))
+
+    expect(scrollIntoViewSpy).toHaveBeenCalledWith({ behavior: 'smooth', block: 'start' })
+    expect(useAppStore.getState().homeActiveSection).toBe('templates')
+  })
 })
