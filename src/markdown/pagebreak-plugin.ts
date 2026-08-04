@@ -54,11 +54,22 @@ export function remarkPagebreak() {
       // as a direct root>html child, nor a mid-paragraph inline occurrence,
       // which stays embedded among text siblings, ever produces a paragraph
       // whose SOLE child is a matching html node) — so matching it here is
-      // safe without checking which pipeline produced it.
+      // safe without checking which pipeline produced it. `parent` here is
+      // the paragraph's OWN parent — i.e. what would have been the html
+      // node's grandparent before preset-commonmark's reparenting — so the
+      // same BLOCK_CONTAINER_TYPES check applies: preset-commonmark's own
+      // reparenting trigger includes `listItem` (not just `root`/
+      // `blockquote`), and without this check a marker inside a list item
+      // would incorrectly activate here even though it's excluded above and
+      // "unsupported in v1" per the design doc — verified this exact gap
+      // empirically before adding this check (a real Milkdown editor
+      // instance produced a `pagebreak` node inside a `list_item` without
+      // it, and correctly left it inert with it).
       if (
         node.type === 'paragraph' &&
         (node as Parent).children.length === 1 &&
-        isMatchingHtml((node as Parent).children[0])
+        isMatchingHtml((node as Parent).children[0]) &&
+        BLOCK_CONTAINER_TYPES.has(parent.type)
       ) {
         const pagebreak: Pagebreak = {
           type: 'pagebreak',

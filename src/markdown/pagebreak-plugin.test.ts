@@ -96,4 +96,38 @@ describe('remarkPagebreak', () => {
     remarkPagebreak()(tree)
     expect(tree.children[0].type).toBe('paragraph')
   })
+
+  it('does not promote a reparented marker inside a list item (unsupported in v1, same rule as the direct-html case)', () => {
+    // Simulates the exact shape preset-commonmark's remarkHtmlTransformer
+    // produces for a marker inside a list item — it reparents into
+    // paragraph{[html]} for listItem too, not just root/blockquote, so this
+    // regression can't be caught by the direct-html list-item test above.
+    const tree: Root = {
+      type: 'root',
+      children: [
+        {
+          type: 'list',
+          ordered: false,
+          spread: true,
+          children: [
+            {
+              type: 'listItem',
+              spread: true,
+              children: [
+                {
+                  type: 'paragraph',
+                  children: [{ type: 'html', value: '<!-- pagebreak -->' }]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+    remarkPagebreak()(tree)
+    const listItem = (tree.children[0] as { children: Root['children'] }).children[0] as {
+      children: Root['children']
+    }
+    expect(listItem.children[0].type).toBe('paragraph')
+  })
 })
