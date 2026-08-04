@@ -1,7 +1,8 @@
-import { test, expect, _electron as electron } from '@playwright/test'
+import { test, expect } from '@playwright/test'
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { markdownToHtml } from '../src/markdown/pipeline'
+import { launchIsolatedApp } from './electron-launch'
 
 // Same two mechanical deviations from the brief's literal sample as every
 // other Phase 0 gate spec (see gate1/gate5/gate7's own comments for the
@@ -28,7 +29,7 @@ interface SendDocumentResult {
 }
 
 test('Gate 3: Mermaid diagrams render with non-zero, deterministic size in the WebContentsView render context', async () => {
-  const app = await electron.launch({ args: ['.'] })
+  const { app, close } = await launchIsolatedApp(['.'])
 
   const markdown = readFileSync(join(__dirname, 'corpus', 'mermaid-diagrams.md'), 'utf8')
   const { html } = markdownToHtml(markdown)
@@ -121,11 +122,11 @@ test('Gate 3: Mermaid diagrams render with non-zero, deterministic size in the W
   )
   expect(sequence.width).toBe(624)
 
-  await app.close()
+  await close()
 })
 
 test('Gate 3: oversized-diagram page-break behavior is deterministic, and CSP still blocks script injection alongside Mermaid styling', async () => {
-  const app = await electron.launch({ args: ['.'] })
+  const { app, close } = await launchIsolatedApp(['.'])
 
   const markdown = readFileSync(join(__dirname, 'corpus', 'mermaid-diagrams.md'), 'utf8')
   const { html } = markdownToHtml(markdown)
@@ -422,5 +423,5 @@ test('Gate 3: oversized-diagram page-break behavior is deterministic, and CSP st
     )
   )
 
-  await app.close()
+  await close()
 })

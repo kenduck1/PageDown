@@ -1,8 +1,9 @@
-import { test, expect, _electron as electron } from '@playwright/test'
+import { test, expect } from '@playwright/test'
 import { readFileSync, writeFileSync, mkdirSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { markdownToHtml } from '../src/markdown/pipeline'
 import { PDFDocument, PDFName, PDFDict, PDFArray, PDFRef } from 'pdf-lib'
+import { launchIsolatedApp } from './electron-launch'
 
 // Same mechanical deviations from the brief's literal sample as every other
 // Phase 0 gate spec (see gate1/gate5/gate7's own comments for the full
@@ -230,7 +231,7 @@ const SUBSEQUENCE_ONLY_FILES = new Set([
 
 test('Gate 4: exported PDF page count and per-page text match the on-screen Paged.js rendering across the reference corpus', async () => {
   test.setTimeout(90_000)
-  const app = await electron.launch({ args: ['.'] })
+  const { app, close } = await launchIsolatedApp(['.'])
   const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs')
 
   const corpusDir = join(__dirname, 'corpus')
@@ -619,11 +620,11 @@ test('Gate 4: exported PDF page count and per-page text match the on-screen Page
     )
   )
 
-  await app.close()
+  await close()
 })
 
 test('Gate 4: split-block fragmentation — a table split across a page boundary becomes two separate structure elements, not one linked table', async () => {
-  const app = await electron.launch({ args: ['.'] })
+  const { app, close } = await launchIsolatedApp(['.'])
 
   // A synthetic table, not one of the pinned reference-corpus fixtures —
   // `tables-spanning-pages.md` (the corpus fixture apparently built for
@@ -811,11 +812,11 @@ test('Gate 4: split-block fragmentation — a table split across a page boundary
     'the two Table fragments must point at two DIFFERENT page objects'
   ).not.toBe([...secondTableLeafPages][0])
 
-  await app.close()
+  await close()
 })
 
 test('Gate 4: running header/footer/page-number content is excluded from the tagged structure tree entirely (not tagged as ordinary content)', async () => {
-  const app = await electron.launch({ args: ['.'] })
+  const { app, close } = await launchIsolatedApp(['.'])
   const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs')
 
   // 45 short body paragraphs — enough to force several real pages so the
@@ -1078,5 +1079,5 @@ test('Gate 4: running header/footer/page-number content is excluded from the tag
     'header/footer content is expected to be drawn with NO explicit /Artifact marked-content tag anywhere on this page (excluded from the tag tree by omission, not via /Artifact) — if this is now true, Chromium may have started using /Artifact for @page margin-box content, which would be worth updating the findings doc over'
   ).toBe(false)
 
-  await app.close()
+  await close()
 })
