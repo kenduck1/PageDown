@@ -1,6 +1,7 @@
-import { test, _electron as electron } from '@playwright/test'
+import { test } from '@playwright/test'
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs'
 import { join } from 'node:path'
+import { launchIsolatedApp } from './electron-launch'
 
 // The brief's sample resolves corpus fixture paths via
 // `new URL(..., import.meta.url)` and reaches `createPaginationHarness` /
@@ -24,7 +25,7 @@ const sizes = [
 ]
 
 test('Gate 2: measure full-pipeline re-pagination time across document sizes', async () => {
-  const app = await electron.launch({ args: ['.'] })
+  const { app, close } = await launchIsolatedApp(['.'])
 
   const markdownByFile: Record<string, string> = {}
   for (const { file } of sizes) {
@@ -121,5 +122,5 @@ test('Gate 2: measure full-pipeline re-pagination time across document sizes', a
     )
   )
 
-  await app.close()
+  await close()
 })
