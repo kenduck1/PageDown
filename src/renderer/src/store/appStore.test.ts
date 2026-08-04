@@ -74,4 +74,19 @@ describe('useAppStore', () => {
     useAppStore.getState().closePageSetup()
     expect(useAppStore.getState().pageSetupOpen).toBe(false)
   })
+
+  it('starts with recent as the active home section', () => {
+    expect(useAppStore.getState().homeActiveSection).toBe('recent')
+  })
+
+  it('setHomeActiveSection switches sections without touching screen', () => {
+    useAppStore.getState().setHomeActiveSection('templates')
+    expect(useAppStore.getState().homeActiveSection).toBe('templates')
+    expect(useAppStore.getState().screen).toBe('home')
+  })
+
+  it('goSettings switches screen to settings', () => {
+    useAppStore.getState().goSettings()
+    expect(useAppStore.getState().screen).toBe('settings')
+  })
 })
