@@ -155,7 +155,34 @@ describe('MilkdownEditor', () => {
     expect(onError.mock.calls[0]?.[0]).toEqual(expect.stringContaining('Doc type error'))
   })
 
-  it('getMarkdown (via ref) reflects a real edit before the debounced onChange fires', async () => {
+  it('flush() (via ref) is a no-op when called with zero edits since mount', async () => {
+    const onChange = vi.fn()
+    const onError = vi.fn()
+    const ref = createRef<MilkdownEditorHandle>()
+    const { container } = render(
+      <MilkdownEditor ref={ref} content="# Hello" onChange={onChange} onError={onError} />
+    )
+
+    await waitFor(() => {
+      expect(container.querySelector('.ProseMirror')).toBeInTheDocument()
+    })
+
+    // Review-round finding (see task-8-report.md): flush() must be a no-op
+    // right after mount, before any edit -- otherwise every Save click (or
+    // Home-navigation flush) on an untouched document would silently
+    // re-serialize it through Milkdown's canonical stringify form. This
+    // also guards against the concrete false positive that was found and
+    // fixed here: preset-commonmark's own internal heading-ID-assignment
+    // plugin dispatches a synthetic post-mount transaction with
+    // `docChanged: true` (but `addToHistory: false`), which without the
+    // addToHistory filter in MilkdownEditor.tsx's editedTrackerProse plugin
+    // would incorrectly flip the edited flag on every single mount, not
+    // just on a real user edit.
+    ref.current?.flush()
+    expect(onChange).not.toHaveBeenCalled()
+  })
+
+  it('flush() (via ref) pushes a real edit through onChange before the debounced onChange fires', async () => {
     const onChange = vi.fn()
     const onError = vi.fn()
     const ref = createRef<MilkdownEditorHandle>()
@@ -169,18 +196,6 @@ describe('MilkdownEditor', () => {
       return el as HTMLElement
     })
 
-    // Review-round finding (see task-8-report.md): getMarkdown() must be
-    // null right after mount, before any edit -- otherwise every Save click
-    // on an untouched document would silently re-serialize it through
-    // Milkdown's canonical stringify form. This also guards against the
-    // concrete false positive that was found and fixed here:
-    // preset-commonmark's own internal heading-ID-assignment plugin
-    // dispatches a synthetic post-mount transaction with `docChanged: true`
-    // (but `addToHistory: false`), which without the addToHistory filter in
-    // MilkdownEditor.tsx's editedTrackerProse plugin would incorrectly flip
-    // the edited flag on every single mount, not just on a real user edit.
-    expect(ref.current?.getMarkdown()).toBeNull()
-
     const h1 = proseMirror.querySelector('h1')
     if (!h1?.firstChild) throw new Error('expected a text node inside the mounted h1')
     const range = document.createRange()
@@ -193,20 +208,26 @@ describe('MilkdownEditor', () => {
 
     // ProseMirror's own MutationObserver needs one tick to turn the DOM
     // mutation into a real transaction (same mechanism the existing "real
-    // edit" test above already relies on) -- but this wait must stay well
-    // under plugin-listener's 200ms debounce, which is exactly the property
-    // under test. If this is flaky at 100ms, that's useful information about
-    // the actual mutation-to-transaction latency in this jsdom environment --
-    // adjust the timeout empirically rather than widening it past ~150ms,
-    // which would stop distinguishing this test from the debounced case.
+    // edit" test above already relies on) before editedSinceMountRef flips
+    // and flush() has anything to push -- so flush() is called repeatedly
+    // from inside waitFor's own polling predicate rather than once, up
+    // front. This wait must stay well under plugin-listener's 200ms
+    // debounce, which is exactly the property under test. If this is flaky
+    // at 100ms, that's useful information about the actual
+    // mutation-to-transaction latency in this jsdom environment -- adjust
+    // the timeout empirically rather than widening it past ~150ms, which
+    // would stop distinguishing this test from the debounced case.
     await waitFor(
       () => {
-        expect(ref.current?.getMarkdown()).toContain('World')
+        ref.current?.flush()
+        expect(onChange).toHaveBeenCalled()
       },
       { timeout: 100 }
     )
-    // The whole point of this fix: getMarkdown() via the ref must see the
-    // edit before onChange's debounce has had any chance to fire.
-    expect(onChange).not.toHaveBeenCalled()
+    // The whole point of this fix: flush() via the ref must push the edit
+    // through onChange before onChange's own debounce has had any chance to
+    // fire on its own.
+    expect(onChange).toHaveBeenCalledTimes(1)
+    expect(onChange.mock.calls[0]?.[0]).toContain('World')
   })
 })

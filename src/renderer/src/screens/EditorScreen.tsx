@@ -9,6 +9,7 @@ function EditorScreen(): React.JSX.Element {
   const content = useDocumentStore((state) => state.content)
   const revision = useDocumentStore((state) => state.revision)
   const updateContent = useDocumentStore((state) => state.updateContent)
+  const isDirty = useDocumentStore((state) => state.isDirty)
   const error = useDocumentStore((state) => state.error)
   const clearError = useDocumentStore((state) => state.clearError)
   const save = useDocumentStore((state) => state.save)
@@ -18,20 +19,33 @@ function EditorScreen(): React.JSX.Element {
     // @milkdown/plugin-listener's onChange fires through an internal 200ms
     // debounce (see CLAUDE.md) -- if the user clicks Save within that
     // window of their last keystroke, documentStore.content can still hold
-    // the PRE-edit value. Pull the editor's true current markdown directly
-    // and sync it into the store before saving, rather than trusting
-    // onChange to have already landed.
-    const latest = editorRef.current?.getMarkdown()
-    if (latest !== undefined && latest !== null && latest !== content) {
-      updateContent(latest)
-    }
+    // the PRE-edit value. flush() reads the editor's true current markdown
+    // and pushes it through onChange (= updateContent) synchronously, IF
+    // AND ONLY IF a real edit happened since mount -- a no-op otherwise, so
+    // it's always safe to call defensively here.
+    editorRef.current?.flush()
     await save()
+  }
+
+  const handleGoHome = async (): Promise<void> => {
+    if (!isDirty) {
+      goHome()
+      return
+    }
+    const choice = await window.api.confirmDiscardChanges()
+    if (choice === 'cancel') return
+    if (choice === 'save') {
+      editorRef.current?.flush()
+      await save()
+      if (useDocumentStore.getState().error) return // save failed -- stay, don't lose the document
+    }
+    goHome()
   }
 
   return (
     <div className="flex h-full flex-col bg-canvas font-sans text-text-primary">
       <div className="flex h-10 items-center gap-3 border-b border-border-chrome bg-chrome-dark px-3">
-        <button onClick={goHome} className="text-12 text-text-secondary">
+        <button onClick={() => void handleGoHome()} className="text-12 text-text-secondary">
           ← Home
         </button>
         <span className="text-12 text-text-secondary">{filePath ?? 'Untitled'}</span>
