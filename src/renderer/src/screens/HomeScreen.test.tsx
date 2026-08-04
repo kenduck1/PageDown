@@ -12,9 +12,11 @@ beforeEach(() => {
     openFile: vi.fn(),
     openPath: vi.fn(),
     saveFile: vi.fn(),
-    getRecentFiles: vi.fn(),
-    getThumbnail: vi.fn(),
-    getTemplateThumbnail: vi.fn()
+    getRecentFiles: vi.fn().mockResolvedValue([]),
+    getThumbnail: vi.fn().mockResolvedValue({ dataUrl: 'data:image/png;base64,x', pageCount: 1 }),
+    getTemplateThumbnail: vi
+      .fn()
+      .mockResolvedValue({ dataUrl: 'data:image/png;base64,x', pageCount: 1 })
   }
 })
 
@@ -82,5 +84,54 @@ describe('HomeScreen', () => {
 
     expect(useDocumentStore.getState().error).toBeNull()
     expect(screen.queryByText('Permission denied')).not.toBeInTheDocument()
+  })
+
+  it('renders all 4 template cards', () => {
+    render(<HomeScreen />)
+    expect(screen.getByText('Blank')).toBeInTheDocument()
+    expect(screen.getByText('Résumé')).toBeInTheDocument()
+    expect(screen.getByText('Letter')).toBeInTheDocument()
+    expect(screen.getByText('Report')).toBeInTheDocument()
+  })
+
+  it('creates a document with the résumé starter content and navigates on Résumé card click', async () => {
+    const user = userEvent.setup()
+    render(<HomeScreen />)
+
+    await user.click(screen.getByText('Résumé'))
+
+    expect(useDocumentStore.getState().content).toContain('Jordan Rivera')
+    expect(useAppStore.getState().screen).toBe('editor')
+  })
+
+  it('shows an empty state when there are no recent files', async () => {
+    vi.mocked(window.api.getRecentFiles).mockResolvedValue([])
+    render(<HomeScreen />)
+    expect(await screen.findByText('No recent documents yet')).toBeInTheDocument()
+  })
+
+  it('renders recent files and opens one on click', async () => {
+    vi.mocked(window.api.getRecentFiles).mockResolvedValue([
+      { filePath: '/tmp/report.md', editedAt: new Date().toISOString() }
+    ])
+    vi.mocked(window.api.openPath).mockResolvedValue({
+      filePath: '/tmp/report.md',
+      content: '# Report'
+    })
+    const user = userEvent.setup()
+    render(<HomeScreen />)
+
+    const row = await screen.findByText('report.md')
+    await user.click(row)
+
+    expect(useDocumentStore.getState().filePath).toBe('/tmp/report.md')
+    expect(useAppStore.getState().screen).toBe('editor')
+  })
+
+  it('navigates to Settings when the Settings nav item is clicked', async () => {
+    const user = userEvent.setup()
+    render(<HomeScreen />)
+    await user.click(screen.getByRole('button', { name: 'Settings' }))
+    expect(useAppStore.getState().screen).toBe('settings')
   })
 })
