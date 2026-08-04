@@ -15,6 +15,39 @@ export function hashContent(content: string): string {
   return createHash('sha256').update(content, 'utf8').digest('hex')
 }
 
+// Serializes every call that actually dispatches into the shared harness
+// below. Required because resources/pagination-render/index.ts's render
+// context tracks only ONE in-flight request at a time (a single
+// `currentRequestId` module variable) and silently drops the result of any
+// request that isn't the most recently dispatched one — a second
+// `sendDocument` call before the first's pagination finishes makes the
+// first's eventual result vanish, and its caller in `pagination-window.ts`
+// spins until its own 10s poll deadline and throws a timeout. This was
+// never a problem for this harness's original callers (Phase 0 gates, each
+// awaiting one full round trip before starting the next), but HomeScreen
+// mounts several TemplateCard/RecentRow components in the same render
+// pass, each independently calling getThumbnail on mount — a genuinely new
+// concurrent-caller pattern this harness was never designed for. Found and
+// verified via manual `pnpm dev` testing during the Home Screen
+// sub-project's HomeScreen task: 2 of 3 concurrent calls failed with
+// "Pagination harness timed out waiting for a result" before this fix;
+// sequential calls always succeeded.
+let harnessQueue: Promise<unknown> = Promise.resolve()
+
+function enqueueHarnessWork<T>(task: () => Promise<T>): Promise<T> {
+  const result = harnessQueue.then(task)
+  // Chain the queue's tail through a value- and rejection-swallowing
+  // continuation, not `result` directly — otherwise one rejected thumbnail
+  // request would permanently wedge the queue, since a rejected promise
+  // used as the next `.then()`'s receiver short-circuits every subsequent
+  // `.then()` in the chain.
+  harnessQueue = result.then(
+    () => undefined,
+    () => undefined
+  )
+  return result
+}
+
 let harnessPromise: Promise<PaginationHarness> | null = null
 
 // Lazily created, then reused for every getThumbnail call within this app
@@ -59,16 +92,18 @@ export async function getThumbnail(
     // regeneration rather than a hard failure.
   }
 
-  const harness = await getHarness(win)
-  const { html } = markdownToHtml(content)
-  const result = await harness.sendDocument(html)
+  return enqueueHarnessWork(async () => {
+    const harness = await getHarness(win)
+    const { html } = markdownToHtml(content)
+    const result = await harness.sendDocument(html)
 
-  const image = await harness.view.webContents.capturePage()
-  const resized = image.resize({ width: THUMBNAIL_WIDTH })
-  const png = resized.toPNG()
+    const image = await harness.view.webContents.capturePage()
+    const resized = image.resize({ width: THUMBNAIL_WIDTH })
+    const png = resized.toPNG()
 
-  await writeFile(pngPath, png)
-  await writeFile(jsonPath, JSON.stringify({ pageCount: result.pageCount }))
+    await writeFile(pngPath, png)
+    await writeFile(jsonPath, JSON.stringify({ pageCount: result.pageCount }))
 
-  return { dataUrl: resized.toDataURL(), pageCount: result.pageCount }
+    return { dataUrl: resized.toDataURL(), pageCount: result.pageCount }
+  })
 }
