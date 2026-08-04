@@ -24,6 +24,52 @@ describe('markdownToHtml', () => {
     expect(matches).toHaveLength(2)
   })
 
+  it('preserves a safe span, dropping its class attribute', () => {
+    const { html } = markdownToHtml('<span class="highlight">inline HTML</span>')
+    expect(html).toContain('<span>inline HTML</span>')
+  })
+
+  it('preserves a safe block div and its inner content', () => {
+    const { html } = markdownToHtml('<div class="callout">\nThis is raw HTML.\n</div>')
+    expect(html).toContain('This is raw HTML.')
+    expect(html).toContain('<div')
+  })
+
+  it('strips a script tag entirely', () => {
+    const { html } = markdownToHtml('<script>alert(1)</script>')
+    expect(html).not.toContain('alert(1)')
+    expect(html).not.toContain('<script')
+  })
+
+  it('strips an onclick handler but keeps the element', () => {
+    const { html } = markdownToHtml('<div onclick="alert(1)">text</div>')
+    expect(html).not.toContain('onclick')
+    expect(html).toContain('text')
+  })
+
+  it('strips a forged data-src-* attribute pair', () => {
+    const { html } = markdownToHtml('<div data-src-start="0" data-src-end="999">forged</div>')
+    expect(html).not.toContain('data-src-start')
+    expect(html).not.toContain('data-src-end')
+    expect(html).toContain('forged')
+  })
+
+  it('preserves wrapping when a raw-HTML tag is interleaved with real Markdown', () => {
+    const { html } = markdownToHtml('Some <span>text **bold** more</span> here.')
+    expect(html).toContain('<span>text <strong>bold</strong> more</span>')
+  })
+
+  it('strips a dangerous attribute even when the tag is interleaved with real Markdown', () => {
+    const { html } = markdownToHtml('Some <span onclick="alert(1)">text **bold** more</span> here.')
+    expect(html).not.toContain('onclick')
+    expect(html).toContain('<span>text <strong>bold</strong> more</span>')
+  })
+
+  it('still emits pagedown-pagebreak divs correctly alongside whole-tree sanitization', () => {
+    const { html } = markdownToHtml('One.\n\n<!-- pagebreak -->\n\nTwo.')
+    expect(html).toContain('<div class="pagedown-pagebreak"></div>')
+  })
+
   it('preserves raw-HTML content from the raw-html.md corpus fixture instead of dropping it', () => {
     const source = readFileSync(join(__dirname, '../../phase0/corpus/raw-html.md'), 'utf-8')
     const { html } = markdownToHtml(source)
@@ -46,8 +92,8 @@ describe('markdownToHtml', () => {
 
     // short.md has no raw HTML or pagebreak content at all, so this is a
     // direct regression check that the new pipeline stages (remarkPagebreak,
-    // the two new remark-rehype handlers) don't change source-map behavior
-    // on documents that never touch them.
+    // raw(), sanitize()) don't change source-map behavior on documents that
+    // never touch them.
     expect(sourceMap).toBeDefined()
     expect(typeof sourceMap.htmlOffsetToSrc).toBe('function')
   })
