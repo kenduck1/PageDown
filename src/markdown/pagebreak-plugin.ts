@@ -1,6 +1,7 @@
 import { visit } from 'unist-util-visit'
 import type { Root, Html, Parent } from 'mdast'
 import type { Node } from 'unist'
+import type { Processor } from 'unified'
 
 export interface Pagebreak extends Node {
   type: 'pagebreak'
@@ -39,4 +40,32 @@ export function remarkPagebreak() {
       parent.children[index] = pagebreak
     })
   }
+}
+
+// Teaches mdast-util-to-markdown (the serializer remark-stringify wraps)
+// how to print a `pagebreak` node — needed only by Milkdown's internal
+// remark pipeline, which serializes ProseMirror content back to Markdown
+// text. markdownToHtml never serializes back to Markdown, so it never
+// needs this half of the plugin — only the parse-time transform above.
+//
+// `this` must be accessed directly in the attacher body, not in a returned
+// transformer: unified only binds `this` to the processor for the attacher
+// call itself (`attacher.call(self, ...options)` in unified/lib/index.js's
+// `freeze()`). A transformer returned from an attacher is later invoked by
+// trough's `wrap()` as a bare function call, so `this` inside it is
+// `undefined` — verified empirically (TypeError: Cannot read properties of
+// undefined (reading 'data')) and by reading unified's and trough's source.
+// This mirrors remark-frontmatter's actual real source
+// (node_modules/remark-frontmatter/lib/index.js), which reads `this.data()`
+// directly in its attacher body and returns nothing, not a transformer.
+export function remarkPagebreakToMarkdown(this: Processor) {
+  const data = this.data() as { toMarkdownExtensions?: unknown[] }
+  const extensions = data.toMarkdownExtensions ?? (data.toMarkdownExtensions = [])
+  extensions.push({
+    handlers: {
+      pagebreak() {
+        return '<!-- pagebreak -->'
+      }
+    }
+  })
 }
