@@ -12,6 +12,7 @@ import {
 import { paginateAndTime } from '../pagination/paginate'
 import { exportToPdf } from '../export/export-pdf'
 import { getThumbnail } from './thumbnail-generator'
+import { getPageCount } from './page-count-generator'
 import {
   openFileDialog,
   readFileByPath,
@@ -203,6 +204,19 @@ app.whenReady().then(() => {
 
   ipcMain.handle('template:getThumbnail', async (_event, content: string) => {
     return getThumbnail(mainWindow, content, app.getPath('userData'))
+  })
+
+  // Status bar's real page-count display (EditorStatusBar.tsx / the
+  // usePageCount hook). Takes raw content directly, the same as
+  // `template:getThumbnail` above -- no `isKnownPath` check needed since
+  // this never touches a filesystem path, only in-memory content already
+  // held by the renderer. Uses its own dedicated harness/queue/window
+  // (`page-count-generator.ts`), deliberately not sharing `getThumbnail`'s
+  // harness or `mainWindow` itself -- see that file's own module comment
+  // for why it owns a private, never-shown BaseWindow instead of attaching
+  // to the real app window the way every other harness here does.
+  ipcMain.handle('file:getPageCount', async (_event, content: string) => {
+    return getPageCount(content)
   })
 
   ipcMain.handle('dialog:confirmDiscard', () => confirmDiscardChanges(mainWindow))

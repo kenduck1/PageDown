@@ -10,6 +10,7 @@ beforeEach(() => {
     getRecentFiles: vi.fn(),
     getThumbnail: vi.fn(),
     getTemplateThumbnail: vi.fn(),
+    getPageCount: vi.fn(),
     confirmDiscardChanges: vi.fn()
   }
 })
