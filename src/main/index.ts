@@ -277,13 +277,24 @@ app.whenReady().then(() => {
   ipcMain.handle('dialog:confirmDiscard', () => confirmDiscardChanges(mainWindow))
 
   // Real Export PDF plumbing (see src/main/pdf-exporter.ts): no isKnownPath
-  // check needed here, unlike file:save/file:openPath -- the destination
-  // path comes from a real dialog.showSaveDialog() result inside
+  // check needed for the SAVE DESTINATION, unlike file:save/file:openPath --
+  // that path comes from a real dialog.showSaveDialog() result inside
   // exportDocumentToPdf, not from a renderer-supplied path, so it's already
   // vetted the same way a Save-As dialog's chosen path is (see CLAUDE.md's
-  // File I/O security invariant section).
-  ipcMain.handle('file:exportPdf', (_event, content: string) =>
-    exportDocumentToPdf(mainWindow, content)
+  // File I/O security invariant section). `filePath` (the SOURCE document,
+  // used only to resolve local image references for the export) IS a
+  // renderer-supplied path and IS validated here -- same drop-not-throw
+  // treatment as file:getPageCount just above: an export never strictly
+  // needs the source path, so an unknown/stale one just means local images
+  // in the exported PDF resolve to nothing rather than a failed export.
+  ipcMain.handle(
+    'file:exportPdf',
+    async (_event, content: string, filePath: string | null = null) => {
+      const userDataDir = app.getPath('userData')
+      const documentPath =
+        filePath && (await isKnownPath(userDataDir, filePath)) ? filePath : undefined
+      return exportDocumentToPdf(mainWindow, content, documentPath)
+    }
   )
 
   // Phase 0 spike wiring: prove the sandboxed pagination render harness

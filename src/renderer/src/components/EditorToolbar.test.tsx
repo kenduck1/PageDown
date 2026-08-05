@@ -256,7 +256,7 @@ describe('EditorToolbar', () => {
   })
 
   it('Export PDF calls window.api.exportPdf with the current document content', async () => {
-    useDocumentStore.setState({ content: '# Real document content' })
+    useDocumentStore.setState({ content: '# Real document content', filePath: null })
     const ref = createRef<MilkdownEditorHandle>()
     const user = userEvent.setup()
     render(<EditorToolbar editorRef={ref} />)
@@ -264,7 +264,27 @@ describe('EditorToolbar', () => {
     await user.click(screen.getByRole('button', { name: /Export PDF/ }))
 
     await waitFor(() => {
-      expect(window.api.exportPdf).toHaveBeenCalledWith('# Real document content')
+      expect(window.api.exportPdf).toHaveBeenCalledWith('# Real document content', null)
+    })
+  })
+
+  it("Export PDF forwards the document's own file path, so local image references can resolve", async () => {
+    // filePath is what src/main/pdf-exporter.ts uses to resolve the
+    // document's local image references against its own directory --
+    // without it, every local image in the exported PDF resolves to
+    // nothing, matching usePageCount's own filePath forwarding.
+    useDocumentStore.setState({
+      content: '# Doc',
+      filePath: '/Users/someone/notes/report.md'
+    })
+    const ref = createRef<MilkdownEditorHandle>()
+    const user = userEvent.setup()
+    render(<EditorToolbar editorRef={ref} />)
+
+    await user.click(screen.getByRole('button', { name: /Export PDF/ }))
+
+    await waitFor(() => {
+      expect(window.api.exportPdf).toHaveBeenCalledWith('# Doc', '/Users/someone/notes/report.md')
     })
   })
 
