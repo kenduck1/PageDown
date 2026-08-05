@@ -41,6 +41,42 @@ interface DocumentState extends DocumentStateValues {
   openPath: (filePath: string) => Promise<boolean>
   save: () => Promise<void>
   updateContent: (content: string) => void
+  // Same update as updateContent, but targets an EXPLICIT tab id rather
+  // than "whichever tab is active right now" -- needed because
+  // MilkdownEditor's onChange can fire asynchronously (its own 200ms
+  // plugin-listener debounce, or the flush() its unmount cleanup calls)
+  // AFTER activeTabId has already changed. Real, reproduced bug this
+  // closes: switchTab/openTab/closeTab all change activeTabId AND bump
+  // revision synchronously (in the same tab-bar click handler); the
+  // revision bump forces EditorScreen's key={revision} to remount
+  // MilkdownEditor, whose OUTGOING instance's unmount cleanup calls
+  // flush() to push any not-yet-debounced edit through onChange. If
+  // onChange were still `updateContent` (which reads state.activeTabId at
+  // CALL time, not at bind time), that final flush from the tab being
+  // LEFT would land in the tab being SWITCHED TO instead -- silently
+  // moving/losing a just-typed edit the instant the user switches tabs
+  // within the debounce window. EditorScreen closes this by binding
+  // onChange to `(markdown) => updateContentForTab(activeTabId, markdown)`
+  // with `activeTabId` read from THIS render's hook value: since any
+  // change to activeTabId always bumps revision (forcing a fresh
+  // MilkdownEditor key), the activeTabId captured in the render that
+  // produced a given key={revision} instance is guaranteed correct for
+  // that instance's entire lifetime, even after the store's own
+  // activeTabId has since moved on.
+  updateContentForTab: (tabId: string, content: string) => void
+  // Same active-tab/mirror update as updateContent, but ALSO bumps revision
+  // -- for a content change that originates OUTSIDE the live mounted editor
+  // (e.g. Page Setup applying a frontmatter edit), not from the editor's own
+  // onChange. MilkdownEditor is uncontrolled after mount (content only seeds
+  // defaultValueCtx at construction -- see MilkdownEditor.tsx) and never
+  // re-reads the `content` prop on a later render, so a plain updateContent
+  // call here would update the store but leave the live editor showing its
+  // own stale in-memory document; the next real edit would then serialize
+  // and push THAT stale document back through onChange, silently reverting
+  // this change. Bumping revision forces EditorScreen's `key={revision}`
+  // remount, the same mechanism newDocument/loadDocument already rely on to
+  // re-seed the editor from fresh content.
+  replaceContent: (content: string) => void
   clearError: () => void
   openTab: (filePath: string | null, content: string) => void
   // Closing a dirty tab is a simple in-memory discard for this pass -- no
@@ -200,12 +236,26 @@ export const useDocumentStore = create<DocumentState>()((set, get) => ({
       set({ error: errorMessage(err) })
     }
   },
-  updateContent: (content) =>
+  updateContent: (content) => get().updateContentForTab(get().activeTabId, content),
+  updateContentForTab: (tabId, content) =>
+    set((state) => {
+      const tabs = state.tabs.map((tab) =>
+        tab.id === tabId ? { ...tab, content, isDirty: true } : tab
+      )
+      // The tab being updated may no longer be the active one (see this
+      // action's own doc comment above) -- only refresh the top-level
+      // mirror fields when it still is, so a late flush from a tab the
+      // user has already switched away from doesn't clobber what's
+      // currently on screen.
+      if (tabId !== state.activeTabId) return { tabs }
+      return { tabs, content, isDirty: true }
+    }),
+  replaceContent: (content) =>
     set((state) => {
       const tabs = state.tabs.map((tab) =>
         tab.id === state.activeTabId ? { ...tab, content, isDirty: true } : tab
       )
-      return { tabs, content, isDirty: true }
+      return { tabs, content, isDirty: true, revision: state.revision + 1 }
     }),
   clearError: () => set({ error: null })
 }))

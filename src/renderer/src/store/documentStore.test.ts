@@ -120,6 +120,54 @@ describe('useDocumentStore', () => {
       revision: before
     })
   })
+
+  it('replaceContent sets content, marks the document dirty, AND bumps revision', () => {
+    useDocumentStore.setState({ content: 'old', isDirty: false })
+    const before = useDocumentStore.getState().revision
+    useDocumentStore.getState().replaceContent('new content')
+    expect(useDocumentStore.getState()).toMatchObject({
+      content: 'new content',
+      isDirty: true,
+      revision: before + 1
+    })
+  })
+
+  it('replaceContent updates the active tab in the tabs array too', () => {
+    const tabId = useDocumentStore.getState().activeTabId
+    useDocumentStore.getState().replaceContent('new content')
+    const tab = useDocumentStore.getState().tabs.find((t) => t.id === tabId)
+    expect(tab).toMatchObject({ content: 'new content', isDirty: true })
+  })
+
+  it('updateContentForTab targeting the active tab behaves exactly like updateContent', () => {
+    const tabId = useDocumentStore.getState().activeTabId
+    useDocumentStore.getState().updateContentForTab(tabId, 'new content')
+    expect(useDocumentStore.getState()).toMatchObject({ content: 'new content', isDirty: true })
+  })
+
+  it('updateContentForTab targeting a tab that is NO LONGER active updates only that tab, not the on-screen mirror fields -- the exact race a late MilkdownEditor flush() can hit after a tab switch', () => {
+    const tabA = useDocumentStore.getState().activeTabId
+    useDocumentStore.getState().openTab('/b.md', '# B')
+    const tabB = useDocumentStore.getState().activeTabId
+    expect(tabB).not.toBe(tabA)
+
+    // Simulates the outgoing MilkdownEditor instance's unmount-triggered
+    // flush() landing AFTER the tab switch already moved activeTabId to
+    // tabB -- exactly what a real tab switch produces, since switchTab's
+    // revision bump and the resulting remount/flush aren't the same tick.
+    useDocumentStore.getState().updateContentForTab(tabA, 'edited after switching away')
+
+    const state = useDocumentStore.getState()
+    // The on-screen mirror fields must still reflect tabB, completely
+    // unaffected by tabA's late update.
+    expect(state).toMatchObject({ activeTabId: tabB, content: '# B', isDirty: false })
+    // But tabA's own entry in the tabs array DID pick up the edit -- it's
+    // not lost, just correctly filed under the tab that was actually
+    // edited rather than the tab that happened to be active when the
+    // update was flushed.
+    const tabAEntry = state.tabs.find((tab) => tab.id === tabA)
+    expect(tabAEntry).toMatchObject({ content: 'edited after switching away', isDirty: true })
+  })
 })
 
 describe('useDocumentStore tabs', () => {
