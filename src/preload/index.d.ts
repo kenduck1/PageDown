@@ -14,7 +14,7 @@ export interface FileApi {
   getTemplateThumbnail: (content: string) => Promise<{ dataUrl: string; pageCount: number }>
   getPageCount: (content: string, filePath?: string | null) => Promise<{ pageCount: number }>
   confirmDiscardChanges: () => Promise<'save' | 'discard' | 'cancel'>
-  exportPdf: (content: string) => Promise<{ filePath: string } | null>
+  exportPdf: (content: string, filePath?: string | null) => Promise<{ filePath: string } | null>
 }
 
 declare global {

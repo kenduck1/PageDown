@@ -127,6 +127,7 @@ function EditorToolbar({ editorRef }: EditorToolbarProps): ReactElement {
   const setViewMode = useAppStore((state) => state.setViewMode)
   const openPageSetup = useAppStore((state) => state.openPageSetup)
   const content = useDocumentStore((state) => state.content)
+  const filePath = useDocumentStore((state) => state.filePath)
   const [isExporting, setIsExporting] = useState(false)
   // Forces the paragraph-style <select> below to remount (fresh DOM node,
   // back to its uncontrolled default) after every use -- see
@@ -170,7 +171,11 @@ function EditorToolbar({ editorRef }: EditorToolbarProps): ReactElement {
     if (isExporting) return
     setIsExporting(true)
     try {
-      await window.api.exportPdf(content)
+      // filePath is what resolves local image references in the exported
+      // PDF against the document's own directory (src/main/pdf-exporter.ts)
+      // -- omitting it (an unsaved document) correctly denies all local
+      // assets, matching usePageCount's own filePath forwarding.
+      await window.api.exportPdf(content, filePath)
       // Deliberately does NOT touch documentStore.error on success. An
       // earlier version cleared it unconditionally here (`setState({ error:
       // null })`), which silently discarded any unrelated, pre-existing

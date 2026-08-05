@@ -3,6 +3,8 @@ import { mkdtemp, readFile, rm, stat } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { launchIsolatedApp } from './electron-launch'
+import { ONE_PX_PNG, TWO_PX_PNG, writeFixtureFile, readImageBoxes } from './asset-evidence'
+import { mergeRecentFiles, readRecentFiles, writeRecentFiles } from '../src/main/recent-files'
 
 // Real, end-to-end coverage for the new `file:exportPdf` IPC surface
 // (src/main/pdf-exporter.ts / src/main/index.ts / src/preload/index.ts):
@@ -201,6 +203,142 @@ test('Gate 13: exporting the same multi-paragraph document repeatedly in one app
     }
   } finally {
     await rm(fixtureDir, { recursive: true, force: true })
+  }
+
+  await close()
+})
+
+// Follow-up to the local-asset-loading plan (docs/superpowers/plans/
+// 2026-08-05-local-asset-loading.md): that plan wired local image
+// resolution into thumbnail and page-count generation, but deliberately
+// left PDF export untouched pending a decision on the plan/spec
+// contradiction its own final review flagged (see the GA-push decisions
+// log's "Local asset loading" entries) -- with local image geometry now
+// affecting the status bar's page count but not the exported PDF, a
+// document with local images would show e.g. "Page 1 of 4" while exporting
+// 6 pages, a NEW divergence that didn't exist when both surfaces
+// consistently rendered every local image at 0x0. These two tests close
+// that gap for exportPdf specifically, mirroring gate8/gate12's own
+// document-directory-confined local-asset test shape exactly (same fixture
+// PNGs, same readImageBoxes evidence helper -- see asset-evidence.ts).
+//
+// `file:exportPdf`'s source-document path is validated via `isKnownPath`
+// (src/main/index.ts), same as `file:getPageCount` -- so, like gate12's own
+// equivalent tests, the fixture document's path must be seeded into a real
+// recent-files.json before calling exportPdf, or the path is correctly,
+// securely dropped as unknown and the asset token is never registered at
+// all (verified the hard way: the first version of these two tests omitted
+// this and the "loads" case failed with the image src left completely
+// unrewritten -- proving isKnownPath's drop-not-throw path, not a bug in
+// the rewrite/protocol-handler code).
+async function seedRecentFile(userDataDir: string, filePath: string): Promise<void> {
+  const existing = await readRecentFiles(userDataDir)
+  await writeRecentFiles(
+    userDataDir,
+    mergeRecentFiles(existing, filePath, new Date().toISOString())
+  )
+}
+
+test('Gate 13: a local relative image reference in the document actually loads in the exported PDF (not silently 404ing)', async () => {
+  test.setTimeout(60_000)
+
+  const { app, close } = await launchIsolatedApp(['.'])
+  const win = await getMainWindow(app)
+  await win.waitForFunction(() => (window as unknown as { api?: unknown }).api !== undefined)
+  const userDataDir = await app.evaluate(({ app: electronApp }) => electronApp.getPath('userData'))
+
+  const fixtureDir = await mkdtemp(join(tmpdir(), 'pagedown-gate13-asset-'))
+  const docPath = join(fixtureDir, 'doc.md')
+  const targetPath = join(fixtureDir, 'export-with-image.pdf')
+
+  try {
+    await writeFixtureFile(join(fixtureDir, 'figures', 'gate13-chart.png'), ONE_PX_PNG)
+    const content = '# Gate 13 Local Image\n\n![chart](./figures/gate13-chart.png)\n\nBody text.\n'
+    await writeFixtureFile(docPath, content)
+    await seedRecentFile(userDataDir, docPath)
+
+    await app.evaluate(({ dialog }, filePath) => {
+      dialog.showSaveDialog = (() =>
+        Promise.resolve({ canceled: false, filePath })) as typeof dialog.showSaveDialog
+    }, targetPath)
+
+    const result = await win.evaluate(
+      ({ c, p }) => {
+        const api = (
+          window as unknown as {
+            api: { exportPdf: (c: string, p: string | null) => Promise<unknown> }
+          }
+        ).api
+        return api.exportPdf(c, p)
+      },
+      { c: content, p: docPath }
+    )
+
+    expect(result).toEqual({ filePath: targetPath })
+
+    const boxes = await readImageBoxes(app, 'gate13-chart.png')
+    const loaded = boxes.find((box) => box.src.includes('gate13-chart.png'))
+    expect(loaded).toBeDefined()
+    expect(loaded?.naturalWidth).toBe(1)
+    expect(loaded?.naturalHeight).toBe(1)
+
+    const buffer = await readFile(targetPath)
+    expect(buffer.subarray(0, 5).toString('latin1')).toBe('%PDF-')
+  } finally {
+    await rm(fixtureDir, { recursive: true, force: true })
+  }
+
+  await close()
+})
+
+test("Gate 13: a local image reference using ../ escaping the exported document's directory does NOT load", async () => {
+  test.setTimeout(60_000)
+
+  const { app, close } = await launchIsolatedApp(['.'])
+  const win = await getMainWindow(app)
+  await win.waitForFunction(() => (window as unknown as { api?: unknown }).api !== undefined)
+  const userDataDir = await app.evaluate(({ app: electronApp }) => electronApp.getPath('userData'))
+
+  const fixtureRoot = await mkdtemp(join(tmpdir(), 'pagedown-gate13-escape-'))
+  const docDir = join(fixtureRoot, 'doc')
+  const docPath = join(docDir, 'doc.md')
+  const targetPath = join(fixtureRoot, 'export-escape.pdf')
+
+  try {
+    // The out-of-tree file lives OUTSIDE docDir -- a real, different-sized
+    // (2x2 vs. the in-tree 1x1) image, so "denied" and "wrong file served"
+    // are distinguishable outcomes, not just "something rendered."
+    await writeFixtureFile(join(fixtureRoot, 'secret.png'), TWO_PX_PNG)
+    const content = '# Gate 13 Traversal\n\n![escape](../secret.png)\n\nBody text.\n'
+    await writeFixtureFile(docPath, content)
+    await seedRecentFile(userDataDir, docPath)
+
+    await app.evaluate(({ dialog }, filePath) => {
+      dialog.showSaveDialog = (() =>
+        Promise.resolve({ canceled: false, filePath })) as typeof dialog.showSaveDialog
+    }, targetPath)
+
+    const result = await win.evaluate(
+      ({ c, p }) => {
+        const api = (
+          window as unknown as {
+            api: { exportPdf: (c: string, p: string | null) => Promise<unknown> }
+          }
+        ).api
+        return api.exportPdf(c, p)
+      },
+      { c: content, p: docPath }
+    )
+
+    expect(result).toEqual({ filePath: targetPath })
+
+    const boxes = await readImageBoxes(app, 'secret.png')
+    const denied = boxes.find((box) => box.src.includes('secret.png'))
+    expect(denied).toBeDefined()
+    expect(denied?.naturalWidth).toBe(0)
+    expect(denied?.naturalHeight).toBe(0)
+  } finally {
+    await rm(fixtureRoot, { recursive: true, force: true })
   }
 
   await close()

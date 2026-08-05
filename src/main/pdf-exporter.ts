@@ -1,7 +1,13 @@
 import { dialog, BaseWindow, type BrowserWindow } from 'electron'
 import { writeFile } from 'node:fs/promises'
+import { dirname } from 'node:path'
 import { markdownToHtml } from '../markdown/pipeline'
-import { createPaginationHarness, type PaginationHarness } from './pagination-window'
+import {
+  createPaginationHarness,
+  registerAssetRoot,
+  unregisterAssetRoot,
+  type PaginationHarness
+} from './pagination-window'
 import { exportToPdf } from '../export/export-pdf'
 
 // --- Fix-round finding (verified empirically, not theorized) --------------
@@ -120,14 +126,24 @@ const EXPORT_PAGINATION_TIMEOUT_MS = 30_000
 // for this dialog's modality -- see withFreshHarness's own comment for why
 // the harness itself deliberately does NOT attach to `win`.
 //
-// No isKnownPath() check is needed here (contrast file-io.ts's
-// saveFileToKnownOrChosenPath): the destination path comes directly from a
+// No isKnownPath() check is needed here for the SAVE DESTINATION (contrast
+// file-io.ts's saveFileToKnownOrChosenPath): that path comes directly from a
 // real native dialog.showSaveDialog() result, which is exactly the
 // "already vetted" source isKnownPath's own allowlist exists to recognize --
-// see CLAUDE.md's File I/O security invariant section.
+// see CLAUDE.md's File I/O security invariant section. `documentPath` (the
+// SOURCE document currently open, used only to resolve local image
+// references against its own directory) is a different renderer-supplied
+// path with no such built-in vetting, so THAT one is validated by
+// `src/main/index.ts`'s `file:exportPdf` handler via `isKnownPath` before it
+// ever reaches this function -- same drop-not-throw treatment as
+// `file:getPageCount` (see page-count-generator.ts's own `getPageCount` doc
+// comment), since exporting never strictly needs the path and dropping it
+// just means local images in the exported PDF resolve to nothing, not a
+// failed export.
 export async function exportDocumentToPdf(
   win: BrowserWindow,
-  content: string
+  content: string,
+  documentPath?: string
 ): Promise<{ filePath: string } | null> {
   const result = await dialog.showSaveDialog(win, {
     filters: [{ name: 'PDF', extensions: ['pdf'] }],
@@ -135,11 +151,22 @@ export async function exportDocumentToPdf(
   })
   if (result.canceled || !result.filePath) return null
 
+  const documentDir = documentPath ? dirname(documentPath) : null
   const pdfBuffer = await enqueueExport(() =>
     withFreshHarness(async (harness) => {
-      const { html } = markdownToHtml(content)
-      await harness.sendDocument(html, EXPORT_PAGINATION_TIMEOUT_MS)
-      return exportToPdf(harness)
+      // Same registerAssetRoot/finally pattern as getThumbnail/getPageCount
+      // (see page-count-generator.ts's getPageCount): skipped entirely (not
+      // called with a placeholder) when there's no validated document
+      // directory, since registerAssetRoot throws on a non-absolute path by
+      // design and a document with no known path must load no local assets.
+      const assetToken = documentDir ? registerAssetRoot(documentDir) : undefined
+      try {
+        const { html } = markdownToHtml(content, { assetToken })
+        await harness.sendDocument(html, EXPORT_PAGINATION_TIMEOUT_MS)
+        return exportToPdf(harness)
+      } finally {
+        if (assetToken) unregisterAssetRoot(assetToken)
+      }
     })
   )
 
