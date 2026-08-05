@@ -620,3 +620,156 @@ export repeated-export timing confirmed flat (~400ms, no degradation) across
 5 independent runs, down from the original ~12x-degrading steady state (and
 down from two earlier fix attempts that measured statistically identical
 degradation to the original bug before the real root cause was found).
+
+---
+
+# Second fix-round addendum
+
+Re-review came back CHANGES NEEDED, light — and independently confirmed the
+PDF-export root-cause diagnosis from the previous addendum: the coordinator's
+own message states the reviewer built and measured all four variants
+(memoized/fresh harness × mainWindow/hidden-window) themselves and found the
+parent window, not harness reuse, is the causal variable — matching this
+track's own finding exactly. Two small items were flagged; both fixed and
+verified below (not just asserted).
+
+## Item 1 (MEDIUM) — Gate 12's regression guard was weaker than it looked
+
+**Fixed and verified.** `phase0/gate12-pdf-export-ipc.spec.ts`'s guard
+changed from `Math.max(first * 5, 5000)` to `Math.max(first * 5, 2000)`. The
+review's own finding was exact: a healthy first export (~390-450ms in this
+environment) makes `first * 5` land around 2000-2250, so the 5000ms floor
+dominated in practice and would not have caught a return of the
+"fresh-harness-per-export, but still on mainWindow" (Attempt 1) partial-fix
+regression — all three of that attempt's own measured values (488/3584/4392ms)
+sit under 5000.
+
+**Verified directly** (not just argued): temporarily reconstructed Attempt
+1 in `src/main/pdf-exporter.ts` (a fresh harness per export, but attached to
+the real `mainWindow` instead of a dedicated hidden `BaseWindow` — the exact
+shape of the previously-tried, previously-measured, non-working fix), backed
+up the real fix first, rebuilt, and ran Gate 12's repeated-export test
+against it:
+
+```
+Gate 12 repeated-export timings (ms): [ 444, 3548, 4324 ]
+Error: expect(received).toBeLessThan(expected)
+Expected: < 2220
+Received:   3548
+1 failed
+```
+
+The tightened guard correctly fails against this reconstruction (threshold
+`max(444*5, 2000) = 2220`, and `3548 > 2220`) — confirming it now catches
+the exact class of regression the review was concerned about. The real fix
+(dedicated `BaseWindow`) was then restored byte-for-byte (diffed against a
+pre-change backup to confirm) and re-verified passing:
+
+```
+Gate 12 repeated-export timings (ms): [ 381, 384, 378 ]
+3 passed (3.5s)
+```
+
+## Item 2 (MEDIUM-LOW) — three command delegations were unverified by any test
+
+**Fixed and verified.** The gap was real and precise: the previous round's
+`buildEditorCommands(editor)`-based tests (in the renamed "wired-
+implementation verification" describe block) exercise `editor-commands.ts`'s
+own internal command wiring directly, but never go through
+`MilkdownEditor.tsx`'s `useImperativeHandle` at all — so a wrong delegation
+there (e.g. `toggleBold: () => commandsRef.current?.toggleItalic()`) was
+invisible to every existing test. This was already covered for
+`toggleHeading`/`setParagraph`/both list toggles/`insertTable`/
+`insertPageBreak`/`undo`/`redo` via existing mounted-`ref` tests — genuinely
+missing only for `toggleBold`, `toggleItalic`, `insertLink`, the three
+routed around mounted-`ref` testing in the previous round specifically
+because they need a real selection.
+
+**Fix**: three new tests in `MilkdownEditor.test.tsx`'s `MilkdownEditor`
+describe block (through the real mounted component + `ref`, not
+`buildEditorCommands` directly), using the reviewer's own suggested
+mechanism — a COLLAPSED cursor, so no selection-setup problem exists at
+all: call `ref.current.toggleBold()`/`.toggleItalic()`/`.insertLink(href)`
+(setting a stored mark, since the underlying commands are all `toggleMark`-
+backed), then simulate typing one character via the same raw-DOM-mutation
+technique this file's existing "real edit" tests already use, and assert
+the new character renders wrapped in `<strong>`/`<em>`/a real `<a href>`.
+
+**Empirical groundwork before writing these** (two throwaway scratch tests,
+deleted after use): first tried `@testing-library/user-event`'s
+`.click()` + `.type()` (the more obvious approach) — this does NOT work in
+this environment: it produced plain unmarked text, and separately threw an
+uncaught `TypeError` from ProseMirror's own `posAtCoords` during the
+`mousedown` handler `user.click()` triggers (jsdom doesn't implement
+`document.elementFromPoint`). Second, tried the existing raw-DOM-mutation
+"type" technique instead (`p.firstChild.textContent = ...`) — this DOES
+correctly pick up the stored mark, confirmed both empirically and by reading
+`prosemirror-state`'s own `Transaction.insertText` source (which reads
+`this.storedMarks` when constructing the inserted text node, reached via
+prosemirror-view's `readDOMChange` → "simply insert text" path for an
+inline, same-text-node mutation — exactly the shape this project's existing
+edit-simulation technique already produces).
+
+**Verified each of the three new tests actually catches a wrong-delegation
+mutation**, reproducing the reviewer's own exact mutation style, one at a
+time, each followed by an immediate revert:
+
+- `toggleBold: () => commandsRef.current?.toggleItalic()` → new test failed:
+  `expected undefined to be 'X'` (DOM showed `<em>X</em>`, no `<strong>`
+  element to query).
+- `insertLink: () => commandsRef.current?.toggleBold()` → new test failed
+  the same way (DOM showed `<strong>X</strong>`, no `<a>` element).
+- `toggleItalic: () => commandsRef.current?.undo()` → new test failed the
+  same way (DOM showed plain `HelloX`, no mark at all).
+
+All three mutations were reverted immediately after observing the failure;
+`git diff`/`grep` confirmed each delegation line matches its pre-mutation
+state before moving on.
+
+## Optional (non-blocking) — `editor.destroy()` moved into `afterEach`
+
+Done, since already in this file. The "wired-implementation verification"
+describe block's 4 tests (`toggleBold`, `toggleItalic`, `insertLink`,
+`insertPageBreak`) each used to call `await editor.destroy()` as the last
+line of their own test body — a real assertion failure earlier in the body
+throws before reaching that line, leaking that test's `Editor` instance
+(and its `createTestEditor`-appended DOM node) into every later test in the
+same file for the rest of the run. Replaced with a shared `currentEditor`
+variable, assigned by each test right after `createTestEditor` resolves,
+destroyed in a block-level `afterEach` that runs regardless of whether the
+test body threw.
+
+## Second fix-round verification output
+
+**`pnpm run typecheck`** — clean, exit 0.
+
+**`pnpm exec eslint .`** (whole repo) — clean, exit 0, zero warnings.
+
+**`pnpm exec prettier --check`** on every touched file — `All matched files
+use Prettier code style!`
+
+**`pnpm exec vitest run`** (full unit suite):
+
+```
+Test Files  19 passed (19)
+     Tests  189 passed (189)
+```
+
+(up from 186 — the 3 new collapsed-cursor delegation tests.)
+
+**`pnpm run build`** — clean.
+
+**`pnpm exec playwright test`** (full `phase0` suite) — **28 passed**,
+including all 3 Gate 12 tests (now under the tightened 2000ms-floor guard)
+and the pre-existing deliberate Gate 10 `test.fail()`.
+
+## Second fix-round one-line summary
+
+189/189 unit tests pass (up from 186), 28/28 phase0 Playwright gates pass;
+Gate 12's regression guard tightened from a 5000ms floor to a 2000ms floor
+and directly verified to now catch a reconstructed Attempt-1-style ~9x
+partial regression (3548ms > 2220ms threshold) while still passing cleanly
+against the real fix (381/384/378ms); three new collapsed-cursor tests close
+the `useImperativeHandle` delegation gap for `toggleBold`/`toggleItalic`/
+`insertLink`, each directly verified against the reviewer's own
+wrong-delegation mutation style before being accepted as done.

@@ -179,13 +179,25 @@ test('Gate 12: exporting the same multi-paragraph document repeatedly in one app
     // Generous regression guard, not a tight performance bound: a later
     // export must not balloon to several times the first export's
     // duration, which is exactly the ~12x-slowdown signature the original
-    // memoized-harness bug produced. `Math.max(..., 5000)` keeps this from
+    // memoized-harness bug produced. `Math.max(..., 2000)` keeps this from
     // being flaky against a fast, low-millisecond first export on a quick
-    // machine, where ordinary run-to-run noise alone could otherwise
-    // exceed a small multiplier.
+    // machine, where ordinary run-to-run noise alone could otherwise exceed
+    // a small multiplier, while staying tight enough to actually catch a
+    // regression: a healthy first export measures ~390-450ms in this
+    // environment, so the 2000ms floor still leaves ~5x headroom over that
+    // steady state (fix-round finding: a 5000ms floor was tried first and
+    // found to be too loose -- it let a real, measured partial-fix
+    // regression slip through silently. See this test's own history in
+    // GA_TRACK_2_REPORT.md's fix-round addenda for the exact numbers: an
+    // earlier "fresh harness, but still attached to the real mainWindow"
+    // fix attempt for this same bug measured 488/3584/4392ms -- a genuine
+    // ~9x degradation -- and every one of those values was still under a
+    // 5000ms floor, so that guard would NOT have caught a regression back
+    // to that exact bug shape. Re-verified against the 2000ms floor: the
+    // same 3584ms/4392ms values now correctly exceed it.).
     const [first, ...rest] = durationsMs
     for (const later of rest) {
-      expect(later).toBeLessThan(Math.max(first * 5, 5000))
+      expect(later).toBeLessThan(Math.max(first * 5, 2000))
     }
   } finally {
     await rm(fixtureDir, { recursive: true, force: true })
