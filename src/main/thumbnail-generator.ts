@@ -28,8 +28,16 @@ const THUMBNAIL_WIDTH = 336
 export function hashContent(content: string, documentDir?: string | null): string {
   const hash = createHash('sha256')
   // A NUL separator, and only when a directory is present: NUL cannot appear
-  // in a POSIX path or a Windows path, so no `documentDir`/`content` pair can
-  // be confused for a different one by concatenation.
+  // in a POSIX path or a Windows path, so within the has-a-directory
+  // namespace, no `documentDir`/`content` pair can be confused for a
+  // different one by concatenation. This does NOT domain-separate ACROSS the
+  // has-directory/no-directory namespaces: the no-directory case emits no
+  // separator at all (deliberately — see the doc comment above, preserving
+  // the pre-existing content-only key), so e.g. hashContent('/a\0# Hi', null)
+  // and hashContent('# Hi', '/a') hash identical bytes. Exotic (it requires a
+  // NUL byte in real document content) and low-stakes (worst case is a wrong
+  // cached preview image), not something this function's return value alone
+  // protects against.
   if (documentDir) hash.update(`${documentDir}\0`, 'utf8')
   return hash.update(content, 'utf8').digest('hex')
 }

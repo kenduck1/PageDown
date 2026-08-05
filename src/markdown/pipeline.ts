@@ -64,6 +64,30 @@ function urlToRelativePath(src: string): string {
 // `pagedown-render://` protocol handler), so that handler can resolve it
 // under a specific document's directory. Must be called on the
 // already-*sanitized* tree — see the call site below for why.
+//
+// Known limitation, fails closed: a query or fragment on a local image
+// (`![x](chart.png?v=2)`, `![x](#frag)`) is not stripped before the rewrite —
+// it becomes part of the literal filename this function percent-encodes
+// (`chart.png?v=2` -> segment `chart.png%3Fv%3D2`), so it 404s against the
+// real on-disk file. This is a direct, accepted consequence of encoding the
+// whole segment rather than parsing it as a URL with query/fragment parts —
+// the same whole-segment encoding is exactly what prevents an attacker from
+// injecting a query/fragment into the generated asset URL itself. Not worth
+// "fixing" by stripping `?`/`#` before encoding: on Windows, `?` isn't even a
+// legal filename character, so there's no real cache-busting use case this
+// would recover.
+//
+// Known limitation, fails closed: `<source srcset>` inside a `<picture>`
+// survives hast-util-sanitize with an unrewritten relative reference — this
+// function only rewrites `img[src]`, not `source[srcset]` (a different
+// attribute, on a different element, with a different micro-syntax: a
+// comma-separated list of URL/width-descriptor pairs). A relative local path
+// inside a `<picture>`'s `srcset` therefore silently 404s. Safe only because
+// hast-util-sanitize's defaultSchema does NOT protocol-restrict `srcSet`
+// (only `cite`/`href`/`longDesc`/`src` are in its `protocols` map), so an
+// unrewritten relative srcset value survives sanitize unchanged rather than
+// being stripped outright — the render context's own CSP (`img-src 'self'
+// data:`) is what actually stops anything worse than a 404 here.
 function rewriteLocalImageSrcs(tree: HastRoot, assetToken: string): void {
   visit(tree, 'element', (node) => {
     if (node.tagName !== 'img') return
