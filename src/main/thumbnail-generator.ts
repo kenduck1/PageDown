@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto'
 import { readFile, writeFile, mkdir } from 'node:fs/promises'
 import { join } from 'node:path'
-import type { BaseWindow } from 'electron'
+import { BaseWindow } from 'electron'
 import { markdownToHtml } from '../markdown/pipeline'
 import { createPaginationHarness, type PaginationHarness } from './pagination-window'
 
@@ -49,23 +49,42 @@ function enqueueHarnessWork<T>(task: () => Promise<T>): Promise<T> {
 }
 
 let harnessPromise: Promise<PaginationHarness> | null = null
+let harnessWindow: BaseWindow | null = null
 
 // Lazily created, then reused for every getThumbnail call within this app
 // session — deliberately a SEPARATE instance from the Phase-0-spike harness
 // wired in src/main/index.ts (see this task's own design note: reusing that
 // one would couple this feature to whatever the future live-preview
 // sub-project does with it).
-function getHarness(win: BaseWindow): Promise<PaginationHarness> {
+//
+// Owns a dedicated, never-shown `BaseWindow` (`show: false`, and never
+// `.show()`-ed after construction) rather than accepting the caller's real
+// `mainWindow`, which was the previous design and is a confirmed,
+// independently-measured bug: a WebContentsView positioned off-canvas
+// inside a REAL, shown BaseWindow still gets Chromium's rendering-throttle
+// treatment (requestAnimationFrame serviced at ~2Hz instead of ~60Hz)
+// because it isn't actually being composited, and Paged.js's Chunker drives
+// its whole progressive-layout loop off rAF. Measured consequence: a
+// ~12-page document landed right at the harness's 10s timeout and a
+// ~30-page document failed outright every time. `setVisible(false)` on the
+// view was tested too and is equally broken — the fix has to be a window
+// that is never shown at all, not one merely hidden after creation. A view
+// filling a genuinely never-shown BaseWindow is not throttled — restores
+// flat ~300ms pagination even for large documents. Off-canvas
+// `setBounds({ x: -9999, ... })` positioning is no longer needed now that
+// the harness lives in a window nothing ever displays, so it's dropped
+// entirely rather than kept as defensive-but-pointless belt-and-suspenders.
+function getHarness(): Promise<PaginationHarness> {
   if (!harnessPromise) {
+    const win = new BaseWindow({ show: false })
+    harnessWindow = win
     harnessPromise = createPaginationHarness(win).then((harness) => {
-      harness.view.setBounds({ x: -9999, y: -9999, width: 816, height: 1056 })
-      // If the underlying WebContentsView is ever destroyed (e.g. its
-      // parent BaseWindow closes — see CLAUDE.md's note on the
-      // file:getThumbnail/template:getThumbnail handlers closing over a
-      // single mainWindow with no macOS re-activate rebinding), drop the
-      // memoized promise so the NEXT getThumbnail call creates a fresh
-      // harness instead of silently failing every cache-miss request for
-      // the rest of the app session against a dead view.
+      // If the underlying WebContentsView is ever destroyed (e.g. via
+      // destroyThumbnailHarness below, or some future unexpected teardown
+      // of harnessWindow), drop the memoized promise so the NEXT
+      // getThumbnail call creates a fresh harness instead of silently
+      // failing every cache-miss request for the rest of the app session
+      // against a dead view.
       harness.view.webContents.once('destroyed', () => {
         harnessPromise = null
       })
@@ -73,6 +92,27 @@ function getHarness(win: BaseWindow): Promise<PaginationHarness> {
     })
   }
   return harnessPromise
+}
+
+// Destroys the dedicated, never-shown BaseWindow backing the thumbnail
+// pagination harness, if one has been created. Must be called at the same
+// point the app decides its last real window has closed (see
+// src/main/index.ts's `createWindow`/`window-all-closed` wiring) — a
+// BaseWindow that's never destroyed keeps `BaseWindow.getAllWindows()` from
+// ever returning to zero, which silently prevents `window-all-closed` from
+// firing on Windows/Linux, leaving the app running invisibly forever after
+// the user closes what looks like the last window. This exact regression
+// was hit once already tonight by the parallel track that built the
+// dedicated-window pattern first; this is the fix carried over. Safe to
+// call even when no harness was ever created (e.g. the user never visited
+// Home screen) or when it's already been destroyed.
+export function destroyThumbnailHarness(): void {
+  const win = harnessWindow
+  harnessWindow = null
+  harnessPromise = null
+  if (win && !win.isDestroyed()) {
+    win.destroy()
+  }
 }
 
 async function cachePaths(
@@ -97,7 +137,6 @@ async function withTimeout<T>(promise: Promise<T>, ms: number, timeoutMessage: s
 }
 
 export async function getThumbnail(
-  win: BaseWindow,
   content: string,
   userDataDir: string
 ): Promise<{ dataUrl: string; pageCount: number }> {
@@ -115,7 +154,7 @@ export async function getThumbnail(
   }
 
   return enqueueHarnessWork(async () => {
-    const harness = await getHarness(win)
+    const harness = await getHarness()
     const { html } = markdownToHtml(content)
     const result = await harness.sendDocument(html)
 

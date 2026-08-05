@@ -11,7 +11,7 @@ import {
 } from './pagination-window'
 import { paginateAndTime } from '../pagination/paginate'
 import { exportToPdf } from '../export/export-pdf'
-import { getThumbnail } from './thumbnail-generator'
+import { getThumbnail, destroyThumbnailHarness } from './thumbnail-generator'
 import {
   openFileDialog,
   readFileByPath,
@@ -102,6 +102,24 @@ function createWindow(): BrowserWindow {
 
   mainWindow.on('ready-to-show', () => {
     mainWindow.show()
+  })
+
+  // The thumbnail generator's pagination harness now lives in its own
+  // dedicated, never-shown BaseWindow (see thumbnail-generator.ts's
+  // getHarness/destroyThumbnailHarness for why: a shown-but-off-canvas
+  // WebContentsView gets Chromium's rendering-throttle treatment, which
+  // starved Paged.js's rAF-driven layout loop and made large documents time
+  // out). That window is real to Electron's window-tracking, though — if
+  // it's never destroyed, BaseWindow.getAllWindows() never returns to zero
+  // after the user closes this real window, so `window-all-closed` below
+  // would silently never fire on Windows/Linux and the app would keep
+  // running invisibly forever. Destroying it here, on this window's own
+  // 'closed' event, is what lets the window count actually reach zero so
+  // `window-all-closed` fires normally afterward. Harmless no-op if no
+  // thumbnail was ever generated this session (harness never created) or if
+  // it's already gone.
+  mainWindow.on('closed', () => {
+    destroyThumbnailHarness()
   })
 
   mainWindow.webContents.setWindowOpenHandler((details) => {
@@ -198,11 +216,11 @@ app.whenReady().then(() => {
       throw new Error('Requested path is not a known recent file')
     }
     const { content } = await readFileByPath(filePath)
-    return getThumbnail(mainWindow, content, userDataDir)
+    return getThumbnail(content, userDataDir)
   })
 
   ipcMain.handle('template:getThumbnail', async (_event, content: string) => {
-    return getThumbnail(mainWindow, content, app.getPath('userData'))
+    return getThumbnail(content, app.getPath('userData'))
   })
 
   ipcMain.handle('dialog:confirmDiscard', () => confirmDiscardChanges(mainWindow))
