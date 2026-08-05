@@ -255,6 +255,60 @@ describe('MilkdownEditor', () => {
     expect(onChange.mock.calls.at(-1)?.[0]).toContain('World')
   })
 
+  it('does not replay a stale edit through onChange when remounted (key change) after that edit already synced normally', async () => {
+    // Regression test for a real, reproduced bug: editedSinceMountRef was
+    // previously cleared ONLY inside flush(), never by the normal debounced
+    // markdownUpdated sync path -- so once ANY edit had occurred, the ref
+    // stayed "dirty" forever after, even once that edit had already been
+    // pushed through onChange. A LATER remount (key change) -- e.g.
+    // EditorScreen's replaceContent forcing a fresh instance after Page
+    // Setup edits the document's frontmatter -- would then have the
+    // OUTGOING instance's unmount cleanup call flush(), which found the
+    // stale-but-still-true ref and re-pushed that outgoing instance's OWN
+    // (now out of date) document through onChange one more time --
+    // clobbering whatever the remount's own fresh content was set to,
+    // immediately after it was set. Concretely reproduced: a document
+    // edited, then Page Setup Apply adding a frontmatter block, then
+    // switching tabs and back showed the frontmatter block gone.
+    const onChange = vi.fn()
+    const onError = vi.fn()
+    const { container, rerender } = render(
+      <MilkdownEditor key="a" content="# Doc A" onChange={onChange} onError={onError} />
+    )
+    await waitFor(() => expect(container.querySelector('h1')?.textContent).toBe('Doc A'))
+
+    const h1 = container.querySelector('h1')
+    if (!h1?.firstChild) throw new Error('expected a text node inside the mounted h1')
+    const range = document.createRange()
+    range.selectNodeContents(h1)
+    range.collapse(false)
+    const selection = window.getSelection()
+    selection?.removeAllRanges()
+    selection?.addRange(range)
+    h1.firstChild.textContent = `${h1.firstChild.textContent} edited`
+
+    await waitFor(() => expect(onChange).toHaveBeenCalled())
+    const callCountAfterNormalSync = onChange.mock.calls.length
+
+    // Simulates replaceContent's revision bump: an external content change
+    // (e.g. Page Setup adding frontmatter) forces a fresh key, remounting
+    // with content that doesn't even come from this instance's own edit.
+    rerender(
+      <MilkdownEditor
+        key="b"
+        content={'---\ntitle: x\n---\n\n# Doc A edited'}
+        onChange={onChange}
+        onError={onError}
+      />
+    )
+    await waitFor(() => expect(container.querySelector('h1')?.textContent).toBe('Doc A edited'))
+
+    // The key assertion: the remount's own unmount-triggered flush() must
+    // NOT have fired a stale replay -- onChange's call count must be
+    // unchanged from right after the normal sync above.
+    expect(onChange.mock.calls.length).toBe(callCountAfterNormalSync)
+  })
+
   it('destroys the previous editor and mounts a fresh one when key changes', async () => {
     const onChange = vi.fn()
     const onError = vi.fn()

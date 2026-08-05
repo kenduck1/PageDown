@@ -166,6 +166,34 @@ const MilkdownEditor = forwardRef<MilkdownEditorHandle, MilkdownEditorProps>(
           ctx.set(defaultValueCtx, content)
           ctx.set(remarkStringifyOptionsCtx, PINNED_STRINGIFY_OPTIONS)
           ctx.get(listenerCtx).markdownUpdated((_ctx, markdown) => {
+            // Clearing editedSinceMountRef here (not just inside flush(),
+            // below) is load-bearing, not cosmetic -- verified via a real
+            // reproduced bug, not theorized. Without this, the ref tracks
+            // "has there been ANY edit since mount" rather than "is there
+            // an edit not yet synced to the store": after a normal edit
+            // syncs through this debounced path, the ref stayed true
+            // forever after (nothing else cleared it), so a LATER,
+            // unrelated unmount (e.g. this same tab's content being
+            // externally replaced by Page Setup's replaceContent, which
+            // bumps revision and remounts a FRESH instance) would still
+            // find the OUTGOING instance's ref true and have its cleanup
+            // flush() unconditionally re-serialize and push that outgoing
+            // instance's OWN (now-stale) document through onChange --
+            // clobbering the fresh, externally-set content the instant
+            // after it was set. Reproduced concretely: type into the
+            // editor, let the 200ms debounce sync normally, then trigger a
+            // revision bump via Page Setup Apply (adds a frontmatter
+            // block) -- the frontmatter silently disappeared on the very
+            // next remount, because the outgoing instance's belated flush
+            // pushed its own pre-Page-Setup (frontmatter-less) snapshot
+            // right after Apply had just set the correct one. Clearing the
+            // ref here means flush() only ever fires for a genuinely
+            // UNSYNCED edit (the original Save-race bug this mechanism
+            // exists for -- see flush()'s own doc comment -- where the
+            // user clicks Save/switches tabs within the 200ms window
+            // before this callback has even run once), not a stale replay
+            // of an edit that already made it to the store.
+            editedSinceMountRef.current = false
             onChangeRef.current(markdown)
           })
         })

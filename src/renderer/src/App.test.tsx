@@ -37,11 +37,14 @@ describe('App', () => {
     render(<App />)
 
     await user.click(screen.getByRole('button', { name: 'New document' }))
-    expect(screen.getByText('Untitled')).toBeInTheDocument()
+    // Two elements legitimately show "Untitled" on the editor screen -- the
+    // title bar's filename readout and the tab bar's active-tab label
+    // (EditorTabBar) -- both fall back to it independently.
+    expect(screen.getAllByText('Untitled').length).toBeGreaterThan(0)
     expect(screen.queryByText('PageDown')).not.toBeInTheDocument()
 
     await user.click(screen.getByRole('button', { name: '← Home' }))
     expect(screen.getByText('PageDown')).toBeInTheDocument()
-    expect(screen.queryByText('Untitled')).not.toBeInTheDocument()
+    expect(screen.queryAllByText('Untitled')).toHaveLength(0)
   })
 })

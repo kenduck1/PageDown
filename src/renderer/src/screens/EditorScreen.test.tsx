@@ -15,7 +15,7 @@ beforeEach(() => {
     getRecentFiles: vi.fn(),
     getThumbnail: vi.fn(),
     getTemplateThumbnail: vi.fn(),
-    getPageCount: vi.fn(),
+    getPageCount: vi.fn().mockResolvedValue({ pageCount: 1 }),
     confirmDiscardChanges: vi.fn(),
     exportPdf: vi.fn()
   }
@@ -28,7 +28,11 @@ afterEach(() => {
 describe('EditorScreen', () => {
   it('shows "Untitled" for a new, unsaved document', () => {
     render(<EditorScreen />)
-    expect(screen.getByText('Untitled')).toBeInTheDocument()
+    // Two elements now legitimately show "Untitled" for an unsaved document
+    // -- the title bar's filename readout AND the tab bar's active-tab
+    // label (EditorTabBar) -- both fall back to the same "Untitled" label
+    // independently, per each component's own design-handoff spec.
+    expect(screen.getAllByText('Untitled').length).toBeGreaterThan(0)
   })
 
   it('shows the real file path and content for a loaded document', async () => {
