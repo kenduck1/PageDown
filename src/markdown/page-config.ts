@@ -111,15 +111,14 @@
 //   this way before PageDown ever touched it.
 // - A YAML comment or blank line that sits *inside* one of PageDown's own
 //   multi-line blocks (e.g. between `margins`'s `top:` and `bottom:`
-//   sub-lines, rather than after the whole block) is treated as part of
-//   that block and does not survive a rewrite of that key -- only a
-//   comment/blank line that has no further structural continuation after
-//   it (i.e. it truly follows the block, not sits inside it) is preserved.
-//   This is a deliberate, narrower trade-off than the alternative of
-//   treating every indented line as part of the block regardless of
-//   structure, which is what previously caused an unrelated comment
-//   directly beneath a scalar key to be deleted entirely on that key's
-//   next write -- see `findBlockEnd`'s own comment for the exact rule.
+//   sub-lines, or in the middle of a block-scalar value, rather than after
+//   the whole block) is treated as part of that block and does not survive
+//   a rewrite of that key -- only a comment/blank line that has no further
+//   indented content after it (i.e. it truly follows the block, not sits
+//   inside it) is preserved. See `findBlockEnd`'s own comment for the
+//   exact rule and the two-round history of getting this right (over-
+//   swallowing an unrelated comment, then under-swallowing a block
+//   scalar's own content -- both real, reviewer-found bugs).
 
 import { load } from 'js-yaml'
 
@@ -354,19 +353,41 @@ function buildOwnedLines(updates: Partial<PageConfig>): OwnedLine[] {
   return lines
 }
 
-// A line counts as a genuine structural continuation of the immediately
-// preceding owned key's own nested value -- a mapping sub-entry
-// (`  key: value`, including a bare `  key:`) or a sequence item
-// (`  - value` / a bare `  -`) -- not merely "anything indented". This is
-// what distinguishes an owned key's own multi-line block (e.g. `margins`'s
-// 4 sub-lines) from an unrelated YAML comment or blank line that merely
-// happens to be indented for readability directly beneath it.
+// A line is a genuine continuation of the immediately preceding owned
+// key's own value if it is indented at all (column > 0). Every owned key
+// this module ever anchors on sits at column 0 (top-level), so YAML's own
+// grammar guarantees there is no *other* valid interpretation of a
+// more-indented line directly following it: it can only be (a) a nested
+// mapping/sequence entry belonging to that key (the only owned key shaped
+// this way is `margins`), (b) a block scalar's (`|`/`>`) own content
+// lines, or (c) a plain scalar's line-folded continuation. Verified
+// directly against js-yaml rather than assumed: an indented line that
+// *looks* like an unrelated mapping entry immediately after a scalar
+// (`theme: default\n  nested: value`) does not parse as anything else at
+// all -- `js-yaml.load` throws ("bad indentation of a mapping entry"),
+// confirming there is no competing valid shape "indented" needs to
+// distinguish itself from here, other than a comment or blank line (which
+// never form part of any value).
 //
-// Fix-wave note: the original implementation treated *any* indented line
-// as a continuation, which silently deleted such a comment on the very
-// next unrelated write -- a real, reviewer-confirmed data-loss bug (see
-// page-config.test.ts's "preserves an indented comment" tests).
-const STRUCTURAL_CONTINUATION = /^[ \t]+(?:-(?:[ \t]|$)|[^\s:#][^:]*:(?:[ \t]|$))/
+// Fix-wave history (two rounds, both reviewer-found real bugs):
+// 1. The very first version of this scan treated *any* indented line as a
+//    continuation, which silently deleted an unrelated indented *comment*
+//    on the next write to a key above it (a real data-loss bug -- see
+//    page-config.test.ts's "preserves an indented comment" tests).
+// 2. The fix for #1 over-corrected: it required a continuation line to
+//    look like a mapping entry or sequence item specifically
+//    (`key:`/`- item`), which also stopped recognizing a block-scalar's or
+//    plain-wrapped scalar's own content lines as continuations (neither
+//    looks like `key:` or `- item`), silently orphaning them on the next
+//    write instead -- a second real corruption bug (see
+//    page-config.test.ts's "preserves a block-scalar value" and
+//    "preserves a plain multi-line-wrapped scalar value" tests).
+// The comment/blank exclusion below is exactly what #1 needed and is
+// sufficient on its own -- no narrower "does this look like a mapping
+// entry" check is needed or correct, per the js-yaml verification above.
+function isIndented(line: string): boolean {
+  return /^[ \t]/.test(line)
+}
 
 function isCommentOrBlankLine(line: string): boolean {
   const trimmed = line.trim()
@@ -424,17 +445,19 @@ function findBlockEnd(lines: string[], startIndex: number): number {
     return index
   }
 
-  // Block-style value: its own line plus any immediately-following lines
-  // that are genuine structural continuations (nested mapping entries or
-  // sequence items). A comment/blank line *interior* to such a run (i.e.
-  // more structural continuation lines follow after it) is swallowed too,
-  // since it's describing content that belongs to the block being
-  // replaced -- but a comment/blank line with no further structural
-  // continuation after it belongs to whatever comes *after* the block,
-  // not the block itself, and is left alone.
+  // Block-style value: its own line plus any immediately-following
+  // indented lines (see `isIndented`'s comment above for why "indented"
+  // alone is the correct and sufficient test here, covering margins'
+  // nested sub-lines, block-scalar content, and plain-wrapped scalar
+  // continuations alike). A comment/blank line *interior* to such a run
+  // (i.e. more indented content follows after it) is swallowed too, since
+  // it's describing/spacing content that belongs to the block being
+  // replaced -- but a comment/blank line with no further indented content
+  // after it belongs to whatever comes *after* the block, not the block
+  // itself, and is left alone.
   let index = startIndex + 1
   while (index < lines.length) {
-    if (STRUCTURAL_CONTINUATION.test(lines[index])) {
+    if (isIndented(lines[index]) && !isCommentOrBlankLine(lines[index])) {
       index += 1
       continue
     }
@@ -443,7 +466,7 @@ function findBlockEnd(lines: string[], startIndex: number): number {
       while (lookahead < lines.length && isCommentOrBlankLine(lines[lookahead])) {
         lookahead += 1
       }
-      if (lookahead < lines.length && STRUCTURAL_CONTINUATION.test(lines[lookahead])) {
+      if (lookahead < lines.length && isIndented(lines[lookahead])) {
         index = lookahead + 1
         continue
       }
