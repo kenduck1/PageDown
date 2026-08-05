@@ -10,13 +10,46 @@ import { sanitize, defaultSchema } from 'hast-util-sanitize'
 import type { Schema } from 'hast-util-sanitize'
 import type { Root as HastRoot } from 'hast'
 import type { Root } from 'mdast'
+import { visit } from 'unist-util-visit'
 import { annotateSourceOffsets, type SourceMap } from './source-map'
 import { remarkPagebreak, PAGEBREAK_CLASS } from './pagebreak-plugin'
 import { createPagebreakToHast } from './pagebreak-to-hast'
 
 export type { SourceMap }
 
-export function markdownToHtml(source: string): { html: string; sourceMap: SourceMap } {
+// A leading URL scheme (`http:`, `https:`, `data:`, `pagedown-render:`, ...)
+// per RFC 3986's `scheme` production. Anything matching this is already an
+// absolute reference and must be left untouched by rewriteLocalImageSrcs.
+const URL_SCHEME_PATTERN = /^[a-z][a-z0-9+.-]*:/i
+
+// True only for a relative, document-local path — no leading `/` (an
+// absolute filesystem path, denied by resolveAssetPath on the main-process
+// side anyway, but never even worth routing through the __asset__ scheme)
+// and no URL scheme prefix (http(s), data:, pagedown-render:, ...).
+function isRelativeLocalPath(src: string): boolean {
+  if (src.length === 0) return false
+  if (src.startsWith('/')) return false
+  if (URL_SCHEME_PATTERN.test(src)) return false
+  return true
+}
+
+// Rewrites every relative local `img src` in the tree into the sandboxed
+// pagination render context's asset scheme, so Task 1's protocol handler can
+// resolve it under a specific document's directory. Must be called on the
+// already-*sanitized* tree — see the call site below for why.
+function rewriteLocalImageSrcs(tree: HastRoot, assetToken: string): void {
+  visit(tree, 'element', (node) => {
+    if (node.tagName !== 'img') return
+    const src = node.properties?.src
+    if (typeof src !== 'string' || !isRelativeLocalPath(src)) return
+    node.properties.src = `pagedown-render://render/__asset__/${assetToken}/${encodeURIComponent(src)}`
+  })
+}
+
+export function markdownToHtml(
+  source: string,
+  options?: { assetToken?: string }
+): { html: string; sourceMap: SourceMap } {
   // unified's `.parse()` only performs the parse phase — it does NOT run
   // attached transformers (remarkPagebreak's tree mutation only executes
   // during `.run()`/`.runSync()`). remarkGfm/remarkFrontmatter don't need
@@ -96,6 +129,21 @@ export function markdownToHtml(source: string): { html: string; sourceMap: Sourc
   // requires seeing the whole document at once, not one fragment at a time.
   const rawProcessed = raw(hastTree) as HastRoot
   const sanitized = sanitize(rawProcessed, schema) as HastRoot
+
+  // Must run AFTER sanitize(), not before it, and this is load-bearing, not
+  // stylistic: hast-util-sanitize's defaultSchema pins `protocols.src` to
+  // `['http', 'https']`, so a `pagedown-render://` src written before this
+  // pass would simply be stripped back out by sanitize() itself, silently
+  // producing zero rewritten images end to end. Running here also means only
+  // already-sanitized `img` nodes are ever rewritten, and the original src is
+  // percent-encoded into a single opaque path segment — nothing injectable
+  // survives. Do NOT "fix" this by adding `pagedown-render` to the sanitize
+  // schema's allowed protocols instead of moving this call — that would let
+  // a document author's own raw HTML forge asset URLs directly, which is
+  // exactly the class of bug the schema pin above exists to prevent.
+  if (options?.assetToken) {
+    rewriteLocalImageSrcs(sanitized, options.assetToken)
+  }
 
   const html = unified()
     .use(rehypeStringify)
