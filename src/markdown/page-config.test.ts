@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest'
+import { load } from 'js-yaml'
 import {
   extractPageConfig,
   applyPageConfig,
@@ -409,16 +410,31 @@ describe('applyPageConfig', () => {
 
   // --- Optional (lower priority): multi-line flow-style margins --------
 
-  it('optional: replaces a multi-line flow-style margins value (closing brace on its own unindented line) without leaving an orphaned bracket', () => {
+  it('optional: replaces a genuinely-valid multi-line flow-style margins value (indented closing brace) without leaving an orphaned bracket', () => {
+    // The closing brace is INDENTED, which is what real YAML requires here.
+    // This fixture previously put it at column 0, a shape that is not valid
+    // YAML at all -- `load` throws "deficient indentation" on it (verified
+    // against js-yaml directly, alongside the round-4 comment fix in
+    // page-config.ts) -- so the test was asserting against an input no
+    // correct document could contain. The column-0 variant is still covered
+    // separately below, as the malformed-input repair case it actually is.
     const raw = [
       'margins: {',
       '  top: 1,',
       '  bottom: 1,',
       '  left: 1,',
       '  right: 1',
-      '}',
+      '  }',
       'draft: true'
     ].join('\n')
+
+    // Guard the fixture itself: if this stops being valid YAML, the test
+    // above it is meaningless.
+    expect(() => load(raw)).not.toThrow()
+    expect(load(raw)).toEqual({
+      margins: { top: 1, bottom: 1, left: 1, right: 1 },
+      draft: true
+    })
 
     const result = applyPageConfig(raw, {
       margins: { top: 2, bottom: 2, left: 1.5, right: 1.5 }
@@ -443,6 +459,26 @@ describe('applyPageConfig', () => {
     expect(result).toBe(
       ['margins:', '  top: 2', '  bottom: 2', '  left: 2', '  right: 2', 'draft: true'].join('\n')
     )
+  })
+
+  it('optional: repairs the malformed column-0-closing-brace flow shape rather than orphaning the brace', () => {
+    // Not valid YAML (js-yaml: "deficient indentation"), but a natural,
+    // JSON-looking thing to hand-author, so findBlockEnd's bounded
+    // closer-only extension still consumes the stray closer and leaves a
+    // well-formed block behind.
+    const raw = ['margins: {', '  top: 1,', '  bottom: 1', '}', 'draft: true'].join('\n')
+    expect(() => load(raw)).toThrow()
+
+    const result = applyPageConfig(raw, {
+      margins: { top: 2, bottom: 2, left: 2, right: 2 }
+    })
+
+    expect(result).toBe(
+      ['margins:', '  top: 2', '  bottom: 2', '  left: 2', '  right: 2', 'draft: true'].join('\n')
+    )
+    expect(extractPageConfig(result)).toEqual({
+      margins: { top: 2, bottom: 2, left: 2, right: 2 }
+    })
   })
 
   // --- Regression: round-3 review (critical) ---------------------------
@@ -561,5 +597,175 @@ describe('applyPageConfig', () => {
     expect(result).toBe('page: A4\ndraft: true')
     expect(() => extractPageConfig(result)).not.toThrow()
     expect(extractPageConfig(result)).toEqual({ pageSize: 'A4' })
+  })
+
+  // --- Regression: round-4 review (critical, content-destroying) --------
+  // Round 2's flow-bracket branch triggered on *any* unbalanced bracket
+  // anywhere on an owned key's line, not just a real flow-collection value.
+  // A plain YAML scalar may legally contain one -- and PageDown's own
+  // footer templating syntax is `{n}`/`{total}`, so a hand-typed half-open
+  // brace is a realistic thing to find in a real document. The branch then
+  // scanned to end-of-input hunting for a closing bracket that never
+  // existed and returned `lines.length`, silently DELETING every remaining
+  // line of the frontmatter block. Strictly worse than Bugs 1-3, which left
+  // recoverable (if invalid) text on disk.
+
+  const FOOTER_UPDATE = { footer: { left: '', center: 'new value', right: '' } } as const
+
+  it('regression (round 4): an unbalanced `{` in a plain scalar value must not delete the rest of the frontmatter block', () => {
+    const raw = 'footerCenter: Chapter {n\ntitle: My Report\ndraft: true'
+
+    // The input is ordinary, perfectly valid YAML -- there is no flow
+    // collection here at all, just a scalar that happens to contain `{`.
+    expect(load(raw)).toEqual({
+      footerCenter: 'Chapter {n',
+      title: 'My Report',
+      draft: true
+    })
+
+    const result = applyPageConfig(raw, FOOTER_UPDATE)
+
+    // The exact regression: these two lines used to vanish entirely.
+    expect(result).toContain('title: My Report')
+    expect(result).toContain('draft: true')
+    expect(result).toBe(
+      [
+        'footerCenter: "new value"',
+        'title: My Report',
+        'draft: true',
+        'footerLeft: ""',
+        'footerRight: ""'
+      ].join('\n')
+    )
+    expect(() => extractPageConfig(result)).not.toThrow()
+    expect(extractPageConfig(result)).toEqual({
+      footer: { left: '', center: 'new value', right: '' }
+    })
+  })
+
+  it('regression (round 4): the full reported repro (6 unrelated keys, incl. a nested sequence) survives intact', () => {
+    const raw = [
+      'footerCenter: Chapter {n',
+      'title: My Report',
+      'author: Kai',
+      'tags:',
+      '  - a',
+      '  - b',
+      'draft: true'
+    ].join('\n')
+
+    const result = applyPageConfig(raw, FOOTER_UPDATE)
+
+    expect(load(result)).toEqual({
+      footerCenter: 'new value',
+      title: 'My Report',
+      author: 'Kai',
+      tags: ['a', 'b'],
+      draft: true,
+      footerLeft: '',
+      footerRight: ''
+    })
+  })
+
+  it('regression (round 4): the same bug via an unbalanced `[` instead of `{`', () => {
+    const raw = 'footerCenter: Chapter [n\ntitle: My Report\ndraft: true'
+    expect(load(raw)).toEqual({
+      footerCenter: 'Chapter [n',
+      title: 'My Report',
+      draft: true
+    })
+
+    const result = applyPageConfig(raw, FOOTER_UPDATE)
+
+    expect(result).toContain('title: My Report')
+    expect(result).toContain('draft: true')
+    expect(extractPageConfig(result)).toEqual({
+      footer: { left: '', center: 'new value', right: '' }
+    })
+  })
+
+  it('regression (round 4): an unbalanced bracket on a NON-footer owned key is equally safe', () => {
+    const raw = 'theme: default [draft\ntitle: My Report\ndraft: true'
+    const result = applyPageConfig(raw, { theme: 'resume' })
+    expect(result).toBe('theme: resume\ntitle: My Report\ndraft: true')
+  })
+
+  it('regression (round 4): a stray unrelated `}` later in the document is not treated as closing an earlier value', () => {
+    // Partial content loss in the original bug: the scan stopped at the
+    // stray closer, taking the intervening line with it.
+    const raw = 'footerCenter: Chapter {n\ntitle: closing } brace\ndraft: true'
+    const result = applyPageConfig(raw, FOOTER_UPDATE)
+
+    expect(result).toContain('title: closing } brace')
+    expect(result).toContain('draft: true')
+  })
+
+  it('regression (round 4): even a value that really does start with `{` will not consume a later line carrying other content', () => {
+    // `footerCenter: {n` genuinely opens a flow collection, so the bracket
+    // extension is eligible here -- but it may only ever consume lines made
+    // up purely of closing brackets, and `title: closing } brace` carries
+    // real content, so it is left alone.
+    const raw = 'footerCenter: {n\ntitle: closing } brace\ndraft: true'
+    const result = applyPageConfig(raw, FOOTER_UPDATE)
+
+    expect(result).toContain('title: closing } brace')
+    expect(result).toContain('draft: true')
+  })
+
+  it('regression (round 4): an unterminated flow collection consumes no more than its own indented block', () => {
+    const raw = ['margins: {', '  top: 1', 'draft: true'].join('\n')
+    const result = applyPageConfig(raw, {
+      margins: { top: 2, bottom: 2, left: 2, right: 2 }
+    })
+
+    expect(result).toContain('draft: true')
+    expect(result).toBe(
+      ['margins:', '  top: 2', '  bottom: 2', '  left: 2', '  right: 2', 'draft: true'].join('\n')
+    )
+  })
+
+  // --- Documented limitations (asserted so they stay *known*) -----------
+
+  it('limitation: a trailing `#`-leading line inside a block scalar is left as cosmetic residue, but the result stays valid and idempotent', () => {
+    const raw = [
+      'footerCenter: |',
+      '  real text',
+      '  # trailing literal hash line',
+      'draft: true'
+    ].join('\n')
+
+    const result = applyPageConfig(raw, FOOTER_UPDATE)
+
+    // Cosmetic residue -- documented in page-config.ts's "Known
+    // limitations" section, deliberately not fixed.
+    expect(result).toContain('  # trailing literal hash line')
+    // ...but it is residue only: still valid YAML, correct values, stable
+    // under a repeat apply (i.e. it does not accumulate or corrupt).
+    expect(() => load(result)).not.toThrow()
+    expect(extractPageConfig(result)).toEqual({
+      footer: { left: '', center: 'new value', right: '' }
+    })
+    expect(applyPageConfig(result, FOOTER_UPDATE)).toBe(result)
+  })
+
+  it('limitation: a `#`-leading line with further block-scalar content after it IS correctly swallowed', () => {
+    const raw = ['footerCenter: |', '  # first line', '  more text', 'draft: true'].join('\n')
+    const result = applyPageConfig(raw, FOOTER_UPDATE)
+    expect(result).toBe(
+      ['footerCenter: "new value"', 'draft: true', 'footerLeft: ""', 'footerRight: ""'].join('\n')
+    )
+  })
+
+  it('limitation: replacing an owned key that carries a YAML anchor orphans an alias to it', () => {
+    const raw = 'footerCenter: &fc Original\nfooterEcho: *fc\ndraft: true'
+    const result = applyPageConfig(raw, FOOTER_UPDATE)
+
+    // Documented in page-config.ts's "Known limitations" section and
+    // deliberately not fixed (anchors are exotic in frontmatter). Asserted
+    // here so the behavior is a recorded known quantity rather than a
+    // surprise, and so a future fix has a test to flip.
+    expect(result).toContain('footerEcho: *fc')
+    expect(() => load(result)).toThrow()
+    expect(extractPageConfig(result)).toEqual({})
   })
 })
