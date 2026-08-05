@@ -11,6 +11,18 @@ import type { MilkdownEditorHandle } from '../milkdown/MilkdownEditor'
 // `editorRef` to the real mounted MilkdownEditor and renders this above the
 // canvas; for now it's built and tested against a fake ref standing in for
 // that real editor instance.
+//
+// KNOWN CLAUDE.md DEVIATION, left for that future integration step: this
+// component calls `window.api.exportPdf` and `useDocumentStore.setState`
+// directly (see handleExportPdf below) rather than through a documentStore
+// action, which CLAUDE.md's State Management section requires ("screen
+// components should call its actions, never window.api directly"). This
+// could not be fixed properly during this track's original build --
+// `documentStore.ts` was off-limits (owned by a concurrent track in a
+// separate worktree) -- and remains off-limits in this fix round for the
+// same reason. Whoever integrates this component into EditorScreen.tsx
+// should add a real `exportPdf` action to documentStore.ts and have this
+// component call that instead.
 export interface EditorToolbarProps {
   editorRef: RefObject<MilkdownEditorHandle | null>
 }
@@ -69,6 +81,16 @@ function ToolbarDivider(): ReactElement {
 interface ToolbarIconButtonProps {
   label: string
   onClick?: () => void
+  // Only pass this for a genuinely toggleable button (Bold, Italic,
+  // Underline, Bulleted/Numbered list, Checklist) -- its mere PRESENCE (not
+  // just its value) controls whether `aria-pressed` is rendered at all.
+  // Fix-round finding: every button previously rendered `aria-pressed`
+  // (defaulting to `false`) regardless of whether it represented a toggle
+  // state -- a screen reader announces `aria-pressed="false"` as "this is a
+  // toggle button, currently off," which is actively misleading for a
+  // one-shot action button (Undo, Insert table, Find, Insert page break,
+  // ...) that isn't a toggle at all. One-shot buttons must omit this prop
+  // entirely, not pass `active={false}`.
   active?: boolean
   disabled?: boolean
   children: ReactElement
@@ -79,7 +101,7 @@ interface ToolbarIconButtonProps {
 function ToolbarIconButton({
   label,
   onClick,
-  active = false,
+  active,
   disabled = false,
   children
 }: ToolbarIconButtonProps): ReactElement {
@@ -100,38 +122,43 @@ function ToolbarIconButton({
   )
 }
 
-type HeadingChoice = 'paragraph' | 1 | 2 | 3
-
 function EditorToolbar({ editorRef }: EditorToolbarProps): ReactElement {
   const viewMode = useAppStore((state) => state.viewMode)
   const setViewMode = useAppStore((state) => state.setViewMode)
   const openPageSetup = useAppStore((state) => state.openPageSetup)
   const content = useDocumentStore((state) => state.content)
   const [isExporting, setIsExporting] = useState(false)
-  // Local mirror of "which paragraph style is selected," independent of the
-  // editor's own live selection (which nothing here tracks yet -- see the
-  // <select>'s own comment below for why "Normal text" can't yet be a real
-  // toggle-off).
-  const [headingChoice, setHeadingChoice] = useState<HeadingChoice>('paragraph')
+  // Forces the paragraph-style <select> below to remount (fresh DOM node,
+  // back to its uncontrolled default) after every use -- see
+  // handleHeadingChange's own comment for why. Not a value store; only
+  // ever incremented.
+  const [headingSelectResetKey, setHeadingSelectResetKey] = useState(0)
 
   const handleHeadingChange = (value: string): void => {
+    // Fix-round finding: this dropdown has no live selection-state tracking
+    // (a separate, larger "bubble menu / active formatting state" feature,
+    // out of scope here -- see this component's own module comment), so it
+    // cannot be a CONTROLLED indicator of the cursor's live heading level --
+    // it's a stateless action trigger instead. Bumping this key forces
+    // React to remount the <select> with a fresh DOM node (back to its
+    // uncontrolled "Normal text" default) after every selection. Without
+    // this, a real browser fires no `change` event when the same option is
+    // selected twice in a row with no other selection in between (e.g.
+    // Heading 2 on one block, then Heading 2 again on a DIFFERENT block) --
+    // the <select>'s displayed value hasn't changed from the browser's own
+    // point of view, so the second click silently did nothing (verified;
+    // the test environment's own `userEvent.selectOptions` does NOT
+    // reproduce this, since it dispatches a change event unconditionally,
+    // unlike a real browser).
+    setHeadingSelectResetKey((k) => k + 1)
     if (value === 'paragraph') {
-      // There is no live selection-state tracking wired into this toolbar
-      // yet (that's a separate, larger "bubble menu / active formatting
-      // state" feature this sub-project doesn't build -- see this
-      // component's own module comment). MilkdownEditorHandle.toggleHeading
-      // only clears a heading back to a paragraph when called with the
-      // level that's ALREADY active; without knowing that live, there's no
-      // level this toolbar could safely pass here that's guaranteed to be
-      // the right one to clear. Left as a real, but currently inert,
-      // dropdown option rather than guessing wrong and clearing/creating the
-      // wrong heading level.
-      setHeadingChoice('paragraph')
+      // setParagraph() converts unconditionally, regardless of the current
+      // block's heading level -- no live-state knowledge is needed for
+      // this, unlike an earlier, incorrect version of this comment claimed.
+      editorRef.current?.setParagraph()
       return
     }
-    const level = Number(value) as 1 | 2 | 3
-    setHeadingChoice(level)
-    editorRef.current?.toggleHeading(level)
+    editorRef.current?.toggleHeading(Number(value) as 1 | 2 | 3)
   }
 
   const handleInsertLink = (): void => {
@@ -143,10 +170,22 @@ function EditorToolbar({ editorRef }: EditorToolbarProps): ReactElement {
     if (isExporting) return
     setIsExporting(true)
     try {
-      const result = await window.api.exportPdf(content)
-      if (result) useDocumentStore.setState({ error: null })
+      await window.api.exportPdf(content)
+      // Deliberately does NOT touch documentStore.error on success. An
+      // earlier version cleared it unconditionally here (`setState({ error:
+      // null })`), which silently discarded any unrelated, pre-existing
+      // error message that had nothing to do with this export (fix-round
+      // review finding) -- e.g. a failed Save from moments earlier would
+      // vanish from the error banner the instant an unrelated export
+      // succeeded.
     } catch (err) {
-      useDocumentStore.setState({ error: err instanceof Error ? err.message : String(err) })
+      // Log the real error for diagnosis, but don't put a raw IPC error
+      // string in front of the user (fix-round review finding) -- Electron
+      // wraps a thrown main-process error as something like `Error invoking
+      // remote method 'file:exportPdf': Error: <original message>`, which
+      // is not a message a user should have to parse.
+      console.error('Failed to export PDF', err)
+      useDocumentStore.setState({ error: 'Failed to export PDF. Please try again.' })
     } finally {
       setIsExporting(false)
     }
@@ -186,9 +225,10 @@ function EditorToolbar({ editorRef }: EditorToolbarProps): ReactElement {
       <div className="flex items-center gap-2">
         <div className="relative flex h-[30px] items-center">
           <select
+            key={headingSelectResetKey}
             aria-label="Paragraph style"
             className="h-full appearance-none rounded-sm bg-transparent pl-2.5 pr-6 text-12-5 text-text-primary hover:bg-chrome-light"
-            value={headingChoice === 'paragraph' ? 'paragraph' : String(headingChoice)}
+            defaultValue="paragraph"
             onChange={(e) => handleHeadingChange(e.target.value)}
           >
             <option value="paragraph">Normal text</option>
@@ -238,13 +278,21 @@ function EditorToolbar({ editorRef }: EditorToolbarProps): ReactElement {
           syntax, and this sub-project's brief doesn't scope a color-mark
           command -- so both stay real, present, but unwired buttons. */}
       <div className="flex items-center gap-0.5">
-        <ToolbarIconButton label="Bold" onClick={() => editorRef.current?.toggleBold()}>
+        <ToolbarIconButton
+          label="Bold"
+          active={false}
+          onClick={() => editorRef.current?.toggleBold()}
+        >
           <span className="text-14 font-bold leading-none">B</span>
         </ToolbarIconButton>
-        <ToolbarIconButton label="Italic" onClick={() => editorRef.current?.toggleItalic()}>
+        <ToolbarIconButton
+          label="Italic"
+          active={false}
+          onClick={() => editorRef.current?.toggleItalic()}
+        >
           <span className="text-14 italic leading-none">I</span>
         </ToolbarIconButton>
-        <ToolbarIconButton label="Underline">
+        <ToolbarIconButton label="Underline" active={false}>
           <span className="text-14 leading-none underline">U</span>
         </ToolbarIconButton>
         <ToolbarIconButton label="Text color">
@@ -267,6 +315,7 @@ function EditorToolbar({ editorRef }: EditorToolbarProps): ReactElement {
       <div className="flex items-center gap-0.5">
         <ToolbarIconButton
           label="Bulleted list"
+          active={false}
           onClick={() => editorRef.current?.toggleBulletList()}
         >
           <Icon strokeWidth={1.7}>
@@ -280,6 +329,7 @@ function EditorToolbar({ editorRef }: EditorToolbarProps): ReactElement {
         </ToolbarIconButton>
         <ToolbarIconButton
           label="Numbered list"
+          active={false}
           onClick={() => editorRef.current?.toggleOrderedList()}
         >
           <Icon strokeWidth={1.7}>
@@ -297,7 +347,7 @@ function EditorToolbar({ editorRef }: EditorToolbarProps): ReactElement {
             <path d="M9 17h11" />
           </Icon>
         </ToolbarIconButton>
-        <ToolbarIconButton label="Checklist">
+        <ToolbarIconButton label="Checklist" active={false}>
           <svg
             width="15"
             height="15"

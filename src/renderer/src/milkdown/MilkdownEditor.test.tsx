@@ -1,4 +1,6 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, afterEach, vi } from 'vitest'
+import { createRef } from 'react'
+import { cleanup, render, waitFor } from '@testing-library/react'
 import {
   Editor,
   rootCtx,
@@ -6,20 +8,17 @@ import {
   remarkStringifyOptionsCtx,
   editorViewCtx
 } from '@milkdown/core'
-import {
-  commonmark,
-  toggleStrongCommand,
-  toggleEmphasisCommand,
-  toggleLinkCommand
-} from '@milkdown/preset-commonmark'
+import { commonmark } from '@milkdown/preset-commonmark'
 import { gfm } from '@milkdown/preset-gfm'
 import { listener, listenerCtx } from '@milkdown/plugin-listener'
-import { getMarkdown, insert, callCommand } from '@milkdown/utils'
+import { getMarkdown, insert } from '@milkdown/utils'
 import { TextSelection } from '@milkdown/prose/state'
 import { PINNED_STRINGIFY_OPTIONS } from './stringify-options'
 import { EDITOR_SCHEMA_PLUGINS } from './plugins'
 import { EDITOR_COMMAND_PLUGINS } from './commands'
 import { createTestEditor } from './test-editor'
+import MilkdownEditor, { type MilkdownEditorHandle } from './MilkdownEditor'
+import { buildEditorCommands } from './editor-commands'
 
 describe('Milkdown listener plugin — API pattern verification', () => {
   it('markdownUpdated fires with the new serialized markdown after a real edit', async () => {
@@ -70,20 +69,29 @@ describe('Milkdown listener plugin — API pattern verification', () => {
 // `MilkdownEditor` describe block below relies on (which work by letting
 // ProseMirror's MutationObserver diff a raw DOM change, independent of
 // `state.selection` entirely) for verifying a mark TOGGLE against
-// already-selected existing text: toggleStrongCommand/toggleEmphasisCommand/
-// toggleLinkCommand all call ProseMirror's `toggleMark`, which only rewrites
-// existing text when `state.selection` is a real, non-empty range -- an
-// empty/collapsed selection just flips a *stored* mark for the next typed
-// character, with no visible DOM change to assert against. The only
-// reliable way found to establish a genuine non-empty ProseMirror selection
-// here is to dispatch a transaction that sets one directly (proven to work
-// in the same scratch test), so that's what this block does -- then calls
-// `editor.action(callCommand(commandKey, payload))`, the exact mechanism
-// MilkdownEditorHandle.toggleBold/toggleItalic/insertLink (MilkdownEditor.tsx)
-// wrap, against the exact plugin composition MilkdownEditor.tsx mounts
-// (EDITOR_SCHEMA_PLUGINS + EDITOR_COMMAND_PLUGINS, both imported rather than
-// hand-copied so this can't silently drift from what's actually shipped).
-describe('MilkdownEditorHandle mark-toggle commands — API pattern verification', () => {
+// already-selected existing text: the underlying toggleMark-backed commands
+// only rewrite existing text when `state.selection` is a real, non-empty
+// range -- an empty/collapsed selection just flips a *stored* mark for the
+// next typed character, with no visible DOM change to assert against. The
+// only reliable way found to establish a genuine non-empty ProseMirror
+// selection here is to dispatch a transaction that sets one directly
+// (proven to work in the same scratch test), so that's what this block
+// does.
+//
+// Fix-round change: this block now calls `buildEditorCommands(editor)` --
+// the exact, real, exported function MilkdownEditor.tsx's own mount effect
+// calls to build the imperative handle -- rather than calling
+// `editor.action(callCommand(commandKey, payload))` directly with a
+// hardcoded command key. The earlier version of this block did the latter,
+// and a mutation-testing pass found the real gap that left: rewiring
+// MilkdownEditorHandle.toggleBold to dispatch toggleEmphasisCommand instead
+// (a genuine wiring bug) passed every test in the suite, because this block
+// verified the underlying command MECHANISM works, never that
+// MilkdownEditorHandle.toggleBold is wired to the RIGHT command key. Going
+// through buildEditorCommands closes that gap: this IS the shipped
+// implementation, not a stand-in for it, so a wiring bug like the
+// mutation-tested one now fails here directly.
+describe('MilkdownEditorHandle commands needing a real ranged selection — wired-implementation verification', () => {
   const PLUGINS = [...EDITOR_SCHEMA_PLUGINS.flat(), ...EDITOR_COMMAND_PLUGINS]
 
   // "# Hello World" parses to doc(heading("Hello World")). Position 7 is
@@ -97,42 +105,45 @@ describe('MilkdownEditorHandle mark-toggle commands — API pattern verification
     })
   }
 
-  it('toggleStrongCommand wraps a real selection in <strong>, and calling it again removes it', async () => {
+  it('toggleBold() wraps a real selection in <strong>, and calling it again removes it', async () => {
     const editor = await createTestEditor('# Hello World', PLUGINS)
     const root = document.querySelector('.ProseMirror') as HTMLElement
+    const commands = buildEditorCommands(editor)
 
     selectWorld(editor)
-    editor.action(callCommand(toggleStrongCommand.key))
+    commands.toggleBold()
     expect(root.querySelector('h1')?.innerHTML).toBe('Hello <strong>World</strong>')
 
     selectWorld(editor)
-    editor.action(callCommand(toggleStrongCommand.key))
+    commands.toggleBold()
     expect(root.querySelector('h1')?.innerHTML).toBe('Hello World')
 
     await editor.destroy()
   })
 
-  it('toggleEmphasisCommand wraps a real selection in <em>, and calling it again removes it', async () => {
+  it('toggleItalic() wraps a real selection in <em>, and calling it again removes it', async () => {
     const editor = await createTestEditor('# Hello World', PLUGINS)
     const root = document.querySelector('.ProseMirror') as HTMLElement
+    const commands = buildEditorCommands(editor)
 
     selectWorld(editor)
-    editor.action(callCommand(toggleEmphasisCommand.key))
+    commands.toggleItalic()
     expect(root.querySelector('h1')?.innerHTML).toBe('Hello <em>World</em>')
 
     selectWorld(editor)
-    editor.action(callCommand(toggleEmphasisCommand.key))
+    commands.toggleItalic()
     expect(root.querySelector('h1')?.innerHTML).toBe('Hello World')
 
     await editor.destroy()
   })
 
-  it('toggleLinkCommand wraps a real selection in a real <a href>', async () => {
+  it('insertLink(href) wraps a real selection in a real <a href>', async () => {
     const editor = await createTestEditor('# Hello World', PLUGINS)
     const root = document.querySelector('.ProseMirror') as HTMLElement
+    const commands = buildEditorCommands(editor)
 
     selectWorld(editor)
-    editor.action(callCommand(toggleLinkCommand.key, { href: 'https://example.com' }))
+    commands.insertLink('https://example.com')
 
     const link = root.querySelector('h1 a')
     expect(link?.getAttribute('href')).toBe('https://example.com')
@@ -140,12 +151,36 @@ describe('MilkdownEditorHandle mark-toggle commands — API pattern verification
 
     await editor.destroy()
   })
-})
 
-import { createRef } from 'react'
-import { cleanup, render, waitFor } from '@testing-library/react'
-import { afterEach, vi } from 'vitest'
-import MilkdownEditor, { type MilkdownEditorHandle } from './MilkdownEditor'
+  it('insertPageBreak() does not delete a non-empty selection -- selected text survives the insertion', async () => {
+    // Fix-round finding (verified, not theorized): the original
+    // insertPagebreakCommand called `state.tr.replaceSelectionWith(...)`
+    // directly against whatever the current selection was, which REPLACES
+    // (consumes) a ranged selection rather than just inserting at it --
+    // "Hello World" with "Hello" selected produced a pagebreak node
+    // followed by "<p> World</p>", with "Hello" silently gone. This test
+    // reproduces that exact repro and asserts it no longer happens.
+    const editor = await createTestEditor('# Hello World', PLUGINS)
+    const root = document.querySelector('.ProseMirror') as HTMLElement
+    const commands = buildEditorCommands(editor)
+
+    // Select "Hello" (positions 1-6 inside the heading: position 1 is
+    // right before "H", position 6 is right after the second "l" -- 5
+    // characters).
+    editor.action((ctx) => {
+      const view = ctx.get(editorViewCtx)
+      view.dispatch(view.state.tr.setSelection(TextSelection.create(view.state.doc, 1, 6)))
+    })
+
+    commands.insertPageBreak()
+
+    expect(root.querySelector('div[data-type="pagebreak"]')).toBeInTheDocument()
+    expect(root.textContent).toContain('Hello')
+    expect(root.textContent).toContain('World')
+
+    await editor.destroy()
+  })
+})
 
 describe('MilkdownEditor', () => {
   afterEach(() => {
@@ -393,6 +428,83 @@ describe('MilkdownEditor', () => {
     ref.current?.toggleOrderedList()
     expect(container.querySelector('ol')).not.toBeInTheDocument()
     expect(container.querySelector('p')?.textContent).toBe('Ordered target')
+  })
+
+  it('Fix-round: toggleBulletList() SWITCHES an ordered list to a bullet list (not a silent no-op)', async () => {
+    // Fix-round finding (verified, not theorized): the original
+    // isInListType helper only checked the TARGET type, so with the cursor
+    // in an `ordered_list`, toggleBulletList() took the "wrap" branch --
+    // and ProseMirror's `wrapIn` (which wrapInBulletListCommand calls)
+    // silently no-ops when the selection is already inside ANY list. The
+    // `<ol>` stayed an `<ol>`, byte-identical before/after, with zero
+    // feedback. This test starts the document already inside an ordered
+    // list (real markdown source, "1. Ordered item") and asserts
+    // toggleBulletList() genuinely converts it.
+    const onChange = vi.fn()
+    const onError = vi.fn()
+    const ref = createRef<MilkdownEditorHandle>()
+    const { container } = render(
+      <MilkdownEditor ref={ref} content="1. Ordered item" onChange={onChange} onError={onError} />
+    )
+    await waitFor(() =>
+      expect(container.querySelector('ol > li')?.textContent).toBe('Ordered item')
+    )
+
+    ref.current?.toggleBulletList()
+
+    expect(container.querySelector('ol')).not.toBeInTheDocument()
+    expect(container.querySelector('ul > li')?.textContent).toBe('Ordered item')
+  })
+
+  it('Fix-round: toggleOrderedList() SWITCHES a bullet list to an ordered list (not a silent no-op)', async () => {
+    const onChange = vi.fn()
+    const onError = vi.fn()
+    const ref = createRef<MilkdownEditorHandle>()
+    const { container } = render(
+      <MilkdownEditor ref={ref} content="- Bullet item" onChange={onChange} onError={onError} />
+    )
+    await waitFor(() => expect(container.querySelector('ul > li')?.textContent).toBe('Bullet item'))
+
+    ref.current?.toggleOrderedList()
+
+    expect(container.querySelector('ul')).not.toBeInTheDocument()
+    expect(container.querySelector('ol > li')?.textContent).toBe('Bullet item')
+  })
+
+  it('setParagraph() unconditionally converts the current block to a plain paragraph', async () => {
+    // Fix-round finding: an earlier version of this method (and its own
+    // doc comment) incorrectly claimed there was no way to clear a heading
+    // back to a paragraph without knowing its current level first.
+    // wrapInHeadingCommand(0) -> paragraph works regardless of the
+    // starting level -- this test checks it against both h1 and h3 to
+    // demonstrate it genuinely doesn't depend on the current level.
+    const onChange = vi.fn()
+    const onError = vi.fn()
+    const ref = createRef<MilkdownEditorHandle>()
+    const { container } = render(
+      <MilkdownEditor ref={ref} content="# Heading One" onChange={onChange} onError={onError} />
+    )
+    await waitFor(() => expect(container.querySelector('h1')?.textContent).toBe('Heading One'))
+
+    ref.current?.setParagraph()
+
+    expect(container.querySelector('h1')).not.toBeInTheDocument()
+    expect(container.querySelector('p')?.textContent).toBe('Heading One')
+  })
+
+  it('setParagraph() works from a deeper heading level too (h3), not just h1', async () => {
+    const onChange = vi.fn()
+    const onError = vi.fn()
+    const ref = createRef<MilkdownEditorHandle>()
+    const { container } = render(
+      <MilkdownEditor ref={ref} content="### Heading Three" onChange={onChange} onError={onError} />
+    )
+    await waitFor(() => expect(container.querySelector('h3')?.textContent).toBe('Heading Three'))
+
+    ref.current?.setParagraph()
+
+    expect(container.querySelector('h3')).not.toBeInTheDocument()
+    expect(container.querySelector('p')?.textContent).toBe('Heading Three')
   })
 
   it('insertTable inserts a real 2x2 table (one header row + one body row) at the cursor', async () => {

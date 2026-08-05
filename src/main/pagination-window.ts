@@ -44,6 +44,12 @@ let schemeHandlerRegistered = false
 // precondition for calling this function) before the app is ready anyway.
 // The guard makes this safe to call repeatedly (e.g. multiple harnesses,
 // repeated test runs) without double-registering anything.
+//
+// (Fix-round note: a per-caller-isolated-partition variant of this function
+// was tried and reverted during the PDF-export timing investigation -- see
+// pdf-exporter.ts's own comment for what the slowdown actually turned out
+// to be. Session/partition sharing was NOT the cause, so this stays the
+// single shared session every caller has always used.)
 function ensureRenderInfraRegistered(): Session {
   if (renderSession) return renderSession
 
@@ -161,8 +167,19 @@ export interface PaginationResult {
 
 export interface PaginationHarness {
   view: WebContentsView
-  sendDocument(html: string): Promise<PaginationResult>
+  // `timeoutMs` defaults to DEFAULT_SEND_DOCUMENT_TIMEOUT_MS below when
+  // omitted -- added (fix-round review, PDF export track) so a caller with
+  // a heavier-than-routine workload (large-document PDF export) can ask for
+  // a longer allowance than the default without changing that default for
+  // every other caller (thumbnail generation, Phase 0 gates) that's always
+  // been fine with it.
+  sendDocument(html: string, timeoutMs?: number): Promise<PaginationResult>
 }
+
+// The general-purpose default every existing caller (thumbnail-generator.ts,
+// every phase0/phase1 gate) implicitly relied on before this became a real
+// parameter -- unchanged from the literal `10_000` this replaces.
+const DEFAULT_SEND_DOCUMENT_TIMEOUT_MS = 10_000
 
 // Builds the sandboxed pagination render harness: a WebContentsView (not an
 // <iframe> — see the design doc's rejection of the iframe approach) loaded
@@ -211,13 +228,16 @@ export async function createPaginationHarness(win: BaseWindow): Promise<Paginati
   view.setBounds({ x: 0, y: 0, width: 816, height: 1056 })
   await view.webContents.loadURL(`${RENDER_SCHEME}://${RENDER_HOST}/index.html`)
 
-  async function sendDocument(html: string): Promise<PaginationResult> {
+  async function sendDocument(
+    html: string,
+    timeoutMs: number = DEFAULT_SEND_DOCUMENT_TIMEOUT_MS
+  ): Promise<PaginationResult> {
     const requestId = randomUUID()
     await view.webContents.executeJavaScript(
       `window.postMessage(${JSON.stringify({ type: 'render', html, requestId })}, '*')`
     )
 
-    const deadline = Date.now() + 10_000
+    const deadline = Date.now() + timeoutMs
     while (Date.now() < deadline) {
       const result = await view.webContents.executeJavaScript(
         `(window.__pagedownResult && window.__pagedownResult.requestId === ${JSON.stringify(requestId)}) ? window.__pagedownResult : null`
@@ -246,7 +266,7 @@ export async function createPaginationHarness(win: BaseWindow): Promise<Paginati
       }
       await new Promise((resolve) => setTimeout(resolve, 50))
     }
-    throw new Error('Pagination harness timed out waiting for a result')
+    throw new Error(`Pagination harness timed out waiting for a result (after ${timeoutMs}ms)`)
   }
 
   return { view, sendDocument }

@@ -117,3 +117,79 @@ test('Gate 12: window.api.exportPdf resolves to null (writes nothing) when the S
 
   await close()
 })
+
+// Fix-round regression guard. The ORIGINAL src/main/pdf-exporter.ts
+// memoized a single pagination harness across every export call within an
+// app session -- verified (fix-round review) to make every export after
+// the first ~12x slower: six consecutive exports of the same 60-paragraph
+// document measured 325ms, then 3642/4000/4044/3975/4059ms. Concretely, a
+// ~10-page document exported fine as the FIRST export of a session but
+// failed outright ("Pagination harness timed out waiting for a result") as
+// a LATER export in the same session, once the ~12x-slower steady state
+// pushed it past sendDocument's timeout. The original version of this gate
+// only ever exported once per launched app and structurally could not have
+// caught this -- it always measured the "first export" case, never a
+// later one. This test exports the same multi-paragraph document THREE
+// times in one app session and asserts later exports don't degrade,
+// closing that gap. The fix (src/main/pdf-exporter.ts): a fresh,
+// single-use pagination harness per export call instead of one memoized
+// across calls.
+test('Gate 12: exporting the same multi-paragraph document repeatedly in one app session does not degrade', async () => {
+  test.setTimeout(90_000)
+
+  const { app, close } = await launchIsolatedApp(['.'])
+  const win = await getMainWindow(app)
+  await win.waitForFunction(() => (window as unknown as { api?: unknown }).api !== undefined)
+
+  const fixtureDir = await mkdtemp(join(tmpdir(), 'pagedown-gate12-repeat-'))
+
+  try {
+    // A real 60-paragraph document -- the same size the fix-round review
+    // used to originally measure and verify this regression.
+    const paragraphs = Array.from(
+      { length: 60 },
+      (_, i) =>
+        `Paragraph ${i + 1}. ${'Real export-timing regression-guard filler text. '.repeat(8)}`
+    )
+    const content = `# Gate 12 Repeated Export\n\n${paragraphs.join('\n\n')}\n`
+
+    const durationsMs: number[] = []
+    for (let i = 0; i < 3; i++) {
+      const targetPath = join(fixtureDir, `export-${i}.pdf`)
+      await app.evaluate(({ dialog }, filePath) => {
+        dialog.showSaveDialog = (() =>
+          Promise.resolve({ canceled: false, filePath })) as typeof dialog.showSaveDialog
+      }, targetPath)
+
+      const start = Date.now()
+      const result = await win.evaluate((c) => {
+        const api = (window as unknown as { api: { exportPdf: (x: string) => Promise<unknown> } })
+          .api
+        return api.exportPdf(c)
+      }, content)
+      durationsMs.push(Date.now() - start)
+
+      expect(result).toEqual({ filePath: targetPath })
+      const buffer = await readFile(targetPath)
+      expect(buffer.subarray(0, 5).toString('latin1')).toBe('%PDF-')
+    }
+
+    console.log('Gate 12 repeated-export timings (ms):', durationsMs)
+
+    // Generous regression guard, not a tight performance bound: a later
+    // export must not balloon to several times the first export's
+    // duration, which is exactly the ~12x-slowdown signature the original
+    // memoized-harness bug produced. `Math.max(..., 5000)` keeps this from
+    // being flaky against a fast, low-millisecond first export on a quick
+    // machine, where ordinary run-to-run noise alone could otherwise
+    // exceed a small multiplier.
+    const [first, ...rest] = durationsMs
+    for (const later of rest) {
+      expect(later).toBeLessThan(Math.max(first * 5, 5000))
+    }
+  } finally {
+    await rm(fixtureDir, { recursive: true, force: true })
+  }
+
+  await close()
+})

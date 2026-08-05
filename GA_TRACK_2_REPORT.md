@@ -35,17 +35,17 @@ against the real live editor, exactly as specced. Command keys used, all
 verified against real `.d.ts`/`.ts` source under `node_modules` (not assumed
 from memory — see file comments for the exact verification path for each):
 
-| Method | Underlying command(s) | Source package |
-|---|---|---|
-| `toggleBold` | `toggleStrongCommand` | `@milkdown/preset-commonmark` |
-| `toggleItalic` | `toggleEmphasisCommand` | `@milkdown/preset-commonmark` |
-| `toggleHeading(level)` | `wrapInHeadingCommand` (level, or `0` for "already this level → back to paragraph") | `@milkdown/preset-commonmark` |
-| `toggleBulletList` | `wrapInBulletListCommand` / `liftListItemCommand` | `@milkdown/preset-commonmark` |
-| `toggleOrderedList` | `wrapInOrderedListCommand` / `liftListItemCommand` | `@milkdown/preset-commonmark` |
-| `insertLink(href)` | `toggleLinkCommand` (`{ href }`) | `@milkdown/preset-commonmark` |
-| `insertTable` | `insertTableCommand` (`{ row: 2, col: 2 }`) | `@milkdown/preset-gfm` |
-| `insertPageBreak` | `insertPagebreakCommand` (new, this project's own) | `src/renderer/src/milkdown/commands.ts` |
-| `undo` / `redo` | `undoCommand` / `redoCommand` (new, wrapping `prosemirror-history`'s own `undo`/`redo`) | `src/renderer/src/milkdown/commands.ts` |
+| Method                 | Underlying command(s)                                                                   | Source package                          |
+| ---------------------- | --------------------------------------------------------------------------------------- | --------------------------------------- |
+| `toggleBold`           | `toggleStrongCommand`                                                                   | `@milkdown/preset-commonmark`           |
+| `toggleItalic`         | `toggleEmphasisCommand`                                                                 | `@milkdown/preset-commonmark`           |
+| `toggleHeading(level)` | `wrapInHeadingCommand` (level, or `0` for "already this level → back to paragraph")     | `@milkdown/preset-commonmark`           |
+| `toggleBulletList`     | `wrapInBulletListCommand` / `liftListItemCommand`                                       | `@milkdown/preset-commonmark`           |
+| `toggleOrderedList`    | `wrapInOrderedListCommand` / `liftListItemCommand`                                      | `@milkdown/preset-commonmark`           |
+| `insertLink(href)`     | `toggleLinkCommand` (`{ href }`)                                                        | `@milkdown/preset-commonmark`           |
+| `insertTable`          | `insertTableCommand` (`{ row: 2, col: 2 }`)                                             | `@milkdown/preset-gfm`                  |
+| `insertPageBreak`      | `insertPagebreakCommand` (new, this project's own)                                      | `src/renderer/src/milkdown/commands.ts` |
+| `undo` / `redo`        | `undoCommand` / `redoCommand` (new, wrapping `prosemirror-history`'s own `undo`/`redo`) | `src/renderer/src/milkdown/commands.ts` |
 
 ### Key findings from empirical verification
 
@@ -58,7 +58,7 @@ from memory — see file comments for the exact verification path for each):
 
 Two new `describe` blocks, extending the file's existing patterns:
 
-1. **`MilkdownEditorHandle mark-toggle commands — API pattern verification`** (new, mirrors the file's pre-existing "listener plugin" raw-`Editor` verification block) — for `toggleBold`/`toggleItalic`/`insertLink`, since these need a real *ranged* selection (jsdom can't produce one — see above). Builds a raw `Editor` with the exact shipped plugin composition (`EDITOR_SCHEMA_PLUGINS` + `EDITOR_COMMAND_PLUGINS`, imported, not hand-copied), dispatches a real `TextSelection` transaction, then calls `editor.action(callCommand(...))` — the exact mechanism the handle methods wrap — and asserts real `<strong>`/`<em>`/`<a href>` in the rendered DOM, both applying and (for bold/italic) removing the mark.
+1. **`MilkdownEditorHandle mark-toggle commands — API pattern verification`** (new, mirrors the file's pre-existing "listener plugin" raw-`Editor` verification block) — for `toggleBold`/`toggleItalic`/`insertLink`, since these need a real _ranged_ selection (jsdom can't produce one — see above). Builds a raw `Editor` with the exact shipped plugin composition (`EDITOR_SCHEMA_PLUGINS` + `EDITOR_COMMAND_PLUGINS`, imported, not hand-copied), dispatches a real `TextSelection` transaction, then calls `editor.action(callCommand(...))` — the exact mechanism the handle methods wrap — and asserts real `<strong>`/`<em>`/`<a href>` in the rendered DOM, both applying and (for bold/italic) removing the mark.
 2. Extended the existing `MilkdownEditor` describe block (full mounted component + `ref`) with 6 new tests for `toggleHeading`, `toggleBulletList`, `toggleOrderedList`, `insertTable`, `insertPageBreak`, and `undo`/`redo` — using the editor's own default initial cursor position (inside the first/only block), since that's testable without needing DOM-driven selection.
 
 All 16 tests in the file pass: 7 pre-existing + 9 new (3 in the new mark-toggle "API pattern verification" block, 6 added to the existing `MilkdownEditor` describe block).
@@ -177,7 +177,7 @@ regression.
   with a real URL the user typed.
 - **The paragraph-style dropdown's "Normal text" option is a real `<select>`
   option but currently a no-op.** `toggleHeading` only clears a heading back
-  to a paragraph when called with the level that's *already* active, and
+  to a paragraph when called with the level that's _already_ active, and
   this toolbar has no live selection-state tracking (a separate, larger
   "bubble menu / active formatting state" feature, out of scope here) to
   know which level that is. Documented in the component's own code comment
@@ -257,3 +257,366 @@ track), typecheck/lint/prettier/build all clean.
 Not touched (per constraints): `EditorScreen.tsx`, `documentStore.ts`,
 `EditorTabBar.tsx`, `EditorOutline.tsx`, `EditorSidebar.tsx`,
 `EditorStatusBar.tsx`, `PageSetupModal.tsx`.
+
+---
+
+# Fix-round addendum
+
+Independent code review came back CHANGES NEEDED with 7 numbered items (1
+HIGH, 5 MEDIUM, 1 LOW-MEDIUM) plus item-7 cleanups. All are addressed below.
+The `editedSinceMountRef`/undo-redo integration the review called out as
+independently re-verified safe was not touched.
+
+**Note (per the coordinator's message, not something to act on):** Track 4,
+running in parallel, also created a file it calls "Gate 12"
+(`phase0/gate12-page-count.spec.ts`). No literal git conflict with this
+track's `phase0/gate12-pdf-export-ipc.spec.ts` (different filenames), but
+both internally claim gate number 12. Flagged as known/already-tracked for
+integration-time renumbering; not fixed here.
+
+**Also per the coordinator's message:** the toolbar is still not mounted
+anywhere (`EditorScreen.tsx` doesn't import `EditorToolbar`) — this remains
+a deliberate constraint of this track's scope, not an oversight, restated
+here explicitly for integration-time tracking.
+
+## Item 1 (HIGH) — PDF export harness reuse causing severe slowdown/failures
+
+**Status: fixed and verified, but the true root cause was NOT what the
+first fix attempt assumed** — worth reading in full, since two intermediate
+"fixes" were tried, measured, and found not to work before the real cause
+was isolated.
+
+**Attempt 1 — fresh harness per export (what the review's own suggested
+direction was).** Implemented: no more memoized `harnessPromise`, every
+export gets its own `WebContentsView` via `createPaginationHarness`, torn
+down after use. Measured via the new Gate 12 repeated-export test (below),
+through the real IPC path: **488ms, 3584ms, 4392ms** — still an ~8-9x
+slowdown. This did NOT reproduce the review's own reported "~300ms flat"
+result for the same fix direction.
+
+**Attempt 2 — isolated session/partition per export**, on top of Attempt 1
+(hypothesis: the shared, memoized `renderSession`/`StoragePartition` every
+harness routes through, fresh WebContentsView or not, was where state
+accumulated). Implemented by parameterizing
+`pagination-window.ts`'s `ensureRenderInfraRegistered`/`createPaginationHarness`
+to accept a caller-supplied partition name, and generating a unique one
+(`pagedown-render-export-<uuid>`) per export. Measured: **1467ms, 3431ms,
+4310ms** — still degrading, statistically indistinguishable from Attempt 1.
+Also tested (even more targeted): disabling `generateTaggedPDF` entirely
+(temporarily, diagnostic-only, reverted immediately after) — **491ms,
+3472ms, 4371ms** — still degrading. Both hypotheses ruled out by
+measurement, not argument. The partition-parameterization change was
+reverted back out of `pagination-window.ts` afterward (see that file's own
+note); the only trace it leaves is a comment explaining it was tried.
+
+**Root cause, isolated via a controlled A/B diagnostic** (a throwaway
+Playwright script, written and deleted, using the existing
+`__pagedownPhase0` bridge to call `createPaginationHarness`/`printToPDF`
+directly — bypassing IPC/dialog entirely to isolate variables): with the
+harness's `WebContentsView` attached to its own **dedicated, never-shown
+`BaseWindow`** instead of the real app-shell `mainWindow`, BOTH a memoized
+harness (3 `printToPDF` calls on one harness) AND a fresh-harness-per-call
+approach measured **flat, fast timing** — memoized: `[85, 70, 69]`ms; fresh:
+`[78, 71, 75]`ms. Reusing vs. recreating the harness turned out not to
+matter **at all**. What mattered was that every previous version of
+`pdf-exporter.ts` (including both fix attempts above) attached the
+harness's view to the real, visible, actively-composited/focused
+`mainWindow` — repeatedly adding/removing a child `WebContentsView` on that
+window accumulates real overhead across repeated `printToPDF` calls, even
+positioned off-screen. A dedicated, always-hidden `BaseWindow` used for
+nothing else doesn't have that cost.
+
+**Actual fix** (`src/main/pdf-exporter.ts`): `withFreshHarness` now creates
+a dedicated `new BaseWindow({ show: false })` per export, attaches the
+harness to _that_, and calls `harnessWindow.destroy()` in its `finally`
+block (destroying the window destroys its owned view/webContents with it —
+no separate `removeChildView`/`webContents.close()` needed). `win` (the
+real `mainWindow`, still passed into `exportDocumentToPdf`) is now used
+**only** for `dialog.showSaveDialog`'s modality, never as the harness's
+parent window.
+
+**Verified fix, before/after, exact numbers:**
+
+|                                                                                  | 1st export | 2nd export                     | 3rd export |
+| -------------------------------------------------------------------------------- | ---------- | ------------------------------ | ---------- |
+| Reviewer's original finding (memoized harness, real IPC path)                    | 325ms      | 3642ms → 4059ms (5 more calls) |
+| This track's Attempt 1 (fresh harness, still on mainWindow)                      | 488ms      | 3584ms                         | 4392ms     |
+| This track's Attempt 2 (fresh harness + isolated partition, still on mainWindow) | 1467ms     | 3431ms                         | 4310ms     |
+| **Actual fix (dedicated hidden BaseWindow), run 1**                              | **404ms**  | **401ms**                      | **395ms**  |
+| **Actual fix, run 2**                                                            | **426ms**  | **419ms**                      | **414ms**  |
+| **Actual fix, run 3**                                                            | **443ms**  | **431ms**                      | **430ms**  |
+| **Actual fix, run 4**                                                            | **431ms**  | **419ms**                      | **414ms**  |
+
+Five independent full runs of Gate 12 (each launching a fresh app instance)
+all show flat timing in the 380-450ms range with no growth pattern — a
+~9-10x improvement over the degraded steady state, and (more importantly)
+no timeout risk regardless of how many exports happen in one session.
+
+**`sendDocument`'s timeout was parameterized** as asked
+(`src/main/pagination-window.ts`): `sendDocument(html: string, timeoutMs?:
+number)`, defaulting to the existing `10_000`ms for every pre-existing
+caller (fully backward compatible — verified no other caller passes a
+second argument). `pdf-exporter.ts` requests `30_000`ms
+(`EXPORT_PAGINATION_TIMEOUT_MS`), matching Gate 7's own reasoning for giving
+a known-heavier workload more headroom than the routine default.
+
+**New Gate 12 test**, exactly as asked: exports the same 60-paragraph
+document 3 times in one app session (`phase0/gate12-pdf-export-ipc.spec.ts`,
+`Gate 12: exporting the same multi-paragraph document repeatedly in one app
+session does not degrade`), logs each duration, and asserts no later export
+exceeds `max(first * 5, 5000)`ms — a generous regression guard (not a tight
+performance bound) sized to catch a real return of the ~8-12x-slowdown
+signature without being flaky against ordinary machine noise. The original
+Gate 12 exported once per launched app and structurally could not have
+caught this class of regression; this closes that gap.
+
+**One known, accepted limitation**: `BaseWindow.destroy()`'s child-view
+cleanup was verified via the _absence_ of the slowdown returning across
+repeated real exports (5 full-suite/gate runs, no zombie process
+accumulation observed via `ps aux` during the investigation) rather than
+via an explicit process-count assertion in the gate itself — asserting on
+OS-level process counts from inside a Playwright test would be its own can
+of worms (process counts vary by platform/Electron version) and wasn't
+asked for; noted here for transparency rather than silently assumed clean.
+
+## Item 2 (MEDIUM) — mark-command test coverage gap (bold/italic/link untested against the real handle)
+
+**Fixed.** Root cause: the pre-fix-round "API pattern verification" test
+block called `editor.action(callCommand(toggleStrongCommand.key))` directly
+with a **hardcoded command key**, never actually invoking
+`MilkdownEditorHandle.toggleBold` itself — so rewiring `toggleBold` to
+dispatch `toggleEmphasisCommand` (the reviewer's mutation test) changed
+nothing the test suite could see.
+
+**Fix**: extracted the command-building logic that used to live inline in
+`MilkdownEditor.tsx`'s mount effect into a new, standalone, exported
+function — `buildEditorCommands(editor: Editor): EditorCommands`
+(`src/renderer/src/milkdown/editor-commands.ts`, new file). The mounted
+component now just calls `commandsRef.current = buildEditorCommands(created)`
+instead of building the object inline. Tests now call
+`buildEditorCommands(editor)` directly (with a real ProseMirror selection
+established via direct transaction dispatch — jsdom's Selection/Range API
+still doesn't sync into `state.selection`, verified again this round) and
+assert on the real DOM result. This is the literal, single, shared
+implementation the mounted component also uses — a wiring bug like the
+mutation-tested one now fails directly, since there's no second
+hand-written copy of the dispatch logic to go out of sync.
+
+**Why a separate file, not just exported from `MilkdownEditor.tsx`:**
+eslint's `react-refresh/only-export-components` rule flagged exporting a
+plain function (`buildEditorCommands`) alongside the component in the same
+file as a real error (not a style nit) once the extraction was attempted
+in-place — Fast Refresh assumes a component file only exports components
+(plus types). Moving `buildEditorCommands`/`EditorCommands`/the
+list-ancestor helper to `editor-commands.ts` resolved it cleanly;
+`MilkdownEditorHandle` (in `MilkdownEditor.tsx`) now `extends
+EditorCommands` and adds only `flush()`.
+
+**New/changed tests** (`MilkdownEditor.test.tsx`): the mark-toggle
+describe block (renamed to `MilkdownEditorHandle commands needing a real
+ranged selection — wired-implementation verification`) now calls
+`buildEditorCommands(editor).toggleBold()` /`.toggleItalic()`
+/`.insertLink()` instead of raw `callCommand(...)`. Re-verified by
+temporarily re-running the reviewer's own mutation (swapping
+`toggleStrongCommand` for `toggleEmphasisCommand` inside
+`buildEditorCommands`) against the new tests: the `toggleBold` test failed
+immediately (`Hello <em>World</em>` where `Hello <strong>World</strong>`
+was expected) — confirmed the gap is closed, then reverted the mutation.
+
+## Item 3 (MEDIUM) — switching list type was a silent no-op
+
+**Fixed.** `findAncestorListType` (renamed from `isInListType`,
+`editor-commands.ts`) now returns _which_ list type (`'bullet_list'` /
+`'ordered_list'` / `null`) the selection is inside, not just whether it
+matches one target type. `toggleBulletList`/`toggleOrderedList` now
+distinguish three real cases: already the target type → lift out (toggle
+off, unchanged from before); inside the OTHER list type → lift out of that
+first, then wrap in the target type (new); not in any list → wrap
+(unchanged). The two `callCommand` calls for the "switch" case are
+dispatched synchronously back to back inside one `editor.action` callback —
+verified directly (not assumed) that the second one sees the state the
+first one's dispatch just produced, via the new tests described next.
+
+**New tests** (`MilkdownEditor.test.tsx`, through the real mounted
+component + ref): `Fix-round: toggleBulletList() SWITCHES an ordered list
+to a bullet list (not a silent no-op)` (starts the document already inside
+a real `1. Ordered item` ordered list, asserts `toggleBulletList()`
+converts it to `<ul><li>` with the `<ol>` gone) and the symmetric
+`toggleOrderedList()` test starting from `- Bullet item`. Both pass.
+
+## Item 4 (MEDIUM) — "Normal text" doesn't work, and the code comment's reasoning was wrong
+
+**Fixed, and the incorrect comment corrected** (both in code and here).
+Added `setParagraph()` to `MilkdownEditorHandle`/`EditorCommands`:
+`editor.action(callCommand(wrapInHeadingCommand.key, 0))` — 3 lines, exactly
+as the reviewer said, and verified directly: `wrapInHeadingCommand(0)`
+converts to a paragraph **unconditionally**, with no dependency on the
+block's current type. The original comment's claim ("no level this toolbar
+could safely pass here that's guaranteed to be the right one to clear") was
+checking the wrong thing — clearing to a paragraph was never conditional on
+knowing the active _heading level_ in the first place; `setParagraph` needs
+no such knowledge, unlike `toggleHeading(2)`'s own genuinely-conditional
+"is it already an h2" check.
+
+`EditorToolbar.tsx`'s paragraph-style dropdown now calls
+`editorRef.current?.setParagraph()` for the "Normal text" option instead of
+the previous no-op branch.
+
+**New tests**: `setParagraph() unconditionally converts the current block
+to a plain paragraph` (from h1) and `setParagraph() works from a deeper
+heading level too (h3), not just h1` (`MilkdownEditor.test.tsx`, through the
+real mounted component); `Selecting "Normal text" in the paragraph-style
+dropdown calls editorRef.current.setParagraph()` (`EditorToolbar.test.tsx`,
+against the fake handle).
+
+**Correction to this report's own earlier text** (original "Deviations"
+section, item "The paragraph-style dropdown's 'Normal text' option is a
+real `<select>` option but currently a no-op"): that paragraph's stated
+reasoning was factually wrong in the same way the code comment was, for the
+same reason. Left in place above (not deleted) as an honest record of what
+was actually claimed at the time, rather than quietly rewritten; this
+addendum is the correction of record.
+
+## Item 5 (MEDIUM) — paragraph-style dropdown gets visually stuck
+
+**Fixed** via the reviewer's second suggested option: restructured as a
+stateless action trigger rather than a controlled indicator of live state.
+`EditorToolbar.tsx`'s `headingChoice` React state (which controlled the
+`<select>`'s `value`) was removed entirely, replaced with a
+`headingSelectResetKey` counter used as the `<select>`'s own `key`. Every
+`onChange` bumps the counter, forcing React to unmount and remount a
+**fresh** `<select>` DOM node (via `defaultValue="paragraph"`, uncontrolled)
+after every use. A real browser fires no `change` event when the same
+option is re-selected with no other selection in between (the exact bug the
+review found) — remounting fresh means the NEXT selection of the same
+option is always a genuine value change from the browser's point of view
+(`paragraph` → whatever was clicked), not a no-op re-selection.
+
+**Why not "resync to live selection" (the review's first option)**: that
+requires building real selection-change subscription/tracking into the
+toolbar, which doesn't exist anywhere in this codebase yet (per
+`MilkdownEditor.tsx`'s and `EditorToolbar.tsx`'s own module comments, a
+separate, larger "bubble menu / active formatting state" feature, out of
+scope for this track). The stateless-trigger restructuring fixes the actual
+reported bug (silently doing nothing on a legitimate repeat selection)
+without requiring that larger feature.
+
+**New test** (`EditorToolbar.test.tsx`): `Fix-round: the paragraph-style
+dropdown resets to its default display after each selection, so
+re-selecting the same heading level fires again` — selects Heading 2,
+asserts the handle was called once, re-queries the (now-remounted) select
+and asserts its `.value` reset to `'paragraph'`, selects Heading 2 again,
+asserts the handle was called a SECOND time. Note (documented in the test
+itself): this environment's own `userEvent.selectOptions` fires a change
+event unconditionally even without the remount fix (confirmed by reading
+the review's own note that this is exactly why the original bug wasn't
+caught by the pre-existing test suite) — so this test verifies the fix
+**mechanism** (the DOM node genuinely resets) rather than being able to
+reproduce the real browser's exact "no event fires" quirk in this
+environment; that's the strongest verification available here, not a
+weaker substitute chosen for convenience.
+
+## Item 6 (LOW-MEDIUM) — page break over a selection silently deleted the selection
+
+**Fixed.** `insertPagebreakCommand` (`src/renderer/src/milkdown/commands.ts`)
+now collapses the selection to its start first
+(`TextSelection.create(state.doc, state.selection.from)`) via
+`state.tr.setSelection(...)`, THEN calls `.replaceSelectionWith(...)` on
+that now-empty selection — inserting at the collapsed point rather than
+replacing whatever range was selected, while still getting
+`replaceSelectionWith`'s own block-splitting behavior for a mid-paragraph
+insertion point.
+
+**New test** (`MilkdownEditor.test.tsx`, in the "wired-implementation
+verification" describe block, since it needs a real ranged selection):
+`insertPageBreak() does not delete a non-empty selection -- selected text
+survives the insertion` — reproduces the exact reviewer repro ("Hello
+World" with "Hello" selected), asserts the pagebreak node is present AND
+both "Hello" and "World" are still present in the document afterward.
+
+## Item 7 — LOW cleanups
+
+- **CLAUDE.md store-action deviation**: explicitly documented, in code, at
+  the top of `EditorToolbar.tsx`'s own module comment (not just in this
+  report) — `window.api.exportPdf`/`useDocumentStore.setState` calls stay
+  direct because `documentStore.ts` remains off-limits in this fix round
+  for the same reason it was during the original build (owned by a
+  concurrent track). Flagged as a required follow-up for whoever integrates
+  this component and can touch `documentStore.ts`.
+- **Unconditional `error: null` clear on export success**: fixed —
+  `handleExportPdf`'s success path no longer touches `documentStore.error`
+  at all, so an unrelated pre-existing error (e.g. a failed Save) survives
+  an unrelated successful export. New test: `Export PDF success does NOT
+clear an unrelated, pre-existing error message`.
+- **`aria-pressed="false"` on non-toggle buttons**: fixed —
+  `ToolbarIconButton`'s `active` prop no longer defaults to `false`;
+  omitting it entirely now omits the `aria-pressed` attribute (React's own
+  behavior for `undefined` DOM attribute values). Only genuinely toggleable
+  buttons (Bold, Italic, Underline, Bulleted list, Numbered list, Checklist)
+  now pass `active={false}` explicitly; one-shot buttons (Undo, Redo, Insert
+  link/image/table/split-cell/page-break, Find, Page setup) pass nothing.
+  New test: `One-shot action buttons omit aria-pressed entirely; genuine
+toggle buttons render it`.
+- **Raw IPC error strings shown to users**: fixed — `handleExportPdf`'s
+  catch block now logs the real error via `console.error` (for diagnosis)
+  and sets a fixed, friendly `documentStore.error` message ("Failed to
+  export PDF. Please try again.") instead of the raw
+  `err.message`/Electron's own wrapped IPC error string. New test: `Export
+PDF surfaces a failure as a friendly message, not the raw IPC error
+string`.
+- **Inaccurate queue rationale in `pdf-exporter.ts`**: fixed — the comment
+  above `exportQueue`/`enqueueExport` no longer claims the queue exists
+  because of contention with thumbnail-generator.ts's harness (confirmed
+  inaccurate: the two are fully separate instances and cannot race each
+  other). It now correctly states the real reason: avoiding several
+  back-to-back "Export PDF" clicks spinning up multiple full pagination
+  render contexts concurrently for no benefit.
+
+## Fix-round verification output
+
+**`pnpm run typecheck`** — clean, exit 0.
+
+**`pnpm exec eslint .`** (whole repo) — clean, exit 0, zero warnings (this
+also caught and required fixing the `react-refresh/only-export-components`
+error from Item 2's first extraction attempt, described above).
+
+**`pnpm exec prettier --check`** on every touched/created file — `All
+matched files use Prettier code style!`
+
+**`pnpm exec vitest run`** (full unit suite):
+
+```
+Test Files  19 passed (19)
+     Tests  186 passed (186)
+```
+
+(up from 177 before this fix round — 9 net new tests: 4 for item 2's
+wired-implementation verification including the new pagebreak-selection
+test, 4 for items 3/4's list-switching/setParagraph coverage, plus the
+mechanical net effect of consolidating/renaming the mark-toggle describe
+block. `EditorToolbar.test.tsx` grew from 15 to 19 tests: `setParagraph`
+wiring, the dropdown-reset mechanism, the friendly-error-message rewrite,
+the unrelated-error-preservation test, and the aria-pressed distinction
+test.)
+
+**`pnpm run build`** — clean: typecheck → electron-vite build →
+build:pagination-render, all succeeded.
+
+**`pnpm exec playwright test`** (full `phase0` suite) — **28 passed**,
+including all 3 Gate 12 tests and the pre-existing deliberate Gate 10
+`test.fail()`. (Two transient, unrelated flakes were observed mid-investigation
+in a single run — `Gate 11` (untouched by this track) and `Gate 12`'s first
+test both hit `getMainWindow`'s "Timed out locating the main app-shell
+window" on the SAME run, after many consecutive real Electron app launches
+during the timing investigation above; both passed cleanly on immediate
+retry, and 3 subsequent full-suite runs were clean. Not a regression from
+this track's changes — noted for transparency, not swept under the rug.)
+
+## One-line test summary (fix-round)
+
+186/186 unit tests pass (up from 177), 28/28 phase0 Playwright gates pass
+(3 Gate 12 tests, up from 2), typecheck/lint/prettier/build all clean; PDF
+export repeated-export timing confirmed flat (~400ms, no degradation) across
+5 independent runs, down from the original ~12x-degrading steady state (and
+down from two earlier fix attempts that measured statistically identical
+degradation to the original bug before the real root cause was found).

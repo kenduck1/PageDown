@@ -1,5 +1,6 @@
 import { $command, $prose } from '@milkdown/utils'
 import { history, undo, redo } from '@milkdown/prose/history'
+import { TextSelection } from '@milkdown/prose/state'
 import { pagebreakNode } from './nodes/pagebreak'
 
 // prosemirror-history is not wired into either stock preset this editor
@@ -41,11 +42,26 @@ export const redoCommand = $command('Redo', () => () => redo)
 // command it sits alongside uses (see e.g. downgradeHeadingCommand in
 // @milkdown/preset-commonmark's own source for the same
 // `(ctx) => () => (state, dispatch) => {...}` shape).
+// Fix-round finding (verified, not theorized): the original implementation
+// called `state.tr.replaceSelectionWith(type.create())` directly against
+// whatever the CURRENT selection was. `replaceSelectionWith` REPLACES the
+// selection, not just inserts at it -- with a non-empty (ranged) selection,
+// that's silent data loss: "Hello World" with "Hello" selected, then
+// insert-page-break, produced a pagebreak node followed by "<p> World</p>"
+// -- "Hello" was gone (undoable via the real undo/redo above, but silently,
+// on the very plausible gesture of "select some text, click insert page
+// break"). Collapsing the selection to its start FIRST, then replacing
+// THAT (now-empty) selection, keeps `replaceSelectionWith`'s own
+// block-splitting behavior (needed for inserting a block-level atom
+// mid-paragraph) while inserting rather than consuming: whatever was
+// selected survives, immediately after the new page break.
 export const insertPagebreakCommand = $command(
   'InsertPagebreak',
   (ctx) => () => (state, dispatch) => {
     const type = pagebreakNode.type(ctx)
-    dispatch?.(state.tr.replaceSelectionWith(type.create()))
+    const collapsed = TextSelection.create(state.doc, state.selection.from)
+    const tr = state.tr.setSelection(collapsed).replaceSelectionWith(type.create())
+    dispatch?.(tr)
     return true
   }
 )

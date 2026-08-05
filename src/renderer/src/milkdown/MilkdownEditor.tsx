@@ -1,58 +1,12 @@
 import { forwardRef, useEffect, useImperativeHandle, useRef } from 'react'
-import {
-  Editor,
-  rootCtx,
-  defaultValueCtx,
-  remarkStringifyOptionsCtx,
-  editorViewCtx
-} from '@milkdown/core'
+import { Editor, rootCtx, defaultValueCtx, remarkStringifyOptionsCtx } from '@milkdown/core'
 import { listener, listenerCtx } from '@milkdown/plugin-listener'
-import { $prose, getMarkdown, callCommand } from '@milkdown/utils'
+import { $prose, getMarkdown } from '@milkdown/utils'
 import { Plugin } from '@milkdown/prose/state'
-import type { EditorView } from '@milkdown/prose/view'
-import {
-  toggleStrongCommand,
-  toggleEmphasisCommand,
-  wrapInHeadingCommand,
-  wrapInBulletListCommand,
-  wrapInOrderedListCommand,
-  liftListItemCommand,
-  toggleLinkCommand
-} from '@milkdown/preset-commonmark'
-import { insertTableCommand } from '@milkdown/preset-gfm'
 import { EDITOR_SCHEMA_PLUGINS } from './plugins'
-import {
-  EDITOR_COMMAND_PLUGINS,
-  undoCommand,
-  redoCommand,
-  insertPagebreakCommand
-} from './commands'
+import { EDITOR_COMMAND_PLUGINS } from './commands'
 import { PINNED_STRINGIFY_OPTIONS } from './stringify-options'
-
-// True heading level 1-6 (`headingSchema`'s own `level` attr, from
-// @milkdown/preset-commonmark's source), narrowed to 1-3 here because
-// that's all the mockup's paragraph-style dropdown ("Normal text"/H1/H2/H3)
-// exposes -- see EditorToolbar.tsx.
-type ToggleableHeadingLevel = 1 | 2 | 3
-
-// Walks up from the current selection's resolved position looking for an
-// ancestor node of the given list type. Used to make toggleBulletList/
-// toggleOrderedList genuine toggles: @milkdown/preset-commonmark's own
-// wrapInBulletListCommand/wrapInOrderedListCommand (confirmed by reading
-// their source, node/bullet-list.ts and node/ordered-list.ts) only ever
-// WRAP -- they call ProseMirror's `wrapIn`, which has no "already wrapped,
-// so lift back out" branch of its own. Without this check, clicking the
-// bullet-list toolbar button a second time on an already-bulleted block
-// would either no-op (wrapIn's own findWrapping guard rejects an invalid
-// wrap) or nest a second list inside the first, neither of which is the
-// toggle-off behavior a toolbar button implies.
-function isInListType(view: EditorView, typeName: 'bullet_list' | 'ordered_list'): boolean {
-  const { $from } = view.state.selection
-  for (let depth = $from.depth; depth > 0; depth--) {
-    if ($from.node(depth).type.name === typeName) return true
-  }
-  return false
-}
+import { buildEditorCommands, type EditorCommands } from './editor-commands'
 
 interface MilkdownEditorProps {
   content: string
@@ -60,7 +14,11 @@ interface MilkdownEditorProps {
   onError: (message: string) => void
 }
 
-export interface MilkdownEditorHandle {
+// Extends EditorCommands (editor-commands.ts) with flush() -- the one
+// method that stays defined here rather than there, since it depends on
+// editedSinceMountRef, a piece of THIS component's own mount lifecycle, not
+// just a live Editor instance the way every EditorCommands method is.
+export interface MilkdownEditorHandle extends EditorCommands {
   // Synchronously serializes and pushes the editor's CURRENT document
   // through onChange -- IF AND ONLY IF a real edit has landed since mount
   // (tracked independently of @milkdown/plugin-listener's own internal
@@ -82,73 +40,16 @@ export interface MilkdownEditorHandle {
   // instead of silently rewriting the file to Milkdown's canonical
   // markdown form. See this sub-project's task-8-report.md for the
   // verified finding.
+  //
+  // The rest of this handle's methods (toggleBold, toggleHeading,
+  // setParagraph, toggleBulletList/toggleOrderedList, insertLink,
+  // insertTable, insertPageBreak, undo, redo) are documented on
+  // EditorCommands (editor-commands.ts), which this interface extends --
+  // see that file for the formatting-toolbar command surface's own
+  // documentation, all of it unchanged by the fix-round move to a separate
+  // file (done for eslint-plugin-react-refresh's `only-export-components`
+  // rule, not for any behavioral reason).
   flush: () => void
-
-  // --- Formatting-toolbar command surface ---------------------------------
-  //
-  // Everything below dispatches directly into the live Milkdown `Editor`
-  // via `editor.action(callCommand(commandKey, payload))` -- verified
-  // empirically (see commands.ts and this file's own imports) to be the
-  // correct mechanism for calling a command from outside the editor's own
-  // keymap/input-rule machinery, the same way MilkdownEditor.test.tsx's own
-  // "API pattern verification" block already verifies @milkdown/plugin-
-  // listener's behavior directly against a real Editor instance rather than
-  // assuming its shape from memory. Each command key referenced here is a
-  // REAL exported constant from @milkdown/preset-commonmark/@milkdown/
-  // preset-gfm (or this project's own commands.ts for the three this
-  // project had to define itself: undo/redo/insertPageBreak), confirmed by
-  // reading each package's own .d.ts/.ts source under node_modules -- none
-  // of these names were assumed from memory.
-  //
-  // All of these are no-ops (never throw) if called before the editor has
-  // finished constructing or after it has been destroyed, matching flush()'s
-  // own defensive-call contract above.
-
-  // toggleStrongCommand -- a genuine ProseMirror `toggleMark`, so this is a
-  // real toggle: bold text becomes un-bold, and vice versa.
-  toggleBold: () => void
-  // toggleEmphasisCommand -- same toggleMark-backed behavior as bold.
-  toggleItalic: () => void
-  // wrapInHeadingCommand is NOT a toggle by itself (confirmed by reading its
-  // source: it always calls `setBlockType` to the given level, with no
-  // "already this level, so revert to paragraph" branch) -- this method adds
-  // that check itself: if the current block is already an `h{level}`,
-  // it turns it back into a plain paragraph (wrapInHeadingCommand's own
-  // documented level-0 behavior, per its source), otherwise it sets the
-  // block to that heading level. Only levels 1-3 are exposed, matching the
-  // mockup's paragraph-style dropdown (Normal text/H1/H2/H3).
-  toggleHeading: (level: ToggleableHeadingLevel) => void
-  // wrapInBulletListCommand also isn't a toggle by itself (it's a plain
-  // ProseMirror `wrapIn`) -- this method adds the lift-back-out-if-already-
-  // wrapped check via isInListType()/liftListItemCommand above.
-  toggleBulletList: () => void
-  // Same toggle treatment as toggleBulletList, for wrapInOrderedListCommand.
-  toggleOrderedList: () => void
-  // toggleLinkCommand -- a toggleMark over the link mark's {href, title}
-  // attrs. Like bold/italic, applying this with an empty (collapsed)
-  // selection sets a *stored* mark that only takes visible effect on the
-  // next character typed, rather than rewriting any existing text -- the
-  // same toggleMark characteristic bold/italic have, not a special case.
-  insertLink: (href: string) => void
-  // insertTableCommand, given `{ row: 2, col: 2 }` -- a minimal 2x2 table
-  // (one header row + one body row, two columns; `row` counts the header
-  // row, confirmed by reading @milkdown/preset-gfm's own createTable source).
-  insertTable: () => void
-  // insertPagebreakCommand (commands.ts) -- inserts this editor's own
-  // existing pagebreak atom node (nodes/pagebreak.ts) at the current
-  // selection, reusing the schema this editor already mounts rather than
-  // introducing a second way to represent a page break.
-  insertPageBreak: () => void
-  // undoCommand/redoCommand (commands.ts) -- prosemirror-history's own
-  // `undo`/`redo`, exposed as real Milkdown commands. Wiring in
-  // prosemirror-history (via commands.ts's historyProse plugin) for the
-  // first time in this project required re-verifying editedTrackerProse's
-  // `addToHistory !== false` exclusion below still can't hide a genuine
-  // content change -- see commands.ts's own comment for the verified
-  // result (it can't: prosemirror-history's undo/redo transactions don't
-  // set `addToHistory: false` on themselves).
-  undo: () => void
-  redo: () => void
 }
 
 const MilkdownEditor = forwardRef<MilkdownEditorHandle, MilkdownEditorProps>(
@@ -212,13 +113,14 @@ const MilkdownEditor = forwardRef<MilkdownEditorHandle, MilkdownEditorProps>(
     // flushRef, for the formatting-toolbar command surface -- a single
     // object of bound dispatch functions built once, right after
     // flushRef.current, inside the mount effect's `.then` below.
-    const commandsRef = useRef<Omit<MilkdownEditorHandle, 'flush'> | null>(null)
+    const commandsRef = useRef<EditorCommands | null>(null)
 
     useImperativeHandle(ref, () => ({
       flush: () => flushRef.current?.(),
       toggleBold: () => commandsRef.current?.toggleBold(),
       toggleItalic: () => commandsRef.current?.toggleItalic(),
       toggleHeading: (level) => commandsRef.current?.toggleHeading(level),
+      setParagraph: () => commandsRef.current?.setParagraph(),
       toggleBulletList: () => commandsRef.current?.toggleBulletList(),
       toggleOrderedList: () => commandsRef.current?.toggleOrderedList(),
       insertLink: (href) => commandsRef.current?.insertLink(href),
@@ -285,63 +187,12 @@ const MilkdownEditor = forwardRef<MilkdownEditorHandle, MilkdownEditorProps>(
               onChangeRef.current(markdown)
             }
           }
-          commandsRef.current = {
-            toggleBold: () => {
-              created.action(callCommand(toggleStrongCommand.key))
-            },
-            toggleItalic: () => {
-              created.action(callCommand(toggleEmphasisCommand.key))
-            },
-            toggleHeading: (level) => {
-              created.action((ctx) => {
-                const view = ctx.get(editorViewCtx)
-                const currentBlock = view.state.selection.$from.parent
-                const isSameLevel =
-                  currentBlock.type.name === 'heading' && currentBlock.attrs.level === level
-                // wrapInHeadingCommand's own documented behavior: a level
-                // below 1 turns the block into a plain paragraph (see its
-                // source in @milkdown/preset-commonmark) -- reused here as
-                // the "toggle off" branch instead of a separate command.
-                return callCommand(wrapInHeadingCommand.key, isSameLevel ? 0 : level)(ctx)
-              })
-            },
-            toggleBulletList: () => {
-              created.action((ctx) => {
-                const view = ctx.get(editorViewCtx)
-                if (isInListType(view, 'bullet_list')) {
-                  return callCommand(liftListItemCommand.key)(ctx)
-                }
-                return callCommand(wrapInBulletListCommand.key)(ctx)
-              })
-            },
-            toggleOrderedList: () => {
-              created.action((ctx) => {
-                const view = ctx.get(editorViewCtx)
-                if (isInListType(view, 'ordered_list')) {
-                  return callCommand(liftListItemCommand.key)(ctx)
-                }
-                return callCommand(wrapInOrderedListCommand.key)(ctx)
-              })
-            },
-            insertLink: (href) => {
-              created.action(callCommand(toggleLinkCommand.key, { href }))
-            },
-            insertTable: () => {
-              // A minimal 2x2 table -- `row` includes the header row (see
-              // insertTableCommand's own createTable helper source), so
-              // `{ row: 2, col: 2 }` is one header row + one body row.
-              created.action(callCommand(insertTableCommand.key, { row: 2, col: 2 }))
-            },
-            insertPageBreak: () => {
-              created.action(callCommand(insertPagebreakCommand.key))
-            },
-            undo: () => {
-              created.action(callCommand(undoCommand.key))
-            },
-            redo: () => {
-              created.action(callCommand(redoCommand.key))
-            }
-          }
+          // buildEditorCommands is the exact same function
+          // MilkdownEditor.test.tsx calls directly against a raw test
+          // Editor -- see its own module-level doc comment for why this
+          // extraction exists (closing a real, verified mutation-testing
+          // gap).
+          commandsRef.current = buildEditorCommands(created)
         })
         .catch((err: unknown) => {
           if (!cancelled) {
