@@ -12,7 +12,7 @@ import {
 import { paginateAndTime } from '../pagination/paginate'
 import { exportToPdf } from '../export/export-pdf'
 import { getThumbnail } from './thumbnail-generator'
-import { getPageCount } from './page-count-generator'
+import { getPageCount, destroyPageCountHarness } from './page-count-generator'
 import {
   openFileDialog,
   readFileByPath,
@@ -103,6 +103,23 @@ function createWindow(): BrowserWindow {
 
   mainWindow.on('ready-to-show', () => {
     mainWindow.show()
+  })
+
+  // page-count-generator.ts's harness lives on its own dedicated,
+  // never-shown `BaseWindow` (see that file's own comment for why) --
+  // which means `BaseWindow.getAllWindows()` (what `window-all-closed`'s
+  // accounting is based on, since BrowserWindow is built on BaseWindow in
+  // this Electron version) still counts it after `mainWindow` closes.
+  // Without this, a real, verified regression: after even one
+  // `getPageCount` call, closing the app's last visible window left that
+  // harness window alive, `window-all-closed` never fired, and the app
+  // process never quit on Windows/Linux (both shipped build targets).
+  // Destroying it here, unconditionally (not just on non-macOS), also
+  // avoids leaking it across a macOS `activate` -> new-window cycle -- the
+  // harness lazily recreates itself on the next `getPageCount` call
+  // regardless of platform.
+  mainWindow.on('closed', () => {
+    destroyPageCountHarness()
   })
 
   mainWindow.webContents.setWindowOpenHandler((details) => {

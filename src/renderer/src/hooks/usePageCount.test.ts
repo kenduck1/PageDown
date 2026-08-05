@@ -93,6 +93,34 @@ describe('usePageCount', () => {
     expect(window.api.getPageCount).toHaveBeenCalledTimes(2)
   })
 
+  it('keeps the last known page count visible (not null) while a new fetch is in flight', async () => {
+    let resolveSecond: ((value: { pageCount: number }) => void) | undefined
+    const secondCall = new Promise<{ pageCount: number }>((resolve) => {
+      resolveSecond = resolve
+    })
+    vi.mocked(window.api.getPageCount)
+      .mockResolvedValueOnce({ pageCount: 5 })
+      .mockReturnValueOnce(secondCall)
+
+    const { result, rerender } = renderHook(({ content }) => usePageCount(content, 0), {
+      initialProps: { content: 'first' }
+    })
+    await waitFor(() => expect(result.current.pageCount).toBe(5))
+    expect(result.current.loading).toBe(false)
+
+    rerender({ content: 'second' })
+    // The new fetch hasn't resolved yet -- loading flips true, but the
+    // previously-known count must stay visible rather than flashing back
+    // to null (this is what a status bar re-fetching on every debounce
+    // cycle during active typing would otherwise do constantly).
+    await waitFor(() => expect(result.current.loading).toBe(true))
+    expect(result.current.pageCount).toBe(5)
+
+    resolveSecond?.({ pageCount: 6 })
+    await waitFor(() => expect(result.current.pageCount).toBe(6))
+    expect(result.current.loading).toBe(false)
+  })
+
   it('ignores a stale in-flight response that resolves after a newer request', async () => {
     let resolveFirst: ((value: { pageCount: number }) => void) | undefined
     const firstCall = new Promise<{ pageCount: number }>((resolve) => {

@@ -43,7 +43,15 @@ export function usePageCount(content: string, debounceMs = DEFAULT_DEBOUNCE_MS):
 
   if (prevContent !== content) {
     setPrevContent(content)
-    setState({ pageCount: null, loading: true, error: null })
+    // Deliberately keeps the previous `pageCount` (and clears `error`, not
+    // `pageCount`) rather than resetting to `null` -- an editor session
+    // re-fetches on essentially every debounce cycle as the user keeps
+    // typing, and flashing the status bar back to "Page 1 of —" on every
+    // single one (only to re-settle ~500ms+ later) reads far worse than
+    // briefly showing the last known-correct count while a fresh one is
+    // in flight. `loading: true` still lets a caller show a subtler
+    // in-progress affordance if it wants one, without losing the number.
+    setState((prev) => ({ pageCount: prev.pageCount, loading: true, error: null }))
   }
 
   // Monotonically-increasing token identifying the most recently FIRED
