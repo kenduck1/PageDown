@@ -1,7 +1,7 @@
 import { WebContentsView, BaseWindow, session, type Session } from 'electron'
 import { randomUUID, randomBytes } from 'node:crypto'
 import path from 'node:path'
-import { readFile } from 'node:fs/promises'
+import { readFile, realpath, stat } from 'node:fs/promises'
 
 // __dirname here resolves at runtime to the directory of the bundled main
 // process output (out/main/), regardless of this file's pre-bundle source
@@ -12,6 +12,142 @@ const RENDER_ROOT = path.join(__dirname, '../../out/pagination-render')
 const RENDER_SCHEME = 'pagedown-render'
 const RENDER_HOST = 'render'
 const RENDER_PARTITION = 'pagedown-render-sandbox' // no `persist:` prefix -> in-memory only
+
+// --- Local asset loading: token-scoped document-directory registry --------
+//
+// A document can reference local images (`![x](./figures/chart.png)`), and
+// the sandboxed render context needs to be able to serve those bytes even
+// though it otherwise only ever serves its own static bundle out of
+// RENDER_ROOT (see the protocol handler below). Rather than have the render
+// context trust an arbitrary absolute path handed to it per-request (which
+// would make every request a potential arbitrary-file-read), the currently
+// open document's directory is registered ONCE per document load, behind an
+// unguessable per-load token, and every asset request must present that
+// token plus a path that resolves (after symlink resolution) to a
+// descendant of that specific directory. See resolveAssetPath below for the
+// actual confinement check this rests on.
+interface AssetRootEntry {
+  documentDir: string
+}
+
+const assetRootRegistry = new Map<string, AssetRootEntry>()
+
+export function registerAssetRoot(documentDir: string): string {
+  const token = randomBytes(16).toString('hex')
+  assetRootRegistry.set(token, { documentDir })
+  return token
+}
+
+export function unregisterAssetRoot(token: string): void {
+  assetRootRegistry.delete(token)
+}
+
+// The one function this feature's whole confinement guarantee rests on --
+// deliberately kept pure/Electron-free (no `session`/`protocol` dependency)
+// so it's directly unit-testable against a real temp directory, matching
+// this codebase's established `isKnownPath`-style testability convention
+// (see recent-files.ts's own comment on why THAT function stays
+// Electron-free). Returns the real, symlink-resolved absolute path if (and
+// only if) `relativePath` resolves to a real file that is a descendant of
+// `documentDir` after symlink resolution -- null for every other case
+// (absolute path, `..` escape, missing file, symlink escape). Deliberately
+// does NOT distinguish these failure reasons in its return type: every
+// caller treats "not resolvable" as a plain 404, and a codebase-wide
+// convention of "don't leak WHY a path was denied" avoids giving a hostile
+// document a oracle for probing the filesystem (e.g. distinguishing
+// "doesn't exist" from "exists but escapes the sandbox" one bit at a time).
+//
+// This is a real symlink-resolving confinement check via fs.realpath on
+// BOTH sides, not a raw string-prefix check on the unresolved path -- unlike
+// the RENDER_ROOT check a little further down in this file, which IS a raw
+// prefix check. That's fine there because RENDER_ROOT only ever serves this
+// project's own build output (a trusted, non-symlinked directory this
+// project controls); documentDir here can be anywhere on a user's disk and
+// can contain symlinks planted by a hostile document's own bundled files
+// (e.g. a `.md` shipped alongside a symlink disguised as an image), so
+// resolving symlinks before the confinement comparison is required, not
+// optional hardening.
+export async function resolveAssetPath(
+  documentDir: string,
+  relativePath: string
+): Promise<string | null> {
+  // path.isAbsolute is the correct rejection for "absolute paths... denied
+  // by default" -- checked BEFORE path.join, since path.join('/a', '/b')
+  // silently treats the second absolute segment as absolute and discards
+  // the first, which would make this check unreliable if done after joining.
+  if (path.isAbsolute(relativePath)) return null
+
+  const candidate = path.join(documentDir, relativePath)
+
+  let realDocumentDir: string
+  let realCandidate: string
+  try {
+    realDocumentDir = await realpath(documentDir)
+    realCandidate = await realpath(candidate)
+  } catch {
+    // Missing file, missing documentDir, or a symlink loop realpath refuses
+    // to resolve -- all denied the same way.
+    return null
+  }
+
+  if (realCandidate !== realDocumentDir && !realCandidate.startsWith(realDocumentDir + path.sep)) {
+    return null
+  }
+
+  const stats = await stat(realCandidate).catch(() => null)
+  if (!stats || !stats.isFile()) return null
+
+  return realCandidate
+}
+
+const ASSET_PATH_PREFIX = '/__asset__/'
+const MAX_ASSET_BYTES = 10 * 1024 * 1024 // 10 MiB, per this plan's Global Constraints
+
+// Real magic-byte sniffing, not a file-extension guess -- "content-type
+// sniffed server-side... non-image types rejected" per the design doc.
+// Checked against the file's actual leading bytes so a non-image file
+// renamed to `.png` is correctly rejected rather than served as image/png.
+// Exported (beyond what the brief's own Step 5 code block shows) so this
+// specific security property -- content-byte sniffing, not extension
+// matching -- is directly unit-testable: the protocol handler branch that
+// calls this can only be exercised through a real Electron `session`, which
+// a plain Vitest test can't construct, so testing the sniffer "indirectly"
+// through the full request flow isn't practical here. Same testability
+// rationale as resolveAssetPath's own exported-for-testing precedent above.
+export function sniffImageContentType(buffer: Buffer): string | null {
+  if (
+    buffer.length >= 8 &&
+    buffer.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))
+  ) {
+    return 'image/png'
+  }
+  if (buffer.length >= 3 && buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff) {
+    return 'image/jpeg'
+  }
+  if (
+    buffer.length >= 6 &&
+    (buffer.subarray(0, 6).toString('latin1') === 'GIF87a' ||
+      buffer.subarray(0, 6).toString('latin1') === 'GIF89a')
+  ) {
+    return 'image/gif'
+  }
+  if (
+    buffer.length >= 12 &&
+    buffer.subarray(0, 4).toString('latin1') === 'RIFF' &&
+    buffer.subarray(8, 12).toString('latin1') === 'WEBP'
+  ) {
+    return 'image/webp'
+  }
+  // SVG: XML-based, no fixed magic bytes -- accept only if the sniffed text
+  // genuinely looks like an SVG root element within the first 512 bytes
+  // (mirrors how real browsers/servers commonly sniff SVG, without needing
+  // a full XML parse just to classify content-type).
+  const head = buffer.subarray(0, 512).toString('utf8')
+  if (/<svg[\s>]/i.test(head) || (/<\?xml/i.test(head) && /<svg[\s>]/i.test(head))) {
+    return 'image/svg+xml'
+  }
+  return null
+}
 
 // Keep this in sync with resources/pagination-render/index.html's CSP
 // <meta http-equiv> tag — they must carry the identical policy. Previously
@@ -78,6 +214,45 @@ function ensureRenderInfraRegistered(): Session {
       // distinct-but-still-matching origin unless we reject it ourselves.
       if (url.hostname !== RENDER_HOST) {
         return new Response('Not found', { status: 404 })
+      }
+
+      // Local-asset requests are a separate namespace from the static
+      // RENDER_ROOT bundle below -- checked first, since `__asset__` paths
+      // never live under RENDER_ROOT and would otherwise just 404 out of
+      // the generic branch below with no chance to actually serve them.
+      if (url.pathname.startsWith(ASSET_PATH_PREFIX)) {
+        const rest = url.pathname.slice(ASSET_PATH_PREFIX.length)
+        const slashIndex = rest.indexOf('/')
+        if (slashIndex === -1) return new Response('Not found', { status: 404 })
+
+        const token = rest.slice(0, slashIndex)
+        const encodedRelativePath = rest.slice(slashIndex + 1)
+        const entry = assetRootRegistry.get(token)
+        if (!entry) return new Response('Not found', { status: 404 })
+
+        let relativePath: string
+        try {
+          relativePath = decodeURIComponent(encodedRelativePath)
+        } catch {
+          return new Response('Not found', { status: 404 })
+        }
+
+        const resolved = await resolveAssetPath(entry.documentDir, relativePath)
+        if (!resolved) return new Response('Not found', { status: 404 })
+
+        const stats = await stat(resolved).catch(() => null)
+        if (!stats || stats.size > MAX_ASSET_BYTES)
+          return new Response('Not found', { status: 404 })
+
+        const body = await readFile(resolved).catch(() => null)
+        if (!body) return new Response('Not found', { status: 404 })
+
+        const contentType = sniffImageContentType(body)
+        if (!contentType) return new Response('Not found', { status: 404 })
+
+        return new Response(body, {
+          headers: { 'Content-Type': contentType, 'X-Content-Type-Options': 'nosniff' }
+        })
       }
 
       // Strips ALL leading slashes, not just one: a request like
