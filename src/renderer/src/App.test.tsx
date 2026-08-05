@@ -15,6 +15,7 @@ beforeEach(() => {
     getTemplateThumbnail: vi
       .fn()
       .mockResolvedValue({ dataUrl: 'data:image/png;base64,x', pageCount: 1 }),
+    getPageCount: vi.fn().mockResolvedValue({ pageCount: 1 }),
     confirmDiscardChanges: vi.fn()
   }
 })
