@@ -32,7 +32,23 @@ interface AssetRootEntry {
 
 const assetRootRegistry = new Map<string, AssetRootEntry>()
 
+// Throws on a non-absolute (including empty-string) documentDir rather than
+// silently registering it: a relative path here would confine assets to
+// wherever the main process's cwd happens to be, not to any real document
+// directory -- a structural bug, not a legitimate input, so this fails loud
+// rather than quietly misbehaving. This is a programming-error guard, not
+// user-input validation: the correct behavior for an unsaved/untitled
+// document (which has no real on-disk directory at all) is for the CALLER
+// to never invoke registerAssetRoot in the first place and skip local-asset
+// loading entirely for that document -- that's Task 3's responsibility, not
+// something this function can paper over by returning a token that can
+// never resolve.
 export function registerAssetRoot(documentDir: string): string {
+  if (!path.isAbsolute(documentDir)) {
+    throw new Error(
+      `registerAssetRoot: documentDir must be an absolute path, got: ${JSON.stringify(documentDir)}`
+    )
+  }
   const token = randomBytes(16).toString('hex')
   assetRootRegistry.set(token, { documentDir })
   return token
@@ -72,9 +88,18 @@ export async function resolveAssetPath(
   relativePath: string
 ): Promise<string | null> {
   // path.isAbsolute is the correct rejection for "absolute paths... denied
-  // by default" -- checked BEFORE path.join, since path.join('/a', '/b')
-  // silently treats the second absolute segment as absolute and discards
-  // the first, which would make this check unreliable if done after joining.
+  // by default" per this plan's Global Constraints -- an absolute reference
+  // is refused on policy grounds regardless of where it would resolve to,
+  // not merely as an incidental side effect of the realpath-confinement
+  // check below. This is genuinely load-bearing, not redundant with that
+  // check: the protocol handler decodeURIComponent()s the path segment
+  // before calling this function, so a request path containing `%2f`
+  // (encoded `/`) arrives here as a real absolute string (e.g.
+  // `/etc/passwd`) -- this is exactly the case this guard exists to catch.
+  // Checked BEFORE path.join, not after: path.isAbsolute reads relativePath
+  // itself, and doing this check post-join would require re-deriving
+  // "was the original segment absolute" from the joined result, which is
+  // strictly more error-prone for no benefit.
   if (path.isAbsolute(relativePath)) return null
 
   const candidate = path.join(documentDir, relativePath)
@@ -143,7 +168,7 @@ export function sniffImageContentType(buffer: Buffer): string | null {
   // (mirrors how real browsers/servers commonly sniff SVG, without needing
   // a full XML parse just to classify content-type).
   const head = buffer.subarray(0, 512).toString('utf8')
-  if (/<svg[\s>]/i.test(head) || (/<\?xml/i.test(head) && /<svg[\s>]/i.test(head))) {
+  if (/<svg[\s>]/i.test(head)) {
     return 'image/svg+xml'
   }
   return null
@@ -250,8 +275,32 @@ function ensureRenderInfraRegistered(): Session {
         const contentType = sniffImageContentType(body)
         if (!contentType) return new Response('Not found', { status: 404 })
 
+        // `X-Content-Type-Options: nosniff` alone is not enough for the
+        // `image/svg+xml` case: the type here is DECLARED svg+xml (real
+        // sniffing already confirmed the bytes genuinely look like one), and
+        // SVG can carry <script> and event-handler attributes. nosniff only
+        // stops a browser from re-interpreting the declared type -- it does
+        // nothing once the declared type itself is script-capable. An <img>
+        // load can't execute an embedded SVG's script (images are loaded in
+        // "image mode", scripting disabled by spec) and the sanitize schema
+        // already strips iframe/object/embed from rendered document HTML, so
+        // there's no reachable path today -- but if this response is ever
+        // loaded as its own document (iframe/object/embed, or a direct
+        // navigation), a real per-resource CSP is what stops it from running
+        // as an unrestricted document in the pagedown-render://render
+        // origin. `default-src 'none'; sandbox;` is maximally strict (the
+        // bare `sandbox` directive with no allow-* tokens denies scripts,
+        // forms, and top-level navigation, same as an <iframe sandbox> with
+        // no allowlist) and costs nothing for the ordinary PNG/JPEG/GIF/WebP
+        // cases: CSP response headers are only enforced against the
+        // document a response becomes, never against an <img> subresource
+        // fetch, so this header is inert for every non-SVG asset response.
         return new Response(body, {
-          headers: { 'Content-Type': contentType, 'X-Content-Type-Options': 'nosniff' }
+          headers: {
+            'Content-Type': contentType,
+            'X-Content-Type-Options': 'nosniff',
+            'Content-Security-Policy': "default-src 'none'; sandbox;"
+          }
         })
       }
 

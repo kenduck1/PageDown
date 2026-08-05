@@ -51,6 +51,56 @@ describe('resolveAssetPath', () => {
     expect(await resolveAssetPath(documentDir, '/etc/passwd')).toBeNull()
   })
 
+  // Pins the path.isAbsolute guard specifically, as distinct from the
+  // realpath-confinement check below it. path.join does NOT discard its
+  // first argument when a later one is absolute (that's path.resolve's
+  // behavior) -- it literally concatenates them and normalizes, so
+  // path.join(documentDir, '/figures/chart.png') collapses to the exact
+  // same real, in-confinement path as join(documentDir, 'figures',
+  // 'chart.png'). That means an absolute relativePath of '/figures/chart.png'
+  // would resolve successfully through the realpath-confinement check alone
+  // -- the isAbsolute guard is the ONLY thing that denies it. (Verified by
+  // deleting the isAbsolute guard and watching this exact test fail -- see
+  // the fix report for the RED output. The plain "denies an absolute path"
+  // test above does NOT catch the guard's removal: '/etc/passwd' doesn't
+  // exist inside documentDir, so realpath denies it either way, guard or
+  // not -- this test specifically picks an absolute path that DOES land on
+  // a real in-directory file once merged, closing that gap.)
+  it('denies an absolute path even when it points inside the document directory', async () => {
+    expect(await resolveAssetPath(documentDir, '/figures/chart.png')).toBeNull()
+  })
+
+  // "Decode-derived" cases: the protocol handler decodeURIComponent()s the
+  // path segment before calling resolveAssetPath, so these embedded-`../`
+  // shapes (as opposed to the single leading `../` case above) are real
+  // inputs this function sees in practice, not just synthetic test shapes.
+  it('denies an embedded ../ traversal that escapes the document directory', async () => {
+    const outside = await realpath(await mkdtemp(join(tmpdir(), 'pagedown-asset-embedded-')))
+    try {
+      await writeFile(join(outside, 'secret.png'), 'fake-png-bytes')
+      // figures/../../<outside-basename>/secret.png: the first `..` cancels
+      // `figures/`, landing back at documentDir; the second `..` is the
+      // actual escape. This is deliberately NOT the same shape as the
+      // single-`../` test above -- it proves the traversal is resolved via
+      // real path/realpath semantics rather than special-cased for a
+      // leading `../` only.
+      const escaping = `figures/../../${basename(outside)}/secret.png`
+      expect(await resolveAssetPath(documentDir, escaping)).toBeNull()
+    } finally {
+      await rm(outside, { recursive: true, force: true })
+    }
+  })
+
+  // The other half of the same proof: an embedded `../` that traverses but
+  // stays inside documentDir must still RESOLVE, not be denied. This is
+  // what distinguishes real realpath-based confinement from a naive
+  // "reject anything containing .." textual ban -- a blanket ban would
+  // wrongly deny this legitimate case.
+  it('resolves an embedded ../ traversal that stays inside the document directory', async () => {
+    const resolved = await resolveAssetPath(documentDir, 'figures/../top-level.png')
+    expect(resolved).toBe(join(documentDir, 'top-level.png'))
+  })
+
   it('denies a ../ traversal that escapes the document directory', async () => {
     // Simplest, unambiguous traversal case: documentDir and `outside` are
     // both direct children of the same tmpdir, so one `../<outside-basename>`
@@ -103,6 +153,20 @@ describe('registerAssetRoot / unregisterAssetRoot', () => {
     expect(tokenA).not.toBe(tokenB)
     unregisterAssetRoot(tokenA)
     unregisterAssetRoot(tokenB)
+  })
+
+  // Structural guard: a relative documentDir would silently confine assets
+  // to wherever the main process's cwd happens to be, not to any real
+  // document directory. This is a programming-error guard (the correct
+  // behavior for an unsaved/untitled document with no real path is for the
+  // caller to never call registerAssetRoot at all), so it throws rather
+  // than returning a token that can never resolve.
+  it('throws on a relative documentDir', () => {
+    expect(() => registerAssetRoot('relative/dir')).toThrow()
+  })
+
+  it('throws on an empty documentDir', () => {
+    expect(() => registerAssetRoot('')).toThrow()
   })
 })
 
