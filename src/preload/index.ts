@@ -11,7 +11,8 @@ const api = {
   getThumbnail: (filePath: string) => ipcRenderer.invoke('file:getThumbnail', filePath),
   getTemplateThumbnail: (content: string) => ipcRenderer.invoke('template:getThumbnail', content),
   getPageCount: (content: string) => ipcRenderer.invoke('file:getPageCount', content),
-  confirmDiscardChanges: () => ipcRenderer.invoke('dialog:confirmDiscard')
+  confirmDiscardChanges: () => ipcRenderer.invoke('dialog:confirmDiscard'),
+  exportPdf: (content: string) => ipcRenderer.invoke('file:exportPdf', content)
 }
 
 // Use `contextBridge` APIs to expose Electron APIs to

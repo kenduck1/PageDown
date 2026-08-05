@@ -11,7 +11,8 @@ beforeEach(() => {
     getThumbnail: vi.fn(),
     getTemplateThumbnail: vi.fn(),
     getPageCount: vi.fn(),
-    confirmDiscardChanges: vi.fn()
+    confirmDiscardChanges: vi.fn(),
+    exportPdf: vi.fn()
   }
 })
 
