@@ -2,6 +2,7 @@ import { $command, $prose } from '@milkdown/utils'
 import { history, undo, redo } from '@milkdown/prose/history'
 import { TextSelection } from '@milkdown/prose/state'
 import { pagebreakNode } from './nodes/pagebreak'
+import { safeImageViewProse } from './image-security'
 
 // prosemirror-history is not wired into either stock preset this editor
 // mounts -- confirmed by reading @milkdown/preset-commonmark's and
@@ -82,5 +83,12 @@ export const EDITOR_COMMAND_PLUGINS = [
   historyProse,
   undoCommand,
   redoCommand,
-  insertPagebreakCommand
+  insertPagebreakCommand,
+  // See image-security.ts's own module comment for the real, confirmed
+  // vulnerability this closes: the stock commonmark image node renders an
+  // unrestricted <img src> directly in this privileged renderer. Rendering
+  // behavior, not schema (round-trip fidelity for image syntax is
+  // untouched), so this belongs here alongside historyProse/undoCommand,
+  // not in plugins.ts's EDITOR_SCHEMA_PLUGINS.
+  safeImageViewProse
 ]
