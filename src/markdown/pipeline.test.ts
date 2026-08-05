@@ -174,9 +174,14 @@ describe('markdownToHtml — local asset src rewriting', () => {
   // assetToken is provided. This test's real subject is therefore narrower
   // than "data: URLs are preserved" — it confirms a `data:` src is never
   // routed into the __asset__ scheme by this task's rewrite, not that it
-  // survives sanitize (it doesn't, before or after this change).
+  // survives sanitize (it doesn't, before or after this change). Asserting
+  // the exact emitted shape (no src attribute at all) — rather than just two
+  // `not.toContain` checks that would also pass for "there was no src to
+  // begin with" — pins the real pre-existing behavior so a future schema
+  // change that starts letting `data:` through would be noticed here.
   it('does not rewrite a data: image src even when assetToken is provided', () => {
     const { html } = markdownToHtml('![x](data:image/png;base64,abc)', { assetToken: 'abc123' })
+    expect(html).toContain('<img alt="x">')
     expect(html).not.toContain('src="data:image/png;base64,abc"')
     expect(html).not.toContain('__asset__')
   })
@@ -185,5 +190,76 @@ describe('markdownToHtml — local asset src rewriting', () => {
     const { html } = markdownToHtml('![x](/etc/passwd)', { assetToken: 'abc123' })
     expect(html).toContain('src="/etc/passwd"')
     expect(html).not.toContain('__asset__')
+  })
+
+  // Task 1's protocol handler (src/main/pagination-window.ts) parses the
+  // rewritten URL by taking everything after `__asset__/<token>/` as the
+  // path segment and running it through exactly ONE decodeURIComponent.
+  // These tests mirror that exact parsing (rather than hardcoding an
+  // expected percent-encoded string, which would just re-encode the
+  // double-encoding bug into the test) and assert the round-trip property:
+  // decoding the emitted segment once must recover the original relative
+  // path exactly, for filenames containing characters mdast-util-to-hast
+  // itself percent-encodes before the src ever reaches this rewrite
+  // (spaces, non-ASCII).
+  function decodeAssetSegment(html: string): string {
+    const match = html.match(/src="pagedown-render:\/\/render\/__asset__\/[^/]+\/([^"]+)"/)
+    if (!match) throw new Error(`no __asset__ src found in: ${html}`)
+    return decodeURIComponent(match[1])
+  }
+
+  it('round-trips a relative path with a space through exactly one encode/decode layer', () => {
+    const { html } = markdownToHtml('![x](<Screen Shot 2026.png>)', { assetToken: 'abc123' })
+    expect(decodeAssetSegment(html)).toBe('Screen Shot 2026.png')
+  })
+
+  it('round-trips a relative path with a non-ASCII character through exactly one encode/decode layer', () => {
+    const { html } = markdownToHtml('![x](café.png)', { assetToken: 'abc123' })
+    expect(decodeAssetSegment(html)).toBe('café.png')
+  })
+
+  it('round-trips a plain relative path through exactly one encode/decode layer', () => {
+    const { html } = markdownToHtml('![chart](./figures/chart.png)', { assetToken: 'abc123' })
+    expect(decodeAssetSegment(html)).toBe('./figures/chart.png')
+  })
+
+  it('does not throw on a src containing a literal, undecodable percent sign', () => {
+    expect(() => markdownToHtml('![x](100%.png)', { assetToken: 'abc123' })).not.toThrow()
+    expect(() => markdownToHtml('![x](a%zz.png)', { assetToken: 'abc123' })).not.toThrow()
+  })
+
+  // Confinement regression guard: decoding one layer before re-encoding (the
+  // fix for the double-encoding bug above) makes a raw-HTML traversal
+  // attempt arrive at the main-process handler as a VISIBLE `../secret.png`
+  // rather than an inert, literally-nonexistent `%2e%2e%2fsecret.png`
+  // filename. Both are denied by resolveAssetPath's realpath-containment
+  // check on the main-process side (out of scope for this file to test
+  // directly), but this test confirms the thing this file IS responsible
+  // for: the decoded segment this rewrite hands to that check is the real,
+  // uncloaked `../secret.png` traversal path, not something the containment
+  // check would need double-decoding to even recognize as a traversal.
+  it('decodes a raw-HTML encoded traversal attempt into a visible, not disguised, relative path', () => {
+    const { html } = markdownToHtml('<img src="%2e%2e%2fsecret.png">', { assetToken: 'abc123' })
+    expect(decodeAssetSegment(html)).toBe('../secret.png')
+  })
+
+  it('rewrites a raw-HTML img src the same as a Markdown image src', () => {
+    const { html } = markdownToHtml('<img src="./x.png">', { assetToken: 'abc123' })
+    expect(decodeAssetSegment(html)).toBe('./x.png')
+  })
+
+  // An author's own raw HTML must never be able to forge a reference into
+  // another document's asset token or otherwise mint a pagedown-render://
+  // URL by hand — isRelativeLocalPath's URL-scheme check rejects this src
+  // outright (it already has a scheme), so it is left completely alone by
+  // this rewrite, then stripped by the pre-existing sanitize protocol pin
+  // (pagedown-render is not in `['http', 'https']`) same as any other
+  // disallowed-protocol src.
+  it('does not let raw HTML forge or borrow another __asset__ URL', () => {
+    const { html } = markdownToHtml('<img src="pagedown-render://render/__asset__/FORGED/a.png">', {
+      assetToken: 'abc123'
+    })
+    expect(html).not.toContain('FORGED')
+    expect(html).not.toContain('src=')
   })
 })

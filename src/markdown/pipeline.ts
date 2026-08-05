@@ -33,16 +33,44 @@ function isRelativeLocalPath(src: string): boolean {
   return true
 }
 
+// mdast-util-to-hast (via micromark-util-sanitize-uri) already
+// percent-encodes unsafe/reserved characters in a Markdown image's `src`
+// before it ever lands in `properties.src` here — so a space becomes `%20`,
+// a non-ASCII character becomes its UTF-8 percent-encoding, etc., well
+// before this rewrite ever sees the value. encodeURIComponent-ing that
+// already-encoded string a second time double-encodes it (`%20` becomes
+// `%2520`), while src/main/pagination-window.ts's protocol handler decodes
+// the path segment exactly once — so any src containing a space or
+// non-ASCII character round-tripped to a literal, on-disk-nonexistent
+// filename and silently 404'd. Decoding one layer first undoes mdast's own
+// encoding, so it's the *original* filename characters that get
+// encodeURIComponent'd, and the handler's one decode recovers them exactly.
+// Raw-HTML `<img src>` values bypass mdast's normalization entirely and can
+// contain a literal, undecodable `%` (e.g. `100%.png`, or `a%zz.png` where
+// `%zz` isn't valid hex) — decodeURIComponent throws URIError on those, so
+// this must not be unguarded, or a document containing one would crash
+// markdownToHtml entirely. Falling back to the raw value on failure is safe:
+// it's exactly what happened before this fix existed, for every src.
+function urlToRelativePath(src: string): string {
+  try {
+    return decodeURIComponent(src)
+  } catch {
+    return src
+  }
+}
+
 // Rewrites every relative local `img src` in the tree into the sandboxed
-// pagination render context's asset scheme, so Task 1's protocol handler can
-// resolve it under a specific document's directory. Must be called on the
+// pagination render context's asset scheme (src/main/pagination-window.ts's
+// `pagedown-render://` protocol handler), so that handler can resolve it
+// under a specific document's directory. Must be called on the
 // already-*sanitized* tree — see the call site below for why.
 function rewriteLocalImageSrcs(tree: HastRoot, assetToken: string): void {
   visit(tree, 'element', (node) => {
     if (node.tagName !== 'img') return
-    const src = node.properties?.src
+    const src = node.properties.src
     if (typeof src !== 'string' || !isRelativeLocalPath(src)) return
-    node.properties.src = `pagedown-render://render/__asset__/${assetToken}/${encodeURIComponent(src)}`
+    const relativePath = urlToRelativePath(src)
+    node.properties.src = `pagedown-render://render/__asset__/${assetToken}/${encodeURIComponent(relativePath)}`
   })
 }
 
