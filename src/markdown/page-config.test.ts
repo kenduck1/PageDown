@@ -444,4 +444,122 @@ describe('applyPageConfig', () => {
       ['margins:', '  top: 2', '  bottom: 2', '  left: 2', '  right: 2', 'draft: true'].join('\n')
     )
   })
+
+  // --- Regression: round-3 review (critical) ---------------------------
+  // The Bug 1 fix (structural-continuation check) over-corrected: it
+  // stopped recognizing a block-scalar's or plain-wrapped scalar's own
+  // content lines as part of the preceding key's block (neither looks
+  // like `key:` or `- item`), orphaning them on the next write -- a real,
+  // reviewer-confirmed corruption bug distinct from Bug 1/Bug 2.
+
+  it('regression (round 3): isolated single-key case -- a block-scalar value is replaced in place with no orphaned lines and no append-vs-replace ambiguity', () => {
+    // Using `theme` (which would never legitimately hold a block-scalar
+    // value in a real document) specifically to isolate findBlockEnd's
+    // block-detection mechanism from the footer-object append-vs-replace
+    // behavior exercised by the other round-3 tests below -- a single
+    // owned key here, already present, so a correct fix must leave
+    // *exactly* one line in that position and nothing orphaned around it.
+    const raw = ['title: X', 'theme: |', '  block', '  scalar', '  content', 'draft: true'].join(
+      '\n'
+    )
+    const result = applyPageConfig(raw, { theme: 'resume' })
+    expect(result).toBe(['title: X', 'theme: resume', 'draft: true'].join('\n'))
+  })
+
+  it('regression (round 3): preserves a block-scalar (`|`) value by replacing its own content lines, not orphaning them', () => {
+    const raw = [
+      'footerCenter: |',
+      '  Some text',
+      '  that spans',
+      '  multiple lines',
+      'draft: true'
+    ].join('\n')
+
+    const result = applyPageConfig(raw, {
+      footer: { left: '', center: 'new value', right: '' }
+    })
+
+    // `footerCenter` already existed (as the block-scalar key), so it's
+    // replaced in place, keeping its original position -- `footerLeft`/
+    // `footerRight` didn't exist yet, so they're appended at the end, same
+    // append-vs-replace-in-place rule already established in round 1. The
+    // key assertion for THIS bug is that the block scalar's 3 content
+    // lines are fully swallowed (no orphaned `  Some text` etc. lines
+    // left dangling before `draft: true`).
+    expect(result).toBe(
+      ['footerCenter: "new value"', 'draft: true', 'footerLeft: ""', 'footerRight: ""'].join('\n')
+    )
+    expect(() => extractPageConfig(result)).not.toThrow()
+    expect(extractPageConfig(result)).toEqual({
+      footer: { left: '', center: 'new value', right: '' }
+    })
+  })
+
+  it('regression (round 3): preserves a plain multi-line-wrapped scalar value (no `|`/`>` indicator) by replacing its own continuation line, not orphaning it', () => {
+    const raw = [
+      'footerCenter: this is a long value',
+      '  that wraps onto a second physical line',
+      'draft: true'
+    ].join('\n')
+
+    const result = applyPageConfig(raw, {
+      footer: { left: '', center: 'new value', right: '' }
+    })
+
+    expect(result).toBe(
+      ['footerCenter: "new value"', 'draft: true', 'footerLeft: ""', 'footerRight: ""'].join('\n')
+    )
+    expect(() => extractPageConfig(result)).not.toThrow()
+    expect(extractPageConfig(result)).toEqual({
+      footer: { left: '', center: 'new value', right: '' }
+    })
+  })
+
+  it('regression (round 3): a `>` folded block-scalar value round-trips the same way as `|`', () => {
+    const raw = ['footerCenter: >', '  folded', '  text', 'draft: true'].join('\n')
+    const result = applyPageConfig(raw, {
+      footer: { left: '', center: 'new value', right: '' }
+    })
+    expect(extractPageConfig(result)).toEqual({
+      footer: { left: '', center: 'new value', right: '' }
+    })
+    expect(result.split('\n')).toEqual([
+      'footerCenter: "new value"',
+      'draft: true',
+      'footerLeft: ""',
+      'footerRight: ""'
+    ])
+  })
+
+  it('regression (round 3): re-confirms Bug 1 is still fixed after the block-scalar/plain-wrap widening (indented comment with nothing structural after it is still preserved)', () => {
+    const raw = [
+      'title: X',
+      'theme: default',
+      '  # this indented note describes something else entirely',
+      'tags:',
+      '  - a',
+      'draft: true'
+    ].join('\n')
+
+    const result = applyPageConfig(raw, { theme: 'resume' })
+
+    expect(result).toBe(
+      [
+        'title: X',
+        'theme: resume',
+        '  # this indented note describes something else entirely',
+        'tags:',
+        '  - a',
+        'draft: true'
+      ].join('\n')
+    )
+  })
+
+  it('regression (round 3): re-confirms Bug 2 is still fixed after the block-scalar/plain-wrap widening (space before colon still found and replaced, not duplicated)', () => {
+    const raw = 'page : Letter\ndraft: true'
+    const result = applyPageConfig(raw, { pageSize: 'A4' })
+    expect(result).toBe('page: A4\ndraft: true')
+    expect(() => extractPageConfig(result)).not.toThrow()
+    expect(extractPageConfig(result)).toEqual({ pageSize: 'A4' })
+  })
 })

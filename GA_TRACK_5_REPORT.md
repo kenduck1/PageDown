@@ -345,3 +345,126 @@ Bug 2, 2 for the optional flow-style case) + 10 in
 `src/renderer/src/components/PageSetupModal.test.tsx` (9 original + 1 new,
 the visible-notice test). Full existing suite (`pnpm test:unit`) passes at
 200/200 — no regressions.
+
+---
+
+## Fix-wave addendum: review round 3 (CHANGES NEEDED → resolved)
+
+Commit before this fix wave: `c80cb48b18d0c6f2af6ddb6cbe94f9aec6bd8660`
+(the round-2 fix-wave commit above).
+
+Re-review confirmed all 4 round-2 items (both Critical bugs, the UI notice,
+the report typo) plus the bonus flow-style fix genuinely fixed, by direct
+reproduction rather than trusting the tests alone. It then found ONE new
+Critical regression introduced by the round-2 Bug 1 fix itself.
+
+### The regression: `findBlockEnd`'s narrowed continuation check didn't recognize block-scalar (`|`/`>`) or plain multi-line-wrapped values
+
+**Root cause**: the round-2 fix for Bug 1 replaced "any indented line
+continues the block" with "only a line shaped like a mapping entry
+(`key:`) or sequence item (`- item`) continues the block"
+(`STRUCTURAL_CONTINUATION`). That correctly stopped an indented *comment*
+from being swallowed (fixing Bug 1), but it also stopped recognizing a
+block scalar's own content lines, or a plain scalar's line-folded
+continuation, as part of the preceding key's block — neither looks like
+`key:` or `- item`. Both left orphaned lines behind on a rewrite, and
+`js-yaml.load` then throws on the corrupted result (`bad indentation of a
+mapping entry`), reverting every owned key to defaults on the next
+`extractPageConfig` call — the same severity/class as Bug 2.
+
+**Confirmed via real js-yaml before fixing** (not assumed):
+
+```
+$ node -e "console.log(JSON.stringify(require('js-yaml').load('footerCenter: |\n  Some text\n  that spans\n  multiple lines\ndraft: true')))"
+{"footerCenter":"Some text\nthat spans\nmultiple lines\n","draft":true}
+
+$ node -e "console.log(JSON.stringify(require('js-yaml').load('footerCenter: this is a long value\n  that wraps onto a second physical line\ndraft: true')))"
+{"footerCenter":"this is a long value that wraps onto a second physical line","draft":true}
+```
+
+Both parse as ordinary, single-key values in real YAML — confirming the
+reviewer's repros were genuine valid-YAML shapes this module needed to
+handle, not edge cases outside scope.
+
+**A key piece of extra verification that shaped the fix**: to decide how
+broad the fix should be without reopening Bug 1, I checked whether an
+indented line that merely *looks* like an unrelated mapping entry directly
+after a scalar could ever be a competing valid interpretation:
+
+```
+$ node -e "require('js-yaml').load('theme: default\n  nested: value')"
+THROWS: bad indentation of a mapping entry (2:9)
+```
+
+This confirms there is no third, valid interpretation of "an indented line
+directly following one of PageDown's own (always column-0) keys" other
+than: that key's own continuation, or a comment/blank line. There is no
+real-world case where such an indented line is legitimately unrelated
+content that a narrower "must look like `key:`/`- item`" check is needed to
+protect against.
+
+**Fix**: `src/markdown/page-config.ts`'s `findBlockEnd` no longer uses the
+`STRUCTURAL_CONTINUATION` regex. The block-style branch now treats *any*
+indented line as a continuation (`isIndented`), with the comment/blank
+exclusion (and its "swallow only if interior" lookahead) kept exactly as
+round 2 left it — that exclusion is what actually fixed Bug 1, and remains
+correct and sufficient on its own per the js-yaml verification above. This
+is a deliberate departure from the reviewer's suggested mechanism (a
+dedicated third branch that detects `|`/`>` indicators specifically,
+mirroring the flow-bracket-depth branch): a single, simpler, YAML-
+semantics-justified rule handles both the block-scalar and the plain-wrap
+case uniformly, without needing to parse the block-scalar indicator
+grammar (chomping/indentation modifiers) at all. This reasoning, and the
+two-round history, is documented directly in `findBlockEnd`'s own comment
+and the file-level "Known limitations" section.
+
+**New regression tests** (`src/markdown/page-config.test.ts`):
+- `regression (round 3): isolated single-key case -- a block-scalar value is replaced in place with no orphaned lines and no append-vs-replace ambiguity` (uses a single already-present key so the "no orphaned lines" property is unambiguous, independent of the footer-object append-vs-replace-in-place behavior)
+- `regression (round 3): preserves a block-scalar (`|`) value by replacing its own content lines, not orphaning them` (the reviewer's exact repro 1)
+- `regression (round 3): preserves a plain multi-line-wrapped scalar value (no `|`/`>` indicator) by replacing its own continuation line, not orphaning it` (the reviewer's exact repro 2)
+- `regression (round 3): a `>` folded block-scalar value round-trips the same way as `|`` (the other block-scalar indicator, not just the literal one)
+- `regression (round 3): re-confirms Bug 1 is still fixed after the block-scalar/plain-wrap widening...` (exact same repro as the round-2 Bug 1 test, re-run against the round-3 code)
+- `regression (round 3): re-confirms Bug 2 is still fixed after the block-scalar/plain-wrap widening...` (exact same repro as the round-2 Bug 2 test, re-run against the round-3 code)
+
+### Full regression pass (not just page-config's own tests, per the review's explicit request)
+
+```
+$ pnpm exec eslint src/markdown/page-config.ts src/markdown/page-config.test.ts
+(no output — clean)
+
+$ pnpm run typecheck
+> tsc --noEmit -p tsconfig.node.json --composite false
+> tsc --noEmit -p tsconfig.web.json --composite false
+(both clean, no output)
+
+$ pnpm test:unit
+ Test Files  20 passed (20)
+      Tests  206 passed (206)
+
+$ pnpm exec prettier --check src/markdown/page-config.ts src/markdown/page-config.test.ts
+Checking formatting...
+All matched files use Prettier code style!
+
+$ pnpm run lint   # full eslint --cache . over the whole repo
+(no output — clean)
+
+$ grep -c "  it(" src/markdown/page-config.test.ts
+43
+```
+
+### Confirmation: both new repro cases fixed, nothing else regressed
+
+- **Repro 1 (block scalar `|`)**: `applyPageConfig('footerCenter: |\n  Some text\n  that spans\n  multiple lines\ndraft: true', { footer: { left: '', center: 'new value', right: '' } })` now produces `footerCenter: "new value"` immediately followed by `draft: true` (plus `footerLeft`/`footerRight` appended after, since those two keys didn't previously exist) — no orphaned `  Some text`/`  that spans`/`  multiple lines` lines, and `extractPageConfig` on the result no longer throws or reverts to defaults.
+- **Repro 2 (plain multi-line wrap)**: same shape and same fix, for `footerCenter: this is a long value\n  that wraps onto a second physical line\ndraft: true`.
+- **Bug 1 (round 2)**: re-run against the round-3 code with the identical repro — indented comment still fully preserved, only `theme:`'s own line changes.
+- **Bug 2 (round 2)**: re-run against the round-3 code with the identical repro — `page : Letter` (space before colon) still found and replaced in place, no duplicate key, `extractPageConfig` no longer throws afterward.
+- **Flow-style fix (round 2 bonus item)**: covered by the existing `optional: replaces a multi-line flow-style margins value...` and `optional: replaces a single-line flow-style margins value...` tests, both still passing unchanged (the flow-bracket-depth branch in `findBlockEnd` is untouched by this round's fix — it's checked first and returns early, before the block-style branch that changed).
+- **Full suite**: `pnpm test:unit` passes 206/206 (up from 200/200 after round 2 — 6 new tests, all in `page-config.test.ts`), confirming no regression anywhere else in the app.
+
+### Updated test summary (post round-3 fix-wave)
+
+`src/markdown/page-config.test.ts` now has 43 tests (37 after round 2 + 6
+new: 1 isolated single-key case, 2 for the reviewer's exact repros, 1 for
+the `>` variant, 2 re-confirming Bug 1/Bug 2 still hold). Combined with
+`PageSetupModal.test.tsx`'s unchanged 10, that's 53 tests across both
+files, all passing. Full suite: 206/206.
