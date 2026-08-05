@@ -94,6 +94,27 @@ describe('Milkdown listener plugin — API pattern verification', () => {
 describe('MilkdownEditorHandle commands needing a real ranged selection — wired-implementation verification', () => {
   const PLUGINS = [...EDITOR_SCHEMA_PLUGINS.flat(), ...EDITOR_COMMAND_PLUGINS]
 
+  // Fix-round (second round) change: destroy is now handled by this
+  // afterEach rather than inline at the end of each test body. Reviewer
+  // finding: with an inline `await editor.destroy()` at the end of each
+  // test, ONE real assertion failure earlier in a test body skips that
+  // test's own destroy() call (a thrown assertion exits the test function
+  // before reaching it) -- leaving that test's Editor instance, and its
+  // DOM node appended to `document.body` by createTestEditor, alive for
+  // every subsequent test in the file. Demonstrated by the reviewer: one
+  // real mutation produced 4 reported failures where only 1 was the actual
+  // bug. `currentEditor` is set by each test right after
+  // `createTestEditor` resolves, and this `afterEach` always runs
+  // (regardless of whether the test body threw), so a real failure no
+  // longer leaks a live editor/DOM node into later tests.
+  let currentEditor: Editor | null = null
+  afterEach(async () => {
+    if (currentEditor) {
+      await currentEditor.destroy()
+      currentEditor = null
+    }
+  })
+
   // "# Hello World" parses to doc(heading("Hello World")). Position 7 is
   // immediately before "W", position 12 immediately after the final "d" --
   // verified empirically against this exact content/plugin combination in
@@ -107,6 +128,7 @@ describe('MilkdownEditorHandle commands needing a real ranged selection — wire
 
   it('toggleBold() wraps a real selection in <strong>, and calling it again removes it', async () => {
     const editor = await createTestEditor('# Hello World', PLUGINS)
+    currentEditor = editor
     const root = document.querySelector('.ProseMirror') as HTMLElement
     const commands = buildEditorCommands(editor)
 
@@ -117,12 +139,11 @@ describe('MilkdownEditorHandle commands needing a real ranged selection — wire
     selectWorld(editor)
     commands.toggleBold()
     expect(root.querySelector('h1')?.innerHTML).toBe('Hello World')
-
-    await editor.destroy()
   })
 
   it('toggleItalic() wraps a real selection in <em>, and calling it again removes it', async () => {
     const editor = await createTestEditor('# Hello World', PLUGINS)
+    currentEditor = editor
     const root = document.querySelector('.ProseMirror') as HTMLElement
     const commands = buildEditorCommands(editor)
 
@@ -133,12 +154,11 @@ describe('MilkdownEditorHandle commands needing a real ranged selection — wire
     selectWorld(editor)
     commands.toggleItalic()
     expect(root.querySelector('h1')?.innerHTML).toBe('Hello World')
-
-    await editor.destroy()
   })
 
   it('insertLink(href) wraps a real selection in a real <a href>', async () => {
     const editor = await createTestEditor('# Hello World', PLUGINS)
+    currentEditor = editor
     const root = document.querySelector('.ProseMirror') as HTMLElement
     const commands = buildEditorCommands(editor)
 
@@ -148,8 +168,6 @@ describe('MilkdownEditorHandle commands needing a real ranged selection — wire
     const link = root.querySelector('h1 a')
     expect(link?.getAttribute('href')).toBe('https://example.com')
     expect(link?.textContent).toBe('World')
-
-    await editor.destroy()
   })
 
   it('insertPageBreak() does not delete a non-empty selection -- selected text survives the insertion', async () => {
@@ -161,6 +179,7 @@ describe('MilkdownEditorHandle commands needing a real ranged selection — wire
     // followed by "<p> World</p>", with "Hello" silently gone. This test
     // reproduces that exact repro and asserts it no longer happens.
     const editor = await createTestEditor('# Hello World', PLUGINS)
+    currentEditor = editor
     const root = document.querySelector('.ProseMirror') as HTMLElement
     const commands = buildEditorCommands(editor)
 
@@ -177,8 +196,6 @@ describe('MilkdownEditorHandle commands needing a real ranged selection — wire
     expect(root.querySelector('div[data-type="pagebreak"]')).toBeInTheDocument()
     expect(root.textContent).toContain('Hello')
     expect(root.textContent).toContain('World')
-
-    await editor.destroy()
   })
 })
 
@@ -361,6 +378,118 @@ describe('MilkdownEditor', () => {
     // fire on its own.
     expect(onChange).toHaveBeenCalledTimes(1)
     expect(onChange.mock.calls[0]?.[0]).toContain('World')
+  })
+
+  // Fix-round (second round) finding: mutation-testing
+  // `useImperativeHandle`'s DELEGATION lines themselves (e.g. rewiring
+  // `toggleBold: () => commandsRef.current?.toggleBold()` to call
+  // `commandsRef.current?.toggleItalic()` instead -- a wrong delegation,
+  // not a wrong underlying command key) passed all 186 tests from the
+  // previous fix round. `MilkdownEditorHandle extends EditorCommands` only
+  // enforces that each method on the handle *exists* with the right
+  // signature, not that `useImperativeHandle`'s own body actually forwards
+  // to the identically-named `commandsRef.current` method. This gap was
+  // real for exactly the three methods that need a genuine ranged
+  // selection to demonstrate via DOM assertions (toggleBold, toggleItalic,
+  // insertLink) -- those were the ones routed around a full mounted-`ref`
+  // test into the raw-Editor "wired-implementation verification" block
+  // above, which calls `buildEditorCommands(editor)` directly and so never
+  // exercises `MilkdownEditor.tsx`'s own `useImperativeHandle` delegation
+  // lines at all. Every other method (toggleHeading, setParagraph, both
+  // list toggles, insertTable, insertPageBreak, undo, redo) already has
+  // mounted-`ref` coverage below and was NOT part of this gap.
+  //
+  // The three tests below close it, through the real mounted component +
+  // `ref`, without needing a ranged selection: `toggleBold`/`toggleItalic`/
+  // `insertLink` all call ProseMirror's `toggleMark` (or a toggleMark-
+  // backed command) under the hood, which -- with a COLLAPSED selection --
+  // sets a *stored mark* rather than rewriting existing text (see
+  // MilkdownEditorHandle's own doc comments). A stored mark applies to the
+  // NEXT typed character. Verified empirically (a throwaway scratch test,
+  // deleted after use) that the raw-DOM-mutation "type a character" trick
+  // these existing tests already use for edits DOES pick up a stored mark
+  // -- confirmed by reading prosemirror-state's own `Transaction.
+  // insertText` source (`node_modules/.pnpm/prosemirror-state.../dist/
+  // index.js`), which reads `this.storedMarks` when constructing the
+  // inserted text node. This is a different, and reliable, mechanism from
+  // `@testing-library/user-event`'s `.type()`, which was tried FIRST and
+  // does NOT work for this in this environment (also verified empirically,
+  // also via a deleted throwaway test): it produced plain, unmarked text,
+  // and separately threw an uncaught `TypeError` from ProseMirror's own
+  // `posAtCoords` during the click userEvent performs first (jsdom doesn't
+  // implement `document.elementFromPoint`).
+  it('toggleBold() at a collapsed cursor sets a stored mark: the next typed character renders as <strong>', async () => {
+    const onChange = vi.fn()
+    const onError = vi.fn()
+    const ref = createRef<MilkdownEditorHandle>()
+    const { container } = render(
+      <MilkdownEditor ref={ref} content="Hello" onChange={onChange} onError={onError} />
+    )
+    const proseMirror = await waitFor(() => {
+      const el = container.querySelector('.ProseMirror')
+      if (!el) throw new Error('not mounted yet')
+      return el as HTMLElement
+    })
+    const p = proseMirror.querySelector('p')
+    if (!p?.firstChild) throw new Error('expected a text node inside the mounted p')
+
+    ref.current?.toggleBold()
+    p.firstChild.textContent = `${p.firstChild.textContent}X`
+
+    await waitFor(() => {
+      expect(proseMirror.querySelector('strong')?.textContent).toBe('X')
+    })
+    expect(proseMirror.innerHTML).toBe('<p>Hello<strong>X</strong></p>')
+  })
+
+  it('toggleItalic() at a collapsed cursor sets a stored mark: the next typed character renders as <em>', async () => {
+    const onChange = vi.fn()
+    const onError = vi.fn()
+    const ref = createRef<MilkdownEditorHandle>()
+    const { container } = render(
+      <MilkdownEditor ref={ref} content="Hello" onChange={onChange} onError={onError} />
+    )
+    const proseMirror = await waitFor(() => {
+      const el = container.querySelector('.ProseMirror')
+      if (!el) throw new Error('not mounted yet')
+      return el as HTMLElement
+    })
+    const p = proseMirror.querySelector('p')
+    if (!p?.firstChild) throw new Error('expected a text node inside the mounted p')
+
+    ref.current?.toggleItalic()
+    p.firstChild.textContent = `${p.firstChild.textContent}X`
+
+    await waitFor(() => {
+      expect(proseMirror.querySelector('em')?.textContent).toBe('X')
+    })
+    expect(proseMirror.innerHTML).toBe('<p>Hello<em>X</em></p>')
+  })
+
+  it('insertLink(href) at a collapsed cursor sets a stored mark: the next typed character renders inside a real <a href>', async () => {
+    const onChange = vi.fn()
+    const onError = vi.fn()
+    const ref = createRef<MilkdownEditorHandle>()
+    const { container } = render(
+      <MilkdownEditor ref={ref} content="Hello" onChange={onChange} onError={onError} />
+    )
+    const proseMirror = await waitFor(() => {
+      const el = container.querySelector('.ProseMirror')
+      if (!el) throw new Error('not mounted yet')
+      return el as HTMLElement
+    })
+    const p = proseMirror.querySelector('p')
+    if (!p?.firstChild) throw new Error('expected a text node inside the mounted p')
+
+    ref.current?.insertLink('https://example.com')
+    p.firstChild.textContent = `${p.firstChild.textContent}X`
+
+    await waitFor(() => {
+      expect(proseMirror.querySelector('a')?.textContent).toBe('X')
+    })
+    const link = proseMirror.querySelector('a')
+    expect(link?.getAttribute('href')).toBe('https://example.com')
+    expect(proseMirror.innerHTML).toBe('<p>Hello<a href="https://example.com">X</a></p>')
   })
 
   // The block-level command tests below rely on the editor's OWN default
