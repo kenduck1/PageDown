@@ -99,16 +99,26 @@
 // - Flow-style values: a hand-authored `margins: { top: 1, bottom: 1,
 //   left: 1, right: 1 }` all on one line round-trips fine (the whole thing
 //   is one line, no special handling needed). A flow value deliberately
-//   split across *several* lines with its closing `}`/`]` on its own line
-//   is bounded by bracket-depth counting (`findBlockEnd`/`bracketDelta`
-//   below) rather than indentation, since a flow collection's closing
-//   bracket has no required indentation at all -- this is a best-effort,
-//   quote/comment-aware character scan, not a real YAML tokenizer, so a
-//   sufficiently adversarial line (e.g. an unbalanced bracket inside a
-//   single-quoted string containing an escaped quote) can still miscount.
-//   Considered low-risk: this module's own writer never produces flow
-//   style, so it only matters for a document some other tool authored
-//   this way before PageDown ever touched it.
+//   split across *several* lines is bounded by ordinary indentation like
+//   every other multi-line value, because a legal one has no unindented
+//   lines to bound: verified against js-yaml rather than assumed, a
+//   top-level key's flow value whose closing bracket sits at column 0
+//   (`margins: {` / `  top: 1` / `}`) throws "deficient indentation" and is
+//   not valid YAML at all, while the same document with that closer
+//   indented by even one column parses fine. (An earlier round of this file
+//   claimed the opposite -- that such a closer "may legally sit at column
+//   0" -- and built an unbounded bracket-hunting scan on that false
+//   premise; see `findBlockEnd`'s fix-wave note #3 for the critical
+//   data-loss bug that caused.) `findBlockEnd` still *repairs* the invalid
+//   column-0-closer shape, since it looks like JSON and is plausibly
+//   hand-authored, but only via a narrowly bounded extension that can
+//   consume nothing except lines made up purely of closing brackets. That
+//   extension leans on `bracketDelta`, a best-effort quote/comment-aware
+//   character scan rather than a real YAML tokenizer, so a sufficiently
+//   adversarial line (e.g. an unbalanced bracket inside a single-quoted
+//   string containing an escaped quote) can still miscount -- now
+//   low-consequence, since a miscount can only mean a stray closer line is
+//   or isn't consumed, never that real content is deleted.
 // - A YAML comment or blank line that sits *inside* one of PageDown's own
 //   multi-line blocks (e.g. between `margins`'s `top:` and `bottom:`
 //   sub-lines, or in the middle of a block-scalar value, rather than after
@@ -119,6 +129,33 @@
 //   exact rule and the two-round history of getting this right (over-
 //   swallowing an unrelated comment, then under-swallowing a block
 //   scalar's own content -- both real, reviewer-found bugs).
+// - A `#`-leading line at the *end* of an owned key's block-scalar
+//   (`|`/`>`) value is left behind as cosmetic residue when that key is
+//   rewritten. Comment detection here is purely textual
+//   (`trim().startsWith('#')`), so it cannot tell a real YAML comment from
+//   literal block-scalar text that merely happens to start with `#` -- and
+//   inside a block scalar it *is* literal text (verified:
+//   `load('footerCenter: |\n  # not a comment\n  more')` yields the string
+//   "# not a comment\nmore"). Only a trailing one is affected: a `#`-leading
+//   line with further indented content after it is correctly swallowed as
+//   interior to the block (measured across first/middle/last/sole-line
+//   positions), because the interior-comment rule above sees that content.
+//   Accepted, not fixed: the leftover line is orphaned *cosmetic* residue,
+//   not corruption -- the result is still valid, re-parseable YAML whose
+//   owned values all read back correctly, and re-applying is idempotent
+//   (both verified). Fixing it properly needs real block-scalar-aware
+//   tokenization (tracking each block's own indentation indicator), which
+//   is not worth introducing here.
+// - Replacing an owned key that carries a YAML *anchor* (`footerCenter: &fc
+//   Original`) drops that anchor along with the rest of the key's old text,
+//   so any alias elsewhere in the block that referenced it (`footerEcho:
+//   *fc`) is orphaned and the whole frontmatter block then fails to parse
+//   on the next read (verified: `load` throws `unidentified alias "fc"`,
+//   and `extractPageConfig` consequently returns `{}`). Accepted, not
+//   fixed: anchors/aliases are exotic in document frontmatter, and
+//   preserving one correctly would mean re-emitting the anchor on a value
+//   this module fully rewrites -- meaningful complexity for a shape no
+//   real PageDown document is expected to contain.
 
 import { load } from 'js-yaml'
 
@@ -397,12 +434,13 @@ function isCommentOrBlankLine(line: string): boolean {
 // Counts unbalanced flow-collection brackets (`{`/`[` vs `}`/`]`) on a
 // single line, ignoring bracket characters inside a quoted string and
 // anything after an unquoted `#` (a real YAML comment). Deliberately not a
-// full YAML tokenizer -- good enough to track whether a flow-style value
-// (e.g. `margins: {` with the rest spanning several further lines) is
-// still "open", which is the one shape column-0-indentation-based
-// scanning can never bound correctly on its own: a flow collection's
-// closing bracket has no required indentation at all, and may legally sit
-// at column 0.
+// full YAML tokenizer -- its only job is to tell whether a flow-style value
+// that opened on an owned key's own line (`margins: {`) is still unclosed
+// at the end of the block the indentation scan already found, which is the
+// one narrow case indentation alone cannot repair. See `findBlockEnd`'s
+// closer-only extension for exactly how far that is allowed to reach, and
+// the file-level "Flow-style values" limitation note for what this
+// best-effort scan can still miscount.
 function bracketDelta(line: string): number {
   let delta = 0
   let quote: '"' | "'" | null = null
@@ -422,39 +460,51 @@ function bracketDelta(line: string): number {
   return delta
 }
 
-// Returns the (exclusive) end index of the block of `lines` that belongs
-// to the owned key whose own line is `lines[startIndex]` -- i.e. the range
-// `[startIndex, findBlockEnd(lines, startIndex))` is exactly what gets
-// replaced or removed for that key, and everything from the returned
-// index onward is untouched.
-function findBlockEnd(lines: string[], startIndex: number): number {
-  const openFlowDepth = bracketDelta(lines[startIndex])
-  if (openFlowDepth > 0) {
-    // Flow-style value left open on the key's own line (e.g.
-    // `margins: {`): bounded by bracket balance, not indentation. Lower
-    // priority, documented edge case -- see the file-level comment's
-    // "Flow-style values" note for this helper's known limits (no real
-    // YAML tokenization, just a best-effort quote/comment-aware bracket
-    // count).
-    let depth = openFlowDepth
-    let index = startIndex + 1
-    while (index < lines.length && depth > 0) {
-      depth += bracketDelta(lines[index])
-      index += 1
-    }
-    return index
-  }
+// True if the value beginning at `valueOffset` (the index just past the
+// owned key's own `key:` / `key :` prefix) genuinely *opens* a flow
+// collection -- i.e. its first non-space character is `{` or `[`.
+//
+// Deliberately far narrower than "this line contains an unbalanced bracket
+// somewhere", which is what round 2 of this file tested and which was a
+// critical, content-destroying bug (see `findBlockEnd`'s fix-wave note #3).
+// A plain YAML scalar may legally contain a stray unbalanced bracket that
+// has no structural meaning whatsoever -- verified directly against
+// js-yaml, not assumed: `load('footerCenter: Chapter {n')` returns
+// `{footerCenter: 'Chapter {n'}` and `load('footerLeft: see [1')` returns
+// `{footerLeft: 'see [1'}`, both perfectly ordinary single-key documents
+// with no flow collection anywhere in sight.
+//
+// A value that opens a flow collection only *after* a tag or anchor
+// (`margins: &m {`, verified valid) is not recognized here, and that is
+// correct rather than a gap: every continuation line of a legal multi-line
+// flow value is indented (see `findBlockEnd`), so the ordinary indentation
+// scan already bounds it exactly: this predicate only gates the extra
+// repair step for the *invalid* column-0-closer shape.
+function opensFlowCollection(line: string, valueOffset: number): boolean {
+  const firstValueChar = line.slice(valueOffset).trimStart().charAt(0)
+  return firstValueChar === '{' || firstValueChar === '['
+}
 
-  // Block-style value: its own line plus any immediately-following
-  // indented lines (see `isIndented`'s comment above for why "indented"
-  // alone is the correct and sufficient test here, covering margins'
-  // nested sub-lines, block-scalar content, and plain-wrapped scalar
-  // continuations alike). A comment/blank line *interior* to such a run
-  // (i.e. more indented content follows after it) is swallowed too, since
-  // it's describing/spacing content that belongs to the block being
-  // replaced -- but a comment/blank line with no further indented content
-  // after it belongs to whatever comes *after* the block, not the block
-  // itself, and is left alone.
+// A line consisting of nothing but flow-collection closers (`}`/`]`), any
+// separating commas and whitespace, and an optional trailing comment --
+// `}`, `] }`, `} # done`. A line matching this carries no key, no value and
+// no comment text of its own, so consuming it can never destroy content.
+function isFlowCloserOnlyLine(line: string): boolean {
+  const withoutComment = line.replace(/#.*$/, '')
+  return /[}\]]/.test(withoutComment) && /^[\s,}\]]*$/.test(withoutComment)
+}
+
+// The indentation-based core of `findBlockEnd`: an owned key's own line
+// plus any immediately-following indented lines (see `isIndented`'s comment
+// above for why "indented" alone is the correct and sufficient test here,
+// covering margins' nested sub-lines, block-scalar content, and
+// plain-wrapped scalar continuations alike). A comment/blank line
+// *interior* to such a run (i.e. more indented content follows after it) is
+// swallowed too, since it's describing/spacing content that belongs to the
+// block being replaced -- but a comment/blank line with no further indented
+// content after it belongs to whatever comes *after* the block, not the
+// block itself, and is left alone.
+function findIndentedBlockEnd(lines: string[], startIndex: number): number {
   let index = startIndex + 1
   while (index < lines.length) {
     if (isIndented(lines[index]) && !isCommentOrBlankLine(lines[index])) {
@@ -474,6 +524,71 @@ function findBlockEnd(lines: string[], startIndex: number): number {
     break
   }
   return index
+}
+
+// Returns the (exclusive) end index of the block of `lines` that belongs
+// to the owned key whose own line is `lines[startIndex]` -- i.e. the range
+// `[startIndex, findBlockEnd(...))` is exactly what gets replaced or
+// removed for that key, and everything from the returned index onward is
+// untouched. `valueOffset` is the index within `lines[startIndex]` at which
+// that key's value begins (just past its `key:` / `key :` prefix).
+//
+// Indentation is the *only* boundary rule for valid YAML, including for
+// multi-line flow-style values. Verified directly against js-yaml rather
+// than assumed: a top-level key's flow value whose closing bracket sits at
+// column 0 (`margins: {` / `  top: 1` / `}`) is not valid YAML at all --
+// `load` throws "deficient indentation" -- while the same document with the
+// closer indented by even one column parses fine. So every continuation
+// line of a *legal* multi-line flow value is indented, and
+// `findIndentedBlockEnd` alone already bounds it exactly.
+//
+// The bracket-counting extension below therefore exists only to repair one
+// specific *invalid* (but natural, JSON-looking, and therefore plausibly
+// hand-authored) shape: a flow value whose closer was left at column 0.
+// It is bounded by construction -- it may only ever consume lines that are
+// nothing but closing brackets (`isFlowCloserOnlyLine`), and only while the
+// collection the key's own value opened is still unbalanced -- so unlike
+// round 2's version it cannot run past, or delete, any real content.
+//
+// Fix-wave history (three rounds, all reviewer-found real bugs -- read
+// before "simplifying" any of this):
+// 1. The first version treated *any* indented line as a continuation, which
+//    silently deleted an unrelated indented *comment* on the next write to
+//    the key above it (see page-config.test.ts's "preserves an indented
+//    comment" tests). Fixed by the comment/blank handling above.
+// 2. The fix for #1 over-corrected: it required a continuation line to look
+//    like a mapping entry or sequence item specifically (`key:`/`- item`),
+//    which stopped recognizing a block scalar's or plain-wrapped scalar's
+//    own content lines as continuations, orphaning them instead (see
+//    "preserves a block-scalar value" / "preserves a plain multi-line-
+//    wrapped scalar value"). Fixed by widening back to plain "indented".
+// 3. Round 2 also added a flow-bracket branch that took over the whole scan
+//    whenever `bracketDelta(lines[startIndex]) > 0` -- i.e. whenever an
+//    unbalanced bracket appeared *anywhere* on the key's line, not only
+//    when the value was really a flow collection. A plain scalar may
+//    legally contain one (`footerCenter: Chapter {n`; note PageDown's own
+//    footer templating syntax is `{n}`/`{total}`, so a hand-typed half-open
+//    brace is realistic), and for those the branch hunted for a closing
+//    bracket that does not exist, ran to end-of-input, and returned
+//    `lines.length` -- silently deleting every remaining line of the
+//    frontmatter block (`title`, `author`, `tags`, `draft`, ...) on the
+//    next write. Strictly worse than #1/#2, which produced recoverable
+//    text; this destroyed content outright. Fixed by the two independent
+//    guards described above (`opensFlowCollection` + `isFlowCloserOnlyLine`)
+//    -- see page-config.test.ts's "round 4" regression tests.
+function findBlockEnd(lines: string[], startIndex: number, valueOffset: number): number {
+  let end = findIndentedBlockEnd(lines, startIndex)
+  if (!opensFlowCollection(lines[startIndex], valueOffset)) return end
+
+  let depth = 0
+  for (let index = startIndex; index < end; index += 1) {
+    depth += bracketDelta(lines[index])
+  }
+  while (depth > 0 && end < lines.length && isFlowCloserOnlyLine(lines[end])) {
+    depth += bracketDelta(lines[end])
+    end += 1
+  }
+  return end
 }
 
 /**
@@ -519,14 +634,30 @@ export function applyPageConfig(rawFrontmatterYaml: string, updates: Partial<Pag
     // corruption bug -- see page-config.test.ts's "space before colon"
     // tests).
     const topLevelPattern = new RegExp(`^${key}[ \t]*:`)
-    const startIndex = lines.findIndex((line) => topLevelPattern.test(line))
+
+    // Matched with `exec` rather than `test` so the match's own length is
+    // available as the offset at which this key's *value* begins, which
+    // `findBlockEnd` needs to tell a genuine flow-collection value
+    // (`margins: {`) from a plain scalar that merely contains a bracket
+    // (`footerCenter: Chapter {n`).
+    let startIndex = -1
+    let valueOffset = 0
+    for (let index = 0; index < lines.length; index += 1) {
+      const match = topLevelPattern.exec(lines[index])
+      if (match) {
+        startIndex = index
+        valueOffset = match[0].length
+        break
+      }
+    }
 
     if (startIndex === -1) {
       appended.push(text)
       continue
     }
 
-    lines.splice(startIndex, findBlockEnd(lines, startIndex) - startIndex, ...text.split('\n'))
+    const blockEnd = findBlockEnd(lines, startIndex, valueOffset)
+    lines.splice(startIndex, blockEnd - startIndex, ...text.split('\n'))
   }
 
   for (const text of appended) {
