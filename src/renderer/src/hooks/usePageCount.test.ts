@@ -23,7 +23,7 @@ afterEach(() => {
 describe('usePageCount', () => {
   it('starts loading, then resolves with the fetched page count', async () => {
     vi.mocked(window.api.getPageCount).mockResolvedValue({ pageCount: 4 })
-    const { result } = renderHook(() => usePageCount('# Doc', 0))
+    const { result } = renderHook(() => usePageCount('# Doc', null, 0))
 
     expect(result.current.loading).toBe(true)
 
@@ -34,7 +34,7 @@ describe('usePageCount', () => {
 
   it('surfaces a rejected call as an error, not a thrown exception', async () => {
     vi.mocked(window.api.getPageCount).mockRejectedValue(new Error('harness timed out'))
-    const { result } = renderHook(() => usePageCount('# Doc', 0))
+    const { result } = renderHook(() => usePageCount('# Doc', null, 0))
 
     await waitFor(() => expect(result.current.loading).toBe(false))
     expect(result.current.pageCount).toBeNull()
@@ -45,7 +45,7 @@ describe('usePageCount', () => {
     vi.useFakeTimers()
     vi.mocked(window.api.getPageCount).mockResolvedValue({ pageCount: 1 })
 
-    renderHook(() => usePageCount('# Doc', 500))
+    renderHook(() => usePageCount('# Doc', null, 500))
     expect(window.api.getPageCount).not.toHaveBeenCalled()
 
     vi.advanceTimersByTime(499)
@@ -59,7 +59,7 @@ describe('usePageCount', () => {
     vi.useFakeTimers()
     vi.mocked(window.api.getPageCount).mockResolvedValue({ pageCount: 7 })
 
-    const { rerender } = renderHook(({ content }) => usePageCount(content, 500), {
+    const { rerender } = renderHook(({ content }) => usePageCount(content, null, 500), {
       initialProps: { content: 'a' }
     })
     vi.advanceTimersByTime(100)
@@ -75,7 +75,38 @@ describe('usePageCount', () => {
     await vi.advanceTimersByTimeAsync(500)
 
     expect(window.api.getPageCount).toHaveBeenCalledTimes(1)
-    expect(window.api.getPageCount).toHaveBeenCalledWith('abc')
+    expect(window.api.getPageCount).toHaveBeenCalledWith('abc', null)
+  })
+
+  it("forwards the document's file path, so local asset references can resolve", async () => {
+    vi.mocked(window.api.getPageCount).mockResolvedValue({ pageCount: 2 })
+
+    const { result } = renderHook(() => usePageCount('# Doc', '/docs/report.md', 0))
+    await waitFor(() => expect(result.current.loading).toBe(false))
+
+    expect(window.api.getPageCount).toHaveBeenCalledWith('# Doc', '/docs/report.md')
+  })
+
+  it('re-fetches when only the file path changes', async () => {
+    // Identical content in two different directories genuinely paginates
+    // differently once local images load (`./figures/chart.png` resolves to a
+    // different file, of a different size, per directory) -- so the path has
+    // to be part of what this hook re-fetches on, not a value it captures
+    // once and ignores.
+    vi.mocked(window.api.getPageCount)
+      .mockResolvedValueOnce({ pageCount: 1 })
+      .mockResolvedValueOnce({ pageCount: 9 })
+
+    const { result, rerender } = renderHook(({ path }) => usePageCount('same', path, 0), {
+      initialProps: { path: '/a/doc.md' }
+    })
+    await waitFor(() => expect(result.current.pageCount).toBe(1))
+
+    rerender({ path: '/b/doc.md' })
+    await waitFor(() => expect(result.current.pageCount).toBe(9))
+
+    expect(window.api.getPageCount).toHaveBeenNthCalledWith(1, 'same', '/a/doc.md')
+    expect(window.api.getPageCount).toHaveBeenNthCalledWith(2, 'same', '/b/doc.md')
   })
 
   it('re-fetches when content changes after the debounce settles', async () => {
@@ -83,7 +114,7 @@ describe('usePageCount', () => {
       .mockResolvedValueOnce({ pageCount: 1 })
       .mockResolvedValueOnce({ pageCount: 2 })
 
-    const { result, rerender } = renderHook(({ content }) => usePageCount(content, 0), {
+    const { result, rerender } = renderHook(({ content }) => usePageCount(content, null, 0), {
       initialProps: { content: 'first' }
     })
     await waitFor(() => expect(result.current.pageCount).toBe(1))
@@ -103,7 +134,7 @@ describe('usePageCount', () => {
       .mockResolvedValueOnce({ pageCount: 5 })
       .mockReturnValueOnce(secondCall)
 
-    const { result, rerender } = renderHook(({ content }) => usePageCount(content, 0), {
+    const { result, rerender } = renderHook(({ content }) => usePageCount(content, null, 0), {
       initialProps: { content: 'first' }
     })
     await waitFor(() => expect(result.current.pageCount).toBe(5))
@@ -131,7 +162,7 @@ describe('usePageCount', () => {
       .mockReturnValueOnce(firstCall)
       .mockResolvedValueOnce({ pageCount: 99 })
 
-    const { result, rerender } = renderHook(({ content }) => usePageCount(content, 0), {
+    const { result, rerender } = renderHook(({ content }) => usePageCount(content, null, 0), {
       initialProps: { content: 'first' }
     })
     await waitFor(() => expect(window.api.getPageCount).toHaveBeenCalledTimes(1))

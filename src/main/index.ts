@@ -220,25 +220,59 @@ app.whenReady().then(() => {
       throw new Error('Requested path is not a known recent file')
     }
     const { content } = await readFileByPath(filePath)
-    return getThumbnail(content, userDataDir)
+    // `filePath` is forwarded ONLY because the isKnownPath check above has
+    // already vetted it -- getThumbnail uses it purely to resolve the
+    // document's local asset references against its own directory (see
+    // thumbnail-generator.ts). Note the deliberate asymmetry with
+    // `file:getPageCount` below, which DROPS an unknown path instead of
+    // throwing: this handler cannot proceed at all without a valid path (it
+    // has to read the file to have any content to render), whereas page
+    // counting has the content in hand and only ever wanted the path for
+    // assets.
+    return getThumbnail(content, userDataDir, filePath)
   })
 
   ipcMain.handle('template:getThumbnail', async (_event, content: string) => {
+    // No document path, deliberately: a template is in-memory content with no
+    // on-disk location, so it has no directory to resolve local assets
+    // against and must load none. Passing nothing is what enforces that --
+    // see getThumbnail's own doc comment.
     return getThumbnail(content, app.getPath('userData'))
   })
 
   // Status bar's real page-count display (EditorStatusBar.tsx / the
-  // usePageCount hook). Takes raw content directly, the same as
-  // `template:getThumbnail` above -- no `isKnownPath` check needed since
-  // this never touches a filesystem path, only in-memory content already
-  // held by the renderer. Uses its own dedicated harness/queue/window
-  // (`page-count-generator.ts`), deliberately not sharing `getThumbnail`'s
-  // harness or `mainWindow` itself -- see that file's own module comment
-  // for why it owns a private, never-shown BaseWindow instead of attaching
-  // to the real app window the way every other harness here does.
-  ipcMain.handle('file:getPageCount', async (_event, content: string) => {
-    return getPageCount(content)
-  })
+  // usePageCount hook). Takes raw content directly. Uses its own dedicated
+  // harness/queue/window (`page-count-generator.ts`), deliberately not
+  // sharing `getThumbnail`'s harness or `mainWindow` itself -- see that
+  // file's own module comment for why it owns a private, never-shown
+  // BaseWindow instead of attaching to the real app window the way every
+  // other harness here does.
+  //
+  // `filePath` is a renderer-supplied path, so CLAUDE.md's File I/O security
+  // invariant binds: it MUST be validated with `isKnownPath` before anything
+  // resolves disk paths beneath it. This is not a formality -- registering a
+  // directory as an asset root grants the sandboxed render context the
+  // ability to read any file under it, so an unvetted path here would be a
+  // genuine arbitrary-file-read primitive, exactly the class of bug that
+  // invariant was added for.
+  //
+  // An unknown path is DROPPED, not thrown on -- deliberately asymmetric with
+  // `file:getThumbnail` above, which does throw. That handler cannot proceed
+  // at all without a valid path (it has to read the file to have any content
+  // to render); page counting already has the content in hand and only ever
+  // wanted the path to resolve local assets. Throwing here would turn a
+  // missing or stale allowlist entry into a broken status bar, whereas
+  // dropping degrades exactly one document to "local assets denied" -- the
+  // same, already-correct treatment an unsaved document gets.
+  ipcMain.handle(
+    'file:getPageCount',
+    async (_event, content: string, filePath: string | null = null) => {
+      const userDataDir = app.getPath('userData')
+      const documentPath =
+        filePath && (await isKnownPath(userDataDir, filePath)) ? filePath : undefined
+      return getPageCount(content, documentPath)
+    }
+  )
 
   ipcMain.handle('dialog:confirmDiscard', () => confirmDiscardChanges(mainWindow))
 

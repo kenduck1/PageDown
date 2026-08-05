@@ -26,6 +26,7 @@ describe('EditorStatusBar', () => {
     render(
       <EditorStatusBar
         content={'# Heading\n\nOne two three four.'}
+        filePath={null}
         isDirty={false}
         zoom={1}
         onZoomChange={vi.fn()}
@@ -36,18 +37,42 @@ describe('EditorStatusBar', () => {
   })
 
   it('uses singular "word" for a one-word document', () => {
-    render(<EditorStatusBar content="Hi" isDirty={false} zoom={1} onZoomChange={vi.fn()} />)
+    render(
+      <EditorStatusBar
+        content="Hi"
+        filePath={null}
+        isDirty={false}
+        zoom={1}
+        onZoomChange={vi.fn()}
+      />
+    )
     expect(screen.getByText('1 word')).toBeInTheDocument()
   })
 
   it('shows "Saved" (not "Unsaved changes") when isDirty is false', () => {
-    render(<EditorStatusBar content="Hi" isDirty={false} zoom={1} onZoomChange={vi.fn()} />)
+    render(
+      <EditorStatusBar
+        content="Hi"
+        filePath={null}
+        isDirty={false}
+        zoom={1}
+        onZoomChange={vi.fn()}
+      />
+    )
     expect(screen.getByText('Saved')).toBeInTheDocument()
     expect(screen.queryByText('Unsaved changes')).not.toBeInTheDocument()
   })
 
   it('shows "Unsaved changes" (not "Saved") when isDirty is true', () => {
-    render(<EditorStatusBar content="Hi" isDirty={true} zoom={1} onZoomChange={vi.fn()} />)
+    render(
+      <EditorStatusBar
+        content="Hi"
+        filePath={null}
+        isDirty={true}
+        zoom={1}
+        onZoomChange={vi.fn()}
+      />
+    )
     expect(screen.getByText('Unsaved changes')).toBeInTheDocument()
     expect(screen.queryByText('Saved')).not.toBeInTheDocument()
   })
@@ -55,7 +80,15 @@ describe('EditorStatusBar', () => {
   it('calls onZoomChange with the selected numeric scale value when the dropdown changes', async () => {
     const user = userEvent.setup()
     const onZoomChange = vi.fn()
-    render(<EditorStatusBar content="Hi" isDirty={false} zoom={1} onZoomChange={onZoomChange} />)
+    render(
+      <EditorStatusBar
+        content="Hi"
+        filePath={null}
+        isDirty={false}
+        zoom={1}
+        onZoomChange={onZoomChange}
+      />
+    )
 
     await user.selectOptions(screen.getByLabelText('Zoom level'), '150%')
 
@@ -63,24 +96,72 @@ describe('EditorStatusBar', () => {
   })
 
   it('reflects the current zoom prop as the dropdown selection', () => {
-    render(<EditorStatusBar content="Hi" isDirty={false} zoom={0.75} onZoomChange={vi.fn()} />)
+    render(
+      <EditorStatusBar
+        content="Hi"
+        filePath={null}
+        isDirty={false}
+        zoom={0.75}
+        onZoomChange={vi.fn()}
+      />
+    )
     expect(screen.getByLabelText('Zoom level')).toHaveValue('0.75')
   })
 
   it('fetches and displays the real page count via window.api.getPageCount', async () => {
-    render(<EditorStatusBar content="# Doc" isDirty={false} zoom={1} onZoomChange={vi.fn()} />)
+    render(
+      <EditorStatusBar
+        content="# Doc"
+        filePath={null}
+        isDirty={false}
+        zoom={1}
+        onZoomChange={vi.fn()}
+      />
+    )
 
     await waitFor(() => expect(screen.getByText('Page 1 of 3')).toBeInTheDocument(), {
       timeout: 2000
     })
-    expect(window.api.getPageCount).toHaveBeenCalledWith('# Doc')
+    expect(window.api.getPageCount).toHaveBeenCalledWith('# Doc', null)
+  })
+
+  it("forwards the document's own file path so local image references can resolve", async () => {
+    render(
+      <EditorStatusBar
+        content="# Doc"
+        filePath="/Users/someone/notes/report.md"
+        isDirty={false}
+        zoom={1}
+        onZoomChange={vi.fn()}
+      />
+    )
+
+    // The path is what the main process turns into an asset root for this
+    // document's own directory (src/main/page-count-generator.ts) -- without
+    // it, every local image in the counted document silently 404s.
+    await waitFor(
+      () =>
+        expect(window.api.getPageCount).toHaveBeenCalledWith(
+          '# Doc',
+          '/Users/someone/notes/report.md'
+        ),
+      { timeout: 2000 }
+    )
   })
 
   it('shows a placeholder page count while the real count is still loading', () => {
     // Never resolves within this test, so the initial "—" placeholder is
     // what's on screen throughout.
     vi.mocked(window.api.getPageCount).mockReturnValue(new Promise(() => {}))
-    render(<EditorStatusBar content="# Doc" isDirty={false} zoom={1} onZoomChange={vi.fn()} />)
+    render(
+      <EditorStatusBar
+        content="# Doc"
+        filePath={null}
+        isDirty={false}
+        zoom={1}
+        onZoomChange={vi.fn()}
+      />
+    )
     expect(screen.getByText('Page 1 of —')).toBeInTheDocument()
   })
 
@@ -91,7 +172,15 @@ describe('EditorStatusBar', () => {
     // real 500ms debounce.
     vi.mocked(window.api.getPageCount).mockReturnValue(new Promise(() => {}))
     const user = userEvent.setup()
-    render(<EditorStatusBar content="# Doc" isDirty={false} zoom={1} onZoomChange={vi.fn()} />)
+    render(
+      <EditorStatusBar
+        content="# Doc"
+        filePath={null}
+        isDirty={false}
+        zoom={1}
+        onZoomChange={vi.fn()}
+      />
+    )
 
     const prevButton = screen.getByRole('button', { name: 'Previous page' })
     const nextButton = screen.getByRole('button', { name: 'Next page' })

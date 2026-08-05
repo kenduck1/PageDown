@@ -1,7 +1,17 @@
-import { test, expect, type ElectronApplication } from '@playwright/test'
-import { readdir, stat } from 'node:fs/promises'
+import { test, expect, type ElectronApplication, type Page } from '@playwright/test'
+import { mkdtemp, readdir, rm, stat } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { randomBytes } from 'node:crypto'
+import { mergeRecentFiles, readRecentFiles, writeRecentFiles } from '../src/main/recent-files'
 import { launchIsolatedApp } from './electron-launch'
+import {
+  ONE_PX_PNG,
+  TWO_PX_PNG,
+  assetUrlPattern,
+  readImageBoxes,
+  writeFixtureFile
+} from './asset-evidence'
 
 let app: ElectronApplication
 let close: () => Promise<void>
@@ -139,4 +149,274 @@ test('Gate 8 regression: a ~13-page document paginates well under the harness ti
   // used to hit almost exactly (~11.8s) -- a reintroduced throttling
   // regression would blow well past this bound, not just marginally miss it.
   expect(elapsedMs).toBeLessThan(6_000)
+})
+
+// --- Local asset loading (2026-08-05 sub-project) --------------------------
+//
+// Local image references in a Markdown document silently 404'd against the
+// `pagedown-render://` scheme since this project began (already recorded, as
+// a deliberately-asserted gap, in phase0/gate4-export.spec.ts). These cases
+// prove the fix end to end through the REAL chain -- real `window.api`
+// contextBridge call, real `isKnownPath` validation, real `readFileByPath`,
+// real `registerAssetRoot`, the REAL `markdownToHtml` src rewrite, and the
+// real `pagedown-render://` protocol handler -- and prove that the
+// document-directory confinement the rewrite rests on actually holds against
+// real traversal attempts.
+//
+// Deliberately driven through the renderer page's `window.api.getThumbnail`
+// rather than this file's older `__pagedownPhase0.getThumbnail` bridge calls
+// above: CLAUDE.md states the renderer-page pattern (Gate 9's convention) is
+// preferred for new gates, and only that path exercises the `file:
+// getThumbnail` IPC handler's own `isKnownPath` check and its new
+// filePath-forwarding.
+
+// Same pattern as gate9/gate11/gate12's own `getMainWindow` -- this app
+// launches a SECOND window at startup (the Phase 0 spike's sandboxed
+// `pagedown-render://` harness), and `firstWindow()` races between the two.
+// Matched by a POSITIVE `file://` check for the reason gate9 documents:
+// every window starts on `about:blank` before its real navigation completes.
+async function getMainWindow(application: ElectronApplication): Promise<Page> {
+  const deadline = Date.now() + 20_000
+  while (Date.now() < deadline) {
+    for (const candidate of application.windows()) {
+      try {
+        await candidate.waitForLoadState('domcontentloaded', { timeout: 500 })
+      } catch {
+        continue
+      }
+      if (candidate.url().startsWith('file://')) return candidate
+    }
+    await new Promise((resolve) => setTimeout(resolve, 200))
+  }
+  throw new Error('Timed out locating the main app-shell window (only found the sandboxed one)')
+}
+
+// Adds `filePath` to the real recent-files allowlist `isKnownPath` reads, so
+// the real `file:getThumbnail` handler will accept it. Writes into the
+// ISOLATED userData directory `launchIsolatedApp` created (not the
+// developer's real one), which is torn down wholesale by `close()` -- so
+// unlike phase0/gate11-editor-save-race.spec.ts this needs no backup/restore
+// of an original file.
+async function seedRecentFile(userDataDir: string, filePath: string): Promise<void> {
+  const existing = await readRecentFiles(userDataDir)
+  await writeRecentFiles(
+    userDataDir,
+    mergeRecentFiles(existing, filePath, new Date().toISOString())
+  )
+}
+
+async function getThumbnailViaApi(win: Page, filePath: string): Promise<{ pageCount: number }> {
+  return win.evaluate(async (path) => {
+    const result = await (
+      window as unknown as {
+        api: { getThumbnail: (f: string) => Promise<{ dataUrl: string; pageCount: number }> }
+      }
+    ).api.getThumbnail(path)
+    // Only the page count crosses back -- a full base64 data URL is a large,
+    // pointless payload to serialize through evaluate(), and the real
+    // image-loading evidence comes from the render context's own imageBoxes
+    // measurements, not from the captured PNG.
+    return { pageCount: result.pageCount }
+  }, filePath)
+}
+
+test('Gate 8: a local relative image reference in the document actually loads (not silently 404ing)', async () => {
+  test.setTimeout(90_000)
+
+  const win = await getMainWindow(app)
+  await win.waitForFunction(() => (window as unknown as { api?: unknown }).api !== undefined)
+  const userDataDir = await app.evaluate(({ app }) => app.getPath('userData'))
+
+  const fixtureDir = await mkdtemp(join(tmpdir(), 'pagedown-gate8-assets-'))
+  const nonce = randomBytes(6).toString('hex')
+
+  try {
+    // A plain nested relative path, plus a SECOND reference whose filename
+    // carries a space and a non-ASCII character. The second one is the real
+    // "realistic input" check for the pipeline<->protocol-handler seam: mdast
+    // percent-encodes those characters on its own before `markdownToHtml`'s
+    // rewrite ever sees the src, the rewrite decodes that layer and
+    // re-encodes the whole path as ONE opaque segment, and the protocol
+    // handler decodes exactly once -- a mismatch anywhere in that chain
+    // produces a filename that doesn't exist on disk and silently 404s.
+    const plainImagePath = join(fixtureDir, 'figures', `chart-${nonce}.png`)
+    const awkwardImagePath = join(fixtureDir, 'figures', `chärt one-${nonce}.png`)
+    await writeFixtureFile(plainImagePath, ONE_PX_PNG)
+    await writeFixtureFile(awkwardImagePath, ONE_PX_PNG)
+
+    const docPath = join(fixtureDir, `doc-${nonce}.md`)
+    await writeFixtureFile(
+      docPath,
+      `# Gate 8 asset fixture ${nonce}\n\n` +
+        `![chart](./figures/chart-${nonce}.png)\n\n` +
+        `![awkward](<./figures/chärt one-${nonce}.png>)\n`
+    )
+    await seedRecentFile(userDataDir, docPath)
+
+    const result = await getThumbnailViaApi(win, docPath)
+    expect(result.pageCount).toBeGreaterThanOrEqual(1)
+
+    const boxes = await readImageBoxes(app, `chart-${nonce}.png`)
+    expect(boxes).toHaveLength(2)
+
+    const plain = boxes.find((box) => box.src.includes(`chart-${nonce}.png`))!
+    const awkward = boxes.find((box) => box.src.includes(`one-${nonce}.png`))!
+
+    // Seam obligation: the src actually requested is the one this project's
+    // REAL rewrite produced -- asset scheme, a fresh 32-hex-char per-render
+    // token, and the relative path as one encodeURIComponent'd segment.
+    expect(plain.src).toMatch(assetUrlPattern(`.%2Ffigures%2Fchart-${nonce}.png`))
+    expect(awkward.src).toMatch(assetUrlPattern(`.%2Ffigures%2Fch%C3%A4rt%20one-${nonce}.png`))
+
+    // Seam obligation: Chromium's own WHATWG URL parse -- the same
+    // normalization `new URL(request.url)` performs inside the protocol
+    // handler -- does not mangle either URL. The token segment survives
+    // intact and the encoded path segment is byte-identical, so what the
+    // handler splits on `/` and `decodeURIComponent`s is exactly what the
+    // pipeline intended.
+    expect(plain.resolvedSrc).toBe(plain.src)
+    expect(awkward.resolvedSrc).toBe(awkward.src)
+
+    // The actual proof the bytes were served AND decoded: the intrinsic size
+    // matches the real 1x1 PNG written above. A silent 404 reads 0x0 here
+    // (that exact signature is what phase0/gate4-export.spec.ts asserts for
+    // the corpus's still-unserved images), so this also confirms that Task
+    // 1's `Content-Security-Policy: default-src 'none'; sandbox;` response
+    // header on asset responses does NOT interfere with an ordinary <img>
+    // subresource load -- CSP response headers only govern the document a
+    // response becomes, never an image fetch.
+    expect(plain.naturalWidth).toBe(1)
+    expect(plain.naturalHeight).toBe(1)
+    expect(awkward.naturalWidth).toBe(1)
+    expect(awkward.naturalHeight).toBe(1)
+  } finally {
+    await rm(fixtureDir, { recursive: true, force: true })
+  }
+})
+
+test('Gate 8: a local image reference using ../ escaping the document directory does NOT load', async () => {
+  test.setTimeout(90_000)
+
+  const win = await getMainWindow(app)
+  await win.waitForFunction(() => (window as unknown as { api?: unknown }).api !== undefined)
+  const userDataDir = await app.evaluate(({ app }) => app.getPath('userData'))
+
+  const fixtureDir = await mkdtemp(join(tmpdir(), 'pagedown-gate8-traversal-'))
+  const nonce = randomBytes(6).toString('hex')
+
+  try {
+    // Two REAL, valid, decodable 2x2 PNGs placed two directories ABOVE the
+    // document -- the denial under test must be genuine confinement, not the
+    // incidental "that file doesn't exist" 404 a nonexistent target would
+    // produce. A traversal that wrongly succeeded would read 2x2 here, which
+    // no in-tree fixture in these gates ever produces.
+    const plainSecretPath = join(fixtureDir, `secret-plain-${nonce}.png`)
+    const rawSecretPath = join(fixtureDir, `secret-raw-${nonce}.png`)
+    await writeFixtureFile(plainSecretPath, TWO_PX_PNG)
+    await writeFixtureFile(rawSecretPath, TWO_PX_PNG)
+    expect((await stat(plainSecretPath)).size).toBeGreaterThan(0)
+    expect((await stat(rawSecretPath)).size).toBeGreaterThan(0)
+
+    const docPath = join(fixtureDir, 'doc', 'sub', `doc-${nonce}.md`)
+    await writeFixtureFile(
+      docPath,
+      `# Gate 8 traversal fixture ${nonce}\n\n` +
+        // A plain Markdown `../../` escape...
+        `![escape](../../secret-plain-${nonce}.png)\n\n` +
+        // ...and a percent-encoded raw-HTML one. `%2e%2e` is `..` after a
+        // single decode, so this specifically probes whether encoding the
+        // dot-segments smuggles them past the rewrite and the handler.
+        `<img src="%2e%2e/%2e%2e/secret-raw-${nonce}.png" alt="encoded escape">\n`
+    )
+    await seedRecentFile(userDataDir, docPath)
+
+    const result = await getThumbnailViaApi(win, docPath)
+    expect(result.pageCount).toBeGreaterThanOrEqual(1)
+
+    const boxes = await readImageBoxes(app, `secret-plain-${nonce}.png`)
+    expect(boxes).toHaveLength(2)
+
+    const plain = boxes.find((box) => box.src.includes(`secret-plain-${nonce}.png`))!
+    const raw = boxes.find((box) => box.src.includes(`secret-raw-${nonce}.png`))!
+
+    // Both traversal attempts are rewritten into real, token-bearing asset
+    // URLs and really dispatched -- this is a genuine end-to-end request
+    // through the live protocol handler, not `resolveAssetPath` checked in
+    // isolation. Note the percent-encoded raw-HTML form normalizes to the
+    // identical shape as the plain one: `markdownToHtml`'s rewrite decodes
+    // the author's encoding layer before re-encoding the path as one
+    // segment, so `%2e%2e` never reaches the handler as a way to hide `..`.
+    expect(plain.src).toMatch(assetUrlPattern(`..%2F..%2Fsecret-plain-${nonce}.png`))
+    expect(raw.src).toMatch(assetUrlPattern(`..%2F..%2Fsecret-raw-${nonce}.png`))
+    expect(plain.resolvedSrc).toBe(plain.src)
+    expect(raw.resolvedSrc).toBe(raw.src)
+
+    // Denied by the handler: 0x0, not the 2x2 the out-of-tree files really
+    // decode to.
+    expect(plain.naturalWidth).toBe(0)
+    expect(plain.naturalHeight).toBe(0)
+    expect(raw.naturalWidth).toBe(0)
+    expect(raw.naturalHeight).toBe(0)
+  } finally {
+    await rm(fixtureDir, { recursive: true, force: true })
+  }
+})
+
+test('Gate 8: a relative path of exactly ".." collapses under URL normalization and is denied', async () => {
+  test.setTimeout(90_000)
+
+  // Pins a low-severity but genuinely untested corner, so nobody later
+  // "fixes" it into something worse. `encodeURIComponent('..')` is `..`
+  // (neither dot is a reserved character), so the rewrite emits a BARE `..`
+  // path segment -- and WHATWG URL parsing removes dot segments, popping the
+  // token segment off entirely before the request ever reaches the protocol
+  // handler. The result names no registered asset root at all, so it is
+  // still a denial (Chromium strips the traversal before the app sees it),
+  // just not via the confinement check in `resolveAssetPath`.
+  const win = await getMainWindow(app)
+  await win.waitForFunction(() => (window as unknown as { api?: unknown }).api !== undefined)
+  const userDataDir = await app.evaluate(({ app }) => app.getPath('userData'))
+
+  const fixtureDir = await mkdtemp(join(tmpdir(), 'pagedown-gate8-dotdot-'))
+  const nonce = randomBytes(6).toString('hex')
+
+  try {
+    // An ordinary sibling image acts as this case's own control: it proves
+    // the render really happened and really CAN serve assets from this
+    // document's directory, so the `..` reference's failure is about the
+    // `..` and nothing else.
+    const anchorPath = join(fixtureDir, `anchor-${nonce}.png`)
+    await writeFixtureFile(anchorPath, ONE_PX_PNG)
+
+    const docPath = join(fixtureDir, `doc-${nonce}.md`)
+    await writeFixtureFile(
+      docPath,
+      `# Gate 8 bare dot-dot fixture ${nonce}\n\n` +
+        `![up](..)\n\n` +
+        `![anchor](./anchor-${nonce}.png)\n`
+    )
+    await seedRecentFile(userDataDir, docPath)
+
+    await getThumbnailViaApi(win, docPath)
+
+    const boxes = await readImageBoxes(app, `anchor-${nonce}.png`)
+    expect(boxes).toHaveLength(2)
+
+    const anchor = boxes.find((box) => box.src.includes(`anchor-${nonce}.png`))!
+    const dotdot = boxes.find((box) => box.src.endsWith('/..'))!
+
+    expect(anchor.naturalWidth).toBe(1)
+
+    // What the rewrite emitted: a real token followed by a bare `..`.
+    expect(dotdot.src).toMatch(assetUrlPattern('..'))
+    // What Chromium actually requested: the token is gone, dot-segment
+    // removal having popped it and left a trailing empty segment. The
+    // handler's `/__asset__/` prefix check still matches, but there is no
+    // `/` left after it to split a token off, so it 404s.
+    expect(dotdot.resolvedSrc).toBe('pagedown-render://render/__asset__/')
+    expect(dotdot.naturalWidth).toBe(0)
+    expect(dotdot.naturalHeight).toBe(0)
+  } finally {
+    await rm(fixtureDir, { recursive: true, force: true })
+  }
 })

@@ -138,6 +138,27 @@ interface OutgoingSuccess {
   // `[]` for documents with no mermaid diagrams (including the
   // empty-content short-circuit below).
   diagramBoxes: Array<{ id: string; width: number; height: number }>
+  // Local-asset loading (2026-08-05 sub-project): one entry per `<img>`
+  // actually present in the PAGINATED output under `root`, read back AFTER
+  // previewer.preview() has cloned content into real page elements and
+  // AFTER every image has settled (see awaitImagesSettled below). Exists
+  // for exactly the same reason `diagramBoxes` does, one layer down: a
+  // local image reference that silently 404s produces an `<img>` element
+  // that is present, `complete === true`, and `naturalWidth === 0` -- the
+  // classic "failed to load" signature (phase0/gate4-export.spec.ts already
+  // asserts precisely that signature for the corpus's unserved images).
+  // Nothing about "pagination finished without throwing" distinguishes a
+  // real, decoded image from that failure, so a non-zero `naturalWidth`
+  // read from the real paginated DOM is the only genuine proof that the
+  // bytes were fetched through the pagedown-render:// asset handler AND
+  // decoded. `[]` for documents with no images (including the
+  // empty-content short-circuit below).
+  imageBoxes: Array<{
+    src: string
+    resolvedSrc: string
+    naturalWidth: number
+    naturalHeight: number
+  }>
 }
 
 interface OutgoingError {
@@ -702,6 +723,82 @@ async function renderMermaidDiagrams(container: DocumentFragment): Promise<void>
 // real, non-zero space once cloned into Paged.js's rendered page tree
 // under this context's real CSP/layout, which is the thing Gate 3 is
 // actually supposed to catch a failure of.
+// Upper bound on how long a single render pass will wait for its images to
+// finish loading. Generous relative to what a local, on-disk asset served
+// by this app's own protocol handler actually costs (a denied/404'd request
+// fires `error` essentially immediately; a real local PNG resolves in low
+// single-digit ms), but small enough that a pathological image can never
+// eat sendDocument's own 10s poll deadline on its own.
+const IMAGE_SETTLE_TIMEOUT_MS = 3_000
+
+// Waits for every `<img>` under `scope` to settle -- load OR error, both are
+// "settled" -- before returning, bounded by IMAGE_SETTLE_TIMEOUT_MS.
+//
+// Load-bearing twice over, not a measurement convenience:
+//   1. Paged.js measures real boxes to decide page breaks. An image whose
+//      bytes haven't arrived yet measures as a zero-size box, so a document
+//      would paginate against the wrong geometry and (for thumbnails) get
+//      captured before the image ever painted -- the capture is cached
+//      permanently under the content's hash, so a mistimed one is not
+//      self-correcting.
+//   2. `naturalWidth` is only meaningful once the image has settled;
+//      measuring before that can't tell "not loaded yet" from "failed to
+//      load", which is exactly the distinction measureImageBoxes exists to
+//      report.
+// Deliberately resolves (rather than rejects) on the timeout: a stuck image
+// must degrade to "this render reports it as not-loaded", never to a failed
+// pagination.
+async function awaitImagesSettled(scope: ParentNode): Promise<void> {
+  const pending = (Array.from(scope.querySelectorAll('img')) as HTMLImageElement[]).filter(
+    (img) => !img.complete
+  )
+  if (pending.length === 0) return
+  await Promise.race([
+    Promise.all(
+      pending.map(
+        (img) =>
+          new Promise<void>((resolve) => {
+            img.addEventListener('load', () => resolve(), { once: true })
+            img.addEventListener('error', () => resolve(), { once: true })
+          })
+      )
+    ),
+    new Promise<void>((resolve) => setTimeout(resolve, IMAGE_SETTLE_TIMEOUT_MS))
+  ])
+}
+
+// Reads back every `<img>` in the PAGINATED output under `root`, with the
+// natural (intrinsic, post-decode) dimensions that distinguish a genuinely
+// loaded image from a silently-404'd one. Same "measure the real paginated
+// DOM, don't infer success from the absence of an error" reasoning as
+// measureDiagramBoxes below -- see `imageBoxes` on OutgoingSuccess.
+function measureImageBoxes(root: HTMLElement): Array<{
+  src: string
+  resolvedSrc: string
+  naturalWidth: number
+  naturalHeight: number
+}> {
+  const images = Array.from(root.querySelectorAll('img')) as HTMLImageElement[]
+  return images.map((img) => ({
+    // Both the raw attribute AND the browser's own resolved form,
+    // deliberately: `getAttribute('src')` is byte-for-byte what
+    // src/markdown/pipeline.ts's rewrite wrote, while the `src` IDL property
+    // is that same value after Chromium's real WHATWG URL parse/normalize --
+    // i.e. the URL the protocol handler in src/main/pagination-window.ts
+    // actually receives. Reporting both is what lets a caller prove the
+    // token segment and percent-encoded path survive URL normalization
+    // intact for realistic inputs (they compare equal), and pin the one
+    // input where they genuinely do NOT (a relative path of exactly `..`,
+    // whose bare `..` segment WHATWG dot-segment removal collapses,
+    // dropping the token entirely -- a denial, since the resulting URL can
+    // no longer name any registered asset root).
+    src: img.getAttribute('src') ?? '',
+    resolvedSrc: img.src,
+    naturalWidth: img.naturalWidth,
+    naturalHeight: img.naturalHeight
+  }))
+}
+
 function measureDiagramBoxes(
   root: HTMLElement
 ): Array<{ id: string; width: number; height: number }> {
@@ -799,7 +896,8 @@ window.addEventListener('message', async (event: MessageEvent<IncomingMessage>) 
         pageCount: 0,
         ready: true,
         layoutMs: 0,
-        diagramBoxes: []
+        diagramBoxes: [],
+        imageBoxes: []
       }
       if (currentRequestId === requestId) window.__pagedownResult = result
       return
@@ -841,6 +939,14 @@ window.addEventListener('message', async (event: MessageEvent<IncomingMessage>) 
     const container = document.createRange().createContextualFragment(html)
     await renderMermaidDiagrams(container)
 
+    // Settle images BEFORE Paged.js measures anything -- a
+    // Range.createContextualFragment fragment is deliberately NON-inert (see
+    // the comment above), so its `<img>` elements start fetching the moment
+    // the fragment is built, and this only has to wait for those already
+    // in-flight requests to finish. Skipping this would hand Paged.js
+    // zero-size image boxes and paginate against the wrong geometry.
+    await awaitImagesSettled(container)
+
     const t0 = performance.now()
     const previewer = new Previewer()
     activePreviewer = previewer
@@ -867,13 +973,30 @@ window.addEventListener('message', async (event: MessageEvent<IncomingMessage>) 
     // this preview() call was still running.
     if (currentRequestId !== requestId) return
 
+    // A second settle pass, against the paginated output rather than the
+    // working copy: Paged.js's Layout appends CLONES of the source nodes
+    // into its page elements, and a cloned `<img>` starts its own load (from
+    // the memory cache, so effectively instant) rather than inheriting the
+    // original's completed state. Without this, measureImageBoxes could read
+    // `naturalWidth === 0` off a clone that simply hadn't finished yet and
+    // report a successfully-served asset as a failure.
+    await awaitImagesSettled(root)
+
+    // Re-checked because the settle above is itself an await: a newer
+    // 'render' message can be dispatched (and even resolve) while this run
+    // is waiting on its images, and publishing here unconditionally would
+    // reintroduce exactly the stale-result-clobbering this guard exists to
+    // prevent.
+    if (currentRequestId !== requestId) return
+
     const result: OutgoingSuccess = {
       type: 'result',
       requestId,
       pageCount: flow.total,
       ready: true,
       layoutMs: t1 - t0,
-      diagramBoxes: measureDiagramBoxes(root)
+      diagramBoxes: measureDiagramBoxes(root),
+      imageBoxes: measureImageBoxes(root)
     }
     window.__pagedownResult = result
   } catch (err) {

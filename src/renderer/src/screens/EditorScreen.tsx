@@ -35,7 +35,7 @@ function EditorScreen(): React.JSX.Element {
   const canvasRef = useRef<HTMLDivElement>(null)
   const [zoom, setZoom] = useState(1)
   const [activeSourceOffset, setActiveSourceOffset] = useState<number | undefined>(undefined)
-  const { pageCount } = usePageCount(content)
+  const { pageCount } = usePageCount(content, filePath)
 
   const handleSave = async (): Promise<void> => {
     // @milkdown/plugin-listener's onChange fires through an internal 200ms
@@ -165,7 +165,13 @@ function EditorScreen(): React.JSX.Element {
           />
         </div>
       </div>
-      <EditorStatusBar content={content} isDirty={isDirty} zoom={zoom} onZoomChange={setZoom} />
+      <EditorStatusBar
+        content={content}
+        filePath={filePath}
+        isDirty={isDirty}
+        zoom={zoom}
+        onZoomChange={setZoom}
+      />
       <PageSetupModal
         open={pageSetupOpen}
         initialConfig={pageConfig}

@@ -387,6 +387,21 @@ export interface PaginationResult {
   // worked" from the absence of a thrown error. `[]` for documents with no
   // mermaid diagrams.
   diagramBoxes: Array<{ id: string; width: number; height: number }>
+  // Local-asset loading: per-`<img>` intrinsic dimensions, measured in the
+  // paginated output after every image settled (see
+  // resources/pagination-render/index.ts's own `imageBoxes` comment). A
+  // silently-404'd local image reference leaves an `<img>` that is present
+  // AND `complete`, but zero-sized — so `naturalWidth > 0` is the only
+  // genuine proof the bytes were actually served through the
+  // `pagedown-render://` asset handler and decoded, exactly as
+  // `diagramBoxes` above is the only genuine proof a Mermaid diagram really
+  // rendered. `[]` for documents with no images.
+  imageBoxes: Array<{
+    src: string
+    resolvedSrc: string
+    naturalWidth: number
+    naturalHeight: number
+  }>
 }
 
 export interface PaginationHarness {
@@ -485,7 +500,8 @@ export async function createPaginationHarness(win: BaseWindow): Promise<Paginati
           pageCount: result.pageCount,
           ready: result.ready,
           layoutMs: result.layoutMs,
-          diagramBoxes: result.diagramBoxes ?? []
+          diagramBoxes: result.diagramBoxes ?? [],
+          imageBoxes: result.imageBoxes ?? []
         }
       }
       await new Promise((resolve) => setTimeout(resolve, 50))
