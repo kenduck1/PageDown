@@ -727,8 +727,15 @@ async function renderMermaidDiagrams(container: DocumentFragment): Promise<void>
 // finish loading. Generous relative to what a local, on-disk asset served
 // by this app's own protocol handler actually costs (a denied/404'd request
 // fires `error` essentially immediately; a real local PNG resolves in low
-// single-digit ms), but small enough that a pathological image can never
-// eat sendDocument's own 10s poll deadline on its own.
+// single-digit ms) — but awaitImagesSettled (below) is called TWICE per
+// render pass (once before Paged.js lays the document out, once again
+// against the paginated clone after preview() resolves — see both call
+// sites further down), so the real worst case this timeout can contribute
+// is 2 * IMAGE_SETTLE_TIMEOUT_MS = 6s of sendDocument's own 10s poll
+// deadline, before any actual layout time is even counted. Not reachable
+// today (a stuck image would have to hang for the full 3s on BOTH passes),
+// but a future caller raising this constant needs to budget for the
+// doubled cost, not the single-pass number.
 const IMAGE_SETTLE_TIMEOUT_MS = 3_000
 
 // Waits for every `<img>` under `scope` to settle -- load OR error, both are
