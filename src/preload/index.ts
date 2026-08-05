@@ -10,7 +10,12 @@ const api = {
   getRecentFiles: () => ipcRenderer.invoke('file:getRecents'),
   getThumbnail: (filePath: string) => ipcRenderer.invoke('file:getThumbnail', filePath),
   getTemplateThumbnail: (content: string) => ipcRenderer.invoke('template:getThumbnail', content),
-  getPageCount: (content: string) => ipcRenderer.invoke('file:getPageCount', content),
+  // `filePath` is optional and used ONLY to resolve the document's local
+  // asset references against its own directory (the main-process handler
+  // validates it with isKnownPath and drops it if unknown). Passing `null`
+  // for an unsaved document is correct and denies all local assets.
+  getPageCount: (content: string, filePath: string | null = null) =>
+    ipcRenderer.invoke('file:getPageCount', content, filePath),
   confirmDiscardChanges: () => ipcRenderer.invoke('dialog:confirmDiscard'),
   exportPdf: (content: string) => ipcRenderer.invoke('file:exportPdf', content)
 }

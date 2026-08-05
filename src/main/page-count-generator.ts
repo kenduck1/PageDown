@@ -1,6 +1,12 @@
+import { dirname } from 'node:path'
 import { BaseWindow } from 'electron'
 import { markdownToHtml } from '../markdown/pipeline'
-import { createPaginationHarness, type PaginationHarness } from './pagination-window'
+import {
+  createPaginationHarness,
+  registerAssetRoot,
+  unregisterAssetRoot,
+  type PaginationHarness
+} from './pagination-window'
 
 // Same queue/harness pattern as `thumbnail-generator.ts`'s `getThumbnail`
 // (see that file's own comment for the full mechanism this mirrors), but a
@@ -175,6 +181,14 @@ export function destroyPageCountHarness(): void {
 // same count). A real edit always produces a different content string, so
 // this never serves a stale count for genuinely changed content.
 let lastContent: string | null = null
+// Part of the cache KEY, not incidental bookkeeping: once local assets load,
+// the same Markdown content genuinely paginates differently depending on
+// which directory it lives in (`![x](./figures/chart.png)` resolves to a
+// different image, of a different size, per directory). Keying on content
+// alone would hand a document in directory B the page count computed for an
+// identical document in directory A. `null` for a document with no validated
+// path, which is a distinct key from any real directory.
+let lastDocumentDir: string | null = null
 let lastResult: { pageCount: number } | null = null
 
 /**
@@ -191,18 +205,43 @@ let lastResult: { pageCount: number } | null = null
  * `getHarness`'s own comment above for why this harness owns a private,
  * dedicated, never-shown `BaseWindow` instead of attaching to the caller's
  * real app window.
+ *
+ * `documentPath` is OPTIONAL and is used only to resolve the document's local
+ * asset references (`![x](./figures/chart.png)`) against its own directory --
+ * the page count itself never needs it. Callers must pass it ONLY for a path
+ * they have already validated: `src/main/index.ts`'s `file:getPageCount`
+ * handler checks it with `isKnownPath` and drops it if unknown. Omitting it
+ * is not a degraded mode to work around -- it is exactly how an unsaved (or
+ * unvalidated) document is made to deny every local asset, since with no
+ * token `markdownToHtml` leaves image srcs completely untouched.
  */
-export async function getPageCount(content: string): Promise<{ pageCount: number }> {
-  if (lastContent === content && lastResult) {
+export async function getPageCount(
+  content: string,
+  documentPath?: string
+): Promise<{ pageCount: number }> {
+  const documentDir = documentPath ? dirname(documentPath) : null
+  if (lastContent === content && lastDocumentDir === documentDir && lastResult) {
     return lastResult
   }
   return enqueueHarnessWork(async () => {
     const harness = await getHarness()
-    const { html } = markdownToHtml(content)
-    const result = await harness.sendDocument(html)
-    const pageCount = { pageCount: result.pageCount }
-    lastContent = content
-    lastResult = pageCount
-    return pageCount
+    // Skipped entirely (rather than called with a placeholder) when there is
+    // no document directory: registerAssetRoot throws on a non-absolute path
+    // by design, and a document with no validated path must load no local
+    // assets at all. Released in a `finally` wrapping the whole body so the
+    // render context can still fetch every image while it lays the document
+    // out.
+    const assetToken = documentDir ? registerAssetRoot(documentDir) : undefined
+    try {
+      const { html } = markdownToHtml(content, { assetToken })
+      const result = await harness.sendDocument(html)
+      const pageCount = { pageCount: result.pageCount }
+      lastContent = content
+      lastDocumentDir = documentDir
+      lastResult = pageCount
+      return pageCount
+    } finally {
+      if (assetToken) unregisterAssetRoot(assetToken)
+    }
   })
 }

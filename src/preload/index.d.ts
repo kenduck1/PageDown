@@ -12,7 +12,7 @@ export interface FileApi {
   getRecentFiles: () => Promise<RecentFileEntry[]>
   getThumbnail: (filePath: string) => Promise<{ dataUrl: string; pageCount: number }>
   getTemplateThumbnail: (content: string) => Promise<{ dataUrl: string; pageCount: number }>
-  getPageCount: (content: string) => Promise<{ pageCount: number }>
+  getPageCount: (content: string, filePath?: string | null) => Promise<{ pageCount: number }>
   confirmDiscardChanges: () => Promise<'save' | 'discard' | 'cancel'>
   exportPdf: (content: string) => Promise<{ filePath: string } | null>
 }

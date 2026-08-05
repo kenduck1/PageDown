@@ -1,9 +1,14 @@
 import { createHash } from 'node:crypto'
 import { readFile, writeFile, mkdir } from 'node:fs/promises'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { BaseWindow } from 'electron'
 import { markdownToHtml } from '../markdown/pipeline'
-import { createPaginationHarness, type PaginationHarness } from './pagination-window'
+import {
+  createPaginationHarness,
+  registerAssetRoot,
+  unregisterAssetRoot,
+  type PaginationHarness
+} from './pagination-window'
 
 const THUMBNAIL_DIR = 'thumbnails'
 // 2x the largest on-screen display size (168px template cards) for crisp
@@ -11,8 +16,22 @@ const THUMBNAIL_DIR = 'thumbnails'
 // full-resolution page image nobody needs for a preview this small.
 const THUMBNAIL_WIDTH = 336
 
-export function hashContent(content: string): string {
-  return createHash('sha256').update(content, 'utf8').digest('hex')
+// The on-disk thumbnail cache key. `documentDir` participates in it because
+// rendered output genuinely depends on it once local assets load: two
+// documents with byte-identical content living in different directories
+// resolve `![x](./figures/chart.png)` to two DIFFERENT images, so keying on
+// content alone would serve directory A's picture inside directory B's
+// thumbnail. Omitting the directory (templates, and any document with no
+// validated path) keeps the exact pre-existing key, so those cache entries
+// are unaffected; documents that DO have a directory get a new key, which
+// simply regenerates their thumbnail once.
+export function hashContent(content: string, documentDir?: string | null): string {
+  const hash = createHash('sha256')
+  // A NUL separator, and only when a directory is present: NUL cannot appear
+  // in a POSIX path or a Windows path, so no `documentDir`/`content` pair can
+  // be confused for a different one by concatenation.
+  if (documentDir) hash.update(`${documentDir}\0`, 'utf8')
+  return hash.update(content, 'utf8').digest('hex')
 }
 
 // Serializes every call that actually dispatches into the shared harness
@@ -136,11 +155,27 @@ async function withTimeout<T>(promise: Promise<T>, ms: number, timeoutMessage: s
   }
 }
 
+/**
+ * Renders `content` to a cached PNG thumbnail.
+ *
+ * `documentPath` is OPTIONAL and is the document's own on-disk path, used
+ * only to resolve local asset references (`![x](./figures/chart.png)`)
+ * against its directory. Callers must pass it ONLY for a path they have
+ * already validated — `src/main/index.ts`'s `file:getThumbnail` handler
+ * passes the path it just checked with `isKnownPath`. Omitting it (template
+ * thumbnails, and any document with no validated path) is not a degraded
+ * mode to be worked around: it is exactly how "a document with no real
+ * directory denies all local assets" is enforced, since without a token
+ * `markdownToHtml` leaves image srcs completely untouched and the render
+ * context has nothing to resolve them against.
+ */
 export async function getThumbnail(
   content: string,
-  userDataDir: string
+  userDataDir: string,
+  documentPath?: string
 ): Promise<{ dataUrl: string; pageCount: number }> {
-  const hash = hashContent(content)
+  const documentDir = documentPath ? dirname(documentPath) : null
+  const hash = hashContent(content, documentDir)
   const { pngPath, jsonPath } = await cachePaths(userDataDir, hash)
 
   try {
@@ -155,35 +190,49 @@ export async function getThumbnail(
 
   return enqueueHarnessWork(async () => {
     const harness = await getHarness()
-    const { html } = markdownToHtml(content)
-    const result = await harness.sendDocument(html)
+    // Registered INSIDE the enqueued body and released in a `finally` that
+    // wraps the whole body, not just the sendDocument call: the render
+    // context still needs to fetch the images while it paints, and
+    // capturePage() below happens well after sendDocument resolves.
+    // Unregistering any earlier would produce a thumbnail whose images
+    // 404'd for no visible reason. Skipped entirely (rather than called with
+    // a placeholder) when there's no document directory — registerAssetRoot
+    // throws on a non-absolute path by design, and a document with no
+    // validated path must load no local assets at all.
+    const assetToken = documentDir ? registerAssetRoot(documentDir) : undefined
+    try {
+      const { html } = markdownToHtml(content, { assetToken })
+      const result = await harness.sendDocument(html)
 
-    // sendDocument resolves once the render context publishes its result,
-    // immediately after Paged.js finishes mutating the DOM — nothing
-    // guarantees the compositor has actually painted that frame yet.
-    // Waiting two animation frames (not one — the first rAF fires before
-    // the current frame is presented, the callback passed to it fires
-    // after) is the standard "wait for the next real paint" pattern.
-    // Without this, a mis-timed capture could be cached permanently under
-    // the wrong content's hash.
-    await withTimeout(
-      harness.view.webContents.executeJavaScript(
-        'new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)))'
-      ),
-      5_000,
-      'Timed out waiting for the render context to paint before capturing a thumbnail'
-    )
+      // sendDocument resolves once the render context publishes its result,
+      // immediately after Paged.js finishes mutating the DOM — nothing
+      // guarantees the compositor has actually painted that frame yet.
+      // Waiting two animation frames (not one — the first rAF fires before
+      // the current frame is presented, the callback passed to it fires
+      // after) is the standard "wait for the next real paint" pattern.
+      // Without this, a mis-timed capture could be cached permanently under
+      // the wrong content's hash.
+      await withTimeout(
+        harness.view.webContents.executeJavaScript(
+          'new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)))'
+        ),
+        5_000,
+        'Timed out waiting for the render context to paint before capturing a thumbnail'
+      )
 
-    const image = await harness.view.webContents.capturePage()
-    if (image.isEmpty()) {
-      throw new Error('Captured thumbnail image was empty — refusing to cache a blank result')
+      const image = await harness.view.webContents.capturePage()
+      if (image.isEmpty()) {
+        throw new Error('Captured thumbnail image was empty — refusing to cache a blank result')
+      }
+      const resized = image.resize({ width: THUMBNAIL_WIDTH })
+      const png = resized.toPNG()
+
+      await writeFile(pngPath, png)
+      await writeFile(jsonPath, JSON.stringify({ pageCount: result.pageCount }))
+
+      return { dataUrl: resized.toDataURL(), pageCount: result.pageCount }
+    } finally {
+      if (assetToken) unregisterAssetRoot(assetToken)
     }
-    const resized = image.resize({ width: THUMBNAIL_WIDTH })
-    const png = resized.toPNG()
-
-    await writeFile(pngPath, png)
-    await writeFile(jsonPath, JSON.stringify({ pageCount: result.pageCount }))
-
-    return { dataUrl: resized.toDataURL(), pageCount: result.pageCount }
   })
 }

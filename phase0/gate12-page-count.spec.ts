@@ -1,5 +1,17 @@
 import { test, expect, type ElectronApplication, type Page } from '@playwright/test'
+import { mkdtemp, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { randomBytes } from 'node:crypto'
+import { mergeRecentFiles, readRecentFiles, writeRecentFiles } from '../src/main/recent-files'
 import { launchIsolatedApp } from './electron-launch'
+import {
+  ONE_PX_PNG,
+  TWO_PX_PNG,
+  assetUrlPattern,
+  readImageBoxes,
+  writeFixtureFile
+} from './asset-evidence'
 
 // This gate proves the EditorStatusBar sub-project's new `file:getPageCount`
 // IPC handler (src/main/index.ts -> src/main/page-count-generator.ts)
@@ -196,5 +208,139 @@ test.describe('Gate 12: real page counts via the dedicated getPageCount harness'
     expect(pageCounts[0]).toBeLessThan(pageCounts[1])
     expect(pageCounts[1]).toBeLessThan(pageCounts[2])
     expect(new Set(pageCounts).size).toBe(3)
+  })
+
+  // --- Local asset loading (2026-08-05 sub-project) ------------------------
+  //
+  // The same two properties gate8 proves for thumbnail generation (a real
+  // local image loads; a `../` escape does not), against the OTHER generator
+  // wired in the same task -- `page-count-generator.ts` owns its own harness,
+  // its own queue and its own result cache, so nothing about gate8's result
+  // carries over to it by construction.
+  //
+  // Plus the one behavior that is unique to this generator: `file:
+  // getPageCount` newly accepts a renderer-supplied path, so it validates it
+  // with `isKnownPath` -- and DROPS an unknown one rather than throwing (page
+  // counting itself never needs a path, and throwing would break a working
+  // status bar for a document whose allowlist entry is simply missing).
+
+  async function seedRecentFile(userDataDir: string, filePath: string): Promise<void> {
+    const existing = await readRecentFiles(userDataDir)
+    await writeRecentFiles(
+      userDataDir,
+      mergeRecentFiles(existing, filePath, new Date().toISOString())
+    )
+  }
+
+  async function getPageCountViaApi(
+    page: Page,
+    content: string,
+    filePath: string | null
+  ): Promise<{ pageCount: number }> {
+    return page.evaluate(
+      (args) =>
+        (
+          window as unknown as {
+            api: {
+              getPageCount: (c: string, f?: string | null) => Promise<{ pageCount: number }>
+            }
+          }
+        ).api.getPageCount(args.content, args.filePath),
+      { content, filePath }
+    )
+  }
+
+  test('a local relative image reference in the counted document actually loads', async () => {
+    test.setTimeout(90_000)
+    const userDataDir = await app.evaluate(({ app }) => app.getPath('userData'))
+    const fixtureDir = await mkdtemp(join(tmpdir(), 'pagedown-gate12-assets-'))
+    const nonce = randomBytes(6).toString('hex')
+
+    try {
+      await writeFixtureFile(join(fixtureDir, 'figures', `plot-${nonce}.png`), ONE_PX_PNG)
+      const docPath = join(fixtureDir, `doc-${nonce}.md`)
+      const content = `# Gate 12 asset fixture ${nonce}\n\n![plot](./figures/plot-${nonce}.png)\n`
+      await writeFixtureFile(docPath, content)
+      await seedRecentFile(userDataDir, docPath)
+
+      const result = await getPageCountViaApi(win, content, docPath)
+      expect(result.pageCount).toBe(1)
+
+      const boxes = await readImageBoxes(app, `plot-${nonce}.png`)
+      expect(boxes).toHaveLength(1)
+      expect(boxes[0].src).toMatch(assetUrlPattern(`.%2Ffigures%2Fplot-${nonce}.png`))
+      expect(boxes[0].resolvedSrc).toBe(boxes[0].src)
+      expect(boxes[0].naturalWidth).toBe(1)
+      expect(boxes[0].naturalHeight).toBe(1)
+    } finally {
+      await rm(fixtureDir, { recursive: true, force: true })
+    }
+  })
+
+  test('a local image reference using ../ escaping the counted document directory does NOT load', async () => {
+    test.setTimeout(90_000)
+    const userDataDir = await app.evaluate(({ app }) => app.getPath('userData'))
+    const fixtureDir = await mkdtemp(join(tmpdir(), 'pagedown-gate12-traversal-'))
+    const nonce = randomBytes(6).toString('hex')
+
+    try {
+      // A real, valid, decodable 2x2 PNG outside the document's directory —
+      // so a denial here is genuine confinement, not "no such file".
+      await writeFixtureFile(join(fixtureDir, `secret-${nonce}.png`), TWO_PX_PNG)
+      const docPath = join(fixtureDir, 'doc', 'sub', `doc-${nonce}.md`)
+      const content = `# Gate 12 traversal fixture ${nonce}\n\n![escape](../../secret-${nonce}.png)\n`
+      await writeFixtureFile(docPath, content)
+      await seedRecentFile(userDataDir, docPath)
+
+      const result = await getPageCountViaApi(win, content, docPath)
+      expect(result.pageCount).toBe(1)
+
+      const boxes = await readImageBoxes(app, `secret-${nonce}.png`)
+      expect(boxes).toHaveLength(1)
+      expect(boxes[0].src).toMatch(assetUrlPattern(`..%2F..%2Fsecret-${nonce}.png`))
+      expect(boxes[0].resolvedSrc).toBe(boxes[0].src)
+      expect(boxes[0].naturalWidth).toBe(0)
+      expect(boxes[0].naturalHeight).toBe(0)
+    } finally {
+      await rm(fixtureDir, { recursive: true, force: true })
+    }
+  })
+
+  test('an unknown (non-allowlisted) document path is dropped, not thrown — the count still resolves and local assets stay denied', async () => {
+    test.setTimeout(90_000)
+    const fixtureDir = await mkdtemp(join(tmpdir(), 'pagedown-gate12-unknown-'))
+    const nonce = randomBytes(6).toString('hex')
+
+    try {
+      // Everything a successful load needs EXCEPT an allowlist entry: a real
+      // directory, a real image inside it, a real relative reference. The
+      // only thing missing is `isKnownPath`, which is exactly what must make
+      // the difference.
+      await writeFixtureFile(join(fixtureDir, `unknown-${nonce}.png`), ONE_PX_PNG)
+      const docPath = join(fixtureDir, `doc-${nonce}.md`)
+      const content = `# Gate 12 unknown-path fixture ${nonce}\n\n![u](./unknown-${nonce}.png)\n`
+      await writeFixtureFile(docPath, content)
+      // Deliberately NOT seeded into recent-files.
+
+      // Resolves normally rather than rejecting: dropping the path must not
+      // regress the status bar's page count for a document whose allowlist
+      // entry is missing.
+      const result = await getPageCountViaApi(win, content, docPath)
+      expect(result.pageCount).toBe(1)
+
+      // ...but with no asset root registered, the rewrite never happens at
+      // all: the src stays the raw relative path, which the render context's
+      // own `pagedown-render://render/` origin resolves against the render
+      // bundle and 404s -- the pre-fix behavior, correctly preserved for an
+      // unvalidated path.
+      const boxes = await readImageBoxes(app, `unknown-${nonce}.png`)
+      expect(boxes).toHaveLength(1)
+      expect(boxes[0].src).toBe(`./unknown-${nonce}.png`)
+      expect(boxes[0].src).not.toContain('__asset__')
+      expect(boxes[0].naturalWidth).toBe(0)
+      expect(boxes[0].naturalHeight).toBe(0)
+    } finally {
+      await rm(fixtureDir, { recursive: true, force: true })
+    }
   })
 })

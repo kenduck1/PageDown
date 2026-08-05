@@ -4,6 +4,15 @@ import { usePageCount } from '../hooks/usePageCount'
 
 export interface EditorStatusBarProps {
   content: string
+  /**
+   * The document's own on-disk path (`documentStore.filePath`), or `null` for
+   * an unsaved one. Passed straight through to `usePageCount` so the
+   * pagination harness can resolve the document's local image references
+   * against its own directory — see that hook's doc comment. A prop rather
+   * than a direct store read, matching this component's existing
+   * store-independent design (`content`/`isDirty` arrive the same way).
+   */
+  filePath: string | null
   isDirty: boolean
   /**
    * A CSS scale multiplier (1 = 100%, 0.5 = 50%, 2 = 200%), NOT a raw
@@ -126,12 +135,13 @@ function CheckIcon(): React.JSX.Element {
  */
 function EditorStatusBar({
   content,
+  filePath,
   isDirty,
   zoom,
   onZoomChange
 }: EditorStatusBarProps): React.JSX.Element {
   const wordCount = useMemo(() => countWords(content), [content])
-  const { pageCount } = usePageCount(content)
+  const { pageCount } = usePageCount(content, filePath)
 
   return (
     <div className="flex h-8 flex-shrink-0 items-center gap-4 border-t border-border-chrome bg-chrome-dark px-3 text-11-5 text-text-secondary">

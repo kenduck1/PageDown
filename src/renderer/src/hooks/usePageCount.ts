@@ -26,8 +26,21 @@ const DEFAULT_DEBOUNCE_MS = 500
  * harness (`file:getPageCount` IPC, `src/main/page-count-generator.ts`),
  * debounced so a fast typing burst triggers one round trip after typing
  * settles, not one per keystroke.
+ *
+ * `filePath` is the document's own on-disk path (`documentStore.filePath`),
+ * forwarded so the render context can resolve the document's local image
+ * references against its own directory. `null` -- an unsaved document, which
+ * has no directory -- is a normal, expected value, not a missing argument:
+ * it makes that document deny all local assets, which is the correct
+ * behavior. The main-process handler independently validates whatever is
+ * passed here against the recent-files allowlist, so this is a hint, never a
+ * grant.
  */
-export function usePageCount(content: string, debounceMs = DEFAULT_DEBOUNCE_MS): PageCountState {
+export function usePageCount(
+  content: string,
+  filePath: string | null = null,
+  debounceMs = DEFAULT_DEBOUNCE_MS
+): PageCountState {
   // Same "reset on key change" pattern as `useThumbnail.ts`'s own
   // `prevKey`/`setPrevKey`: adjusting state directly in the render body
   // (rather than via a synchronous setState call inside useEffect, which
@@ -70,7 +83,7 @@ export function usePageCount(content: string, debounceMs = DEFAULT_DEBOUNCE_MS):
     const timer = setTimeout(() => {
       const requestId = ++latestRequestRef.current
       window.api
-        .getPageCount(content)
+        .getPageCount(content, filePath)
         .then((result) => {
           if (latestRequestRef.current !== requestId) return
           setState({ pageCount: result.pageCount, loading: false, error: null })
@@ -86,7 +99,7 @@ export function usePageCount(content: string, debounceMs = DEFAULT_DEBOUNCE_MS):
     }, debounceMs)
 
     return () => clearTimeout(timer)
-  }, [content, debounceMs])
+  }, [content, filePath, debounceMs])
 
   return state
 }
