@@ -112,6 +112,46 @@ test.describe('Gate 12: real page counts via the dedicated getPageCount harness'
     expect(result.pageCount).toBeLessThan(45)
   })
 
+  test('a second call for identical content is a fast in-memory cache hit', async () => {
+    const content = generateSections(60, 'CacheHit')
+
+    const firstStart = Date.now()
+    const first = await win.evaluate(
+      (c) =>
+        (
+          window as unknown as {
+            api: { getPageCount: (c: string) => Promise<{ pageCount: number }> }
+          }
+        ).api.getPageCount(c),
+      content
+    )
+    const firstElapsedMs = Date.now() - firstStart
+
+    const secondStart = Date.now()
+    const second = await win.evaluate(
+      (c) =>
+        (
+          window as unknown as {
+            api: { getPageCount: (c: string) => Promise<{ pageCount: number }> }
+          }
+        ).api.getPageCount(c),
+      content
+    )
+    const secondElapsedMs = Date.now() - secondStart
+
+    expect(second.pageCount).toBe(first.pageCount)
+    // The real proof this was a cache hit, not just "also happened to be
+    // fast": a genuine cache hit skips the harness/queue/sendDocument round
+    // trip entirely and resolves in low single-digit milliseconds, an order
+    // of magnitude faster than a real dispatch (which this repo's own
+    // measurements put at 60-450ms+ even for a warm, already-created
+    // harness -- see this file's other tests and page-count-generator.ts's
+    // own module comment). A generous 25ms threshold comfortably separates
+    // the two without being sensitive to normal IPC/CI timing noise.
+    expect(secondElapsedMs).toBeLessThan(25)
+    expect(secondElapsedMs).toBeLessThan(firstElapsedMs)
+  })
+
   test('concurrent getPageCount calls for differently-sized documents each resolve with their OWN correct count', async () => {
     // Three fixtures deliberately sized to paginate to clearly distinct page
     // counts -- proving the dedicated harness/queue serializes correctly

@@ -89,6 +89,38 @@ describe('countWords', () => {
     expect(countWords('One.\n\n<!-- pagebreak -->\n\nTwo.')).toBe(2)
   })
 
+  // Regression tests: an inline element (link/bold/inline-code/emphasis)
+  // directly adjacent to surrounding text with NO whitespace between them
+  // used to split one reader-visible word into extra spurious tokens (or,
+  // for a mid-word split, undercount) because words were counted per
+  // mdast text/inlineCode node independently instead of per concatenated
+  // block. All four of these previously returned the wrong count despite
+  // every other test above passing, because every other fixture happened
+  // to place whitespace after the inline element.
+  it('counts a link immediately followed by punctuation as ending one word, not two', () => {
+    // "See", "the", "docs." -- the trailing "." must attach to "docs", not
+    // become its own one-character token.
+    expect(countWords('See [the docs](https://example.com).')).toBe(3)
+  })
+
+  it('counts bold text immediately followed by punctuation as ending one word, not two', () => {
+    // "This", "is", "bold."
+    expect(countWords('This is **bold**.')).toBe(3)
+  })
+
+  it('counts inline code immediately followed by punctuation as one word, not two', () => {
+    // "Use", "npm,", "then", "stop." -- the comma right after the
+    // backtick-closed inline code must attach to "npm", not stand alone.
+    expect(countWords('Use `npm`, then stop.')).toBe(4)
+  })
+
+  it('merges a word split mid-token by emphasis with no surrounding whitespace', () => {
+    // "un" + "bel" (emphasized) + "ievable" are one continuous word with
+    // zero whitespace anywhere between them -- "unbelievable word", 2
+    // words, not 4 from three independently-split fragments.
+    expect(countWords('un*bel*ievable word')).toBe(2)
+  })
+
   it('matches manual expectation for a realistic mixed fixture', () => {
     const markdown = [
       '---',

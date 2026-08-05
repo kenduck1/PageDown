@@ -33,6 +33,12 @@ function enqueueHarnessWork<T>(task: () => Promise<T>): Promise<T> {
 
 let harnessPromise: Promise<PaginationHarness> | null = null
 
+// Tracked alongside `harnessPromise` so the dedicated window can actually be
+// torn down (see `destroyPageCountHarness` below) -- `PaginationHarness`
+// itself only exposes the WebContentsView, not the BaseWindow it was
+// constructed against.
+let harnessWindow: BaseWindow | null = null
+
 // Lazily created, then reused for every getPageCount call within this app
 // session -- deliberately a SEPARATE instance from thumbnail-generator.ts's
 // own harness and the Phase-0-spike harness wired in src/main/index.ts (see
@@ -104,14 +110,27 @@ let harnessPromise: Promise<PaginationHarness> | null = null
 function getHarness(): Promise<PaginationHarness> {
   if (!harnessPromise) {
     const win = new BaseWindow({ show: false })
+    harnessWindow = win
     harnessPromise = createPaginationHarness(win).then((harness) => {
       // Same self-healing behavior as thumbnail-generator.ts's harness: if
       // the underlying WebContentsView is ever destroyed, drop the
       // memoized promise so the NEXT getPageCount call creates a fresh
       // harness (and a fresh dedicated window) instead of silently failing
       // every request for the rest of the app session against a dead view.
+      //
+      // Unlike thumbnail-generator.ts's version, this ALSO has to destroy
+      // `win` itself: thumbnail-generator.ts's harness attaches to the
+      // caller's own `mainWindow`, which someone else is responsible for
+      // destroying, but `win` here is a BaseWindow THIS module created
+      // and owns -- if this handler only dropped `harnessPromise` without
+      // also destroying `win`, the orphaned window would leak (it's never
+      // referenced anywhere else), and each self-heal cycle would leak one
+      // more, compounding the exact "extra BaseWindow keeps the app alive"
+      // problem `destroyPageCountHarness` below exists to prevent.
       harness.view.webContents.once('destroyed', () => {
         harnessPromise = null
+        if (!win.isDestroyed()) win.destroy()
+        if (harnessWindow === win) harnessWindow = null
       })
       return harness
     })
@@ -120,14 +139,53 @@ function getHarness(): Promise<PaginationHarness> {
 }
 
 /**
+ * Tears down this module's dedicated harness window, if one currently
+ * exists. Must be called when the app's real window(s) close and the app
+ * is expected to quit (see `src/main/index.ts`'s `mainWindow` `'closed'`
+ * handler) -- this harness's `BaseWindow` is a genuine, separate top-level
+ * window, and `app.on('window-all-closed', ...)`'s underlying window count
+ * includes it. A real, verified regression before this existed: after even
+ * one `getPageCount` call, closing the app's only visible window left this
+ * harness's hidden `BaseWindow` alive, `BaseWindow.getAllWindows().length`
+ * never reached 0, and `window-all-closed` never fired -- meaning the app
+ * process never quit on Windows/Linux (both shipped build targets) after a
+ * single status-bar page-count fetch. Safe to call even if no harness has
+ * been created yet (a no-op), and safe to call more than once.
+ */
+export function destroyPageCountHarness(): void {
+  const win = harnessWindow
+  harnessPromise = null
+  harnessWindow = null
+  if (win && !win.isDestroyed()) win.destroy()
+}
+
+// Single-entry, in-memory-only cache for the most recently computed result --
+// no disk persistence (unlike thumbnail-generator.ts's PNG cache, there's no
+// expensive image encode/resize/write step here to amortize across app
+// restarts, just the pagination pass itself). A plain string-equality check
+// against the last-seen content, not a hash: for a single in-memory slot
+// there's no need for a hash's usual benefits (a compact/stable key for a
+// Map, a filename, cross-process comparison) -- direct comparison is simpler
+// and strictly more precise (zero collision surface) with no real cost, since
+// V8 string equality on same-reference or differing-length strings is
+// effectively O(1) in the common case this cache targets anyway (repeated
+// calls for the exact same content string, e.g. usePageCount's own debounced
+// re-fetch firing again for content that didn't actually change, or a Save
+// happening shortly after the last status-bar update already computed the
+// same count). A real edit always produces a different content string, so
+// this never serves a stale count for genuinely changed content.
+let lastContent: string | null = null
+let lastResult: { pageCount: number } | null = null
+
+/**
  * Returns the real, correct page count for a document's raw Markdown
  * content, via a one-shot round trip through the sandboxed pagination
  * render harness (the same `markdownToHtml` -> `harness.sendDocument`
  * pattern `thumbnail-generator.ts` uses, minus the thumbnail image capture
- * and disk cache -- the status bar only ever needs the number). No caching
- * is done here: unlike a thumbnail PNG, there is no expensive image
- * encode/resize/disk-write step to amortize, so every call does a fresh
- * (but harness-queue-serialized) pagination pass.
+ * and disk cache -- the status bar only ever needs the number). Skips the
+ * harness/queue entirely on a cache hit (see `lastContent`/`lastResult`
+ * above) -- otherwise does a fresh (harness-queue-serialized) pagination
+ * pass.
  *
  * Deliberately takes no `win` parameter, unlike `getThumbnail` -- see
  * `getHarness`'s own comment above for why this harness owns a private,
@@ -135,10 +193,16 @@ function getHarness(): Promise<PaginationHarness> {
  * real app window.
  */
 export async function getPageCount(content: string): Promise<{ pageCount: number }> {
+  if (lastContent === content && lastResult) {
+    return lastResult
+  }
   return enqueueHarnessWork(async () => {
     const harness = await getHarness()
     const { html } = markdownToHtml(content)
     const result = await harness.sendDocument(html)
-    return { pageCount: result.pageCount }
+    const pageCount = { pageCount: result.pageCount }
+    lastContent = content
+    lastResult = pageCount
+    return pageCount
   })
 }
