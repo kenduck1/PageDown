@@ -4,7 +4,9 @@ import { listener, listenerCtx } from '@milkdown/plugin-listener'
 import { $prose, getMarkdown } from '@milkdown/utils'
 import { Plugin } from '@milkdown/prose/state'
 import { EDITOR_SCHEMA_PLUGINS } from './plugins'
+import { EDITOR_COMMAND_PLUGINS } from './commands'
 import { PINNED_STRINGIFY_OPTIONS } from './stringify-options'
+import { buildEditorCommands, type EditorCommands } from './editor-commands'
 
 interface MilkdownEditorProps {
   content: string
@@ -12,7 +14,11 @@ interface MilkdownEditorProps {
   onError: (message: string) => void
 }
 
-export interface MilkdownEditorHandle {
+// Extends EditorCommands (editor-commands.ts) with flush() -- the one
+// method that stays defined here rather than there, since it depends on
+// editedSinceMountRef, a piece of THIS component's own mount lifecycle, not
+// just a live Editor instance the way every EditorCommands method is.
+export interface MilkdownEditorHandle extends EditorCommands {
   // Synchronously serializes and pushes the editor's CURRENT document
   // through onChange -- IF AND ONLY IF a real edit has landed since mount
   // (tracked independently of @milkdown/plugin-listener's own internal
@@ -34,6 +40,15 @@ export interface MilkdownEditorHandle {
   // instead of silently rewriting the file to Milkdown's canonical
   // markdown form. See this sub-project's task-8-report.md for the
   // verified finding.
+  //
+  // The rest of this handle's methods (toggleBold, toggleHeading,
+  // setParagraph, toggleBulletList/toggleOrderedList, insertLink,
+  // insertTable, insertPageBreak, undo, redo) are documented on
+  // EditorCommands (editor-commands.ts), which this interface extends --
+  // see that file for the formatting-toolbar command surface's own
+  // documentation, all of it unchanged by the fix-round move to a separate
+  // file (done for eslint-plugin-react-refresh's `only-export-components`
+  // rule, not for any behavioral reason).
   flush: () => void
 }
 
@@ -59,11 +74,16 @@ const MilkdownEditor = forwardRef<MilkdownEditorHandle, MilkdownEditorProps>(
     // just half of it, means this flag is true if and only if
     // plugin-listener would eventually fire markdownUpdated for the same
     // transaction -- a much stronger invariant than an ad-hoc predicate.
-    // This project currently wires no undo/redo (`prosemirror-history` is
-    // not used anywhere in src/), so there is no real edit path that could
-    // ever set `addToHistory: false` and get silently excluded here; if
-    // undo/redo is added later, re-verify this exclusion still can't hide a
-    // genuine content change.
+    // This project now wires real undo/redo (commands.ts's historyProse
+    // plugin, backing MilkdownEditorHandle.undo()/redo() below) -- this
+    // exclusion was re-verified against that, per this comment's own
+    // earlier note that adding undo/redo later required re-checking it:
+    // prosemirror-history's own undo/redo transactions (confirmed by
+    // reading node_modules/.pnpm/prosemirror-history's source) never set
+    // `addToHistory: false` on themselves, so a document-changing undo/redo
+    // still has `docChanged: true` and `getMeta('addToHistory') !== false`
+    // (it's `undefined`, not `false`) -- still correctly flips this flag,
+    // exactly as a real edit should.
     const editedSinceMountRef = useRef(false)
     // Edits fire through whichever onChange was current at mount time
     // otherwise -- captured in a ref so the listener callback (registered
@@ -89,8 +109,25 @@ const MilkdownEditor = forwardRef<MilkdownEditorHandle, MilkdownEditorProps>(
     // component's own unmount cleanup can share one implementation.
     const flushRef = useRef<(() => void) | null>(null)
 
+    // Same "set once construction finishes, null otherwise" treatment as
+    // flushRef, for the formatting-toolbar command surface -- a single
+    // object of bound dispatch functions built once, right after
+    // flushRef.current, inside the mount effect's `.then` below.
+    const commandsRef = useRef<EditorCommands | null>(null)
+
     useImperativeHandle(ref, () => ({
-      flush: () => flushRef.current?.()
+      flush: () => flushRef.current?.(),
+      toggleBold: () => commandsRef.current?.toggleBold(),
+      toggleItalic: () => commandsRef.current?.toggleItalic(),
+      toggleHeading: (level) => commandsRef.current?.toggleHeading(level),
+      setParagraph: () => commandsRef.current?.setParagraph(),
+      toggleBulletList: () => commandsRef.current?.toggleBulletList(),
+      toggleOrderedList: () => commandsRef.current?.toggleOrderedList(),
+      insertLink: (href) => commandsRef.current?.insertLink(href),
+      insertTable: () => commandsRef.current?.insertTable(),
+      insertPageBreak: () => commandsRef.current?.insertPageBreak(),
+      undo: () => commandsRef.current?.undo(),
+      redo: () => commandsRef.current?.redo()
     }))
 
     useEffect(() => {
@@ -133,6 +170,7 @@ const MilkdownEditor = forwardRef<MilkdownEditorHandle, MilkdownEditorProps>(
           })
         })
         .use(EDITOR_SCHEMA_PLUGINS.flat())
+        .use(EDITOR_COMMAND_PLUGINS)
         .use(listener)
         .use(editedTrackerProse)
         .create()
@@ -149,6 +187,12 @@ const MilkdownEditor = forwardRef<MilkdownEditorHandle, MilkdownEditorProps>(
               onChangeRef.current(markdown)
             }
           }
+          // buildEditorCommands is the exact same function
+          // MilkdownEditor.test.tsx calls directly against a raw test
+          // Editor -- see its own module-level doc comment for why this
+          // extraction exists (closing a real, verified mutation-testing
+          // gap).
+          commandsRef.current = buildEditorCommands(created)
         })
         .catch((err: unknown) => {
           if (!cancelled) {
@@ -160,6 +204,7 @@ const MilkdownEditor = forwardRef<MilkdownEditorHandle, MilkdownEditorProps>(
         cancelled = true
         flushRef.current?.()
         flushRef.current = null
+        commandsRef.current = null
         if (editorRef.current) {
           void editorRef.current.destroy()
           editorRef.current = null
