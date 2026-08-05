@@ -145,3 +145,45 @@ describe('markdownToHtml', () => {
     }
   })
 })
+
+describe('markdownToHtml — local asset src rewriting', () => {
+  it('rewrites a relative local image src into the __asset__ URL scheme when assetToken is provided', () => {
+    const { html } = markdownToHtml('![chart](./figures/chart.png)', { assetToken: 'abc123' })
+    expect(html).toContain(
+      'src="pagedown-render://render/__asset__/abc123/' +
+        encodeURIComponent('./figures/chart.png') +
+        '"'
+    )
+  })
+
+  it('does NOT rewrite a relative image src when assetToken is omitted (existing/default behavior)', () => {
+    const { html } = markdownToHtml('![chart](./figures/chart.png)')
+    expect(html).toContain('src="./figures/chart.png"')
+  })
+
+  it('does not rewrite a remote http(s) image src even when assetToken is provided', () => {
+    const { html } = markdownToHtml('![x](https://example.com/a.png)', { assetToken: 'abc123' })
+    expect(html).toContain('src="https://example.com/a.png"')
+    expect(html).not.toContain('__asset__')
+  })
+
+  // The pre-existing hast-util-sanitize pass (unrelated to this task's
+  // rewrite) already strips a `data:` src from `img` entirely, since
+  // hast-util-sanitize's defaultSchema pins `protocols.src` to
+  // `['http', 'https']` only. That happens regardless of whether an
+  // assetToken is provided. This test's real subject is therefore narrower
+  // than "data: URLs are preserved" — it confirms a `data:` src is never
+  // routed into the __asset__ scheme by this task's rewrite, not that it
+  // survives sanitize (it doesn't, before or after this change).
+  it('does not rewrite a data: image src even when assetToken is provided', () => {
+    const { html } = markdownToHtml('![x](data:image/png;base64,abc)', { assetToken: 'abc123' })
+    expect(html).not.toContain('src="data:image/png;base64,abc"')
+    expect(html).not.toContain('__asset__')
+  })
+
+  it('does not rewrite an absolute local path even when assetToken is provided (denied by resolveAssetPath anyway, but should not even be routed through __asset__)', () => {
+    const { html } = markdownToHtml('![x](/etc/passwd)', { assetToken: 'abc123' })
+    expect(html).toContain('src="/etc/passwd"')
+    expect(html).not.toContain('__asset__')
+  })
+})
