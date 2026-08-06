@@ -260,6 +260,99 @@ describe('EditorScreen', () => {
     expect(vi.mocked(window.api.clearPendingAutosave).mock.calls[0]).toHaveLength(1)
   })
 
+  it('closes the discarded tab on "Don\'t Save", so its content cannot resurrect as a later autosave', async () => {
+    // Regression test for the final whole-branch review's Important 3.
+    // handleGoHome's discard branch cleared the on-disk snapshots but left
+    // the tab itself in documentStore -- goHome() only sets screen: 'home'.
+    // The discarded tab survived with isDirty: true and the discarded
+    // content still in it, so returning to the editor later and clicking
+    // that tab restored isDirty: true, useAutosave saw a clean->dirty
+    // transition, and 45s later wrote the DISCARDED content back out as a
+    // snapshot -- which the next open silently "recovers." Exactly the
+    // reappearance this feature exists to prevent.
+    //
+    // Two tabs, not one, so the assertion is about the discarded tab being
+    // GONE rather than about closeTab's replace-the-last-tab behavior (that
+    // case gets its own test below).
+    const discarded = {
+      id: 'tab-discarded',
+      filePath: '/tmp/report.md',
+      content: '# Discarded edit',
+      isDirty: true
+    }
+    const other = {
+      id: 'tab-other',
+      filePath: '/tmp/other.md',
+      content: '# Other document',
+      isDirty: false
+    }
+    useAppStore.setState({ screen: 'editor' })
+    useDocumentStore.setState({
+      tabs: [discarded, other],
+      activeTabId: discarded.id,
+      filePath: discarded.filePath,
+      content: discarded.content,
+      isDirty: true
+    })
+    vi.mocked(window.api.confirmDiscardChanges).mockResolvedValue('discard')
+    const user = userEvent.setup()
+    render(<EditorScreen />)
+
+    await user.click(screen.getByRole('button', { name: '← Home' }))
+
+    await waitFor(() => expect(useAppStore.getState().screen).toBe('home'))
+    // The snapshot clear must still have happened -- closing the tab is an
+    // ADDITION to that half of "Don't Save", not a replacement for it.
+    expect(window.api.clearPendingAutosave).toHaveBeenCalledWith('/tmp/report.md')
+
+    // Let any late unmount flush() from the outgoing MilkdownEditor land
+    // before asserting -- that path is precisely how the discarded content
+    // used to get re-pushed into the store on the way out.
+    await new Promise((resolve) => setTimeout(resolve, 250))
+
+    const state = useDocumentStore.getState()
+    expect(state.tabs.find((tab) => tab.id === discarded.id)).toBeUndefined()
+    // Not just the id: the discarded CONTENT must be unreachable from any
+    // tab, which is what actually makes a later autosave impossible.
+    expect(state.tabs.some((tab) => tab.content.includes('Discarded edit'))).toBe(false)
+    expect(state.content).not.toContain('Discarded edit')
+    // The untouched sibling tab survives and becomes the active one.
+    expect(state.tabs.map((tab) => tab.id)).toEqual([other.id])
+    expect(state.activeTabId).toBe(other.id)
+  })
+
+  it('replaces the last tab with a fresh blank one when the discarded tab is the only tab', async () => {
+    // closeTab never leaves zero tabs (see documentStore.closeTab) -- this
+    // locks in that the discard path inherits that behavior rather than
+    // leaving the app with no editing surface.
+    useAppStore.setState({ screen: 'editor' })
+    useDocumentStore.setState((state) => ({
+      filePath: '/tmp/report.md',
+      content: '# Discarded edit',
+      isDirty: true,
+      tabs: state.tabs.map((tab) =>
+        tab.id === state.activeTabId
+          ? { ...tab, filePath: '/tmp/report.md', content: '# Discarded edit', isDirty: true }
+          : tab
+      )
+    }))
+    vi.mocked(window.api.confirmDiscardChanges).mockResolvedValue('discard')
+    const user = userEvent.setup()
+    render(<EditorScreen />)
+
+    await user.click(screen.getByRole('button', { name: '← Home' }))
+
+    await waitFor(() => expect(useAppStore.getState().screen).toBe('home'))
+    await new Promise((resolve) => setTimeout(resolve, 250))
+
+    const state = useDocumentStore.getState()
+    expect(state.tabs).toHaveLength(1)
+    expect(state.tabs[0]).toMatchObject({ filePath: null, content: '', isDirty: false })
+    expect(state.activeTabId).toBe(state.tabs[0].id)
+    expect(state.content).toBe('')
+    expect(state.isDirty).toBe(false)
+  })
+
   it('does NOT clear pending autosave when the user chooses to Save (not discard)', async () => {
     useAppStore.setState({ screen: 'editor' })
     useDocumentStore.setState({ filePath: '/tmp/report.md', content: '# Report', isDirty: true })
