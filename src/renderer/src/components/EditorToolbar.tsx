@@ -198,240 +198,253 @@ function EditorToolbar({ editorRef }: EditorToolbarProps): ReactElement {
 
   return (
     <div
-      className="flex flex-none flex-wrap items-center gap-x-2.5 gap-y-1.5 border-b border-border-subtle bg-page px-3.5 py-1.5"
+      className="flex flex-none flex-nowrap items-center gap-x-3.5 border-b border-border-subtle bg-page px-3.5 py-1.5"
       role="toolbar"
       aria-label="Formatting toolbar"
     >
-      {/* Undo / redo */}
-      <div className="flex items-center gap-0.5">
-        <ToolbarIconButton label="Undo" onClick={() => editorRef.current?.undo()}>
-          <Icon strokeWidth={1.8}>
-            <path d="M7 7 3 11l4 4" />
-            <path d="M3 11h11.5A5.5 5.5 0 0 1 20 16.5v0" />
-          </Icon>
-        </ToolbarIconButton>
-        <ToolbarIconButton label="Redo" onClick={() => editorRef.current?.redo()}>
-          <Icon strokeWidth={1.8}>
-            <path d="M17 7l4 4-4 4" />
-            <path d="M21 11H9.5A5.5 5.5 0 0 0 4 16.5v0" />
-          </Icon>
-        </ToolbarIconButton>
-      </div>
+      {/* Everything except the right-aligned cluster lives in its own
+          scrollable region: the view-mode selector, Page setup, and Export
+          PDF must always stay visible regardless of window width, while the
+          formatting controls (which there are a lot of, and which are far
+          less useful if invisible off the right edge) scroll horizontally
+          instead of wrapping to a second row or getting clipped. min-w-0 is
+          load-bearing on a flex child -- without it this div refuses to
+          shrink below its content's natural width and overflow-x-auto never
+          actually engages. */}
+      <div className="flex min-w-0 flex-1 items-center gap-x-2.5 overflow-x-auto">
+        {/* Undo / redo */}
+        <div className="flex items-center gap-0.5">
+          <ToolbarIconButton label="Undo" onClick={() => editorRef.current?.undo()}>
+            <Icon strokeWidth={1.8}>
+              <path d="M7 7 3 11l4 4" />
+              <path d="M3 11h11.5A5.5 5.5 0 0 1 20 16.5v0" />
+            </Icon>
+          </ToolbarIconButton>
+          <ToolbarIconButton label="Redo" onClick={() => editorRef.current?.redo()}>
+            <Icon strokeWidth={1.8}>
+              <path d="M17 7l4 4-4 4" />
+              <path d="M21 11H9.5A5.5 5.5 0 0 0 4 16.5v0" />
+            </Icon>
+          </ToolbarIconButton>
+        </div>
 
-      <ToolbarDivider />
+        <ToolbarDivider />
 
-      {/* Paragraph style / font family / font size. Font family and font
+        {/* Paragraph style / font family / font size. Font family and font
           size have no backing MilkdownEditorHandle command (this
           sub-project's brief scopes editing commands to bold/italic/
           heading/lists/link/table/pagebreak/undo/redo only) -- both selects
           below are real, interactive, native <select> elements, but
           intentionally unwired, matching the same "present but inert"
           treatment as the Find button. */}
-      <div className="flex items-center gap-2">
-        <div className="relative flex h-[30px] items-center">
-          <select
-            key={headingSelectResetKey}
-            aria-label="Paragraph style"
-            className="h-full appearance-none rounded-sm bg-transparent pl-2.5 pr-6 text-12-5 text-text-primary hover:bg-chrome-light"
-            defaultValue="paragraph"
-            onChange={(e) => handleHeadingChange(e.target.value)}
-          >
-            <option value="paragraph">Normal text</option>
-            <option value="1">Heading 1</option>
-            <option value="2">Heading 2</option>
-            <option value="3">Heading 3</option>
-          </select>
-          <span className="pointer-events-none absolute right-2 text-text-tertiary">
-            <ChevronDownIcon />
-          </span>
+        <div className="flex items-center gap-2">
+          <div className="relative flex h-[30px] items-center">
+            <select
+              key={headingSelectResetKey}
+              aria-label="Paragraph style"
+              className="h-full appearance-none rounded-sm bg-transparent pl-2.5 pr-6 text-12-5 text-text-primary hover:bg-chrome-light"
+              defaultValue="paragraph"
+              onChange={(e) => handleHeadingChange(e.target.value)}
+            >
+              <option value="paragraph">Normal text</option>
+              <option value="1">Heading 1</option>
+              <option value="2">Heading 2</option>
+              <option value="3">Heading 3</option>
+            </select>
+            <span className="pointer-events-none absolute right-2 text-text-tertiary">
+              <ChevronDownIcon />
+            </span>
+          </div>
+          <div className="relative flex h-[30px] items-center">
+            <select
+              aria-label="Font family"
+              className="h-full appearance-none rounded-sm bg-transparent pl-2.5 pr-6 font-serif text-12-5 text-text-primary hover:bg-chrome-light"
+              defaultValue="Source Serif 4"
+            >
+              <option value="Source Serif 4">Source Serif 4</option>
+              <option value="Sans">Sans</option>
+            </select>
+            <span className="pointer-events-none absolute right-2 text-text-tertiary">
+              <ChevronDownIcon />
+            </span>
+          </div>
+          <div className="relative flex h-[30px] items-center">
+            <select
+              aria-label="Font size"
+              className="h-full appearance-none rounded-sm bg-transparent pl-2 pr-5 text-12-5 text-text-primary hover:bg-chrome-light"
+              defaultValue="11"
+            >
+              {['9', '10', '11', '12', '14', '16', '18'].map((size) => (
+                <option key={size} value={size}>
+                  {size}
+                </option>
+              ))}
+            </select>
+            <span className="pointer-events-none absolute right-1.5 text-text-tertiary">
+              <ChevronDownIcon />
+            </span>
+          </div>
         </div>
-        <div className="relative flex h-[30px] items-center">
-          <select
-            aria-label="Font family"
-            className="h-full appearance-none rounded-sm bg-transparent pl-2.5 pr-6 font-serif text-12-5 text-text-primary hover:bg-chrome-light"
-            defaultValue="Source Serif 4"
-          >
-            <option value="Source Serif 4">Source Serif 4</option>
-            <option value="Sans">Sans</option>
-          </select>
-          <span className="pointer-events-none absolute right-2 text-text-tertiary">
-            <ChevronDownIcon />
-          </span>
-        </div>
-        <div className="relative flex h-[30px] items-center">
-          <select
-            aria-label="Font size"
-            className="h-full appearance-none rounded-sm bg-transparent pl-2 pr-5 text-12-5 text-text-primary hover:bg-chrome-light"
-            defaultValue="11"
-          >
-            {['9', '10', '11', '12', '14', '16', '18'].map((size) => (
-              <option key={size} value={size}>
-                {size}
-              </option>
-            ))}
-          </select>
-          <span className="pointer-events-none absolute right-1.5 text-text-tertiary">
-            <ChevronDownIcon />
-          </span>
-        </div>
-      </div>
 
-      <ToolbarDivider />
+        <ToolbarDivider />
 
-      {/* Bold / Italic / Underline / text color. Underline and text-color
+        {/* Bold / Italic / Underline / text color. Underline and text-color
           have no backing command -- Markdown has no native underline
           syntax, and this sub-project's brief doesn't scope a color-mark
           command -- so both stay real, present, but unwired buttons. */}
-      <div className="flex items-center gap-0.5">
-        <ToolbarIconButton
-          label="Bold"
-          active={false}
-          onClick={() => editorRef.current?.toggleBold()}
-        >
-          <span className="text-14 font-bold leading-none">B</span>
-        </ToolbarIconButton>
-        <ToolbarIconButton
-          label="Italic"
-          active={false}
-          onClick={() => editorRef.current?.toggleItalic()}
-        >
-          <span className="text-14 italic leading-none">I</span>
-        </ToolbarIconButton>
-        <ToolbarIconButton label="Underline" active={false}>
-          <span className="text-14 leading-none underline">U</span>
-        </ToolbarIconButton>
-        <ToolbarIconButton label="Text color">
-          <span className="flex flex-col items-center gap-px">
-            <span className="text-13 leading-none">A</span>
-            <span className="h-[2.5px] w-3.5 rounded-full bg-accent" />
-          </span>
-        </ToolbarIconButton>
-      </div>
+        <div className="flex items-center gap-0.5">
+          <ToolbarIconButton
+            label="Bold"
+            active={false}
+            onClick={() => editorRef.current?.toggleBold()}
+          >
+            <span className="text-14 font-bold leading-none">B</span>
+          </ToolbarIconButton>
+          <ToolbarIconButton
+            label="Italic"
+            active={false}
+            onClick={() => editorRef.current?.toggleItalic()}
+          >
+            <span className="text-14 italic leading-none">I</span>
+          </ToolbarIconButton>
+          <ToolbarIconButton label="Underline" active={false}>
+            <span className="text-14 leading-none underline">U</span>
+          </ToolbarIconButton>
+          <ToolbarIconButton label="Text color">
+            <span className="flex flex-col items-center gap-px">
+              <span className="text-13 leading-none">A</span>
+              <span className="h-[2.5px] w-3.5 rounded-full bg-accent" />
+            </span>
+          </ToolbarIconButton>
+        </div>
 
-      <ToolbarDivider />
+        <ToolbarDivider />
 
-      {/* Bullet / numbered / checkbox list -- the mockup renders these as
+        {/* Bullet / numbered / checkbox list -- the mockup renders these as
           three plain icon buttons side by side (verified against
           PageDown.dc.html's own markup: no chevron/dropdown panel actually
           exists for this group, despite the README's prose calling it a
           "dropdown group"), so that's what's built here. Checkbox list has
           no backing command (GFM task-list items aren't in this
           sub-project's command scope) and stays unwired. */}
-      <div className="flex items-center gap-0.5">
-        <ToolbarIconButton
-          label="Bulleted list"
-          active={false}
-          onClick={() => editorRef.current?.toggleBulletList()}
-        >
-          <Icon strokeWidth={1.7}>
-            <circle cx="4.5" cy="7" r="1.3" fill="currentColor" stroke="none" />
-            <path d="M9 7h11" />
-            <circle cx="4.5" cy="12" r="1.3" fill="currentColor" stroke="none" />
-            <path d="M9 12h11" />
-            <circle cx="4.5" cy="17" r="1.3" fill="currentColor" stroke="none" />
-            <path d="M9 17h11" />
-          </Icon>
-        </ToolbarIconButton>
-        <ToolbarIconButton
-          label="Numbered list"
-          active={false}
-          onClick={() => editorRef.current?.toggleOrderedList()}
-        >
-          <Icon strokeWidth={1.7}>
-            <text x="2" y="8.5" fontSize="7" stroke="none" fill="currentColor">
-              1
-            </text>
-            <path d="M9 7h11" />
-            <text x="2" y="13.5" fontSize="7" stroke="none" fill="currentColor">
-              2
-            </text>
-            <path d="M9 12h11" />
-            <text x="2" y="18.5" fontSize="7" stroke="none" fill="currentColor">
-              3
-            </text>
-            <path d="M9 17h11" />
-          </Icon>
-        </ToolbarIconButton>
-        <ToolbarIconButton label="Checklist" active={false}>
-          <svg
-            width="15"
-            height="15"
-            viewBox="0 0 16 16"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth={2}
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            aria-hidden="true"
+        <div className="flex items-center gap-0.5">
+          <ToolbarIconButton
+            label="Bulleted list"
+            active={false}
+            onClick={() => editorRef.current?.toggleBulletList()}
           >
-            <rect x="2" y="2" width="10" height="10" rx="2" />
-            <path d="M4.3 7.3l1.8 1.8L10 5.8" />
-          </svg>
-        </ToolbarIconButton>
-      </div>
+            <Icon strokeWidth={1.7}>
+              <circle cx="4.5" cy="7" r="1.3" fill="currentColor" stroke="none" />
+              <path d="M9 7h11" />
+              <circle cx="4.5" cy="12" r="1.3" fill="currentColor" stroke="none" />
+              <path d="M9 12h11" />
+              <circle cx="4.5" cy="17" r="1.3" fill="currentColor" stroke="none" />
+              <path d="M9 17h11" />
+            </Icon>
+          </ToolbarIconButton>
+          <ToolbarIconButton
+            label="Numbered list"
+            active={false}
+            onClick={() => editorRef.current?.toggleOrderedList()}
+          >
+            <Icon strokeWidth={1.7}>
+              <text x="2" y="8.5" fontSize="7" stroke="none" fill="currentColor">
+                1
+              </text>
+              <path d="M9 7h11" />
+              <text x="2" y="13.5" fontSize="7" stroke="none" fill="currentColor">
+                2
+              </text>
+              <path d="M9 12h11" />
+              <text x="2" y="18.5" fontSize="7" stroke="none" fill="currentColor">
+                3
+              </text>
+              <path d="M9 17h11" />
+            </Icon>
+          </ToolbarIconButton>
+          <ToolbarIconButton label="Checklist" active={false}>
+            <svg
+              width="15"
+              height="15"
+              viewBox="0 0 16 16"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth={2}
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              aria-hidden="true"
+            >
+              <rect x="2" y="2" width="10" height="10" rx="2" />
+              <path d="M4.3 7.3l1.8 1.8L10 5.8" />
+            </svg>
+          </ToolbarIconButton>
+        </div>
 
-      <ToolbarDivider />
+        <ToolbarDivider />
 
-      {/* Link / image / table / split-cell / page-break. Image and
+        {/* Link / image / table / split-cell / page-break. Image and
           split-cell have no backing command in this sub-project's scope and
           stay unwired, same treatment as Underline/text-color above. */}
-      <div className="flex items-center gap-0.5">
-        <ToolbarIconButton label="Insert link" onClick={handleInsertLink}>
-          <Icon strokeWidth={1.8}>
-            <path d="M9.5 14.5 14.5 9.5" />
-            <path d="M11 7.5l1-1a3.5 3.5 0 0 1 5 5l-1 1" />
-            <path d="M13 16.5l-1 1a3.5 3.5 0 0 1-5-5l1-1" />
-          </Icon>
-        </ToolbarIconButton>
-        <ToolbarIconButton label="Insert image">
-          <Icon strokeWidth={1.7}>
-            <rect x="3.5" y="5" width="17" height="14" rx="2" />
-            <circle cx="9" cy="10" r="1.4" />
-            <path d="M4 16.5 9 12a2 2 0 0 1 2.7 0l5.3 4.7" />
-          </Icon>
-        </ToolbarIconButton>
-        <ToolbarIconButton label="Insert table" onClick={() => editorRef.current?.insertTable()}>
-          <Icon strokeWidth={1.7}>
-            <rect x="3.5" y="5" width="17" height="14" rx="1.5" />
-            <path d="M3.5 10.3h17" />
-            <path d="M3.5 15.6h17" />
-            <path d="M10 5v14" />
-          </Icon>
-        </ToolbarIconButton>
-        <ToolbarIconButton label="Split cell">
-          <Icon strokeWidth={1.7}>
-            <rect x="3.5" y="4" width="7" height="5" rx="1" />
-            <rect x="13.5" y="15" width="7" height="5" rx="1" />
-            <path d="M7 9v3a2 2 0 0 0 2 2h1.5" />
-            <path d="M14.5 14h-1a2 2 0 0 1-2-2v0" />
-          </Icon>
-        </ToolbarIconButton>
-        <ToolbarIconButton
-          label="Insert page break"
-          onClick={() => editorRef.current?.insertPageBreak()}
-        >
-          <Icon strokeWidth={1.7}>
-            <rect x="5" y="3" width="14" height="18" rx="1.5" />
-            <path d="M6.5 12h3M14.5 12h3" />
-            <path d="M11 10.3v3.4" />
-          </Icon>
-        </ToolbarIconButton>
-      </div>
+        <div className="flex items-center gap-0.5">
+          <ToolbarIconButton label="Insert link" onClick={handleInsertLink}>
+            <Icon strokeWidth={1.8}>
+              <path d="M9.5 14.5 14.5 9.5" />
+              <path d="M11 7.5l1-1a3.5 3.5 0 0 1 5 5l-1 1" />
+              <path d="M13 16.5l-1 1a3.5 3.5 0 0 1-5-5l1-1" />
+            </Icon>
+          </ToolbarIconButton>
+          <ToolbarIconButton label="Insert image">
+            <Icon strokeWidth={1.7}>
+              <rect x="3.5" y="5" width="17" height="14" rx="2" />
+              <circle cx="9" cy="10" r="1.4" />
+              <path d="M4 16.5 9 12a2 2 0 0 1 2.7 0l5.3 4.7" />
+            </Icon>
+          </ToolbarIconButton>
+          <ToolbarIconButton label="Insert table" onClick={() => editorRef.current?.insertTable()}>
+            <Icon strokeWidth={1.7}>
+              <rect x="3.5" y="5" width="17" height="14" rx="1.5" />
+              <path d="M3.5 10.3h17" />
+              <path d="M3.5 15.6h17" />
+              <path d="M10 5v14" />
+            </Icon>
+          </ToolbarIconButton>
+          <ToolbarIconButton label="Split cell">
+            <Icon strokeWidth={1.7}>
+              <rect x="3.5" y="4" width="7" height="5" rx="1" />
+              <rect x="13.5" y="15" width="7" height="5" rx="1" />
+              <path d="M7 9v3a2 2 0 0 0 2 2h1.5" />
+              <path d="M14.5 14h-1a2 2 0 0 1-2-2v0" />
+            </Icon>
+          </ToolbarIconButton>
+          <ToolbarIconButton
+            label="Insert page break"
+            onClick={() => editorRef.current?.insertPageBreak()}
+          >
+            <Icon strokeWidth={1.7}>
+              <rect x="5" y="3" width="14" height="18" rx="1.5" />
+              <path d="M6.5 12h3M14.5 12h3" />
+              <path d="M11 10.3v3.4" />
+            </Icon>
+          </ToolbarIconButton>
+        </div>
 
-      {/* Find -- per docs/design-handoff/README.md's own "Not yet designed"
+        {/* Find -- per docs/design-handoff/README.md's own "Not yet designed"
           list: "a search icon exists in the toolbar as a placeholder
           trigger only" (no find/replace panel exists to open). Deliberately
           unwired, matching the design handoff's own explicit call-out. */}
-      <ToolbarIconButton label="Find">
-        <Icon strokeWidth={1.8}>
-          <circle cx="10.5" cy="10.5" r="6" />
-          <path d="M19 19l-4.3-4.3" />
-        </Icon>
-      </ToolbarIconButton>
+        <ToolbarIconButton label="Find">
+          <Icon strokeWidth={1.8}>
+            <circle cx="10.5" cy="10.5" r="6" />
+            <path d="M19 19l-4.3-4.3" />
+          </Icon>
+        </ToolbarIconButton>
+      </div>
 
       {/* Right-aligned cluster: view-mode segmented control, page setup,
-          Export PDF. */}
-      <div className="ml-auto flex items-center gap-3.5">
+          Export PDF. flex-none (not just the implicit default) so it never
+          shrinks or scrolls, regardless of how narrow the window gets --
+          the scrollable region above absorbs all the squeeze instead. */}
+      <div className="flex flex-none items-center gap-3.5">
         <div className="flex items-center gap-0.5 rounded-md bg-chrome-dark p-0.5">
           {(
             [
