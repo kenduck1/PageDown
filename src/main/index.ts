@@ -290,15 +290,26 @@ app.whenReady().then(() => {
   // correctly, so a dropped autosave tick or an empty history list just
   // means slightly less protection, not a broken app.
   //
-  // Each body is ALSO wrapped in its own try/catch: per this plan's global
-  // "snapshot writes are best-effort and must never block, delay, or fail a
-  // real Save" invariant, a rejected writeSnapshot/clearPendingAutosave call
-  // must never surface as a failed IPC promise -- the renderer calls these
-  // fire-and-forget (`void ...`), so an unhandled rejection here would
-  // either produce a spurious console error unrelated to anything the user
-  // did, or (worse) get attributed to an otherwise-successful Save. Logged
-  // and swallowed instead, matching addRecentFile's own failure handling
-  // above.
+  // Each body is ALSO wrapped in its own try/catch, and -- per fix round 1
+  // review -- the isKnownPath check lives INSIDE that try, not before it:
+  // isKnownPath is unreachable-by-throw today (readRecentFiles swallows
+  // every read error internally), but that's an implementation detail of
+  // the current allowlist storage, not a contract this handler should rely
+  // on. Keeping the check inside the same try the rest of the body is in
+  // means a future isKnownPath that legitimately can throw (e.g. one that
+  // adds a stat/realpath call) stays covered by the exact same
+  // drop-not-throw guarantee as everything after it, rather than silently
+  // becoming the one uncovered statement in a handler whose surrounding
+  // comment claims full coverage.
+  //
+  // Per this plan's global "snapshot writes are best-effort and must never
+  // block, delay, or fail a real Save" invariant, a rejected
+  // writeSnapshot/clearPendingAutosave call must never surface as a failed
+  // IPC promise -- the renderer calls these fire-and-forget (`void ...`),
+  // so an unhandled rejection here would either produce a spurious console
+  // error unrelated to anything the user did, or (worse) get attributed to
+  // an otherwise-successful Save. Logged and swallowed instead, matching
+  // addRecentFile's own failure handling above.
   //
   // `filePath` is canonicalized via canonicalizeDocumentPath (fs.realpath)
   // before being passed into version-history.ts -- see that function's own
@@ -306,8 +317,8 @@ app.whenReady().then(() => {
   // every entry point that touches version-history storage.
   ipcMain.handle('file:autosaveSnapshot', async (_event, content: string, filePath: string) => {
     const userDataDir = app.getPath('userData')
-    if (!(await isKnownPath(userDataDir, filePath))) return
     try {
+      if (!(await isKnownPath(userDataDir, filePath))) return
       const canonicalPath = await canonicalizeDocumentPath(filePath)
       await writeSnapshot(userDataDir, canonicalPath, content)
     } catch (err) {
@@ -317,8 +328,8 @@ app.whenReady().then(() => {
 
   ipcMain.handle('file:getVersionHistory', async (_event, filePath: string) => {
     const userDataDir = app.getPath('userData')
-    if (!(await isKnownPath(userDataDir, filePath))) return []
     try {
+      if (!(await isKnownPath(userDataDir, filePath))) return []
       const canonicalPath = await canonicalizeDocumentPath(filePath)
       return await listSnapshots(userDataDir, canonicalPath)
     } catch (err) {
@@ -331,8 +342,8 @@ app.whenReady().then(() => {
     'file:restoreVersionContent',
     async (_event, filePath: string, snapshotId: string) => {
       const userDataDir = app.getPath('userData')
-      if (!(await isKnownPath(userDataDir, filePath))) return null
       try {
+        if (!(await isKnownPath(userDataDir, filePath))) return null
         const canonicalPath = await canonicalizeDocumentPath(filePath)
         return await readSnapshotContent(userDataDir, canonicalPath, snapshotId)
       } catch (err) {
@@ -346,8 +357,8 @@ app.whenReady().then(() => {
     'file:clearPendingAutosave',
     async (_event, filePath: string, sinceIso: string) => {
       const userDataDir = app.getPath('userData')
-      if (!(await isKnownPath(userDataDir, filePath))) return
       try {
+        if (!(await isKnownPath(userDataDir, filePath))) return
         const canonicalPath = await canonicalizeDocumentPath(filePath)
         await clearPendingAutosaveSnapshots(userDataDir, canonicalPath, sinceIso)
       } catch (err) {
