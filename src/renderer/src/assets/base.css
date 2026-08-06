@@ -81,4 +81,19 @@
   .milkdown-mount td > p {
     margin: 0;
   }
+
+  /* Hides the native scrollbar while leaving real scroll behavior (wheel,
+     trackpad, drag) fully intact -- used by EditorToolbar's horizontally
+     scrollable region, which signals "more content" via its own edge-fade
+     indicators instead of a visible scrollbar track. `scrollbar-width` is
+     the standard property (Firefox); the `::-webkit-scrollbar` pseudo-
+     element is required for Chromium, which this app always runs under
+     (Electron), but both are harmless to ship together. */
+  .scrollbar-hide {
+    scrollbar-width: none;
+  }
+
+  .scrollbar-hide::-webkit-scrollbar {
+    display: none;
+  }
 }

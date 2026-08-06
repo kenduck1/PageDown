@@ -36,3 +36,19 @@ if (!Range.prototype.getBoundingClientRect) {
     } as DOMRect
   }
 }
+
+// jsdom doesn't implement ResizeObserver at all (a real, current-Chromium-only
+// API; jsdom performs no real layout to observe changes to in the first
+// place) — a no-op stub, same convention as scrollIntoView's polyfill above,
+// so components that construct one (e.g. EditorToolbar's scroll-fade
+// tracking) don't throw under test. Real Electron/Chromium has the genuine
+// implementation; this only affects jsdom-based unit tests.
+if (typeof globalThis.ResizeObserver === 'undefined') {
+  globalThis.ResizeObserver = class {
+    /* eslint-disable @typescript-eslint/no-empty-function */
+    observe(): void {}
+    unobserve(): void {}
+    disconnect(): void {}
+    /* eslint-enable @typescript-eslint/no-empty-function */
+  }
+}

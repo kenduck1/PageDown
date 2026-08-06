@@ -1,4 +1,4 @@
-import { useState, type ReactElement, type RefObject } from 'react'
+import { useEffect, useRef, useState, type ReactElement, type RefObject } from 'react'
 import { useAppStore } from '../store/appStore'
 import { useDocumentStore } from '../store/documentStore'
 import type { MilkdownEditorHandle } from '../milkdown/MilkdownEditor'
@@ -135,6 +135,45 @@ function EditorToolbar({ editorRef }: EditorToolbarProps): ReactElement {
   // ever incremented.
   const [headingSelectResetKey, setHeadingSelectResetKey] = useState(0)
 
+  // Drives the scroll-right indicator on the toolbar's horizontally
+  // scrollable region (see the JSX below) -- a plain native scrollbar was
+  // both visually heavy for a 45px-tall toolbar and gave no clear signal
+  // that there was more content, let alone that it was clickable.
+  // `canScrollRight` is recomputed on every scroll AND on resize (a window
+  // resize can change whether the content overflows at all, e.g. widening
+  // past the point where everything fits), so the indicator only ever shows
+  // when there's genuinely more content to reach. No left-side counterpart:
+  // the sticky-positioned left group (below) already permanently occupies
+  // that visual space, so a left chevron would sit on top of real content
+  // rather than in genuinely empty space -- scrolling left to reveal the
+  // rest of the content from its start is still just as possible via wheel/
+  // trackpad/drag, it just isn't called out with its own button.
+  const scrollRef = useRef<HTMLDivElement>(null)
+  const [canScrollRight, setCanScrollRight] = useState(false)
+
+  useEffect(() => {
+    const el = scrollRef.current
+    if (!el) return
+
+    const updateScrollState = (): void => {
+      // A 1px tolerance -- some browsers report a fractional scrollLeft
+      // that never quite reaches the exact scrollWidth - clientWidth
+      // value at the true end, which would otherwise leave the indicator
+      // visible forever even when fully scrolled.
+      setCanScrollRight(el.scrollLeft < el.scrollWidth - el.clientWidth - 1)
+    }
+
+    updateScrollState()
+    el.addEventListener('scroll', updateScrollState)
+    const resizeObserver = new ResizeObserver(updateScrollState)
+    resizeObserver.observe(el)
+
+    return () => {
+      el.removeEventListener('scroll', updateScrollState)
+      resizeObserver.disconnect()
+    }
+  }, [])
+
   const handleHeadingChange = (value: string): void => {
     // Fix-round finding: this dropdown has no live selection-state tracking
     // (a separate, larger "bubble menu / active formatting state" feature,
@@ -202,242 +241,293 @@ function EditorToolbar({ editorRef }: EditorToolbarProps): ReactElement {
       role="toolbar"
       aria-label="Formatting toolbar"
     >
-      {/* Everything except the right-aligned cluster lives in its own
-          scrollable region: the view-mode selector, Page setup, and Export
-          PDF must always stay visible regardless of window width, while the
-          formatting controls (which there are a lot of, and which are far
-          less useful if invisible off the right edge) scroll horizontally
-          instead of wrapping to a second row or getting clipped. min-w-0 is
-          load-bearing on a flex child -- without it this div refuses to
-          shrink below its content's natural width and overflow-x-auto never
-          actually engages. */}
-      <div className="flex min-w-0 flex-1 items-center gap-x-2.5 overflow-x-auto">
-        {/* Undo / redo */}
-        <div className="flex items-center gap-0.5">
-          <ToolbarIconButton label="Undo" onClick={() => editorRef.current?.undo()}>
-            <Icon strokeWidth={1.8}>
-              <path d="M7 7 3 11l4 4" />
-              <path d="M3 11h11.5A5.5 5.5 0 0 1 20 16.5v0" />
-            </Icon>
-          </ToolbarIconButton>
-          <ToolbarIconButton label="Redo" onClick={() => editorRef.current?.redo()}>
-            <Icon strokeWidth={1.8}>
-              <path d="M17 7l4 4-4 4" />
-              <path d="M21 11H9.5A5.5 5.5 0 0 0 4 16.5v0" />
-            </Icon>
-          </ToolbarIconButton>
-        </div>
+      {/* Everything except the right-aligned cluster lives in ONE scrollable
+          region -- Undo/Redo through Find all scroll together as far as the
+          browser is concerned. The "stay visible" behavior for Undo/Redo +
+          paragraph-style/font/size is achieved with `sticky left-0` (below),
+          NOT by splitting them into a second, separately-reserved flex-none
+          group: two independently-reserved flex-none groups (this one AND
+          the right cluster) have no shared mechanism to give way to each
+          other, so at a narrow enough width their combined minimum size can
+          exceed the toolbar's own width with nothing left to shrink --
+          verified this the hard way (Export PDF's own bounding box stayed
+          pinned past the visible edge, entirely unreachable, once the
+          window got narrow enough that both fixed groups no longer fit
+          together). `sticky` composes correctly instead: it visually stays
+          pinned to the scrollable region's own left edge for as long as
+          there's room, and only when truly out of room does it start
+          scrolling away WITH the rest of the region -- the right cluster
+          (still genuinely flex-none, outside this scrollable region
+          entirely) is what actually keeps its unconditional guarantee.
+          min-w-0 is load-bearing on a flex child -- without it this div
+          refuses to shrink below its content's natural width and
+          overflow-x-auto never actually engages.
 
-        <ToolbarDivider />
+          The native scrollbar is hidden (scrollbar-hide, base.css) in favor
+          of the passive edge-fade overlay below: a visible scrollbar track
+          was both heavy for a 45px toolbar and gave no clear signal of
+          which direction had more content, whereas the fade only appears
+          on the right when there genuinely is more (canScrollRight, kept
+          in sync with real scroll position above). No button/icon chrome
+          -- deliberately subtle, not a call-attention-to-itself control.
 
-        {/* Paragraph style / font family / font size. Font family and font
-          size have no backing MilkdownEditorHandle command (this
-          sub-project's brief scopes editing commands to bold/italic/
-          heading/lists/link/table/pagebreak/undo/redo only) -- both selects
-          below are real, interactive, native <select> elements, but
-          intentionally unwired, matching the same "present but inert"
-          treatment as the Find button. */}
-        <div className="flex items-center gap-2">
-          <div className="relative flex h-[30px] items-center">
-            <select
-              key={headingSelectResetKey}
-              aria-label="Paragraph style"
-              className="h-full appearance-none rounded-sm bg-transparent pl-2.5 pr-6 text-12-5 text-text-primary hover:bg-chrome-light"
-              defaultValue="paragraph"
-              onChange={(e) => handleHeadingChange(e.target.value)}
-            >
-              <option value="paragraph">Normal text</option>
-              <option value="1">Heading 1</option>
-              <option value="2">Heading 2</option>
-              <option value="3">Heading 3</option>
-            </select>
-            <span className="pointer-events-none absolute right-2 text-text-tertiary">
-              <ChevronDownIcon />
-            </span>
+          Implemented as an inset box-shadow directly on the scrollable
+          element (not a separate overlay div with a background-color
+          gradient, tried first and reverted): a color gradient FROM the
+          toolbar's own bg-page (white) TO transparent has essentially zero
+          visible contrast against that same white toolbar background --
+          confirmed by screenshotting it, not just reasoning about it. An
+          inset shadow reads as a soft dark vignette regardless of the
+          underlying background color, which is the standard technique for
+          exactly this "more scrollable content this way" affordance (the
+          same one browsers' own overflow indicators, Gmail's message list,
+          etc. use). */}
+      <div className="relative min-w-0 flex-1">
+        <div
+          ref={scrollRef}
+          className={`scrollbar-hide flex items-center gap-x-2.5 overflow-x-auto ${
+            canScrollRight ? 'shadow-[inset_-14px_0_10px_-10px_rgba(0,0,0,0.18)]' : ''
+          }`}
+        >
+          {/* Sticky left group: undo/redo + paragraph-style/font/size. z-10
+              so it paints above the content scrolling underneath it; bg-page
+              (opaque, matching the toolbar's own background) so that
+              underlying content is genuinely occluded rather than showing
+              through. flex-none so this group itself is never the thing
+              that shrinks -- if anything has to give at extreme widths, it's
+              the plain formatting controls after it, not this. */}
+          <div className="sticky left-0 z-10 flex flex-none items-center gap-x-2.5 bg-page">
+            {/* Undo / redo */}
+            <div className="flex items-center gap-0.5">
+              <ToolbarIconButton label="Undo" onClick={() => editorRef.current?.undo()}>
+                <Icon strokeWidth={1.8}>
+                  <path d="M7 7 3 11l4 4" />
+                  <path d="M3 11h11.5A5.5 5.5 0 0 1 20 16.5v0" />
+                </Icon>
+              </ToolbarIconButton>
+              <ToolbarIconButton label="Redo" onClick={() => editorRef.current?.redo()}>
+                <Icon strokeWidth={1.8}>
+                  <path d="M17 7l4 4-4 4" />
+                  <path d="M21 11H9.5A5.5 5.5 0 0 0 4 16.5v0" />
+                </Icon>
+              </ToolbarIconButton>
+            </div>
+
+            <ToolbarDivider />
+
+            {/* Paragraph style / font family / font size. Font family and
+              font size have no backing MilkdownEditorHandle command (this
+              sub-project's brief scopes editing commands to bold/italic/
+              heading/lists/link/table/pagebreak/undo/redo only) -- both
+              selects below are real, interactive, native <select> elements,
+              but intentionally unwired, matching the same "present but
+              inert" treatment as the Find button. */}
+            <div className="flex items-center gap-2">
+              <div className="relative flex h-[30px] items-center">
+                <select
+                  key={headingSelectResetKey}
+                  aria-label="Paragraph style"
+                  className="h-full appearance-none rounded-sm bg-transparent pl-2.5 pr-6 text-12-5 text-text-primary hover:bg-chrome-light"
+                  defaultValue="paragraph"
+                  onChange={(e) => handleHeadingChange(e.target.value)}
+                >
+                  <option value="paragraph">Normal text</option>
+                  <option value="1">Heading 1</option>
+                  <option value="2">Heading 2</option>
+                  <option value="3">Heading 3</option>
+                </select>
+                <span className="pointer-events-none absolute right-2 text-text-tertiary">
+                  <ChevronDownIcon />
+                </span>
+              </div>
+              <div className="relative flex h-[30px] items-center">
+                <select
+                  aria-label="Font family"
+                  className="h-full appearance-none rounded-sm bg-transparent pl-2.5 pr-6 font-serif text-12-5 text-text-primary hover:bg-chrome-light"
+                  defaultValue="Source Serif 4"
+                >
+                  <option value="Source Serif 4">Source Serif 4</option>
+                  <option value="Sans">Sans</option>
+                </select>
+                <span className="pointer-events-none absolute right-2 text-text-tertiary">
+                  <ChevronDownIcon />
+                </span>
+              </div>
+              <div className="relative flex h-[30px] items-center">
+                <select
+                  aria-label="Font size"
+                  className="h-full appearance-none rounded-sm bg-transparent pl-2 pr-5 text-12-5 text-text-primary hover:bg-chrome-light"
+                  defaultValue="11"
+                >
+                  {['9', '10', '11', '12', '14', '16', '18'].map((size) => (
+                    <option key={size} value={size}>
+                      {size}
+                    </option>
+                  ))}
+                </select>
+                <span className="pointer-events-none absolute right-1.5 text-text-tertiary">
+                  <ChevronDownIcon />
+                </span>
+              </div>
+            </div>
+
+            <ToolbarDivider />
           </div>
-          <div className="relative flex h-[30px] items-center">
-            <select
-              aria-label="Font family"
-              className="h-full appearance-none rounded-sm bg-transparent pl-2.5 pr-6 font-serif text-12-5 text-text-primary hover:bg-chrome-light"
-              defaultValue="Source Serif 4"
-            >
-              <option value="Source Serif 4">Source Serif 4</option>
-              <option value="Sans">Sans</option>
-            </select>
-            <span className="pointer-events-none absolute right-2 text-text-tertiary">
-              <ChevronDownIcon />
-            </span>
-          </div>
-          <div className="relative flex h-[30px] items-center">
-            <select
-              aria-label="Font size"
-              className="h-full appearance-none rounded-sm bg-transparent pl-2 pr-5 text-12-5 text-text-primary hover:bg-chrome-light"
-              defaultValue="11"
-            >
-              {['9', '10', '11', '12', '14', '16', '18'].map((size) => (
-                <option key={size} value={size}>
-                  {size}
-                </option>
-              ))}
-            </select>
-            <span className="pointer-events-none absolute right-1.5 text-text-tertiary">
-              <ChevronDownIcon />
-            </span>
-          </div>
-        </div>
 
-        <ToolbarDivider />
-
-        {/* Bold / Italic / Underline / text color. Underline and text-color
+          {/* Bold / Italic / Underline / text color. Underline and text-color
           have no backing command -- Markdown has no native underline
           syntax, and this sub-project's brief doesn't scope a color-mark
           command -- so both stay real, present, but unwired buttons. */}
-        <div className="flex items-center gap-0.5">
-          <ToolbarIconButton
-            label="Bold"
-            active={false}
-            onClick={() => editorRef.current?.toggleBold()}
-          >
-            <span className="text-14 font-bold leading-none">B</span>
-          </ToolbarIconButton>
-          <ToolbarIconButton
-            label="Italic"
-            active={false}
-            onClick={() => editorRef.current?.toggleItalic()}
-          >
-            <span className="text-14 italic leading-none">I</span>
-          </ToolbarIconButton>
-          <ToolbarIconButton label="Underline" active={false}>
-            <span className="text-14 leading-none underline">U</span>
-          </ToolbarIconButton>
-          <ToolbarIconButton label="Text color">
-            <span className="flex flex-col items-center gap-px">
-              <span className="text-13 leading-none">A</span>
-              <span className="h-[2.5px] w-3.5 rounded-full bg-accent" />
-            </span>
-          </ToolbarIconButton>
-        </div>
+          <div className="flex items-center gap-0.5">
+            <ToolbarIconButton
+              label="Bold"
+              active={false}
+              onClick={() => editorRef.current?.toggleBold()}
+            >
+              <span className="text-14 font-bold leading-none">B</span>
+            </ToolbarIconButton>
+            <ToolbarIconButton
+              label="Italic"
+              active={false}
+              onClick={() => editorRef.current?.toggleItalic()}
+            >
+              <span className="text-14 italic leading-none">I</span>
+            </ToolbarIconButton>
+            <ToolbarIconButton label="Underline" active={false}>
+              <span className="text-14 leading-none underline">U</span>
+            </ToolbarIconButton>
+            <ToolbarIconButton label="Text color">
+              <span className="flex flex-col items-center gap-px">
+                <span className="text-13 leading-none">A</span>
+                <span className="h-[2.5px] w-3.5 rounded-full bg-accent" />
+              </span>
+            </ToolbarIconButton>
+          </div>
 
-        <ToolbarDivider />
+          <ToolbarDivider />
 
-        {/* Bullet / numbered / checkbox list -- the mockup renders these as
+          {/* Bullet / numbered / checkbox list -- the mockup renders these as
           three plain icon buttons side by side (verified against
           PageDown.dc.html's own markup: no chevron/dropdown panel actually
           exists for this group, despite the README's prose calling it a
           "dropdown group"), so that's what's built here. Checkbox list has
           no backing command (GFM task-list items aren't in this
           sub-project's command scope) and stays unwired. */}
-        <div className="flex items-center gap-0.5">
-          <ToolbarIconButton
-            label="Bulleted list"
-            active={false}
-            onClick={() => editorRef.current?.toggleBulletList()}
-          >
-            <Icon strokeWidth={1.7}>
-              <circle cx="4.5" cy="7" r="1.3" fill="currentColor" stroke="none" />
-              <path d="M9 7h11" />
-              <circle cx="4.5" cy="12" r="1.3" fill="currentColor" stroke="none" />
-              <path d="M9 12h11" />
-              <circle cx="4.5" cy="17" r="1.3" fill="currentColor" stroke="none" />
-              <path d="M9 17h11" />
-            </Icon>
-          </ToolbarIconButton>
-          <ToolbarIconButton
-            label="Numbered list"
-            active={false}
-            onClick={() => editorRef.current?.toggleOrderedList()}
-          >
-            <Icon strokeWidth={1.7}>
-              <text x="2" y="8.5" fontSize="7" stroke="none" fill="currentColor">
-                1
-              </text>
-              <path d="M9 7h11" />
-              <text x="2" y="13.5" fontSize="7" stroke="none" fill="currentColor">
-                2
-              </text>
-              <path d="M9 12h11" />
-              <text x="2" y="18.5" fontSize="7" stroke="none" fill="currentColor">
-                3
-              </text>
-              <path d="M9 17h11" />
-            </Icon>
-          </ToolbarIconButton>
-          <ToolbarIconButton label="Checklist" active={false}>
-            <svg
-              width="15"
-              height="15"
-              viewBox="0 0 16 16"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth={2}
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              aria-hidden="true"
+          <div className="flex items-center gap-0.5">
+            <ToolbarIconButton
+              label="Bulleted list"
+              active={false}
+              onClick={() => editorRef.current?.toggleBulletList()}
             >
-              <rect x="2" y="2" width="10" height="10" rx="2" />
-              <path d="M4.3 7.3l1.8 1.8L10 5.8" />
-            </svg>
-          </ToolbarIconButton>
-        </div>
+              <Icon strokeWidth={1.7}>
+                <circle cx="4.5" cy="7" r="1.3" fill="currentColor" stroke="none" />
+                <path d="M9 7h11" />
+                <circle cx="4.5" cy="12" r="1.3" fill="currentColor" stroke="none" />
+                <path d="M9 12h11" />
+                <circle cx="4.5" cy="17" r="1.3" fill="currentColor" stroke="none" />
+                <path d="M9 17h11" />
+              </Icon>
+            </ToolbarIconButton>
+            <ToolbarIconButton
+              label="Numbered list"
+              active={false}
+              onClick={() => editorRef.current?.toggleOrderedList()}
+            >
+              <Icon strokeWidth={1.7}>
+                <text x="2" y="8.5" fontSize="7" stroke="none" fill="currentColor">
+                  1
+                </text>
+                <path d="M9 7h11" />
+                <text x="2" y="13.5" fontSize="7" stroke="none" fill="currentColor">
+                  2
+                </text>
+                <path d="M9 12h11" />
+                <text x="2" y="18.5" fontSize="7" stroke="none" fill="currentColor">
+                  3
+                </text>
+                <path d="M9 17h11" />
+              </Icon>
+            </ToolbarIconButton>
+            <ToolbarIconButton label="Checklist" active={false}>
+              <svg
+                width="15"
+                height="15"
+                viewBox="0 0 16 16"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth={2}
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                aria-hidden="true"
+              >
+                <rect x="2" y="2" width="10" height="10" rx="2" />
+                <path d="M4.3 7.3l1.8 1.8L10 5.8" />
+              </svg>
+            </ToolbarIconButton>
+          </div>
 
-        <ToolbarDivider />
+          <ToolbarDivider />
 
-        {/* Link / image / table / split-cell / page-break. Image and
+          {/* Link / image / table / split-cell / page-break. Image and
           split-cell have no backing command in this sub-project's scope and
           stay unwired, same treatment as Underline/text-color above. */}
-        <div className="flex items-center gap-0.5">
-          <ToolbarIconButton label="Insert link" onClick={handleInsertLink}>
-            <Icon strokeWidth={1.8}>
-              <path d="M9.5 14.5 14.5 9.5" />
-              <path d="M11 7.5l1-1a3.5 3.5 0 0 1 5 5l-1 1" />
-              <path d="M13 16.5l-1 1a3.5 3.5 0 0 1-5-5l1-1" />
-            </Icon>
-          </ToolbarIconButton>
-          <ToolbarIconButton label="Insert image">
-            <Icon strokeWidth={1.7}>
-              <rect x="3.5" y="5" width="17" height="14" rx="2" />
-              <circle cx="9" cy="10" r="1.4" />
-              <path d="M4 16.5 9 12a2 2 0 0 1 2.7 0l5.3 4.7" />
-            </Icon>
-          </ToolbarIconButton>
-          <ToolbarIconButton label="Insert table" onClick={() => editorRef.current?.insertTable()}>
-            <Icon strokeWidth={1.7}>
-              <rect x="3.5" y="5" width="17" height="14" rx="1.5" />
-              <path d="M3.5 10.3h17" />
-              <path d="M3.5 15.6h17" />
-              <path d="M10 5v14" />
-            </Icon>
-          </ToolbarIconButton>
-          <ToolbarIconButton label="Split cell">
-            <Icon strokeWidth={1.7}>
-              <rect x="3.5" y="4" width="7" height="5" rx="1" />
-              <rect x="13.5" y="15" width="7" height="5" rx="1" />
-              <path d="M7 9v3a2 2 0 0 0 2 2h1.5" />
-              <path d="M14.5 14h-1a2 2 0 0 1-2-2v0" />
-            </Icon>
-          </ToolbarIconButton>
-          <ToolbarIconButton
-            label="Insert page break"
-            onClick={() => editorRef.current?.insertPageBreak()}
-          >
-            <Icon strokeWidth={1.7}>
-              <rect x="5" y="3" width="14" height="18" rx="1.5" />
-              <path d="M6.5 12h3M14.5 12h3" />
-              <path d="M11 10.3v3.4" />
-            </Icon>
-          </ToolbarIconButton>
-        </div>
+          <div className="flex items-center gap-0.5">
+            <ToolbarIconButton label="Insert link" onClick={handleInsertLink}>
+              <Icon strokeWidth={1.8}>
+                <path d="M9.5 14.5 14.5 9.5" />
+                <path d="M11 7.5l1-1a3.5 3.5 0 0 1 5 5l-1 1" />
+                <path d="M13 16.5l-1 1a3.5 3.5 0 0 1-5-5l1-1" />
+              </Icon>
+            </ToolbarIconButton>
+            <ToolbarIconButton label="Insert image">
+              <Icon strokeWidth={1.7}>
+                <rect x="3.5" y="5" width="17" height="14" rx="2" />
+                <circle cx="9" cy="10" r="1.4" />
+                <path d="M4 16.5 9 12a2 2 0 0 1 2.7 0l5.3 4.7" />
+              </Icon>
+            </ToolbarIconButton>
+            <ToolbarIconButton
+              label="Insert table"
+              onClick={() => editorRef.current?.insertTable()}
+            >
+              <Icon strokeWidth={1.7}>
+                <rect x="3.5" y="5" width="17" height="14" rx="1.5" />
+                <path d="M3.5 10.3h17" />
+                <path d="M3.5 15.6h17" />
+                <path d="M10 5v14" />
+              </Icon>
+            </ToolbarIconButton>
+            <ToolbarIconButton label="Split cell">
+              <Icon strokeWidth={1.7}>
+                <rect x="3.5" y="4" width="7" height="5" rx="1" />
+                <rect x="13.5" y="15" width="7" height="5" rx="1" />
+                <path d="M7 9v3a2 2 0 0 0 2 2h1.5" />
+                <path d="M14.5 14h-1a2 2 0 0 1-2-2v0" />
+              </Icon>
+            </ToolbarIconButton>
+            <ToolbarIconButton
+              label="Insert page break"
+              onClick={() => editorRef.current?.insertPageBreak()}
+            >
+              <Icon strokeWidth={1.7}>
+                <rect x="5" y="3" width="14" height="18" rx="1.5" />
+                <path d="M6.5 12h3M14.5 12h3" />
+                <path d="M11 10.3v3.4" />
+              </Icon>
+            </ToolbarIconButton>
+          </div>
 
-        {/* Find -- per docs/design-handoff/README.md's own "Not yet designed"
+          {/* Find -- per docs/design-handoff/README.md's own "Not yet designed"
           list: "a search icon exists in the toolbar as a placeholder
           trigger only" (no find/replace panel exists to open). Deliberately
           unwired, matching the design handoff's own explicit call-out. */}
-        <ToolbarIconButton label="Find">
-          <Icon strokeWidth={1.8}>
-            <circle cx="10.5" cy="10.5" r="6" />
-            <path d="M19 19l-4.3-4.3" />
-          </Icon>
-        </ToolbarIconButton>
+          <ToolbarIconButton label="Find">
+            <Icon strokeWidth={1.8}>
+              <circle cx="10.5" cy="10.5" r="6" />
+              <path d="M19 19l-4.3-4.3" />
+            </Icon>
+          </ToolbarIconButton>
+        </div>
       </div>
 
       {/* Right-aligned cluster: view-mode segmented control, page setup,
