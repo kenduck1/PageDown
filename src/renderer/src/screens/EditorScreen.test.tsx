@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import EditorScreen from './EditorScreen'
 import { useAppStore, initialAppState } from '../store/appStore'
@@ -304,11 +304,22 @@ describe('EditorScreen', () => {
   })
 
   it('restoring a version flushes and saves dirty edits first, then replaces content, when the pre-restore save succeeds', async () => {
-    useDocumentStore.setState({
+    // Sets the `tabs` array entry, not just the top-level mirror fields --
+    // handleRestoreVersion's post-save guard reads the ACTUAL tab entry
+    // (by id), not the mirror, so a fixture that only fakes the mirror
+    // while leaving the real tab entry at its stale initial values (e.g.
+    // isDirty: false) would silently desync from what a real dirty-edit
+    // action would have produced.
+    useDocumentStore.setState((state) => ({
       filePath: '/tmp/report.md',
       content: '# Unsaved edits',
-      isDirty: true
-    })
+      isDirty: true,
+      tabs: state.tabs.map((tab) =>
+        tab.id === state.activeTabId
+          ? { ...tab, filePath: '/tmp/report.md', content: '# Unsaved edits', isDirty: true }
+          : tab
+      )
+    }))
     vi.mocked(window.api.saveFile).mockResolvedValue({ filePath: '/tmp/report.md' })
     vi.mocked(window.api.getVersionHistory).mockResolvedValue([
       { id: 'snap-1', timestamp: '2026-08-05T12:00:00.000Z', sizeBytes: 10 }
@@ -334,12 +345,19 @@ describe('EditorScreen', () => {
     // for "the save didn't actually happen" (see the Save-As-cancelled
     // tests above) -- documentStore.save()'s `if (result)` branch never
     // runs, so isDirty stays true exactly as it would after a real
-    // disk-write failure.
-    useDocumentStore.setState({
+    // disk-write failure. Sets the `tabs` array entry too, not just the
+    // top-level mirror -- see the sibling "succeeds" test's own comment on
+    // why: handleRestoreVersion's guard reads the real tab entry.
+    useDocumentStore.setState((state) => ({
       filePath: '/tmp/report.md',
       content: '# Unsaved edits',
-      isDirty: true
-    })
+      isDirty: true,
+      tabs: state.tabs.map((tab) =>
+        tab.id === state.activeTabId
+          ? { ...tab, filePath: '/tmp/report.md', content: '# Unsaved edits', isDirty: true }
+          : tab
+      )
+    }))
     vi.mocked(window.api.saveFile).mockResolvedValue(null)
     vi.mocked(window.api.getVersionHistory).mockResolvedValue([
       { id: 'snap-1', timestamp: '2026-08-05T12:00:00.000Z', sizeBytes: 10 }
@@ -362,5 +380,69 @@ describe('EditorScreen', () => {
     await new Promise((resolve) => setTimeout(resolve, 50))
     expect(useDocumentStore.getState().content).toBe('# Unsaved edits')
     expect(useDocumentStore.getState().isDirty).toBe(true)
+  })
+
+  it('lands a restore on the tab that was active at click time, not whichever tab is active when the pre-restore save resolves', async () => {
+    // Tab A is the one being restored (dirty, so a pre-restore Save fires
+    // and has a real async gap at `await save()`, an IPC round trip). Tab B
+    // is a distinct, untouched tab the user switches to WHILE that save is
+    // still in flight -- the always-visible EditorTabBar lets this happen
+    // at any time, and it's exactly the race replaceContentForTab exists
+    // to close.
+    const tabA = { id: 'tab-a', filePath: '/tmp/a.md', content: '# A dirty edit', isDirty: true }
+    const tabB = { id: 'tab-b', filePath: '/tmp/b.md', content: '# B untouched', isDirty: false }
+    useDocumentStore.setState({
+      tabs: [tabA, tabB],
+      activeTabId: tabA.id,
+      content: tabA.content,
+      filePath: tabA.filePath,
+      isDirty: tabA.isDirty
+    })
+
+    let resolveSave: (value: { filePath: string } | null) => void = () => {}
+    vi.mocked(window.api.saveFile).mockReturnValue(
+      new Promise((resolve) => {
+        resolveSave = resolve
+      })
+    )
+    vi.mocked(window.api.getVersionHistory).mockResolvedValue([
+      { id: 'snap-1', timestamp: '2026-08-05T12:00:00.000Z', sizeBytes: 10 }
+    ])
+    vi.mocked(window.api.restoreVersionContent).mockResolvedValue('# Restored A')
+
+    const user = userEvent.setup()
+    render(<EditorScreen />)
+
+    await user.click(screen.getByRole('button', { name: 'History' }))
+    const restoreButton = await screen.findByRole('button', { name: /restore/i })
+    await user.click(restoreButton)
+
+    // The pre-restore Save is now in flight (saveFile called, but its
+    // promise deliberately not yet resolved) -- switch to tab B before it
+    // resolves.
+    await waitFor(() => {
+      expect(window.api.saveFile).toHaveBeenCalledWith('/tmp/a.md', '# A dirty edit')
+    })
+    await act(async () => {
+      useDocumentStore.getState().switchTab(tabB.id)
+    })
+    expect(useDocumentStore.getState().activeTabId).toBe(tabB.id)
+
+    resolveSave({ filePath: '/tmp/a.md' })
+
+    await waitFor(() => {
+      expect(useDocumentStore.getState().tabs.find((tab) => tab.id === tabA.id)?.content).toBe(
+        '# Restored A'
+      )
+    })
+    // Tab B, active when the save resolved, must be completely untouched --
+    // neither its content nor its dirty state was ever meant to change.
+    const finalTabB = useDocumentStore.getState().tabs.find((tab) => tab.id === tabB.id)
+    expect(finalTabB?.content).toBe('# B untouched')
+    expect(finalTabB?.isDirty).toBe(false)
+    // Tab B is still the active tab, so the top-level mirror must still
+    // reflect it, not the restored tab A content that just landed in the
+    // background.
+    expect(useDocumentStore.getState().content).toBe('# B untouched')
   })
 })
