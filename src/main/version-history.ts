@@ -10,6 +10,30 @@ import { join } from 'node:path'
 const RETENTION_FULL_GRANULARITY_DAYS = 30
 const MS_PER_DAY = 24 * 60 * 60 * 1000
 
+// Filesystem mtime is not a monotonic clock directly comparable, bare, to a
+// locally-generated Date#toISOString() timestamp:
+//   - mtime GRANULARITY TRUNCATION. Snapshot timestamps are millisecond-
+//     precision; mtime is not, on any filesystem short of APFS/ext4-with-ns
+//     (exFAT/FAT32 -- USB sticks -- truncate to 2s; HFS+ and many SMB/NFS
+//     shares to 1s).
+//   - MTIME-PRESERVING RESTORES. `rsync -t`, `tar -x`, `unzip`, and most
+//     backup/sync tools reinstate the original mtime.
+// Chosen to comfortably exceed the coarsest realistic mtime granularity above
+// (FAT32/exFAT's 2s).
+//
+// Lives HERE, not in file-io.ts, even though file-io.ts's
+// resolveContentWithRecovery was its original (and still its most-documented)
+// consumer: this module is Electron-free by design and file-io.ts imports
+// `electron`, so the import can only point in this direction without dragging
+// Electron into a plain-Vitest-testable module. Both consumers -- the
+// recovery check that decides whether a snapshot is "meaningfully newer" than
+// the file, and clearPendingAutosaveForFile's discard cutoff below -- MUST use
+// the same value: they are two sides of the same "is this snapshot pending or
+// already reflected on disk?" question, and letting them drift apart would
+// carve out a window of snapshots that one side deletes and the other would
+// have recovered (or vice versa). One exported constant, two call sites.
+export const MTIME_TOLERANCE_MS = 2000
+
 export interface SnapshotMeta {
   id: string
   timestamp: string
@@ -317,7 +341,37 @@ export async function clearPendingAutosaveForFile(
   filePath: string
 ): Promise<void> {
   const fileStat = await stat(filePath)
-  const sinceIso = new Date(fileStat.mtimeMs).toISOString()
+  // The cutoff is the file's mtime PLUS MTIME_TOLERANCE_MS, not the bare
+  // mtime -- a real bug found in the final whole-branch review, verified
+  // empirically (autosave C1 -> Save C2 -> autosave C3 -> clear: C1 survived,
+  // but C2 -- the SAVED one -- and C3 were both deleted).
+  //
+  // Why the bare mtime is wrong: documentStore.save() writes its own
+  // version-history snapshot AFTER the disk write has already completed (a
+  // deliberate ordering -- a snapshot write must never block, delay, or fail
+  // a real Save), so a Save-triggered snapshot's timestamp is ALWAYS a few
+  // milliseconds GREATER than the mtime of the very write it records.
+  // `clearPendingAutosave` deletes everything with `timestamp > sinceIso`, so
+  // a bare-mtime cutoff deletes the version-history entry for the user's most
+  // recent explicit Save. Not disk data loss (the file itself is untouched),
+  // but the History list is then left advertising a PRE-Save autosave as its
+  // newest "version," so restoring "the latest version" hands back content
+  // that was never saved -- and it contradicts the design spec's own wording,
+  // "deletes every snapshot newer than the document's last explicit Save."
+  //
+  // Why adding the tolerance is safe rather than merely convenient: a GENUINE
+  // pending autosave structurally cannot land inside this 2s margin.
+  // `useAutosave` restarts its 45s countdown on every clean->dirty transition
+  // and a Save always clears `isDirty`, so the earliest possible autosave tick
+  // after a Save is a full 45s after the user's next edit -- far outside the
+  // margin. (Multi-tab caveat: see useAutosave's own note that a true->true
+  // tab switch doesn't restart the countdown; that only ever makes a tick land
+  // EARLIER than 45s, never inside 2s of a Save on a different tab's file.)
+  // It also makes this cutoff self-consistent with file-io.ts's recovery
+  // check, which uses the SAME constant to decide a snapshot within the margin
+  // isn't meaningfully newer than the file -- i.e. exactly the snapshots this
+  // now keeps are exactly the ones recovery would never have restored anyway.
+  const sinceIso = new Date(fileStat.mtimeMs + MTIME_TOLERANCE_MS).toISOString()
   return clearPendingAutosave(userDataDir, canonicalPath, sinceIso)
 }
 
