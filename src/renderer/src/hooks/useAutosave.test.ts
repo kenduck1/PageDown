@@ -94,6 +94,45 @@ describe('useAutosave', () => {
     expect(window.api.autosaveSnapshot).toHaveBeenCalledTimes(1)
   })
 
+  // Regression guard for the diff's highest-risk behavior: the effect's
+  // dependency array must stay `[isDirty]`, NOT grow to include `content`
+  // (or `filePath`). A reader who notices the effect closes over `content`/
+  // `filePath` via `latestRef` might reasonably assume exhaustive-deps wants
+  // them listed -- but adding them would restart the interval on every
+  // keystroke, meaning autosave would NEVER fire during continuous typing
+  // (a silent, total defeat of the feature) with an otherwise fully green
+  // test suite, since every other test here holds `content` static. This
+  // test interleaves content changes with sub-45s timer advances while
+  // `isDirty` stays continuously `true`, and asserts the snapshot still
+  // fires exactly once at the cumulative 45s mark -- which only holds if
+  // content changes do NOT reset the timer -- AND that it fires with the
+  // LATEST content, proving the latestRef pattern (not a stale closure) is
+  // what's actually feeding the eventual call.
+  it('does not restart the countdown on content changes while continuously dirty, and fires with the LATEST content at the 45s mark', () => {
+    const { rerender } = renderHook(
+      ({ content }) => useAutosave({ content, filePath: '/a.md', isDirty: true }),
+      { initialProps: { content: '# v1' } }
+    )
+
+    vi.advanceTimersByTime(10_000)
+    rerender({ content: '# v2' })
+    vi.advanceTimersByTime(10_000)
+    rerender({ content: '# v3' })
+    vi.advanceTimersByTime(10_000)
+    rerender({ content: '# v4 latest' })
+    vi.advanceTimersByTime(10_000)
+
+    // 40s cumulative since mount -- not yet at the 45s mark.
+    expect(window.api.autosaveSnapshot).not.toHaveBeenCalled()
+
+    // The remaining 5s (40s + 5s = 45s since MOUNT, not since the last
+    // content change) should now fire it -- proving the single mount-time
+    // interval survived every intervening content change untouched.
+    vi.advanceTimersByTime(5_000)
+    expect(window.api.autosaveSnapshot).toHaveBeenCalledTimes(1)
+    expect(window.api.autosaveSnapshot).toHaveBeenCalledWith('# v4 latest', '/a.md')
+  })
+
   it('stops the countdown when the document transitions from dirty back to clean before the interval fires', () => {
     const { rerender } = renderHook(
       ({ isDirty }) => useAutosave({ content: '# Doc', filePath: '/a.md', isDirty }),
