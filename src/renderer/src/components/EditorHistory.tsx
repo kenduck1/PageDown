@@ -149,7 +149,11 @@ function EditorHistory({ filePath, onRestore }: EditorHistoryProps): React.JSX.E
     // guarantee the freshly-written snapshot is in the list this refetch
     // returns. documentStore.save()'s own version-history snapshot write
     // (`void window.api.autosaveSnapshot(...)`) is deliberately
-    // fire-and-forget, fired AFTER save()'s own promise already resolves,
+    // fire-and-forget -- fired without `await`, after the real save has
+    // already succeeded and the store has already been updated, NOT after
+    // save()'s own returned promise resolves (it's the last statement
+    // inside that same async function, so save()'s promise resolves
+    // essentially right alongside this call firing, not afterward) --
     // specifically so a slow/failed snapshot write can never block or
     // delay a real Save (see documentStore.ts's own comment on that call)
     // -- that invariant is intentionally NOT weakened here just to make
