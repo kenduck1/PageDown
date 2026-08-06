@@ -135,25 +135,43 @@ function EditorToolbar({ editorRef }: EditorToolbarProps): ReactElement {
   // ever incremented.
   const [headingSelectResetKey, setHeadingSelectResetKey] = useState(0)
 
-  // Drives the scroll-right indicator on the toolbar's horizontally
+  // Drives the scroll-fade indicators on the toolbar's horizontally
   // scrollable region (see the JSX below) -- a plain native scrollbar was
   // both visually heavy for a 45px-tall toolbar and gave no clear signal
-  // that there was more content, let alone that it was clickable.
-  // `canScrollRight` is recomputed on every scroll AND on resize (a window
-  // resize can change whether the content overflows at all, e.g. widening
-  // past the point where everything fits), so the indicator only ever shows
-  // when there's genuinely more content to reach. No left-side counterpart:
-  // the sticky-positioned left group (below) already permanently occupies
-  // that visual space, so a left chevron would sit on top of real content
-  // rather than in genuinely empty space -- scrolling left to reveal the
-  // rest of the content from its start is still just as possible via wheel/
-  // trackpad/drag, it just isn't called out with its own button.
+  // that there was more content, let alone which direction.
+  //
+  // The right edge fades whenever there's more content to reach
+  // (`canScrollRight`). The left edge is trickier: the sticky-positioned
+  // left group (undo/redo + paragraph/font, below) permanently occupies
+  // that space and must stay fully opaque -- it never disappears, so it
+  // can't fade the way trailing content does. What DOES need a left-edge
+  // fade is the plain scrollable content once it's scrolled partway under
+  // that sticky group (`hasScrolledUnderSticky`, true once scrollLeft > 0):
+  // it should fade out right at the sticky group's trailing edge, mirroring
+  // the right-edge treatment instead of introducing a different technique
+  // (an earlier box-shadow version was tried and reverted -- see git
+  // history -- once it became clear a shadow reads as a visually distinct
+  // affordance from the mask fade already used on the right, not "the same
+  // fade," which is what was actually being asked for).
+  //
+  // Because the fade needs to start exactly where the sticky group's own
+  // rendered width ends -- not a fixed pixel offset, since the paragraph-
+  // style/font-family/font-size selects can render at different widths
+  // depending on the current selection -- `stickyWidth` tracks that
+  // element's real width via the same ResizeObserver used for scroll
+  // dimensions, and toolbarMaskImage (below) builds the gradient stops
+  // around it.
   const scrollRef = useRef<HTMLDivElement>(null)
+  const stickyRef = useRef<HTMLDivElement>(null)
   const [canScrollRight, setCanScrollRight] = useState(false)
+  const [hasScrolledUnderSticky, setHasScrolledUnderSticky] = useState(false)
+  const [stickyWidth, setStickyWidth] = useState(0)
+  const [containerWidth, setContainerWidth] = useState(0)
 
   useEffect(() => {
     const el = scrollRef.current
-    if (!el) return
+    const stickyEl = stickyRef.current
+    if (!el || !stickyEl) return
 
     const updateScrollState = (): void => {
       // A 1px tolerance -- some browsers report a fractional scrollLeft
@@ -161,18 +179,72 @@ function EditorToolbar({ editorRef }: EditorToolbarProps): ReactElement {
       // value at the true end, which would otherwise leave the indicator
       // visible forever even when fully scrolled.
       setCanScrollRight(el.scrollLeft < el.scrollWidth - el.clientWidth - 1)
+      setHasScrolledUnderSticky(el.scrollLeft > 0)
+      // Both measured via getBoundingClientRect so they land in the same
+      // coordinate space -- see toolbarMaskImage below for why mixing this
+      // with a percentage-based stop (e.g. `calc(100% - 36px)`) is exactly
+      // the bug that shipped and had to be reverted here.
+      setStickyWidth(stickyEl.getBoundingClientRect().width)
+      setContainerWidth(el.getBoundingClientRect().width)
     }
 
     updateScrollState()
     el.addEventListener('scroll', updateScrollState)
     const resizeObserver = new ResizeObserver(updateScrollState)
     resizeObserver.observe(el)
+    resizeObserver.observe(stickyEl)
 
     return () => {
       el.removeEventListener('scroll', updateScrollState)
       resizeObserver.disconnect()
     }
   }, [])
+
+  // The fade distance (in px) each edge ramps from fully transparent to
+  // fully opaque over. Shared by both edges so the two fades feel like the
+  // same effect rather than two coincidentally similar ones.
+  const TOOLBAR_FADE_PX = 36
+
+  // Builds the combined mask-image gradient for the scrollable region.
+  // Both edges are expressed as stops on ONE gradient (rather than two
+  // separate mask layers) because mask coordinates are relative to the
+  // element's own box, which is exactly what lets the sticky group's
+  // region (0 to stickyWidth) stay pinned at fully opaque regardless of
+  // scroll position -- the sticky element is visually anchored to that
+  // same box via `position: sticky`, so the two coordinate spaces always
+  // line up. Returns undefined (no mask at all) when neither edge has
+  // anything to hide, matching the toolbar's un-faded default state.
+  //
+  // EVERY stop is an absolute px value derived from containerWidth, never
+  // a `calc(100% - Npx)` percentage. A shipped version mixed the two: at
+  // any narrow width where the sticky group's own natural width exceeds
+  // the visible scrollable box (verified with a real build -- e.g. 385px
+  // of sticky content inside a 159px-wide visible window), the percentage
+  // stop resolved to a pixel position BEFORE the preceding absolute-px
+  // stop. A CSS gradient clamps an out-of-order stop forward to match the
+  // one before it, which collapsed the entire gradient to solid opaque --
+  // no fade anywhere, on either edge. Math.max below reproduces that same
+  // clamp deliberately, in JS, so it's a visible, intentional guard against
+  // the sticky group outgrowing the container rather than a silent CSS
+  // fallback: once stickyWidth alone consumes the whole visible box, both
+  // fade zones collapse to zero width and simply don't render, rather than
+  // producing an inverted/broken gradient.
+  const toolbarMaskImage = (() => {
+    if (!hasScrolledUnderSticky && !canScrollRight) return undefined
+    const leftFadeStart = stickyWidth
+    const leftFadeEnd = Math.max(leftFadeStart, stickyWidth + TOOLBAR_FADE_PX)
+    const rightFadeStart = Math.max(leftFadeEnd, containerWidth - TOOLBAR_FADE_PX)
+    const rightFadeEnd = Math.max(rightFadeStart, containerWidth)
+
+    const stops = ['black 0px', `black ${leftFadeStart}px`]
+    if (hasScrolledUnderSticky) {
+      stops.push(`transparent ${leftFadeStart}px`, `black ${leftFadeEnd}px`)
+    }
+    if (canScrollRight) {
+      stops.push(`black ${rightFadeStart}px`, `transparent ${rightFadeEnd}px`)
+    }
+    return `linear-gradient(to right, ${stops.join(', ')})`
+  })()
 
   const handleHeadingChange = (value: string): void => {
     // Fix-round finding: this dropdown has no live selection-state tracking
@@ -266,36 +338,40 @@ function EditorToolbar({ editorRef }: EditorToolbarProps): ReactElement {
           The native scrollbar is hidden (scrollbar-hide, base.css) in favor
           of a mask-image fade on the scrollable element itself: a visible
           scrollbar track was both heavy for a 45px toolbar and gave no
-          clear signal of which direction had more content, and the fade
-          only applies when there genuinely is more (canScrollRight, kept
-          in sync with real scroll position above).
+          clear signal of which direction had more content. Both edges use
+          the same fade technique -- see toolbarMaskImage above for how the
+          two edges combine into one gradient, and why the left one only
+          fades the plain content, never the sticky group itself.
 
-          Two earlier approaches were tried and rejected, in order: (1) a
+          Approaches tried and rejected before landing here, in order: (1) a
           separate overlay div with a background-color gradient FROM the
           toolbar's own bg-page (white) TO transparent -- had essentially
           zero visible contrast against that same white toolbar background
           (confirmed by screenshotting it, not assumed); (2) an inset
-          box-shadow -- fixed the contrast problem, but at any strength
-          that was actually visible it read as a distinct rectangular
-          shape/seam rather than a soft fade (also confirmed visually, not
-          assumed). mask-image is the technically correct tool for this:
-          rather than drawing a shape ON TOP of the content, it gradually
-          reduces the CONTENT's own opacity as it nears the edge -- there is
-          no shape to see, only the real icons/text genuinely fading out,
-          which is what actually reads as a fade rather than a box. Needs
-          both the standard and -webkit- prefixed properties (Chromium,
-          which this app always runs under via Electron, still requires the
-          prefixed form for `mask-image`). */}
+          box-shadow on the trailing edge -- fixed the contrast problem, but
+          at any strength that was actually visible it read as a distinct
+          rectangular shape/seam rather than a soft fade (also confirmed
+          visually); (3) a drop-shadow cast by the sticky left group instead
+          of a matching fade -- worked, but reads as a visually different
+          affordance from the right edge's fade, when the actual ask was
+          for the SAME treatment on both sides. mask-image is the
+          technically correct tool: rather than drawing a shape ON TOP of
+          the content, it gradually reduces the CONTENT's own opacity as it
+          nears an edge -- there is no shape to see, only the real
+          icons/text genuinely fading out. Needs both the standard and
+          -webkit- prefixed properties (Chromium, which this app always
+          runs under via Electron, still requires the prefixed form for
+          `mask-image`). TOOLBAR_FADE_PX (36, shortened from an initial 48
+          per feedback) compresses the same transparent-to-opaque range
+          into less horizontal space, so it reads as a bit more present
+          without turning into a hard edge. */}
       <div className="relative min-w-0 flex-1">
         <div
           ref={scrollRef}
           className="scrollbar-hide flex items-center gap-x-2.5 overflow-x-auto"
           style={
-            canScrollRight
-              ? {
-                  WebkitMaskImage: 'linear-gradient(to left, transparent, black 48px)',
-                  maskImage: 'linear-gradient(to left, transparent, black 48px)'
-                }
+            toolbarMaskImage
+              ? { WebkitMaskImage: toolbarMaskImage, maskImage: toolbarMaskImage }
               : undefined
           }
         >
@@ -305,8 +381,14 @@ function EditorToolbar({ editorRef }: EditorToolbarProps): ReactElement {
               underlying content is genuinely occluded rather than showing
               through. flex-none so this group itself is never the thing
               that shrinks -- if anything has to give at extreme widths, it's
-              the plain formatting controls after it, not this. */}
-          <div className="sticky left-0 z-10 flex flex-none items-center gap-x-2.5 bg-page">
+              the plain formatting controls after it, not this. Always fully
+              opaque -- toolbarMaskImage's gradient stays black (unmasked)
+              across this group's own width (tracked via stickyRef), so it
+              never fades regardless of scroll position. */}
+          <div
+            ref={stickyRef}
+            className="sticky left-0 z-10 flex flex-none items-center gap-x-2.5 bg-page"
+          >
             {/* Undo / redo */}
             <div className="flex items-center gap-0.5">
               <ToolbarIconButton label="Undo" onClick={() => editorRef.current?.undo()}>
