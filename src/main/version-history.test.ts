@@ -465,6 +465,141 @@ describe('clearPendingAutosaveForFile', () => {
   })
 })
 
+// Retention is a Global Constraint with exact stated values (30 days at full
+// granularity, then one snapshot per calendar day), but until this suite
+// existed it was DEAD CODE UNDER TEST: writeSnapshot always stamps
+// `new Date()`, so every existing test's index contained only entries written
+// seconds ago, `computeSnapshotsToPrune(newIndex, new Date())` returned []
+// every single time, and the entire prune-application block -- the index
+// filter, the `rm` loop, the deliberate write-index-before-delete crash
+// ordering, and the isValidSnapshotId defensive filter -- never executed.
+// Mutation-verified by the final whole-branch review: replacing the prune set
+// with an empty set left 25/25 tests green.
+//
+// This suite hand-seeds a real index.json with real backing .md files at real
+// past timestamps (the only way to exercise the prune path, since writeSnapshot
+// won't stamp a past date for us), then calls the REAL writeSnapshot and checks
+// both halves of what pruning means: the index entry is gone AND the .md file
+// was actually deleted from disk.
+describe('writeSnapshot retention pruning (integration, real files on disk)', () => {
+  let userDataDir: string
+  const docPath = '/prune/doc.md'
+
+  beforeEach(async () => {
+    userDataDir = await mkdtemp(join(tmpdir(), 'pagedown-vh-prune-'))
+  })
+
+  afterEach(async () => {
+    await rm(userDataDir, { recursive: true, force: true })
+  })
+
+  // Built from LOCAL date components (setDate then setHours), not a UTC
+  // literal, so "same calendar day" / "different calendar day" hold by
+  // construction in any timezone -- the same timezone-independence rule the
+  // computeSnapshotsToPrune unit tests below already established.
+  function daysAgoAt(days: number, hour: number): Date {
+    const date = new Date()
+    date.setDate(date.getDate() - days)
+    date.setHours(hour, 0, 0, 0)
+    return date
+  }
+
+  function seededId(timestamp: Date): string {
+    // Conforms to SNAPSHOT_ID_PATTERN, so snapshotPath accepts it and the
+    // prune step's own isValidSnapshotId filter passes it through to `rm`.
+    return `${timestamp.toISOString()}-abcd`
+  }
+
+  async function seedSnapshot(timestamp: Date, content: string): Promise<SnapshotMeta> {
+    const id = seededId(timestamp)
+    const dir = join(userDataDir, 'version-history', hashDocumentPath(docPath), 'snapshots')
+    await mkdir(dir, { recursive: true })
+    await writeFile(join(dir, `${id}.md`), content, 'utf8')
+    return { id, timestamp: timestamp.toISOString(), sizeBytes: Buffer.byteLength(content) }
+  }
+
+  async function snapshotFileExists(id: string): Promise<boolean> {
+    try {
+      await stat(
+        join(userDataDir, 'version-history', hashDocumentPath(docPath), 'snapshots', `${id}.md`)
+      )
+      return true
+    } catch {
+      return false
+    }
+  }
+
+  it('prunes older-than-30-days snapshots down to one per calendar day, deleting their .md files, and keeps everything else', async () => {
+    // Two snapshots on the SAME calendar day, 60 days ago: only the later
+    // one survives.
+    const oldDayAEarly = await seedSnapshot(daysAgoAt(60, 1), 'day A, 01:00')
+    const oldDayALate = await seedSnapshot(daysAgoAt(60, 20), 'day A, 20:00')
+    // A second, different day 45 days ago with a single snapshot: survives
+    // untouched (it is already that day's only entry).
+    const oldDayBOnly = await seedSnapshot(daysAgoAt(45, 10), 'day B, 10:00')
+    // Inside the 30-day full-granularity window: two on the same day, and
+    // BOTH must survive -- this is what proves the day-thinning applies only
+    // to the older-than-30-days bucket, not everywhere.
+    const recentEarly = await seedSnapshot(daysAgoAt(5, 9), 'recent, 09:00')
+    const recentLate = await seedSnapshot(daysAgoAt(5, 17), 'recent, 17:00')
+
+    const dir = join(userDataDir, 'version-history', hashDocumentPath(docPath))
+    await mkdir(dir, { recursive: true })
+    await writeFile(
+      join(dir, 'index.json'),
+      // Newest-last, matching real storage order -- computeSnapshotsToPrune
+      // reads `.at(-1)` as "the most recent snapshot overall".
+      JSON.stringify([oldDayAEarly, oldDayALate, oldDayBOnly, recentEarly, recentLate]),
+      'utf8'
+    )
+
+    const newId = await writeSnapshot(userDataDir, docPath, '# brand new content')
+
+    const remaining = await listSnapshots(userDataDir, docPath)
+    expect(remaining.map((entry) => entry.id)).toEqual([
+      oldDayALate.id,
+      oldDayBOnly.id,
+      recentEarly.id,
+      recentLate.id,
+      newId
+    ])
+
+    // The index is only half of pruning -- the .md file must actually be
+    // gone from disk, which is the half `rm`'s loop is responsible for and
+    // the half an index-only assertion would never notice.
+    expect(await snapshotFileExists(oldDayAEarly.id)).toBe(false)
+    expect(await snapshotFileExists(oldDayALate.id)).toBe(true)
+    expect(await snapshotFileExists(oldDayBOnly.id)).toBe(true)
+    expect(await snapshotFileExists(recentEarly.id)).toBe(true)
+    expect(await snapshotFileExists(recentLate.id)).toBe(true)
+    expect(await snapshotFileExists(newId)).toBe(true)
+
+    // The surviving old entries are still genuinely readable, not just
+    // listed -- a prune that deleted the wrong file would still leave a
+    // correct-looking index.
+    expect(await readSnapshotContent(userDataDir, docPath, oldDayALate.id)).toBe('day A, 20:00')
+    expect(await readSnapshotContent(userDataDir, docPath, oldDayAEarly.id)).toBeNull()
+  })
+
+  it('never prunes the single most recent snapshot, even when every entry is far older than 30 days', async () => {
+    const ancientEarly = await seedSnapshot(daysAgoAt(400, 2), 'ancient, 02:00')
+    const ancientLate = await seedSnapshot(daysAgoAt(400, 22), 'ancient, 22:00')
+    const dir = join(userDataDir, 'version-history', hashDocumentPath(docPath))
+    await mkdir(dir, { recursive: true })
+    await writeFile(join(dir, 'index.json'), JSON.stringify([ancientEarly, ancientLate]), 'utf8')
+
+    // The new snapshot becomes the most-recent entry, so ancientLate loses
+    // that protection and is judged purely on the one-per-calendar-day rule
+    // (which it wins, being that day's latest); ancientEarly loses.
+    const newId = await writeSnapshot(userDataDir, docPath, '# newest')
+
+    const remaining = await listSnapshots(userDataDir, docPath)
+    expect(remaining.map((entry) => entry.id)).toEqual([ancientLate.id, newId])
+    expect(await snapshotFileExists(ancientEarly.id)).toBe(false)
+    expect(await snapshotFileExists(newId)).toBe(true)
+  })
+})
+
 describe('computeSnapshotsToPrune', () => {
   function meta(id: string, isoTimestamp: string): SnapshotMeta {
     return { id, timestamp: isoTimestamp, sizeBytes: 10 }
