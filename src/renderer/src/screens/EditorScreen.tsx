@@ -9,6 +9,7 @@ import EditorStatusBar from '../components/EditorStatusBar'
 import PageSetupModal from '../components/PageSetupModal'
 import { extractOutline } from '../lib/extractOutline'
 import { usePageCount } from '../hooks/usePageCount'
+import { useAutosave } from '../hooks/useAutosave'
 import { extractRawFrontmatter, replaceRawFrontmatter } from '../lib/frontmatterSplice'
 import {
   DEFAULT_PAGE_CONFIG,
@@ -36,6 +37,7 @@ function EditorScreen(): React.JSX.Element {
   const [zoom, setZoom] = useState(1)
   const [activeSourceOffset, setActiveSourceOffset] = useState<number | undefined>(undefined)
   const { pageCount } = usePageCount(content, filePath)
+  useAutosave({ content, filePath, isDirty })
 
   const handleSave = async (): Promise<void> => {
     // @milkdown/plugin-listener's onChange fires through an internal 200ms
@@ -66,6 +68,20 @@ function EditorScreen(): React.JSX.Element {
       // with no error at all and leaves isDirty untouched. Either way,
       // don't navigate away from a document that wasn't actually written.
       if (useDocumentStore.getState().isDirty) return
+    }
+    if (choice === 'discard' && filePath) {
+      // "Don't Save" means exactly that -- a pending autosave snapshot must
+      // never silently reappear on next open. `new Date().toISOString()` is
+      // "now" as a reasonable stand-in for "the document's own last-saved
+      // timestamp"; clearPendingAutosave only deletes snapshots STRICTLY
+      // NEWER than this, so it's safe even if it's a few seconds later than
+      // the document's actual on-disk mtime -- the goal is "delete the
+      // pending unsaved autosave," not precise timestamp matching.
+      // Fire-and-forget: clearPendingAutosave's own IPC handler already
+      // validates the path and swallows failures (never rejects), and this
+      // runs after the discard decision is already final, so it can't
+      // affect navigation either way.
+      void window.api.clearPendingAutosave(filePath, new Date().toISOString())
     }
     goHome()
   }
