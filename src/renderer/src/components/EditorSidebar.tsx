@@ -1,5 +1,6 @@
 import { useAppStore } from '../store/appStore'
 import EditorOutline from './EditorOutline'
+import EditorHistory from './EditorHistory'
 
 export interface EditorSidebarProps {
   // Forwarded straight through to EditorOutline -- this component has no
@@ -15,6 +16,15 @@ export interface EditorSidebarProps {
   // this component yet, so omitting it renders an honest "not available"
   // note rather than a fabricated number.
   pageCount?: number
+  // Forwarded straight through to EditorHistory -- null for a document that
+  // has never been saved (no history is possible yet), matching the
+  // documentStore mirror field's own type.
+  filePath: string | null
+  // `void | Promise<void>`: EditorScreen's handleRestoreVersion returns the
+  // underlying flush+Save+replace promise rather than void-discarding it,
+  // so EditorHistory can await this before refetching its snapshot list --
+  // see EditorHistory.tsx's own comment on why that ordering matters.
+  onRestoreVersion: (content: string) => void | Promise<void>
 }
 
 // Segmented-control track/pill styling matches the real design-handoff
@@ -77,7 +87,9 @@ function EditorSidebar({
   content,
   onSelectHeading,
   activeSourceOffset,
-  pageCount
+  pageCount,
+  filePath,
+  onRestoreVersion
 }: EditorSidebarProps): React.JSX.Element {
   const sidebarTab = useAppStore((state) => state.sidebarTab)
   const setSidebarTab = useAppStore((state) => state.setSidebarTab)
@@ -95,6 +107,11 @@ function EditorSidebar({
           isActive={sidebarTab === 'outline'}
           onClick={() => setSidebarTab('outline')}
         />
+        <TabButton
+          label="History"
+          isActive={sidebarTab === 'history'}
+          onClick={() => setSidebarTab('history')}
+        />
       </div>
       <div className="flex flex-1 flex-col overflow-hidden">
         {sidebarTab === 'outline' ? (
@@ -103,6 +120,8 @@ function EditorSidebar({
             onSelectHeading={onSelectHeading}
             activeSourceOffset={activeSourceOffset}
           />
+        ) : sidebarTab === 'history' ? (
+          <EditorHistory filePath={filePath} onRestore={onRestoreVersion} />
         ) : (
           <PagesPlaceholder pageCount={pageCount} />
         )}

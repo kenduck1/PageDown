@@ -21,8 +21,15 @@ import {
   getRecentFiles,
   addRecentFile,
   isKnownPath,
-  confirmDiscardChanges
+  confirmDiscardChanges,
+  canonicalizeDocumentPath
 } from './file-io'
+import {
+  writeSnapshot,
+  listSnapshots,
+  readSnapshotContent,
+  clearPendingAutosaveForFile
+} from './version-history'
 
 // Must run before app.whenReady() is awaited anywhere — Electron requires
 // protocol.registerSchemesAsPrivileged() to be called before the `ready`
@@ -172,7 +179,7 @@ app.whenReady().then(() => {
   // read/write to the renderer as a failure — leaving the Document Store with a
   // stale filePath and isDirty still set after a successful save.
   ipcMain.handle('file:open', async () => {
-    const result = await openFileDialog()
+    const result = await openFileDialog(app.getPath('userData'))
     if (result) {
       try {
         await addRecentFile(app.getPath('userData'), result.filePath)
@@ -188,7 +195,7 @@ app.whenReady().then(() => {
     if (!(await isKnownPath(userDataDir, filePath))) {
       throw new Error('Requested path is not a known recent file')
     }
-    const result = await readFileByPath(filePath)
+    const result = await readFileByPath(filePath, userDataDir)
     try {
       await addRecentFile(userDataDir, result.filePath)
     } catch (err) {
@@ -219,7 +226,7 @@ app.whenReady().then(() => {
     if (!(await isKnownPath(userDataDir, filePath))) {
       throw new Error('Requested path is not a known recent file')
     }
-    const { content } = await readFileByPath(filePath)
+    const { content } = await readFileByPath(filePath, userDataDir)
     // `filePath` is forwarded ONLY because the isKnownPath check above has
     // already vetted it -- getThumbnail uses it purely to resolve the
     // document's local asset references against its own directory (see
@@ -273,6 +280,108 @@ app.whenReady().then(() => {
       return getPageCount(content, documentPath)
     }
   )
+
+  // Version-history IPC surface (Task 2 of the autosave/crash-recovery/
+  // version-history plan). All four validate `filePath` via isKnownPath --
+  // same File I/O security invariant as file:openPath/file:save/
+  // file:getPageCount above -- and all four drop-not-throw on an unknown
+  // path, matching file:getPageCount's own established rationale: none of
+  // these operations strictly requires success for the app to keep working
+  // correctly, so a dropped autosave tick or an empty history list just
+  // means slightly less protection, not a broken app.
+  //
+  // Each body is ALSO wrapped in its own try/catch, and -- per fix round 1
+  // review -- the isKnownPath check lives INSIDE that try, not before it:
+  // isKnownPath is unreachable-by-throw today (readRecentFiles swallows
+  // every read error internally), but that's an implementation detail of
+  // the current allowlist storage, not a contract this handler should rely
+  // on. Keeping the check inside the same try the rest of the body is in
+  // means a future isKnownPath that legitimately can throw (e.g. one that
+  // adds a stat/realpath call) stays covered by the exact same
+  // drop-not-throw guarantee as everything after it, rather than silently
+  // becoming the one uncovered statement in a handler whose surrounding
+  // comment claims full coverage.
+  //
+  // Per this plan's global "snapshot writes are best-effort and must never
+  // block, delay, or fail a real Save" invariant, a rejected
+  // writeSnapshot/clearPendingAutosave call must never surface as a failed
+  // IPC promise -- the renderer calls these fire-and-forget (`void ...`),
+  // so an unhandled rejection here would either produce a spurious console
+  // error unrelated to anything the user did, or (worse) get attributed to
+  // an otherwise-successful Save. Logged and swallowed instead, matching
+  // addRecentFile's own failure handling above.
+  //
+  // `filePath` is canonicalized via canonicalizeDocumentPath (fs.realpath)
+  // before being passed into version-history.ts -- see that function's own
+  // comment in file-io.ts for why this must happen consistently across
+  // every entry point that touches version-history storage.
+  ipcMain.handle('file:autosaveSnapshot', async (_event, content: string, filePath: string) => {
+    const userDataDir = app.getPath('userData')
+    try {
+      if (!(await isKnownPath(userDataDir, filePath))) return
+      const canonicalPath = await canonicalizeDocumentPath(filePath)
+      await writeSnapshot(userDataDir, canonicalPath, content)
+    } catch (err) {
+      console.error('Failed to write autosave snapshot', err)
+    }
+  })
+
+  ipcMain.handle('file:getVersionHistory', async (_event, filePath: string) => {
+    const userDataDir = app.getPath('userData')
+    try {
+      if (!(await isKnownPath(userDataDir, filePath))) return []
+      const canonicalPath = await canonicalizeDocumentPath(filePath)
+      return await listSnapshots(userDataDir, canonicalPath)
+    } catch (err) {
+      console.error('Failed to list version history', err)
+      return []
+    }
+  })
+
+  ipcMain.handle(
+    'file:restoreVersionContent',
+    async (_event, filePath: string, snapshotId: string) => {
+      const userDataDir = app.getPath('userData')
+      try {
+        if (!(await isKnownPath(userDataDir, filePath))) return null
+        const canonicalPath = await canonicalizeDocumentPath(filePath)
+        return await readSnapshotContent(userDataDir, canonicalPath, snapshotId)
+      } catch (err) {
+        console.error('Failed to restore version content', err)
+        return null
+      }
+    }
+  )
+
+  // No renderer-supplied cutoff -- CRITICAL FIX (found in review): this
+  // handler used to accept `sinceIso` from the renderer, with
+  // EditorScreen's "Don't Save" path passing `new Date().toISOString()`
+  // (the moment of the click). version-history.ts's clearPendingAutosave
+  // deletes only entries whose `timestamp > sinceIso` -- but every
+  // snapshot that already exists was written in the PAST relative to
+  // "now," so that comparison was false for all of them and NOTHING was
+  // ever deleted. The pending snapshot then survived, was more than
+  // MTIME_TOLERANCE_MS newer than the file's untouched on-disk mtime, and
+  // got silently "recovered" on the very next open -- a direct violation
+  // of this feature's own core promise (a deliberately discarded edit
+  // must never reappear). The design spec's own wording is "deletes every
+  // snapshot newer than ... the file's own on-disk mtime" -- so the
+  // cutoff is computed from the validated path's real `stat()` result, not
+  // accepted as a parameter. Delegated to version-history.ts's
+  // `clearPendingAutosaveForFile` (not done inline here) so this
+  // previously-buggy logic is directly unit-testable under plain Vitest --
+  // this handler itself stays a thin, Electron-touching wrapper, same
+  // pattern as isKnownPath/canonicalizeDocumentPath above.
+  ipcMain.handle('file:clearPendingAutosave', async (_event, filePath: string) => {
+    const userDataDir = app.getPath('userData')
+    try {
+      if (!(await isKnownPath(userDataDir, filePath))) return
+      const canonicalPath = await canonicalizeDocumentPath(filePath)
+      await clearPendingAutosaveForFile(userDataDir, canonicalPath, filePath)
+    } catch (err) {
+      console.error('Failed to clear pending autosave snapshots', err)
+    }
+  })
 
   ipcMain.handle('dialog:confirmDiscard', () => confirmDiscardChanges(mainWindow))
 

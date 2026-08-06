@@ -12,7 +12,11 @@ beforeEach(() => {
     getTemplateThumbnail: vi.fn(),
     getPageCount: vi.fn(),
     confirmDiscardChanges: vi.fn(),
-    exportPdf: vi.fn()
+    exportPdf: vi.fn(),
+    autosaveSnapshot: vi.fn(),
+    getVersionHistory: vi.fn(),
+    restoreVersionContent: vi.fn(),
+    clearPendingAutosave: vi.fn()
   }
 })
 
@@ -50,7 +54,11 @@ describe('useDocumentStore', () => {
   })
 
   it('openFile loads the result and returns true on success', async () => {
-    vi.mocked(window.api.openFile).mockResolvedValue({ filePath: '/a.md', content: '# A' })
+    vi.mocked(window.api.openFile).mockResolvedValue({
+      filePath: '/a.md',
+      content: '# A',
+      recoveredFromAutosave: false
+    })
     const loaded = await useDocumentStore.getState().openFile()
     expect(loaded).toBe(true)
     expect(useDocumentStore.getState().filePath).toBe('/a.md')
@@ -71,8 +79,35 @@ describe('useDocumentStore', () => {
     expect(useDocumentStore.getState().error).toBe('Permission denied')
   })
 
+  it('openFile lands the document dirty when the result is recoveredFromAutosave', async () => {
+    vi.mocked(window.api.openFile).mockResolvedValue({
+      filePath: '/a.md',
+      content: '# Recovered content',
+      recoveredFromAutosave: true
+    })
+    await useDocumentStore.getState().openFile()
+    expect(useDocumentStore.getState()).toMatchObject({
+      content: '# Recovered content',
+      isDirty: true
+    })
+  })
+
+  it('openFile leaves the document clean when the result is NOT recoveredFromAutosave', async () => {
+    vi.mocked(window.api.openFile).mockResolvedValue({
+      filePath: '/a.md',
+      content: '# Normal content',
+      recoveredFromAutosave: false
+    })
+    await useDocumentStore.getState().openFile()
+    expect(useDocumentStore.getState().isDirty).toBe(false)
+  })
+
   it('openPath loads the result and returns true on success', async () => {
-    vi.mocked(window.api.openPath).mockResolvedValue({ filePath: '/b.md', content: '# B' })
+    vi.mocked(window.api.openPath).mockResolvedValue({
+      filePath: '/b.md',
+      content: '# B',
+      recoveredFromAutosave: false
+    })
     const loaded = await useDocumentStore.getState().openPath('/b.md')
     expect(loaded).toBe(true)
     expect(useDocumentStore.getState().content).toBe('# B')
@@ -90,6 +125,27 @@ describe('useDocumentStore', () => {
     vi.mocked(window.api.saveFile).mockRejectedValue(new Error('Disk full'))
     await useDocumentStore.getState().save()
     expect(useDocumentStore.getState()).toMatchObject({ filePath: '/a.md', error: 'Disk full' })
+  })
+
+  it('save writes a version-history snapshot of the saved content after a successful save', async () => {
+    useDocumentStore.setState({ content: '# Saved content', filePath: '/a.md', isDirty: true })
+    vi.mocked(window.api.saveFile).mockResolvedValue({ filePath: '/a.md' })
+    await useDocumentStore.getState().save()
+    expect(window.api.autosaveSnapshot).toHaveBeenCalledWith('# Saved content', '/a.md')
+  })
+
+  it('save does NOT call autosaveSnapshot when the save itself fails', async () => {
+    useDocumentStore.setState({ content: '# X', filePath: '/a.md', isDirty: true })
+    vi.mocked(window.api.saveFile).mockRejectedValue(new Error('disk full'))
+    await useDocumentStore.getState().save()
+    expect(window.api.autosaveSnapshot).not.toHaveBeenCalled()
+  })
+
+  it('save does NOT call autosaveSnapshot when the user cancels Save-As (result is null)', async () => {
+    useDocumentStore.setState({ content: '# X', filePath: null, isDirty: true })
+    vi.mocked(window.api.saveFile).mockResolvedValue(null)
+    await useDocumentStore.getState().save()
+    expect(window.api.autosaveSnapshot).not.toHaveBeenCalled()
   })
 
   it('clearError resets error to null', () => {
@@ -313,6 +369,45 @@ describe('useDocumentStore tabs', () => {
 
     const state = useDocumentStore.getState()
     expect(state).toMatchObject({ filePath: '/saved.md', isDirty: false })
+  })
+
+  it('save targets the tab that was active when save() was CALLED, not whichever tab is active when the write resolves', async () => {
+    // window.api.saveFile is a real async IPC round trip -- the user can
+    // switch tabs (via the always-visible EditorTabBar) while it's still
+    // in flight. Captures activeTabId synchronously via a deferred
+    // saveFile promise, switches tabs mid-flight, then resolves it -- the
+    // exact race replaceContentForTab was introduced to close for restore,
+    // reopened here through save()'s own separate `set()` callback (which
+    // used to read state.activeTabId at RESOLVE time instead).
+    useDocumentStore.setState({ content: '# A dirty', filePath: '/a.md', isDirty: true })
+    const tabA = useDocumentStore.getState().activeTabId
+    let resolveSave: (value: { filePath: string } | null) => void = () => {}
+    vi.mocked(window.api.saveFile).mockReturnValue(
+      new Promise((resolve) => {
+        resolveSave = resolve
+      })
+    )
+
+    const savePromise = useDocumentStore.getState().save()
+    useDocumentStore.getState().openTab('/b.md', '# B')
+    const tabB = useDocumentStore.getState().activeTabId
+    expect(tabB).not.toBe(tabA)
+
+    resolveSave({ filePath: '/saved-a.md' })
+    await savePromise
+
+    const state = useDocumentStore.getState()
+    // Tab A -- the one actually saved -- picked up the resolved filePath
+    // and cleared isDirty, even though it's no longer the active tab.
+    const tabAEntry = state.tabs.find((tab) => tab.id === tabA)
+    expect(tabAEntry).toMatchObject({ filePath: '/saved-a.md', isDirty: false })
+    // Tab B, active when the write resolved, must be completely untouched
+    // by a save that was never about it.
+    const tabBEntry = state.tabs.find((tab) => tab.id === tabB)
+    expect(tabBEntry).toMatchObject({ filePath: '/b.md', content: '# B', isDirty: false })
+    // Tab B is still the active tab, so the top-level mirror must still
+    // reflect it, not tab A's just-saved state.
+    expect(state).toMatchObject({ activeTabId: tabB, filePath: '/b.md' })
   })
 
   it('the single-document API contract (content/filePath/isDirty/revision/error) still holds with multiple tabs open', async () => {

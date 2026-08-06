@@ -13,7 +13,11 @@ beforeEach(() => {
     getTemplateThumbnail: vi.fn(),
     getPageCount: vi.fn().mockResolvedValue({ pageCount: 3 }),
     confirmDiscardChanges: vi.fn(),
-    exportPdf: vi.fn()
+    exportPdf: vi.fn(),
+    autosaveSnapshot: vi.fn(),
+    getVersionHistory: vi.fn(),
+    restoreVersionContent: vi.fn(),
+    clearPendingAutosave: vi.fn()
   }
 })
 

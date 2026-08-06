@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import EditorScreen from './EditorScreen'
 import { useAppStore, initialAppState } from '../store/appStore'
@@ -17,7 +17,11 @@ beforeEach(() => {
     getTemplateThumbnail: vi.fn(),
     getPageCount: vi.fn().mockResolvedValue({ pageCount: 1 }),
     confirmDiscardChanges: vi.fn(),
-    exportPdf: vi.fn()
+    exportPdf: vi.fn(),
+    autosaveSnapshot: vi.fn(),
+    getVersionHistory: vi.fn(),
+    restoreVersionContent: vi.fn(),
+    clearPendingAutosave: vi.fn()
   }
 })
 
@@ -172,6 +176,60 @@ describe('EditorScreen', () => {
     expect(savedContent).toContain('Q3')
   })
 
+  // The autosave TIMER's wiring into the app had no coverage at all before
+  // the final whole-branch review: mutation-verified that deleting the
+  // `useAutosave({ content, filePath, isDirty })` call and its import from
+  // EditorScreen.tsx left all 469 tests passing with clean typecheck and
+  // lint -- the one line that makes autosave exist could be removed with a
+  // fully green suite. useAutosave.test.ts covers the hook in isolation; these
+  // two cover that the real screen actually calls it, with the real store's
+  // real fields. Also closes the design doc's own Testing-section ask for
+  // proof that "autosave actually fires on the configured interval while
+  // dirty and stops firing once clean," which the plan silently dropped.
+  //
+  // Fake timers are scoped to each test (not the file-level beforeEach) so
+  // every other test here keeps its real-timer behavior -- several of them
+  // depend on Milkdown's real 200ms debounce and on userEvent's own timing.
+  it('fires an autosave snapshot after 45s while the document is dirty (real useAutosave wiring)', async () => {
+    vi.useFakeTimers()
+    try {
+      useDocumentStore.setState({ filePath: '/tmp/report.md', content: '# Report', isDirty: true })
+      render(<EditorScreen />)
+
+      // Nothing yet -- proves the assertion below is about the interval
+      // firing, not about a call made eagerly at mount.
+      expect(window.api.autosaveSnapshot).not.toHaveBeenCalled()
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(44_000)
+      })
+      expect(window.api.autosaveSnapshot).not.toHaveBeenCalled()
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1_000)
+      })
+      expect(window.api.autosaveSnapshot).toHaveBeenCalledWith('# Report', '/tmp/report.md')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('does NOT fire an autosave snapshot while the document is clean', async () => {
+    vi.useFakeTimers()
+    try {
+      useDocumentStore.setState({ filePath: '/tmp/report.md', content: '# Report', isDirty: false })
+      render(<EditorScreen />)
+
+      // Two full intervals' worth -- a free-running or isDirty-blind timer
+      // would have fired twice by now.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(90_000)
+      })
+      expect(window.api.autosaveSnapshot).not.toHaveBeenCalled()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('clears the error when "Dismiss" is clicked', async () => {
     useDocumentStore.setState({ error: 'File not found' })
     const user = userEvent.setup()
@@ -224,6 +282,147 @@ describe('EditorScreen', () => {
     await waitFor(() => expect(useAppStore.getState().screen).toBe('home'))
   })
 
+  it('clears pending autosave for the document when the user chooses "Don\'t Save", passing ONLY the file path', async () => {
+    // "Don't Save" means exactly that -- a pending autosave snapshot must
+    // never silently reappear on next open. Regression test for a real,
+    // shipped Critical bug (caught in review): an earlier version called
+    // this with a SECOND argument, `new Date().toISOString()`, as a
+    // renderer-supplied cutoff -- but every snapshot that already exists
+    // was written in the past relative to "now," so that cutoff matched
+    // nothing and clearPendingAutosave silently deleted zero snapshots
+    // every single time it ran. The fix removes the second argument
+    // entirely: the main-process handler now computes the correct cutoff
+    // itself from the validated path's real on-disk mtime (see
+    // src/main/index.ts's own file:clearPendingAutosave handler and its
+    // main-process-level test in src/main/version-history.test.ts for the
+    // end-to-end semantics this unit test can't reach). This test's job is
+    // narrower but still load-bearing: assert the renderer call site never
+    // regresses back to passing a second argument the main process would
+    // silently ignore (window.api's real signature no longer accepts one).
+    useAppStore.setState({ screen: 'editor' })
+    useDocumentStore.setState({ filePath: '/tmp/report.md', content: '# Report', isDirty: true })
+    vi.mocked(window.api.confirmDiscardChanges).mockResolvedValue('discard')
+    const user = userEvent.setup()
+    render(<EditorScreen />)
+
+    await user.click(screen.getByRole('button', { name: '← Home' }))
+
+    await waitFor(() => {
+      expect(window.api.clearPendingAutosave).toHaveBeenCalledWith('/tmp/report.md')
+    })
+    expect(window.api.clearPendingAutosave).toHaveBeenCalledTimes(1)
+    expect(vi.mocked(window.api.clearPendingAutosave).mock.calls[0]).toHaveLength(1)
+  })
+
+  it('closes the discarded tab on "Don\'t Save", so its content cannot resurrect as a later autosave', async () => {
+    // Regression test for the final whole-branch review's Important 3.
+    // handleGoHome's discard branch cleared the on-disk snapshots but left
+    // the tab itself in documentStore -- goHome() only sets screen: 'home'.
+    // The discarded tab survived with isDirty: true and the discarded
+    // content still in it, so returning to the editor later and clicking
+    // that tab restored isDirty: true, useAutosave saw a clean->dirty
+    // transition, and 45s later wrote the DISCARDED content back out as a
+    // snapshot -- which the next open silently "recovers." Exactly the
+    // reappearance this feature exists to prevent.
+    //
+    // Two tabs, not one, so the assertion is about the discarded tab being
+    // GONE rather than about closeTab's replace-the-last-tab behavior (that
+    // case gets its own test below).
+    const discarded = {
+      id: 'tab-discarded',
+      filePath: '/tmp/report.md',
+      content: '# Discarded edit',
+      isDirty: true
+    }
+    const other = {
+      id: 'tab-other',
+      filePath: '/tmp/other.md',
+      content: '# Other document',
+      isDirty: false
+    }
+    useAppStore.setState({ screen: 'editor' })
+    useDocumentStore.setState({
+      tabs: [discarded, other],
+      activeTabId: discarded.id,
+      filePath: discarded.filePath,
+      content: discarded.content,
+      isDirty: true
+    })
+    vi.mocked(window.api.confirmDiscardChanges).mockResolvedValue('discard')
+    const user = userEvent.setup()
+    render(<EditorScreen />)
+
+    await user.click(screen.getByRole('button', { name: '← Home' }))
+
+    await waitFor(() => expect(useAppStore.getState().screen).toBe('home'))
+    // The snapshot clear must still have happened -- closing the tab is an
+    // ADDITION to that half of "Don't Save", not a replacement for it.
+    expect(window.api.clearPendingAutosave).toHaveBeenCalledWith('/tmp/report.md')
+
+    // Let any late unmount flush() from the outgoing MilkdownEditor land
+    // before asserting -- that path is precisely how the discarded content
+    // used to get re-pushed into the store on the way out.
+    await new Promise((resolve) => setTimeout(resolve, 250))
+
+    const state = useDocumentStore.getState()
+    expect(state.tabs.find((tab) => tab.id === discarded.id)).toBeUndefined()
+    // Not just the id: the discarded CONTENT must be unreachable from any
+    // tab, which is what actually makes a later autosave impossible.
+    expect(state.tabs.some((tab) => tab.content.includes('Discarded edit'))).toBe(false)
+    expect(state.content).not.toContain('Discarded edit')
+    // The untouched sibling tab survives and becomes the active one.
+    expect(state.tabs.map((tab) => tab.id)).toEqual([other.id])
+    expect(state.activeTabId).toBe(other.id)
+  })
+
+  it('replaces the last tab with a fresh blank one when the discarded tab is the only tab', async () => {
+    // closeTab never leaves zero tabs (see documentStore.closeTab) -- this
+    // locks in that the discard path inherits that behavior rather than
+    // leaving the app with no editing surface.
+    useAppStore.setState({ screen: 'editor' })
+    useDocumentStore.setState((state) => ({
+      filePath: '/tmp/report.md',
+      content: '# Discarded edit',
+      isDirty: true,
+      tabs: state.tabs.map((tab) =>
+        tab.id === state.activeTabId
+          ? { ...tab, filePath: '/tmp/report.md', content: '# Discarded edit', isDirty: true }
+          : tab
+      )
+    }))
+    vi.mocked(window.api.confirmDiscardChanges).mockResolvedValue('discard')
+    const user = userEvent.setup()
+    render(<EditorScreen />)
+
+    await user.click(screen.getByRole('button', { name: '← Home' }))
+
+    await waitFor(() => expect(useAppStore.getState().screen).toBe('home'))
+    await new Promise((resolve) => setTimeout(resolve, 250))
+
+    const state = useDocumentStore.getState()
+    expect(state.tabs).toHaveLength(1)
+    expect(state.tabs[0]).toMatchObject({ filePath: null, content: '', isDirty: false })
+    expect(state.activeTabId).toBe(state.tabs[0].id)
+    expect(state.content).toBe('')
+    expect(state.isDirty).toBe(false)
+  })
+
+  it('does NOT clear pending autosave when the user chooses to Save (not discard)', async () => {
+    useAppStore.setState({ screen: 'editor' })
+    useDocumentStore.setState({ filePath: '/tmp/report.md', content: '# Report', isDirty: true })
+    vi.mocked(window.api.confirmDiscardChanges).mockResolvedValue('save')
+    vi.mocked(window.api.saveFile).mockResolvedValue({ filePath: '/tmp/report.md' })
+    const user = userEvent.setup()
+    render(<EditorScreen />)
+
+    await user.click(screen.getByRole('button', { name: '← Home' }))
+
+    await waitFor(() => {
+      expect(useAppStore.getState().screen).toBe('home')
+    })
+    expect(window.api.clearPendingAutosave).not.toHaveBeenCalled()
+  })
+
   it('does not navigate Home if Save was chosen but the user cancelled the Save-As dialog', async () => {
     // Real navigation state, matching the sibling dirty-check tests above --
     // without this, useAppStore's initial screen ('home') would make the
@@ -262,5 +461,229 @@ describe('EditorScreen', () => {
     await waitFor(() => {
       expect(useAppStore.getState().screen).toBe('home')
     })
+  })
+
+  it('restoring a version flushes and saves dirty edits first, then replaces content, when the pre-restore save succeeds', async () => {
+    // Sets the `tabs` array entry, not just the top-level mirror fields --
+    // handleRestoreVersion's post-save guard reads the ACTUAL tab entry
+    // (by id), not the mirror, so a fixture that only fakes the mirror
+    // while leaving the real tab entry at its stale initial values (e.g.
+    // isDirty: false) would silently desync from what a real dirty-edit
+    // action would have produced.
+    useDocumentStore.setState((state) => ({
+      filePath: '/tmp/report.md',
+      content: '# Unsaved edits',
+      isDirty: true,
+      tabs: state.tabs.map((tab) =>
+        tab.id === state.activeTabId
+          ? { ...tab, filePath: '/tmp/report.md', content: '# Unsaved edits', isDirty: true }
+          : tab
+      )
+    }))
+    vi.mocked(window.api.saveFile).mockResolvedValue({ filePath: '/tmp/report.md' })
+    vi.mocked(window.api.getVersionHistory).mockResolvedValue([
+      { id: 'snap-1', timestamp: '2026-08-05T12:00:00.000Z', sizeBytes: 10 }
+    ])
+    vi.mocked(window.api.restoreVersionContent).mockResolvedValue('# Restored Report')
+    const user = userEvent.setup()
+    render(<EditorScreen />)
+
+    await user.click(screen.getByRole('button', { name: 'History' }))
+    const restoreButton = await screen.findByRole('button', { name: /restore/i })
+    await user.click(restoreButton)
+
+    await waitFor(() => {
+      expect(window.api.saveFile).toHaveBeenCalledWith('/tmp/report.md', '# Unsaved edits')
+    })
+    await waitFor(() => {
+      expect(useDocumentStore.getState().content).toBe('# Restored Report')
+    })
+  })
+
+  it('restores correctly when the editor holds an unflushed edit the store has not seen yet (the 200ms debounce window)', async () => {
+    // Regression test for the final whole-branch review's Important 2.
+    // handleRestoreVersion used to read `isDirty` from the RENDER CLOSURE.
+    // Milkdown's markdownUpdated is 200ms-debounced, so there is a real
+    // window where the editor holds a genuine edit but documentStore.isDirty
+    // is still false. Clicking a History row inside that window took the
+    // "clean document, nothing to save" path, called replaceContentForTab
+    // (bumping revision), and the resulting remount's unmount-flush then
+    // pushed the unflushed edit straight back over the just-restored content
+    // -- leaving the editor DISPLAYING the restored version while the store
+    // HELD the pre-restore edit, which the next Save would write to disk.
+    //
+    // The document starts CLEAN here (isDirty: false everywhere, tab entry
+    // included) -- that is the entire point. A dirty fixture would take the
+    // already-covered flush+save path and prove nothing about this bug.
+    useDocumentStore.setState((state) => ({
+      filePath: '/tmp/report.md',
+      content: '# Report',
+      isDirty: false,
+      tabs: state.tabs.map((tab) =>
+        tab.id === state.activeTabId
+          ? { ...tab, filePath: '/tmp/report.md', content: '# Report', isDirty: false }
+          : tab
+      )
+    }))
+    vi.mocked(window.api.saveFile).mockResolvedValue({ filePath: '/tmp/report.md' })
+    vi.mocked(window.api.getVersionHistory).mockResolvedValue([
+      { id: 'snap-1', timestamp: '2026-08-05T12:00:00.000Z', sizeBytes: 10 }
+    ])
+    vi.mocked(window.api.restoreVersionContent).mockResolvedValue('# Restored Report')
+    const user = userEvent.setup()
+    render(<EditorScreen />)
+
+    await waitFor(() => {
+      expect(document.querySelector('.milkdown-mount .ProseMirror')).toBeInTheDocument()
+    })
+    // Open History and locate the restore row BEFORE making the edit, so the
+    // only real time spent between the edit and the click is the click
+    // itself -- the 200ms debounce must not fire in between, or the store
+    // would learn about the edit on its own and the scenario evaporates.
+    await user.click(screen.getByRole('button', { name: 'History' }))
+    const restoreButton = await screen.findByRole('button', { name: /restore/i })
+
+    // Same direct-DOM-mutation technique as the 'Save picks up the editor
+    // current content' test above: a real ProseMirror edit the store has not
+    // been told about, rather than an attempt to win a 200ms race by timing.
+    const h1 = document.querySelector('.ProseMirror h1')
+    if (!h1?.firstChild) throw new Error('expected a text node inside the mounted h1')
+    h1.firstChild.textContent = `${h1.firstChild.textContent} Q3`
+    const range = document.createRange()
+    range.selectNodeContents(h1)
+    range.collapse(false)
+    const selection = window.getSelection()
+    selection?.removeAllRanges()
+    selection?.addRange(range)
+
+    // One tick for ProseMirror's MutationObserver to turn the DOM change into
+    // a real transaction (which is what flips the editor's edited-since-mount
+    // flag) -- but nowhere near the 200ms debounce.
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    expect(useDocumentStore.getState().isDirty).toBe(false)
+
+    await user.click(restoreButton)
+
+    // The unflushed edit must have been flushed and SAVED first...
+    await waitFor(() => {
+      expect(window.api.saveFile).toHaveBeenCalled()
+    })
+    expect(vi.mocked(window.api.saveFile).mock.calls.at(-1)?.[1]).toContain('Q3')
+
+    // ...and the restored content must be what the store actually ends up
+    // holding. Before the fix this settled on the pre-restore edit instead.
+    await waitFor(() => {
+      expect(useDocumentStore.getState().content).toBe('# Restored Report')
+    })
+    // Give the remount's own unmount-flush every chance to fire and (if the
+    // bug regressed) clobber the restore, before asserting it stuck.
+    await new Promise((resolve) => setTimeout(resolve, 250))
+    expect(useDocumentStore.getState().content).toBe('# Restored Report')
+  })
+
+  it('abandons the restore without touching content when the pre-restore save leaves the document dirty', async () => {
+    // saveFile resolving null is this codebase's own established stand-in
+    // for "the save didn't actually happen" (see the Save-As-cancelled
+    // tests above) -- documentStore.save()'s `if (result)` branch never
+    // runs, so isDirty stays true exactly as it would after a real
+    // disk-write failure. Sets the `tabs` array entry too, not just the
+    // top-level mirror -- see the sibling "succeeds" test's own comment on
+    // why: handleRestoreVersion's guard reads the real tab entry.
+    useDocumentStore.setState((state) => ({
+      filePath: '/tmp/report.md',
+      content: '# Unsaved edits',
+      isDirty: true,
+      tabs: state.tabs.map((tab) =>
+        tab.id === state.activeTabId
+          ? { ...tab, filePath: '/tmp/report.md', content: '# Unsaved edits', isDirty: true }
+          : tab
+      )
+    }))
+    vi.mocked(window.api.saveFile).mockResolvedValue(null)
+    vi.mocked(window.api.getVersionHistory).mockResolvedValue([
+      { id: 'snap-1', timestamp: '2026-08-05T12:00:00.000Z', sizeBytes: 10 }
+    ])
+    vi.mocked(window.api.restoreVersionContent).mockResolvedValue('# Restored Report')
+    const user = userEvent.setup()
+    render(<EditorScreen />)
+
+    await user.click(screen.getByRole('button', { name: 'History' }))
+    const restoreButton = await screen.findByRole('button', { name: /restore/i })
+    await user.click(restoreButton)
+
+    await waitFor(() => {
+      expect(window.api.saveFile).toHaveBeenCalledWith('/tmp/report.md', '# Unsaved edits')
+    })
+    // Give handleRestoreVersion's async flushAndRestore every chance to
+    // reach (and wrongly act past) its guard before asserting nothing
+    // changed -- there are no further awaits after saveFile resolves, so
+    // this is generous, not load-bearing timing.
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    expect(useDocumentStore.getState().content).toBe('# Unsaved edits')
+    expect(useDocumentStore.getState().isDirty).toBe(true)
+  })
+
+  it('lands a restore on the tab that was active at click time, not whichever tab is active when the pre-restore save resolves', async () => {
+    // Tab A is the one being restored (dirty, so a pre-restore Save fires
+    // and has a real async gap at `await save()`, an IPC round trip). Tab B
+    // is a distinct, untouched tab the user switches to WHILE that save is
+    // still in flight -- the always-visible EditorTabBar lets this happen
+    // at any time, and it's exactly the race replaceContentForTab exists
+    // to close.
+    const tabA = { id: 'tab-a', filePath: '/tmp/a.md', content: '# A dirty edit', isDirty: true }
+    const tabB = { id: 'tab-b', filePath: '/tmp/b.md', content: '# B untouched', isDirty: false }
+    useDocumentStore.setState({
+      tabs: [tabA, tabB],
+      activeTabId: tabA.id,
+      content: tabA.content,
+      filePath: tabA.filePath,
+      isDirty: tabA.isDirty
+    })
+
+    let resolveSave: (value: { filePath: string } | null) => void = () => {}
+    vi.mocked(window.api.saveFile).mockReturnValue(
+      new Promise((resolve) => {
+        resolveSave = resolve
+      })
+    )
+    vi.mocked(window.api.getVersionHistory).mockResolvedValue([
+      { id: 'snap-1', timestamp: '2026-08-05T12:00:00.000Z', sizeBytes: 10 }
+    ])
+    vi.mocked(window.api.restoreVersionContent).mockResolvedValue('# Restored A')
+
+    const user = userEvent.setup()
+    render(<EditorScreen />)
+
+    await user.click(screen.getByRole('button', { name: 'History' }))
+    const restoreButton = await screen.findByRole('button', { name: /restore/i })
+    await user.click(restoreButton)
+
+    // The pre-restore Save is now in flight (saveFile called, but its
+    // promise deliberately not yet resolved) -- switch to tab B before it
+    // resolves.
+    await waitFor(() => {
+      expect(window.api.saveFile).toHaveBeenCalledWith('/tmp/a.md', '# A dirty edit')
+    })
+    await act(async () => {
+      useDocumentStore.getState().switchTab(tabB.id)
+    })
+    expect(useDocumentStore.getState().activeTabId).toBe(tabB.id)
+
+    resolveSave({ filePath: '/tmp/a.md' })
+
+    await waitFor(() => {
+      expect(useDocumentStore.getState().tabs.find((tab) => tab.id === tabA.id)?.content).toBe(
+        '# Restored A'
+      )
+    })
+    // Tab B, active when the save resolved, must be completely untouched --
+    // neither its content nor its dirty state was ever meant to change.
+    const finalTabB = useDocumentStore.getState().tabs.find((tab) => tab.id === tabB.id)
+    expect(finalTabB?.content).toBe('# B untouched')
+    expect(finalTabB?.isDirty).toBe(false)
+    // Tab B is still the active tab, so the top-level mirror must still
+    // reflect it, not the restored tab A content that just landed in the
+    // background.
+    expect(useDocumentStore.getState().content).toBe('# B untouched')
   })
 })
