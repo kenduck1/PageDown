@@ -19,7 +19,11 @@ beforeEach(() => {
       .mockResolvedValue({ dataUrl: 'data:image/png;base64,x', pageCount: 1 }),
     getPageCount: vi.fn().mockResolvedValue({ pageCount: 1 }),
     confirmDiscardChanges: vi.fn(),
-    exportPdf: vi.fn()
+    exportPdf: vi.fn(),
+    autosaveSnapshot: vi.fn(),
+    getVersionHistory: vi.fn(),
+    restoreVersionContent: vi.fn(),
+    clearPendingAutosave: vi.fn()
   }
 })
 
@@ -42,7 +46,8 @@ describe('HomeScreen', () => {
   it('loads the opened file and navigates to Editor when Open file succeeds', async () => {
     vi.mocked(window.api.openFile).mockResolvedValue({
       filePath: '/tmp/example.md',
-      content: '# Hello'
+      content: '# Hello',
+      recoveredFromAutosave: false
     })
     const user = userEvent.setup()
     render(<HomeScreen />)
@@ -119,7 +124,8 @@ describe('HomeScreen', () => {
     ])
     vi.mocked(window.api.openPath).mockResolvedValue({
       filePath: '/tmp/report.md',
-      content: '# Report'
+      content: '# Report',
+      recoveredFromAutosave: false
     })
     const user = userEvent.setup()
     render(<HomeScreen />)
