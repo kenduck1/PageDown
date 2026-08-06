@@ -79,6 +79,29 @@ describe('useDocumentStore', () => {
     expect(useDocumentStore.getState().error).toBe('Permission denied')
   })
 
+  it('openFile lands the document dirty when the result is recoveredFromAutosave', async () => {
+    vi.mocked(window.api.openFile).mockResolvedValue({
+      filePath: '/a.md',
+      content: '# Recovered content',
+      recoveredFromAutosave: true
+    })
+    await useDocumentStore.getState().openFile()
+    expect(useDocumentStore.getState()).toMatchObject({
+      content: '# Recovered content',
+      isDirty: true
+    })
+  })
+
+  it('openFile leaves the document clean when the result is NOT recoveredFromAutosave', async () => {
+    vi.mocked(window.api.openFile).mockResolvedValue({
+      filePath: '/a.md',
+      content: '# Normal content',
+      recoveredFromAutosave: false
+    })
+    await useDocumentStore.getState().openFile()
+    expect(useDocumentStore.getState().isDirty).toBe(false)
+  })
+
   it('openPath loads the result and returns true on success', async () => {
     vi.mocked(window.api.openPath).mockResolvedValue({
       filePath: '/b.md',
@@ -102,6 +125,27 @@ describe('useDocumentStore', () => {
     vi.mocked(window.api.saveFile).mockRejectedValue(new Error('Disk full'))
     await useDocumentStore.getState().save()
     expect(useDocumentStore.getState()).toMatchObject({ filePath: '/a.md', error: 'Disk full' })
+  })
+
+  it('save writes a version-history snapshot of the saved content after a successful save', async () => {
+    useDocumentStore.setState({ content: '# Saved content', filePath: '/a.md', isDirty: true })
+    vi.mocked(window.api.saveFile).mockResolvedValue({ filePath: '/a.md' })
+    await useDocumentStore.getState().save()
+    expect(window.api.autosaveSnapshot).toHaveBeenCalledWith('# Saved content', '/a.md')
+  })
+
+  it('save does NOT call autosaveSnapshot when the save itself fails', async () => {
+    useDocumentStore.setState({ content: '# X', filePath: '/a.md', isDirty: true })
+    vi.mocked(window.api.saveFile).mockRejectedValue(new Error('disk full'))
+    await useDocumentStore.getState().save()
+    expect(window.api.autosaveSnapshot).not.toHaveBeenCalled()
+  })
+
+  it('save does NOT call autosaveSnapshot when the user cancels Save-As (result is null)', async () => {
+    useDocumentStore.setState({ content: '# X', filePath: null, isDirty: true })
+    vi.mocked(window.api.saveFile).mockResolvedValue(null)
+    await useDocumentStore.getState().save()
+    expect(window.api.autosaveSnapshot).not.toHaveBeenCalled()
   })
 
   it('clearError resets error to null', () => {

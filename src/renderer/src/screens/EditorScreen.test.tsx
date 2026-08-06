@@ -228,6 +228,41 @@ describe('EditorScreen', () => {
     await waitFor(() => expect(useAppStore.getState().screen).toBe('home'))
   })
 
+  it('clears pending autosave for the document when the user chooses "Don\'t Save"', async () => {
+    // "Don't Save" means exactly that -- a pending autosave snapshot must
+    // never silently reappear on next open.
+    useAppStore.setState({ screen: 'editor' })
+    useDocumentStore.setState({ filePath: '/tmp/report.md', content: '# Report', isDirty: true })
+    vi.mocked(window.api.confirmDiscardChanges).mockResolvedValue('discard')
+    const user = userEvent.setup()
+    render(<EditorScreen />)
+
+    await user.click(screen.getByRole('button', { name: '← Home' }))
+
+    await waitFor(() => {
+      expect(window.api.clearPendingAutosave).toHaveBeenCalledWith(
+        '/tmp/report.md',
+        expect.any(String)
+      )
+    })
+  })
+
+  it('does NOT clear pending autosave when the user chooses to Save (not discard)', async () => {
+    useAppStore.setState({ screen: 'editor' })
+    useDocumentStore.setState({ filePath: '/tmp/report.md', content: '# Report', isDirty: true })
+    vi.mocked(window.api.confirmDiscardChanges).mockResolvedValue('save')
+    vi.mocked(window.api.saveFile).mockResolvedValue({ filePath: '/tmp/report.md' })
+    const user = userEvent.setup()
+    render(<EditorScreen />)
+
+    await user.click(screen.getByRole('button', { name: '← Home' }))
+
+    await waitFor(() => {
+      expect(useAppStore.getState().screen).toBe('home')
+    })
+    expect(window.api.clearPendingAutosave).not.toHaveBeenCalled()
+  })
+
   it('does not navigate Home if Save was chosen but the user cancelled the Save-As dialog', async () => {
     // Real navigation state, matching the sibling dirty-check tests above --
     // without this, useAppStore's initial screen ('home') would make the

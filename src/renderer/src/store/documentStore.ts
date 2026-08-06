@@ -36,7 +36,13 @@ interface DocumentStateValues {
 
 interface DocumentState extends DocumentStateValues {
   newDocument: (initialContent?: string) => void
-  loadDocument: (filePath: string, content: string) => void
+  // startDirty defaults to false so every existing call site (newDocument,
+  // and any future plain load) is unchanged; openFile/openPath pass through
+  // `result.recoveredFromAutosave` so a document recovered from a crash
+  // lands dirty, reusing the app's existing unsaved-changes protections
+  // (dirty-check-before-navigate, the "Save"/"Don't Save"/"Cancel" prompt)
+  // rather than adding recovery-specific UI.
+  loadDocument: (filePath: string, content: string, startDirty?: boolean) => void
   openFile: () => Promise<boolean>
   openPath: (filePath: string) => Promise<boolean>
   save: () => Promise<void>
@@ -78,7 +84,9 @@ interface DocumentState extends DocumentStateValues {
   // re-seed the editor from fresh content.
   replaceContent: (content: string) => void
   clearError: () => void
-  openTab: (filePath: string | null, content: string) => void
+  // startDirty defaults to false, same as loadDocument above -- a recovered
+  // document is the only caller that ever passes true.
+  openTab: (filePath: string | null, content: string, startDirty?: boolean) => void
   // Closing a dirty tab is a simple in-memory discard for this pass -- no
   // "Save changes before closing?" confirmation. EditorScreen's existing
   // dirty-check-before-navigate flow (window.api.confirmDiscardChanges) only
@@ -130,9 +138,9 @@ function errorMessage(err: unknown): string {
 
 export const useDocumentStore = create<DocumentState>()((set, get) => ({
   ...initialDocumentState,
-  openTab: (filePath, content) =>
+  openTab: (filePath, content, startDirty = false) =>
     set((state) => {
-      const tab: DocumentTab = { id: generateTabId(), filePath, content, isDirty: false }
+      const tab: DocumentTab = { id: generateTabId(), filePath, content, isDirty: startDirty }
       return {
         tabs: [...state.tabs, tab],
         activeTabId: tab.id,
@@ -196,12 +204,13 @@ export const useDocumentStore = create<DocumentState>()((set, get) => ({
   // behavior -- both are thin wrappers around openTab so there is exactly
   // one place ("what does opening a document do") to reason about.
   newDocument: (initialContent = '') => get().openTab(null, initialContent),
-  loadDocument: (filePath, content) => get().openTab(filePath, content),
+  loadDocument: (filePath, content, startDirty = false) =>
+    get().openTab(filePath, content, startDirty),
   openFile: async () => {
     try {
       const result = await window.api.openFile()
       if (!result) return false
-      get().loadDocument(result.filePath, result.content)
+      get().loadDocument(result.filePath, result.content, result.recoveredFromAutosave)
       return true
     } catch (err) {
       set({ error: errorMessage(err) })
@@ -211,7 +220,7 @@ export const useDocumentStore = create<DocumentState>()((set, get) => ({
   openPath: async (filePath) => {
     try {
       const result = await window.api.openPath(filePath)
-      get().loadDocument(result.filePath, result.content)
+      get().loadDocument(result.filePath, result.content, result.recoveredFromAutosave)
       return true
     } catch (err) {
       set({ error: errorMessage(err) })
@@ -231,6 +240,14 @@ export const useDocumentStore = create<DocumentState>()((set, get) => ({
           )
           return { tabs, filePath: result.filePath, isDirty: false, error: null }
         })
+        // Best-effort -- see version-history's own "never blocks a real
+        // Save" invariant. This call happens AFTER the real save already
+        // succeeded and the store has already been updated above, so even a
+        // rejected promise here (autosaveSnapshot's own IPC handler already
+        // swallows failures and never rejects, but this stays fire-and-
+        // forget regardless) can never undo or fail the Save the user just
+        // performed.
+        void window.api.autosaveSnapshot(content, result.filePath)
       }
     } catch (err) {
       set({ error: errorMessage(err) })
