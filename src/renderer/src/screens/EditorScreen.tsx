@@ -29,6 +29,7 @@ function EditorScreen(): React.JSX.Element {
   const updateContentForTab = useDocumentStore((state) => state.updateContentForTab)
   const replaceContent = useDocumentStore((state) => state.replaceContent)
   const replaceContentForTab = useDocumentStore((state) => state.replaceContentForTab)
+  const closeTab = useDocumentStore((state) => state.closeTab)
   const isDirty = useDocumentStore((state) => state.isDirty)
   const error = useDocumentStore((state) => state.error)
   const clearError = useDocumentStore((state) => state.clearError)
@@ -70,7 +71,7 @@ function EditorScreen(): React.JSX.Element {
       // don't navigate away from a document that wasn't actually written.
       if (useDocumentStore.getState().isDirty) return
     }
-    if (choice === 'discard' && filePath) {
+    if (choice === 'discard') {
       // "Don't Save" means exactly that -- a pending autosave snapshot must
       // never silently reappear on next open. `clearPendingAutosave` takes
       // ONLY the file path now, not a renderer-supplied cutoff -- a real,
@@ -89,7 +90,39 @@ function EditorScreen(): React.JSX.Element {
       // already validates the path and swallows failures (never rejects),
       // and this runs after the discard decision is already final, so it
       // can't affect navigation either way.
-      void window.api.clearPendingAutosave(filePath)
+      //
+      // Guarded on `filePath` because version-history storage is keyed by
+      // path -- an unsaved document has no snapshots to clear (useAutosave
+      // never fires without a path either). The tab close below is NOT so
+      // guarded: discarded content is discarded content, path or no path.
+      if (filePath) {
+        void window.api.clearPendingAutosave(filePath)
+      }
+      // Clearing the snapshots on disk is only half of "Don't Save" -- the
+      // other half, missing until the final whole-branch review found it, is
+      // the in-memory tab. goHome() only sets `screen: 'home'`; it does not
+      // touch documentStore, so the discarded tab used to survive with
+      // isDirty: true and the discarded content still in it (the unmount
+      // flush() even re-pushed the editor's copy into the store on the way
+      // out). The user then returns to the editor later, clicks that old tab,
+      // switchTab restores isDirty: true, useAutosave sees a clean->dirty
+      // transition, and 45s later writes the DISCARDED content back out as a
+      // snapshot -- which the next open silently recovers. A direct reversal
+      // of this feature's core promise that a deliberately discarded edit
+      // never silently reappears.
+      //
+      // Closing the tab removes that resurrection path at the source, and is
+      // also just the honest reading of the user's choice. Ordered AFTER the
+      // clearPendingAutosave dispatch above so the snapshot clear still
+      // happens (it only needs `filePath`, already captured, and it's
+      // fire-and-forget, so the call is already in flight by this line).
+      // Note closeTab never leaves zero tabs: closing the last one replaces
+      // it with a fresh blank "Untitled" tab (see documentStore.closeTab), so
+      // the store is left in exactly the state a fresh launch would produce.
+      // Any late unmount flush() from the outgoing MilkdownEditor targets the
+      // now-removed tab id and is a no-op by construction, since
+      // updateContentForTab only ever maps over tabs that still exist.
+      closeTab(activeTabId)
     }
     goHome()
   }
