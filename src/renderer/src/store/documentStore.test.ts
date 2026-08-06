@@ -12,7 +12,11 @@ beforeEach(() => {
     getTemplateThumbnail: vi.fn(),
     getPageCount: vi.fn(),
     confirmDiscardChanges: vi.fn(),
-    exportPdf: vi.fn()
+    exportPdf: vi.fn(),
+    autosaveSnapshot: vi.fn(),
+    getVersionHistory: vi.fn(),
+    restoreVersionContent: vi.fn(),
+    clearPendingAutosave: vi.fn()
   }
 })
 
@@ -50,7 +54,11 @@ describe('useDocumentStore', () => {
   })
 
   it('openFile loads the result and returns true on success', async () => {
-    vi.mocked(window.api.openFile).mockResolvedValue({ filePath: '/a.md', content: '# A' })
+    vi.mocked(window.api.openFile).mockResolvedValue({
+      filePath: '/a.md',
+      content: '# A',
+      recoveredFromAutosave: false
+    })
     const loaded = await useDocumentStore.getState().openFile()
     expect(loaded).toBe(true)
     expect(useDocumentStore.getState().filePath).toBe('/a.md')
@@ -72,7 +80,11 @@ describe('useDocumentStore', () => {
   })
 
   it('openPath loads the result and returns true on success', async () => {
-    vi.mocked(window.api.openPath).mockResolvedValue({ filePath: '/b.md', content: '# B' })
+    vi.mocked(window.api.openPath).mockResolvedValue({
+      filePath: '/b.md',
+      content: '# B',
+      recoveredFromAutosave: false
+    })
     const loaded = await useDocumentStore.getState().openPath('/b.md')
     expect(loaded).toBe(true)
     expect(useDocumentStore.getState().content).toBe('# B')

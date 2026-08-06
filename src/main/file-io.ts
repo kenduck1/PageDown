@@ -1,7 +1,8 @@
 import { dialog, type BrowserWindow } from 'electron'
-import { readFile, writeFile } from 'node:fs/promises'
+import { readFile, writeFile, stat, realpath } from 'node:fs/promises'
 import { mergeRecentFiles, readRecentFiles, writeRecentFiles, isKnownPath } from './recent-files'
 import type { RecentFileEntry } from './recent-files'
+import { getLatestSnapshot } from './version-history'
 
 // Re-exported so src/main/index.ts imports every file-I/O primitive from one
 // place, matching its existing single-import pattern.
@@ -12,20 +13,78 @@ const MARKDOWN_FILTERS = [{ name: 'Markdown', extensions: ['md', 'markdown'] }]
 export interface OpenedFile {
   filePath: string
   content: string
+  recoveredFromAutosave: boolean
 }
 
-export async function openFileDialog(): Promise<OpenedFile | null> {
+// Canonicalizes a document path via fs.realpath before it's used to key
+// version-history.ts storage. Required because two spellings of the SAME
+// file -- most commonly a symlinked temp dir vs. its realpath (macOS
+// resolves `/tmp/x` to `/private/tmp/x`, which a mkdtemp(tmpdir())-based
+// fixture hits directly) -- would otherwise silently key two different
+// history entries for what is really one document: an autosave written
+// under one spelling would never be found by a lookup under the other,
+// permanently splitting the document's history and defeating recovery.
+// realpath throws for a path that doesn't exist yet (e.g. a brand-new,
+// not-yet-saved document) -- fall back to the raw path rather than let that
+// reject the caller.
+//
+// Exported so src/main/index.ts's four version-history IPC handlers
+// canonicalize exactly the same way as the recovery check below -- factored
+// into one function so all five call sites (this module's own recovery
+// check, plus the four handlers) can't drift apart.
+export async function canonicalizeDocumentPath(filePath: string): Promise<string> {
+  try {
+    return await realpath(filePath)
+  } catch {
+    return filePath
+  }
+}
+
+// Best-effort: an autosave snapshot newer than the file's own on-disk mtime
+// means the app (or OS) crashed after an autosave tick but before the next
+// real Save, so what's on disk is stale relative to what the user last saw
+// -- silently prefer that snapshot's content over the on-disk bytes so the
+// document reopens exactly where the user left off (Task 3 surfaces the
+// returned `recoveredFromAutosave` flag as a passive banner, not a prompt).
+// The whole body is wrapped in try/catch and degrades to the on-disk
+// content on ANY failure (a deleted file racing the stat call, a corrupted
+// history, anything) -- this must never turn an otherwise-successful file
+// open into a failure. Deliberately asymmetric with the write side
+// (autosaveSnapshot etc. in index.ts): those drop silently, but a failed
+// *read* here still has perfectly good on-disk content to fall back to, so
+// nothing is lost either way.
+async function resolveContentWithRecovery(
+  userDataDir: string,
+  filePath: string,
+  onDiskContent: string
+): Promise<{ content: string; recoveredFromAutosave: boolean }> {
+  try {
+    const fileStat = await stat(filePath)
+    const canonicalPath = await canonicalizeDocumentPath(filePath)
+    const latest = await getLatestSnapshot(userDataDir, canonicalPath)
+    if (latest && new Date(latest.timestamp).getTime() > fileStat.mtimeMs) {
+      return { content: latest.content, recoveredFromAutosave: true }
+    }
+    return { content: onDiskContent, recoveredFromAutosave: false }
+  } catch (err) {
+    console.error('Failed to check for a newer autosave snapshot', err)
+    return { content: onDiskContent, recoveredFromAutosave: false }
+  }
+}
+
+export async function openFileDialog(userDataDir: string): Promise<OpenedFile | null> {
   const result = await dialog.showOpenDialog({
     filters: MARKDOWN_FILTERS,
     properties: ['openFile']
   })
   if (result.canceled || result.filePaths.length === 0) return null
-  return readFileByPath(result.filePaths[0])
+  return readFileByPath(result.filePaths[0], userDataDir)
 }
 
-export async function readFileByPath(filePath: string): Promise<OpenedFile> {
+export async function readFileByPath(filePath: string, userDataDir: string): Promise<OpenedFile> {
   const content = await readFile(filePath, 'utf8')
-  return { filePath, content }
+  const recovery = await resolveContentWithRecovery(userDataDir, filePath, content)
+  return { filePath, ...recovery }
 }
 
 export async function saveFile(
