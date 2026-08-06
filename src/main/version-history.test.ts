@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import { mkdtemp, mkdir, rm, writeFile, utimes } from 'node:fs/promises'
+import { mkdtemp, mkdir, rm, writeFile, utimes, stat } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
@@ -345,6 +345,23 @@ describe('clearPendingAutosaveForFile', () => {
     // document was opened. No sinceIso variable is captured anywhere in
     // this test; clearPendingAutosaveForFile must derive the correct
     // cutoff entirely on its own from the file as it sits on disk.
+    //
+    // Backdating the file's mtime here is load-bearing, not decoration --
+    // found by independent verification (real, reproducible flake: 4/5
+    // failures when this whole file runs back-to-back, 0/5 in isolation).
+    // clearPendingAutosaveForFile's cutoff comparison is a plain
+    // `entry.timestamp > sinceIso` with no tolerance window (unlike
+    // file-io.ts's separate MTIME_TOLERANCE_MS-gated recovery check), so it
+    // needs a real, unambiguous gap between the file's mtime and the
+    // snapshot's timestamp -- two sequential awaited calls with no
+    // artificial separation can land within the same millisecond when
+    // Vitest runs many fast tests in one process, exactly the same
+    // mtime-ordering hazard already found and fixed this same way in
+    // gate14-autosave-version-history.spec.ts's tests 1 and 3.
+    const fileStat = await stat(docPath)
+    const backdated = new Date(fileStat.mtimeMs - 2_000)
+    await utimes(docPath, backdated, backdated)
+
     const id = await writeSnapshot(userDataDir, docPath, 'pending autosave, discard me')
 
     await clearPendingAutosaveForFile(userDataDir, docPath, docPath)
