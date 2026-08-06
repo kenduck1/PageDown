@@ -154,8 +154,45 @@ function EditorScreen(): React.JSX.Element {
     // `await save()`.
     const targetTabId = activeTabId
     const flushAndRestore = async (): Promise<void> => {
-      if (isDirty) {
-        editorRef.current?.flush()
+      // flush() runs UNCONDITIONALLY, BEFORE anything reads isDirty -- and
+      // the dirty check that follows reads the live store, not this render's
+      // closed-over `isDirty`. Both halves fix one real bug found in the
+      // final whole-branch review.
+      //
+      // The window: Milkdown's markdownUpdated is 200ms-debounced (see
+      // CLAUDE.md), so between a keystroke and that debounce firing, the
+      // editor holds a real unflushed edit while documentStore.isDirty is
+      // still false. Type a character, then click a History row inside that
+      // window, and the OLD code took this path:
+      //   1. `isDirty` (bound at render, and genuinely false) => skip flush,
+      //      skip save, fall straight through to replaceContentForTab, which
+      //      bumps revision.
+      //   2. The revision bump remounts MilkdownEditor; the OUTGOING
+      //      instance's unmount cleanup calls flush(), which pushes the
+      //      unsynced edit through onChange => updateContentForTab, silently
+      //      OVERWRITING the content just restored -- and without a revision
+      //      bump of its own.
+      //   3. The incoming editor is already mounted showing the restored
+      //      content and never re-reads the `content` prop (uncontrolled
+      //      after mount).
+      // End state: the editor DISPLAYS the restored version, the store HOLDS
+      // the pre-restore edit, and the user's next Save writes the pre-restore
+      // edit to disk. The restore silently didn't happen, with no error shown.
+      //
+      // Calling flush() first collapses that window: the edit lands in the
+      // store synchronously, so the dirty check below sees the truth and the
+      // pre-restore Save actually happens. flush() is a documented no-op when
+      // nothing has changed since mount (see MilkdownEditorHandle), so making
+      // it unconditional costs nothing on a genuinely clean document.
+      editorRef.current?.flush()
+      // Read the TARGET TAB's own dirty state from the live store rather than
+      // the top-level `isDirty` mirror bound at render -- stale for the reason
+      // above, and (as with the post-save re-read below) mirror-scoped rather
+      // than tab-scoped.
+      const dirtyBeforeRestore = useDocumentStore
+        .getState()
+        .tabs.find((tab) => tab.id === targetTabId)?.isDirty
+      if (dirtyBeforeRestore) {
         await save()
         // documentStore.save() never throws -- a failure (disk error, or
         // the user cancelling a Save-As dialog for a never-saved document)

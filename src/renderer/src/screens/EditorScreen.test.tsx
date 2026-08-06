@@ -353,6 +353,87 @@ describe('EditorScreen', () => {
     })
   })
 
+  it('restores correctly when the editor holds an unflushed edit the store has not seen yet (the 200ms debounce window)', async () => {
+    // Regression test for the final whole-branch review's Important 2.
+    // handleRestoreVersion used to read `isDirty` from the RENDER CLOSURE.
+    // Milkdown's markdownUpdated is 200ms-debounced, so there is a real
+    // window where the editor holds a genuine edit but documentStore.isDirty
+    // is still false. Clicking a History row inside that window took the
+    // "clean document, nothing to save" path, called replaceContentForTab
+    // (bumping revision), and the resulting remount's unmount-flush then
+    // pushed the unflushed edit straight back over the just-restored content
+    // -- leaving the editor DISPLAYING the restored version while the store
+    // HELD the pre-restore edit, which the next Save would write to disk.
+    //
+    // The document starts CLEAN here (isDirty: false everywhere, tab entry
+    // included) -- that is the entire point. A dirty fixture would take the
+    // already-covered flush+save path and prove nothing about this bug.
+    useDocumentStore.setState((state) => ({
+      filePath: '/tmp/report.md',
+      content: '# Report',
+      isDirty: false,
+      tabs: state.tabs.map((tab) =>
+        tab.id === state.activeTabId
+          ? { ...tab, filePath: '/tmp/report.md', content: '# Report', isDirty: false }
+          : tab
+      )
+    }))
+    vi.mocked(window.api.saveFile).mockResolvedValue({ filePath: '/tmp/report.md' })
+    vi.mocked(window.api.getVersionHistory).mockResolvedValue([
+      { id: 'snap-1', timestamp: '2026-08-05T12:00:00.000Z', sizeBytes: 10 }
+    ])
+    vi.mocked(window.api.restoreVersionContent).mockResolvedValue('# Restored Report')
+    const user = userEvent.setup()
+    render(<EditorScreen />)
+
+    await waitFor(() => {
+      expect(document.querySelector('.milkdown-mount .ProseMirror')).toBeInTheDocument()
+    })
+    // Open History and locate the restore row BEFORE making the edit, so the
+    // only real time spent between the edit and the click is the click
+    // itself -- the 200ms debounce must not fire in between, or the store
+    // would learn about the edit on its own and the scenario evaporates.
+    await user.click(screen.getByRole('button', { name: 'History' }))
+    const restoreButton = await screen.findByRole('button', { name: /restore/i })
+
+    // Same direct-DOM-mutation technique as the 'Save picks up the editor
+    // current content' test above: a real ProseMirror edit the store has not
+    // been told about, rather than an attempt to win a 200ms race by timing.
+    const h1 = document.querySelector('.ProseMirror h1')
+    if (!h1?.firstChild) throw new Error('expected a text node inside the mounted h1')
+    h1.firstChild.textContent = `${h1.firstChild.textContent} Q3`
+    const range = document.createRange()
+    range.selectNodeContents(h1)
+    range.collapse(false)
+    const selection = window.getSelection()
+    selection?.removeAllRanges()
+    selection?.addRange(range)
+
+    // One tick for ProseMirror's MutationObserver to turn the DOM change into
+    // a real transaction (which is what flips the editor's edited-since-mount
+    // flag) -- but nowhere near the 200ms debounce.
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    expect(useDocumentStore.getState().isDirty).toBe(false)
+
+    await user.click(restoreButton)
+
+    // The unflushed edit must have been flushed and SAVED first...
+    await waitFor(() => {
+      expect(window.api.saveFile).toHaveBeenCalled()
+    })
+    expect(vi.mocked(window.api.saveFile).mock.calls.at(-1)?.[1]).toContain('Q3')
+
+    // ...and the restored content must be what the store actually ends up
+    // holding. Before the fix this settled on the pre-restore edit instead.
+    await waitFor(() => {
+      expect(useDocumentStore.getState().content).toBe('# Restored Report')
+    })
+    // Give the remount's own unmount-flush every chance to fire and (if the
+    // bug regressed) clobber the restore, before asserting it stuck.
+    await new Promise((resolve) => setTimeout(resolve, 250))
+    expect(useDocumentStore.getState().content).toBe('# Restored Report')
+  })
+
   it('abandons the restore without touching content when the pre-restore save leaves the document dirty', async () => {
     // saveFile resolving null is this codebase's own established stand-in
     // for "the save didn't actually happen" (see the Save-As-cancelled
