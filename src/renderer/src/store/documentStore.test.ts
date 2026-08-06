@@ -371,6 +371,45 @@ describe('useDocumentStore tabs', () => {
     expect(state).toMatchObject({ filePath: '/saved.md', isDirty: false })
   })
 
+  it('save targets the tab that was active when save() was CALLED, not whichever tab is active when the write resolves', async () => {
+    // window.api.saveFile is a real async IPC round trip -- the user can
+    // switch tabs (via the always-visible EditorTabBar) while it's still
+    // in flight. Captures activeTabId synchronously via a deferred
+    // saveFile promise, switches tabs mid-flight, then resolves it -- the
+    // exact race replaceContentForTab was introduced to close for restore,
+    // reopened here through save()'s own separate `set()` callback (which
+    // used to read state.activeTabId at RESOLVE time instead).
+    useDocumentStore.setState({ content: '# A dirty', filePath: '/a.md', isDirty: true })
+    const tabA = useDocumentStore.getState().activeTabId
+    let resolveSave: (value: { filePath: string } | null) => void = () => {}
+    vi.mocked(window.api.saveFile).mockReturnValue(
+      new Promise((resolve) => {
+        resolveSave = resolve
+      })
+    )
+
+    const savePromise = useDocumentStore.getState().save()
+    useDocumentStore.getState().openTab('/b.md', '# B')
+    const tabB = useDocumentStore.getState().activeTabId
+    expect(tabB).not.toBe(tabA)
+
+    resolveSave({ filePath: '/saved-a.md' })
+    await savePromise
+
+    const state = useDocumentStore.getState()
+    // Tab A -- the one actually saved -- picked up the resolved filePath
+    // and cleared isDirty, even though it's no longer the active tab.
+    const tabAEntry = state.tabs.find((tab) => tab.id === tabA)
+    expect(tabAEntry).toMatchObject({ filePath: '/saved-a.md', isDirty: false })
+    // Tab B, active when the write resolved, must be completely untouched
+    // by a save that was never about it.
+    const tabBEntry = state.tabs.find((tab) => tab.id === tabB)
+    expect(tabBEntry).toMatchObject({ filePath: '/b.md', content: '# B', isDirty: false })
+    // Tab B is still the active tab, so the top-level mirror must still
+    // reflect it, not tab A's just-saved state.
+    expect(state).toMatchObject({ activeTabId: tabB, filePath: '/b.md' })
+  })
+
   it('the single-document API contract (content/filePath/isDirty/revision/error) still holds with multiple tabs open', async () => {
     useDocumentStore.getState().openTab('/a.md', '# A')
     useDocumentStore.getState().openTab('/b.md', '# B')

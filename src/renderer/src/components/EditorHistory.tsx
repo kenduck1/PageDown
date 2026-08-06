@@ -1,10 +1,17 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { groupSnapshots, type SnapshotGroup } from '../lib/groupSnapshots'
 import type { SnapshotMeta } from '../../../preload/index.d'
 
 export interface EditorHistoryProps {
   filePath: string | null
-  onRestore: (content: string) => void
+  // Widened to `void | Promise<void>` so an async caller can signal when
+  // the restore has actually finished landing -- EditorScreen's
+  // handleRestoreVersion has a real async gap (it may flush + Save first),
+  // and handleRestore below awaits this before refetching, so the
+  // refreshed list reflects the restore's own resulting state rather than
+  // racing ahead of it. A synchronous caller can still just return
+  // undefined.
+  onRestore: (content: string) => void | Promise<void>
 }
 
 function formatTimestampLabel(isoTimestamp: string): string {
@@ -59,6 +66,19 @@ function EditorHistory({ filePath, onRestore }: EditorHistoryProps): React.JSX.E
     if (filePath) setLoading(true)
   }
 
+  // Guards every getVersionHistory response (both the mount/filePath-change
+  // fetch below and handleRestore's own post-restore refetch) against
+  // resolving out of order and overwriting a newer, correct response with a
+  // stale one -- same token-check pattern as usePageCount.ts's own
+  // latestRequestRef ("a response only gets applied to state if it's still
+  // the most recent one by the time it resolves"). EditorHistory is NOT
+  // remounted on a document-tab switch (only MilkdownEditor is, via
+  // key={revision}) -- it just receives a new `filePath` prop -- so a slow
+  // fetch for the PREVIOUS document resolving after the user has switched
+  // to a new one would otherwise silently overwrite the new document's
+  // correctly-fetched list.
+  const latestRequestRef = useRef(0)
+
   useEffect(() => {
     // No fetch to make for an unsaved document -- and no state to reset
     // either: the render below returns its own "save this document first"
@@ -76,7 +96,9 @@ function EditorHistory({ filePath, onRestore }: EditorHistoryProps): React.JSX.E
     // calling setState directly in the effect body -- so handleRestore's
     // post-restore refresh below duplicates this fetch rather than sharing
     // a `fetchHistory` helper with this effect.
+    const requestId = ++latestRequestRef.current
     window.api.getVersionHistory(filePath).then((result) => {
+      if (latestRequestRef.current !== requestId) return
       setSnapshots(result)
       setLoading(false)
     })
@@ -86,7 +108,25 @@ function EditorHistory({ filePath, onRestore }: EditorHistoryProps): React.JSX.E
     if (!filePath) return
     const content = await window.api.restoreVersionContent(filePath, snapshotId)
     if (content === null) return
-    onRestore(content)
+    // Await the caller's own restore completion (EditorScreen's
+    // handleRestoreVersion may flush + Save first -- a real async gap)
+    // before refetching below. Without this, the refetch typically
+    // resolves before that Save even starts, returning the same stale
+    // list and defeating the whole point of refreshing.
+    //
+    // Residual, accepted gap: even awaiting the restore fully doesn't
+    // guarantee the freshly-written snapshot is in the list this refetch
+    // returns. documentStore.save()'s own version-history snapshot write
+    // (`void window.api.autosaveSnapshot(...)`) is deliberately
+    // fire-and-forget, fired AFTER save()'s own promise already resolves,
+    // specifically so a slow/failed snapshot write can never block or
+    // delay a real Save (see documentStore.ts's own comment on that call)
+    // -- that invariant is intentionally NOT weakened here just to make
+    // this refresh airtight. In rare timing, this refetch can still beat
+    // that snapshot write to disk. Not fixed: switching sidebar tabs
+    // (which remounts this component) or reopening History a moment later
+    // both self-correct.
+    await onRestore(content)
     // Restoring flushes and Saves the current document first (see
     // EditorScreen's handleRestoreVersion), and a Save writes a new
     // snapshot -- so the list we just showed the user is immediately
@@ -96,7 +136,9 @@ function EditorHistory({ filePath, onRestore }: EditorHistoryProps): React.JSX.E
     // deliberately no live subscription here. This runs from a click
     // handler, not a useEffect body, so setState here isn't subject to
     // (and doesn't need to route around) the effect-body rule above.
+    const requestId = ++latestRequestRef.current
     const refreshed = await window.api.getVersionHistory(filePath)
+    if (latestRequestRef.current !== requestId) return
     setSnapshots(refreshed)
   }
 

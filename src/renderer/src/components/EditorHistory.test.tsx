@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { cleanup, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import EditorHistory from './EditorHistory'
+import type { SnapshotMeta } from '../../../preload/index.d'
 
 beforeEach(() => {
   window.api = {
@@ -131,19 +132,84 @@ describe('EditorHistory', () => {
     expect(onRestore).toHaveBeenCalledWith('content-for-older')
   })
 
-  it('re-fetches the history list after a restore completes', async () => {
+  it('re-fetches the history list only after the (possibly async) onRestore callback completes, not before', async () => {
     vi.mocked(window.api.getVersionHistory).mockResolvedValue([
       { id: 'a', timestamp: '2026-08-05T12:00:00.000Z', sizeBytes: 10 }
     ])
     vi.mocked(window.api.restoreVersionContent).mockResolvedValue('# Restored content')
+    // A pending promise standing in for EditorScreen's real async gap
+    // (flush + Save, a real IPC round trip) -- if handleRestore refetched
+    // without awaiting this, getVersionHistory's second call would fire
+    // immediately, before onRestore's own work (here, before
+    // resolveOnRestore is ever called) has finished.
+    let resolveOnRestore: () => void = () => {}
+    const onRestore = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveOnRestore = resolve
+        })
+    )
     const user = userEvent.setup()
-    render(<EditorHistory filePath="/a.md" onRestore={vi.fn()} />)
+    render(<EditorHistory filePath="/a.md" onRestore={onRestore} />)
 
     const row = await screen.findByRole('button', { name: /restore/i })
     await user.click(row)
 
     await waitFor(() => {
+      expect(onRestore).toHaveBeenCalledWith('# Restored content')
+    })
+    // onRestore's own promise is still pending -- the refetch must not
+    // have happened yet.
+    expect(window.api.getVersionHistory).toHaveBeenCalledTimes(1)
+
+    resolveOnRestore()
+
+    await waitFor(() => {
       expect(window.api.getVersionHistory).toHaveBeenCalledTimes(2)
     })
+  })
+
+  it('does not let a stale fetch for a previous filePath overwrite a newer one that resolves first', async () => {
+    // Two overlapping fetches, deliberately resolved OUT OF ORDER: the
+    // SECOND (newer, for "/b.md") resolves first, then the STALE first
+    // one (for "/a.md") resolves after -- exactly the case a slow
+    // response for a document the user has already navigated away from
+    // would produce. Without the latestRequestRef guard, the stale
+    // response arriving last would silently win and overwrite the correct
+    // list.
+    let resolveFirst: (value: SnapshotMeta[]) => void = () => {}
+    let resolveSecond: (value: SnapshotMeta[]) => void = () => {}
+    const firstPromise = new Promise<SnapshotMeta[]>((resolve) => {
+      resolveFirst = resolve
+    })
+    const secondPromise = new Promise<SnapshotMeta[]>((resolve) => {
+      resolveSecond = resolve
+    })
+    const getVersionHistory = vi.mocked(window.api.getVersionHistory)
+    getVersionHistory.mockReturnValueOnce(firstPromise)
+    getVersionHistory.mockReturnValueOnce(secondPromise)
+
+    const { rerender } = render(<EditorHistory filePath="/a.md" onRestore={vi.fn()} />)
+    rerender(<EditorHistory filePath="/b.md" onRestore={vi.fn()} />)
+
+    // "/b.md" has two snapshots more than 10 minutes apart -- two separate
+    // top-level groups, i.e. two restore buttons -- distinguishable by
+    // COUNT from "/a.md"'s single snapshot, so the assertion below doesn't
+    // depend on locale-formatted label text.
+    resolveSecond([
+      { id: 'b-snap-1', timestamp: '2026-08-01T12:00:00.000Z', sizeBytes: 10 },
+      { id: 'b-snap-2', timestamp: '2026-08-05T12:00:00.000Z', sizeBytes: 10 }
+    ])
+    await waitFor(() => {
+      expect(screen.getAllByRole('button', { name: /restore/i })).toHaveLength(2)
+    })
+
+    resolveFirst([{ id: 'a-snap', timestamp: '2026-08-05T11:00:00.000Z', sizeBytes: 10 }])
+    // Give the stale response's own microtask/state-update every chance to
+    // run (if the guard were missing, it would silently replace the
+    // correct list) before asserting nothing changed.
+    await new Promise((resolve) => setTimeout(resolve, 20))
+
+    expect(screen.getAllByRole('button', { name: /restore/i })).toHaveLength(2)
   })
 })

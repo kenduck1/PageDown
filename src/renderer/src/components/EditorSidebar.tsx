@@ -20,7 +20,11 @@ export interface EditorSidebarProps {
   // has never been saved (no history is possible yet), matching the
   // documentStore mirror field's own type.
   filePath: string | null
-  onRestoreVersion: (content: string) => void
+  // `void | Promise<void>`: EditorScreen's handleRestoreVersion returns the
+  // underlying flush+Save+replace promise rather than void-discarding it,
+  // so EditorHistory can await this before refetching its snapshot list --
+  // see EditorHistory.tsx's own comment on why that ordering matters.
+  onRestoreVersion: (content: string) => void | Promise<void>
 }
 
 // Segmented-control track/pill styling matches the real design-handoff

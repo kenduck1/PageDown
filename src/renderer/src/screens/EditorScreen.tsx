@@ -28,6 +28,7 @@ function EditorScreen(): React.JSX.Element {
   const activeTabId = useDocumentStore((state) => state.activeTabId)
   const updateContentForTab = useDocumentStore((state) => state.updateContentForTab)
   const replaceContent = useDocumentStore((state) => state.replaceContent)
+  const replaceContentForTab = useDocumentStore((state) => state.replaceContentForTab)
   const isDirty = useDocumentStore((state) => state.isDirty)
   const error = useDocumentStore((state) => state.error)
   const clearError = useDocumentStore((state) => state.clearError)
@@ -126,35 +127,52 @@ function EditorScreen(): React.JSX.Element {
     closePageSetup()
   }
 
-  const handleRestoreVersion = (restoredContent: string): void => {
-    // Restoring is an externally-originated content change, exactly like
-    // Page Setup's Apply -- the live editor must remount to pick it up
-    // rather than silently overwrite it on the next real edit. If there
-    // are unsaved edits right now, flush + Save them first so nothing
-    // is lost -- the currently-unsaved state becomes its own snapshot on
-    // the next autosave tick or explicit Save, never silently discarded.
+  // Returns the underlying flush+Save+replace promise (rather than
+  // void-discarding it) so EditorHistory's handleRestore can `await` this
+  // before refetching the snapshot list -- without that, the refetch
+  // typically resolves before the flush+Save round trip below even starts,
+  // returning the same stale list. See EditorHistory.tsx's own comment on
+  // its post-restore refetch for the residual gap this doesn't close
+  // (documentStore.save()'s own version-history snapshot write stays
+  // fire-and-forget, by design, so it can still lag behind this promise's
+  // resolution in rare timing).
+  const handleRestoreVersion = (restoredContent: string): Promise<void> => {
+    // Capture the tab being restored into BEFORE the async gap below -- see
+    // documentStore.ts's replaceContentForTab doc comment for the exact
+    // race this closes. `activeTabId` here is this render's own hook
+    // value, correct as of click time (EditorHistory's restore button is
+    // bound to a fresh onClick closure on every render), and determines
+    // which tab actually receives the restored content -- regardless of
+    // which tab is active by the time flushAndRestore resumes after
+    // `await save()`.
+    const targetTabId = activeTabId
     const flushAndRestore = async (): Promise<void> => {
       if (isDirty) {
         editorRef.current?.flush()
         await save()
         // documentStore.save() never throws -- a failure (disk error, or
         // the user cancelling a Save-As dialog for a never-saved document)
-        // is caught into `error` and leaves `isDirty` untouched, i.e. still
-        // true. Re-check the LIVE store state here, not the `isDirty` value
-        // captured in this render's closure (stale by the time this async
-        // function resumes after `await save()`) -- if the document is
-        // still dirty, the save didn't actually happen, so abandon the
-        // restore rather than falling through to replaceContent below,
-        // which would silently overwrite and permanently lose content that
-        // was never written anywhere. Same guard, same reasoning, as
-        // handleGoHome's own save-then-recheck above. Don't remove this:
-        // without it, a failed pre-restore save is a one-click, silent,
-        // unrecoverable data-loss path.
-        if (useDocumentStore.getState().isDirty) return
+        // is caught into `error` and leaves the target tab's OWN isDirty
+        // untouched, i.e. still true. Re-read THAT TAB's entry directly
+        // from the live `tabs` array -- NOT the top-level `isDirty`
+        // mirror, which by now reflects whichever tab is active, possibly
+        // a DIFFERENT one if the user switched tabs (via the
+        // always-visible EditorTabBar) during the `await` above. If the
+        // target tab is still dirty, its save didn't actually happen, so
+        // abandon the restore rather than falling through to
+        // replaceContentForTab below, which would silently overwrite and
+        // permanently lose content that was never written anywhere. Same
+        // guard, same reasoning, as handleGoHome's own save-then-recheck
+        // above, just tab-scoped instead of mirror-scoped so it survives a
+        // concurrent tab switch. Don't remove this: without it, a failed
+        // pre-restore save is a one-click, silent, unrecoverable
+        // data-loss path.
+        const targetTab = useDocumentStore.getState().tabs.find((tab) => tab.id === targetTabId)
+        if (targetTab?.isDirty) return
       }
-      replaceContent(restoredContent)
+      replaceContentForTab(targetTabId, restoredContent)
     }
-    void flushAndRestore()
+    return flushAndRestore()
   }
 
   return (
