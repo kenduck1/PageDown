@@ -3,7 +3,7 @@ import { readFile, writeFile, stat, realpath } from 'node:fs/promises'
 import { dirname, basename, join } from 'node:path'
 import { mergeRecentFiles, readRecentFiles, writeRecentFiles, isKnownPath } from './recent-files'
 import type { RecentFileEntry } from './recent-files'
-import { getLatestSnapshot } from './version-history'
+import { getLatestSnapshot, MTIME_TOLERANCE_MS } from './version-history'
 
 // Re-exported so src/main/index.ts imports every file-I/O primitive from one
 // place, matching its existing single-import pattern.
@@ -59,27 +59,23 @@ export async function canonicalizeDocumentPath(filePath: string): Promise<string
   }
 }
 
-// Filesystem mtime is not a monotonic clock directly comparable, bare, to a
-// locally-generated Date#toISOString() timestamp -- two realistic failure
-// modes, both silent loss of genuinely saved work, if compared with a bare
-// `>`:
-//   - mtime GRANULARITY TRUNCATION. Snapshot timestamps are millisecond-
-//     precision; mtime is not, on any filesystem short of APFS/ext4-with-ns
-//     (exFAT/FAT32 -- USB sticks -- truncate to 2s; HFS+ and many SMB/NFS
-//     shares to 1s). An autosave at 10:00:00.500 followed by a real Save at
-//     10:00:00.900 can yield an mtime of 10:00:00.000 on a truncating
-//     filesystem -- the PRE-save snapshot would then compare as newer than
-//     the save that superseded it, silently reverting the save on reopen.
-//   - MTIME-PRESERVING RESTORES. `rsync -t`, `tar -x`, `unzip`, and most
-//     backup/sync tools reinstate the original mtime, so a user who
-//     deliberately restores a backup over their document would get it
-//     silently overridden by a since-written, now-stale PageDown snapshot.
-// MTIME_TOLERANCE_MS absorbs both: a snapshot must be newer by MORE than
-// this margin to count as "meaningfully newer," not just newer by any
-// nonzero amount. Chosen to comfortably exceed the coarsest realistic mtime
-// granularity above (FAT32/exFAT's 2s).
-const MTIME_TOLERANCE_MS = 2000
-
+// MTIME_TOLERANCE_MS (imported from version-history.ts, which owns the
+// constant because it is Electron-free and this module is not -- see its own
+// definition for the full mtime-granularity/mtime-preserving-restore
+// rationale, and for why both consumers must share one value) absorbs two
+// realistic failure modes below, both silent loss of genuinely saved work if
+// the comparison were a bare `>`:
+//   - mtime GRANULARITY TRUNCATION. An autosave at 10:00:00.500 followed by a
+//     real Save at 10:00:00.900 can yield an mtime of 10:00:00.000 on a
+//     truncating filesystem -- the PRE-save snapshot would then compare as
+//     newer than the save that superseded it, silently reverting the save on
+//     reopen.
+//   - MTIME-PRESERVING RESTORES. A user who deliberately restores a backup
+//     over their document would get it silently overridden by a
+//     since-written, now-stale PageDown snapshot.
+// So a snapshot must be newer by MORE than this margin to count as
+// "meaningfully newer," not just newer by any nonzero amount.
+//
 // Best-effort: an autosave snapshot meaningfully newer than the file's own
 // on-disk mtime, AND whose content actually differs from what's on disk,
 // means the app (or OS) crashed after an autosave tick but before the next

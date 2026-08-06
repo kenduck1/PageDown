@@ -11,6 +11,7 @@ import {
   clearPendingAutosave,
   clearPendingAutosaveForFile,
   computeSnapshotsToPrune,
+  MTIME_TOLERANCE_MS,
   type SnapshotMeta
 } from './version-history'
 
@@ -337,9 +338,9 @@ describe('clearPendingAutosaveForFile', () => {
     await rm(fixtureDir, { recursive: true, force: true })
   })
 
-  it("deletes a pending snapshot written after the file exists, using the file's own mtime as the cutoff -- the real production ordering", async () => {
-    // This is the exact case the bug got wrong: the file already exists
-    // (from beforeEach) with a real mtime, and the snapshot below is
+  it("deletes a pending snapshot written well after the file's mtime, using that mtime (plus the tolerance) as the cutoff -- the real production ordering", async () => {
+    // This is the exact case the original bug got wrong: the file already
+    // exists (from beforeEach) with a real mtime, and the snapshot below is
     // written normally afterward -- so its timestamp is naturally NEWER
     // than the file's mtime, same as a real autosave tick landing after a
     // document was opened. No sinceIso variable is captured anywhere in
@@ -349,17 +350,20 @@ describe('clearPendingAutosaveForFile', () => {
     // Backdating the file's mtime here is load-bearing, not decoration --
     // found by independent verification (real, reproducible flake: 4/5
     // failures when this whole file runs back-to-back, 0/5 in isolation).
-    // clearPendingAutosaveForFile's cutoff comparison is a plain
-    // `entry.timestamp > sinceIso` with no tolerance window (unlike
-    // file-io.ts's separate MTIME_TOLERANCE_MS-gated recovery check), so it
-    // needs a real, unambiguous gap between the file's mtime and the
-    // snapshot's timestamp -- two sequential awaited calls with no
-    // artificial separation can land within the same millisecond when
-    // Vitest runs many fast tests in one process, exactly the same
-    // mtime-ordering hazard already found and fixed this same way in
-    // gate14-autosave-version-history.spec.ts's tests 1 and 3.
+    // Two sequential awaited calls with no artificial separation can land
+    // within the same millisecond when Vitest runs many fast tests in one
+    // process, exactly the same mtime-ordering hazard already found and
+    // fixed this same way in gate14-autosave-version-history.spec.ts's
+    // tests 1 and 3.
+    //
+    // The backdate is 60s (was 2s before the final-review fix) because the
+    // cutoff is now `mtime + MTIME_TOLERANCE_MS`, so a 2s backdate would put
+    // the snapshot right ON the cutoff boundary and make this test flake for
+    // an entirely new reason. 60s is also the realistic figure: a genuine
+    // pending autosave is a 45s-timer tick, which lands far outside the 2s
+    // margin -- that structural gap is exactly why adding the margin is safe.
     const fileStat = await stat(docPath)
-    const backdated = new Date(fileStat.mtimeMs - 2_000)
+    const backdated = new Date(fileStat.mtimeMs - 60_000)
     await utimes(docPath, backdated, backdated)
 
     const id = await writeSnapshot(userDataDir, docPath, 'pending autosave, discard me')
@@ -368,6 +372,79 @@ describe('clearPendingAutosaveForFile', () => {
 
     expect(await listSnapshots(userDataDir, docPath)).toEqual([])
     expect(await readSnapshotContent(userDataDir, docPath, id)).toBeNull()
+  })
+
+  // Regression coverage for the final whole-branch review's Important 1:
+  // clearPendingAutosaveForFile used the file's BARE mtime as the cutoff, but
+  // documentStore.save() writes its own snapshot AFTER the disk write has
+  // completed (deliberately -- a snapshot write must never block, delay, or
+  // fail a real Save), so a Save-triggered snapshot's timestamp is always a
+  // few ms GREATER than the mtime of the write it records, and a later
+  // "Don't Save" deleted it. Verified empirically before the fix (autosave C1
+  // -> Save C2 -> autosave C3 -> clear left ONLY C1, i.e. the History list's
+  // newest surviving "version" was a PRE-Save autosave -- restoring "the
+  // latest version" would hand back content that was never saved).
+  //
+  // Deliberately reproduces the real production ORDERING rather than
+  // asserting on an arbitrary timestamp: write the file (as saveFile does),
+  // then write the snapshot right after (as save()'s post-write
+  // autosaveSnapshot call does), with no artificial separation at all. That
+  // millisecond-scale gap IS the bug's whole surface.
+  it("keeps the Save-triggered snapshot that lands milliseconds AFTER the file's own mtime", async () => {
+    // Re-stamp the file's mtime to "now" so the snapshot below is written
+    // immediately after it, exactly as a real Save does (beforeEach's write
+    // is otherwise a few ms further back, which is still well inside the
+    // tolerance but leaves less of the point on the page).
+    const now = new Date()
+    await utimes(docPath, now, now)
+
+    const savedId = await writeSnapshot(userDataDir, docPath, '# Saved content')
+
+    await clearPendingAutosaveForFile(userDataDir, docPath, docPath)
+
+    const remaining = await listSnapshots(userDataDir, docPath)
+    expect(remaining.map((entry) => entry.id)).toEqual([savedId])
+    expect(await readSnapshotContent(userDataDir, docPath, savedId)).toBe('# Saved content')
+  })
+
+  // The composed scenario from the review's own empirical repro, end to end
+  // (autosave C1 -> Save C2 -> autosave C3 -> clear): one clear call has to
+  // treat all three DIFFERENTLY. Before the fix this left ONLY C1 -- both the
+  // saved snapshot and the pending one were deleted.
+  it('keeps a pre-Save autosave AND the Save-triggered snapshot, while deleting the pending autosave written after the Save', async () => {
+    const preSaveId = await writeSnapshot(userDataDir, docPath, '# C1 pre-save autosave')
+    await new Promise((resolve) => setTimeout(resolve, 5))
+    const savedId = await writeSnapshot(userDataDir, docPath, '# C2 saved content')
+    // A real gap standing in for the 45s autosave interval -- shortened to
+    // keep the suite fast; only its ORDER relative to the cutoff matters.
+    await new Promise((resolve) => setTimeout(resolve, 300))
+    const pendingId = await writeSnapshot(userDataDir, docPath, '# C3 pending autosave')
+
+    // Place the file's mtime so the cutoff (`mtime + MTIME_TOLERANCE_MS`)
+    // lands squarely BETWEEN C2 and C3 -- which is exactly where a real
+    // Save's cutoff falls, since save() writes the file first and snapshots
+    // a few ms after. Computed from C2's own recorded timestamp rather than
+    // wall-clock guesses so the placement is exact, and centred in the C2/C3
+    // gap (~150ms of slack on each side) so filesystem mtime rounding can't
+    // tip it over either boundary. MTIME_TOLERANCE_MS is imported, not
+    // re-typed as a literal, for the same single-source reason the fix
+    // itself reuses it.
+    const c2Timestamp = (await listSnapshots(userDataDir, docPath)).find(
+      (entry) => entry.id === savedId
+    )?.timestamp
+    if (!c2Timestamp) throw new Error('expected the saved snapshot to be indexed')
+    const mtime = new Date(new Date(c2Timestamp).getTime() + 150 - MTIME_TOLERANCE_MS)
+    await utimes(docPath, mtime, mtime)
+
+    await clearPendingAutosaveForFile(userDataDir, docPath, docPath)
+
+    const remaining = await listSnapshots(userDataDir, docPath)
+    expect(remaining.map((entry) => entry.id)).toEqual([preSaveId, savedId])
+    expect(await readSnapshotContent(userDataDir, docPath, pendingId)).toBeNull()
+    // The newest surviving entry must be the SAVED content -- the whole
+    // point: "restore the latest version" has to hand back what was actually
+    // written to disk, not a pre-Save autosave.
+    expect(await readSnapshotContent(userDataDir, docPath, savedId)).toBe('# C2 saved content')
   })
 
   it("keeps a snapshot that is OLDER than the file's current mtime (a real prior save, not pending)", async () => {
