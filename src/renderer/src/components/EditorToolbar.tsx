@@ -286,7 +286,7 @@ function EditorToolbar({ editorRef }: EditorToolbarProps): ReactElement {
         <div
           ref={scrollRef}
           className={`scrollbar-hide flex items-center gap-x-2.5 overflow-x-auto ${
-            canScrollRight ? 'shadow-[inset_-10px_0_8px_-9px_rgba(0,0,0,0.08)]' : ''
+            canScrollRight ? 'shadow-[inset_-22px_0_22px_-16px_rgba(0,0,0,0.10)]' : ''
           }`}
         >
           {/* Sticky left group: undo/redo + paragraph-style/font/size. z-10
