@@ -38,6 +38,66 @@ describe('EditorHistory', () => {
     expect(screen.getByText(/save this document first/i)).toBeInTheDocument()
   })
 
+  // The main-process handlers themselves never reject (each catches
+  // internally), but `ipcRenderer.invoke` can on its own account -- an
+  // unregistered channel, a structured-clone failure -- and a future refactor
+  // of those handlers could too. Before the final whole-branch review, none
+  // of this component's .then() chains had a .catch, so such a rejection
+  // produced an unhandled promise rejection AND (for the mount fetch) left
+  // `loading` stuck at true forever: "Loading history…" with no way out but
+  // switching sidebar tabs.
+  it('degrades to the empty state instead of hanging on "Loading history…" when the history fetch rejects', async () => {
+    vi.mocked(window.api.getVersionHistory).mockRejectedValue(new Error('IPC channel gone'))
+    render(<EditorHistory filePath="/a.md" onRestore={vi.fn()} />)
+
+    expect(await screen.findByText('No saved versions yet.')).toBeInTheDocument()
+    expect(screen.queryByText('Loading history…')).not.toBeInTheDocument()
+  })
+
+  it('survives a rejected restore without an unhandled rejection, leaving the displayed list intact', async () => {
+    vi.mocked(window.api.getVersionHistory).mockResolvedValue([
+      { id: 'a', timestamp: '2026-08-05T12:00:00.000Z', sizeBytes: 10 }
+    ])
+    vi.mocked(window.api.restoreVersionContent).mockRejectedValue(new Error('IPC channel gone'))
+    const onRestore = vi.fn()
+    const user = userEvent.setup()
+    render(<EditorHistory filePath="/a.md" onRestore={onRestore} />)
+
+    const row = await screen.findByRole('button', { name: /restore/i })
+    await user.click(row)
+
+    // handleRestore is invoked as `void handleRestore(...)` from onClick, so
+    // without the catch this rejection has nowhere to go -- Vitest reports an
+    // unhandled rejection and fails the run. The visible assertions below are
+    // the secondary half: the panel must stay usable and keep showing the
+    // list it already had.
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    expect(onRestore).not.toHaveBeenCalled()
+    expect(screen.getAllByRole('button', { name: /restore/i })).toHaveLength(1)
+  })
+
+  it('survives a rejected post-restore refetch, keeping the restore itself successful', async () => {
+    // The restore genuinely happened (onRestore was called); only the
+    // cosmetic list refresh afterwards failed. That must not turn into an
+    // unhandled rejection either.
+    vi.mocked(window.api.getVersionHistory)
+      .mockResolvedValueOnce([{ id: 'a', timestamp: '2026-08-05T12:00:00.000Z', sizeBytes: 10 }])
+      .mockRejectedValue(new Error('IPC channel gone'))
+    vi.mocked(window.api.restoreVersionContent).mockResolvedValue('# Restored content')
+    const onRestore = vi.fn()
+    const user = userEvent.setup()
+    render(<EditorHistory filePath="/a.md" onRestore={onRestore} />)
+
+    const row = await screen.findByRole('button', { name: /restore/i })
+    await user.click(row)
+
+    await waitFor(() => {
+      expect(onRestore).toHaveBeenCalledWith('# Restored content')
+    })
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    expect(screen.getAllByRole('button', { name: /restore/i })).toHaveLength(1)
+  })
+
   it('renders a grouped snapshot list and calls onRestore with fetched content when a snapshot is clicked', async () => {
     vi.mocked(window.api.getVersionHistory).mockResolvedValue([
       { id: 'a', timestamp: '2026-08-05T12:00:00.000Z', sizeBytes: 10 }

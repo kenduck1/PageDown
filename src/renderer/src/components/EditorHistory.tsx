@@ -127,67 +127,100 @@ function EditorHistory({ filePath, onRestore }: EditorHistoryProps): React.JSX.E
     // post-restore refresh below duplicates this fetch rather than sharing
     // a `fetchHistory` helper with this effect.
     const requestId = ++latestRequestRef.current
-    window.api.getVersionHistory(filePath).then((result) => {
-      if (latestRequestRef.current !== requestId) return
-      if (filePath !== currentFilePathRef.current) return
-      setSnapshots(result)
-      setLoading(false)
-    })
+    window.api
+      .getVersionHistory(filePath)
+      .then((result) => {
+        if (latestRequestRef.current !== requestId) return
+        if (filePath !== currentFilePathRef.current) return
+        setSnapshots(result)
+        setLoading(false)
+      })
+      // The `file:getVersionHistory` handler itself never rejects (it catches
+      // internally and returns []), but `ipcRenderer.invoke` can reject on its
+      // own account -- an unregistered channel, a structured-clone failure --
+      // and any future refactor of that handler could too. Without this,
+      // such a rejection produced an unhandled promise rejection AND left
+      // `loading` stuck at true forever, so the panel showed "Loading
+      // history…" permanently with no way out but switching sidebar tabs.
+      // Degrade to the honest empty state instead, behind the exact same two
+      // staleness guards as the success path (a stale rejection must not
+      // clear a newer, correct list any more than a stale success may
+      // overwrite it).
+      .catch(() => {
+        if (latestRequestRef.current !== requestId) return
+        if (filePath !== currentFilePathRef.current) return
+        setSnapshots([])
+        setLoading(false)
+      })
   }, [filePath])
 
+  // Every await below is wrapped (see the trailing catch) rather than left
+  // bare: this function is invoked as `void handleRestore(...)` from an
+  // onClick, so ANY rejection along the way -- restoreVersionContent's IPC
+  // call, the caller's own onRestore (EditorScreen's real flush+Save round
+  // trip), or the post-restore refetch -- would otherwise surface as an
+  // unhandled promise rejection with nothing to attribute it to. Failing
+  // quietly and leaving the currently-displayed list alone is the right
+  // degradation here: the list is already rendered and still accurate, and
+  // there is no restore-specific error surface in this panel to route into.
   const handleRestore = async (snapshotId: string): Promise<void> => {
     if (!filePath) return
-    const content = await window.api.restoreVersionContent(filePath, snapshotId)
-    if (content === null) return
-    // Await the caller's own restore completion (EditorScreen's
-    // handleRestoreVersion may flush + Save first -- a real async gap)
-    // before refetching below. Without this, the refetch typically
-    // resolves before that Save even starts, returning the same stale
-    // list and defeating the whole point of refreshing.
-    //
-    // Residual, accepted gap: even awaiting the restore fully doesn't
-    // guarantee the freshly-written snapshot is in the list this refetch
-    // returns. documentStore.save()'s own version-history snapshot write
-    // (`void window.api.autosaveSnapshot(...)`) is deliberately
-    // fire-and-forget -- fired without `await`, after the real save has
-    // already succeeded and the store has already been updated, NOT after
-    // save()'s own returned promise resolves (it's the last statement
-    // inside that same async function, so save()'s promise resolves
-    // essentially right alongside this call firing, not afterward) --
-    // specifically so a slow/failed snapshot write can never block or
-    // delay a real Save (see documentStore.ts's own comment on that call)
-    // -- that invariant is intentionally NOT weakened here just to make
-    // this refresh airtight. In rare timing, this refetch can still beat
-    // that snapshot write to disk. Not fixed: switching sidebar tabs
-    // (which remounts this component) or reopening History a moment later
-    // both self-correct.
-    await onRestore(content)
-    // Restoring flushes and Saves the current document first (see
-    // EditorScreen's handleRestoreVersion), and a Save writes a new
-    // snapshot -- so the list we just showed the user is immediately
-    // stale. Re-fetch once the restore round-trip finishes. The list is
-    // otherwise only fetched on mount/filePath change (switching sidebar
-    // tabs remounts this component, which covers the common case) --
-    // deliberately no live subscription here. This runs from a click
-    // handler, not a useEffect body, so setState here isn't subject to
-    // (and doesn't need to route around) the effect-body rule above.
-    const requestId = ++latestRequestRef.current
-    const refreshed = await window.api.getVersionHistory(filePath)
-    if (latestRequestRef.current !== requestId) return
-    // `filePath` here is THIS closure's value -- captured from whichever
-    // render created the specific handleRestore instance the clicked
-    // button was bound to, frozen for this function's entire lifetime.
-    // If the user switched documents during either await above (both
-    // restoreVersionContent and onRestore are real async gaps), this
-    // component has since re-rendered with a DIFFERENT filePath prop, its
-    // own effect has already fetched and displayed that document's
-    // correct list, and this refetch -- for the OLD document, dispatched
-    // LAST -- would otherwise pass the latestRequestRef check above (it
-    // genuinely is the most recently dispatched request) and silently
-    // clobber the correctly-displayed list with the wrong document's
-    // history. Bail if the document has moved on.
-    if (filePath !== currentFilePathRef.current) return
-    setSnapshots(refreshed)
+    try {
+      const content = await window.api.restoreVersionContent(filePath, snapshotId)
+      if (content === null) return
+      // Await the caller's own restore completion (EditorScreen's
+      // handleRestoreVersion may flush + Save first -- a real async gap)
+      // before refetching below. Without this, the refetch typically
+      // resolves before that Save even starts, returning the same stale
+      // list and defeating the whole point of refreshing.
+      //
+      // Residual, accepted gap: even awaiting the restore fully doesn't
+      // guarantee the freshly-written snapshot is in the list this refetch
+      // returns. documentStore.save()'s own version-history snapshot write
+      // (`void window.api.autosaveSnapshot(...)`) is deliberately
+      // fire-and-forget -- fired without `await`, after the real save has
+      // already succeeded and the store has already been updated, NOT after
+      // save()'s own returned promise resolves (it's the last statement
+      // inside that same async function, so save()'s promise resolves
+      // essentially right alongside this call firing, not afterward) --
+      // specifically so a slow/failed snapshot write can never block or
+      // delay a real Save (see documentStore.ts's own comment on that call)
+      // -- that invariant is intentionally NOT weakened here just to make
+      // this refresh airtight. In rare timing, this refetch can still beat
+      // that snapshot write to disk. Not fixed: switching sidebar tabs
+      // (which remounts this component) or reopening History a moment later
+      // both self-correct.
+      await onRestore(content)
+      // Restoring flushes and Saves the current document first (see
+      // EditorScreen's handleRestoreVersion), and a Save writes a new
+      // snapshot -- so the list we just showed the user is immediately
+      // stale. Re-fetch once the restore round-trip finishes. The list is
+      // otherwise only fetched on mount/filePath change (switching sidebar
+      // tabs remounts this component, which covers the common case) --
+      // deliberately no live subscription here. This runs from a click
+      // handler, not a useEffect body, so setState here isn't subject to
+      // (and doesn't need to route around) the effect-body rule above.
+      const requestId = ++latestRequestRef.current
+      const refreshed = await window.api.getVersionHistory(filePath)
+      if (latestRequestRef.current !== requestId) return
+      // `filePath` here is THIS closure's value -- captured from whichever
+      // render created the specific handleRestore instance the clicked
+      // button was bound to, frozen for this function's entire lifetime.
+      // If the user switched documents during either await above (both
+      // restoreVersionContent and onRestore are real async gaps), this
+      // component has since re-rendered with a DIFFERENT filePath prop, its
+      // own effect has already fetched and displayed that document's
+      // correct list, and this refetch -- for the OLD document, dispatched
+      // LAST -- would otherwise pass the latestRequestRef check above (it
+      // genuinely is the most recently dispatched request) and silently
+      // clobber the correctly-displayed list with the wrong document's
+      // history. Bail if the document has moved on.
+      if (filePath !== currentFilePathRef.current) return
+      setSnapshots(refreshed)
+    } catch {
+      // Deliberately silent, and deliberately leaves the currently-displayed
+      // list alone -- see this function's own comment above.
+    }
   }
 
   const toggleExpanded = (groupId: string): void => {
