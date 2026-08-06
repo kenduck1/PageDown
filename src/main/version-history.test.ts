@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, mkdir, rm, writeFile, utimes } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
@@ -9,6 +9,7 @@ import {
   listSnapshots,
   readSnapshotContent,
   clearPendingAutosave,
+  clearPendingAutosaveForFile,
   computeSnapshotsToPrune,
   type SnapshotMeta
 } from './version-history'
@@ -295,6 +296,78 @@ describe('clearPendingAutosave', () => {
     const futureIso = new Date(Date.now() + 60_000).toISOString()
     await clearPendingAutosave(userDataDir, docPath, futureIso)
     expect(await listSnapshots(userDataDir, docPath)).toHaveLength(1)
+  })
+})
+
+// Regression coverage for a real, shipped Critical bug (fix-round-2
+// review): EditorScreen's "Don't Save" handler used to pass
+// `new Date().toISOString()` -- the moment of the click -- directly as
+// clearPendingAutosave's own `sinceIso`. Every snapshot that already
+// exists was necessarily written in the PAST relative to "now," so
+// `entry.timestamp > sinceIso` was false for every real entry and NOTHING
+// was ever deleted -- verified empirically against this exact module
+// before the fix. clearPendingAutosaveForFile fixes this by computing the
+// cutoff from the document's own real on-disk mtime instead. Unlike the
+// `clearPendingAutosave` tests above (which use an arbitrary, non-real
+// `docPath` string purely as a storage key, and a manually pre-captured
+// `cutoff` variable -- a legitimate way to test that lower-level
+// primitive's own filter mechanics in isolation), these tests use a REAL
+// file on a REAL temp directory and the PRODUCTION ordering: the file
+// exists first (with whatever mtime that gives it), a snapshot is written
+// normally afterward with no artificial cutoff variable involved, then
+// clearPendingAutosaveForFile is asked to compute its own cutoff from the
+// file as it actually sits on disk right now -- exactly what
+// EditorScreen's real "Don't Save" click does end to end, once you factor
+// out the Electron-only IPC plumbing that made this untestable inline in
+// index.ts before the extraction.
+describe('clearPendingAutosaveForFile', () => {
+  let userDataDir: string
+  let fixtureDir: string
+  let docPath: string
+
+  beforeEach(async () => {
+    userDataDir = await mkdtemp(join(tmpdir(), 'pagedown-vh-clearfile-test-'))
+    fixtureDir = await mkdtemp(join(tmpdir(), 'pagedown-vh-clearfile-doc-'))
+    docPath = join(fixtureDir, 'doc.md')
+    await writeFile(docPath, '# On-disk content')
+  })
+
+  afterEach(async () => {
+    await rm(userDataDir, { recursive: true, force: true })
+    await rm(fixtureDir, { recursive: true, force: true })
+  })
+
+  it("deletes a pending snapshot written after the file exists, using the file's own mtime as the cutoff -- the real production ordering", async () => {
+    // This is the exact case the bug got wrong: the file already exists
+    // (from beforeEach) with a real mtime, and the snapshot below is
+    // written normally afterward -- so its timestamp is naturally NEWER
+    // than the file's mtime, same as a real autosave tick landing after a
+    // document was opened. No sinceIso variable is captured anywhere in
+    // this test; clearPendingAutosaveForFile must derive the correct
+    // cutoff entirely on its own from the file as it sits on disk.
+    const id = await writeSnapshot(userDataDir, docPath, 'pending autosave, discard me')
+
+    await clearPendingAutosaveForFile(userDataDir, docPath, docPath)
+
+    expect(await listSnapshots(userDataDir, docPath)).toEqual([])
+    expect(await readSnapshotContent(userDataDir, docPath, id)).toBeNull()
+  })
+
+  it("keeps a snapshot that is OLDER than the file's current mtime (a real prior save, not pending)", async () => {
+    const oldId = await writeSnapshot(userDataDir, docPath, 'already reflected in a later save')
+    // Push the file's mtime forward past the snapshot's own timestamp --
+    // simulates a real Save landing after that snapshot was written, which
+    // is the "nothing pending" case: the snapshot is history, not a
+    // discard candidate.
+    await new Promise((resolve) => setTimeout(resolve, 5))
+    const future = new Date(Date.now() + 60_000)
+    await utimes(docPath, future, future)
+
+    await clearPendingAutosaveForFile(userDataDir, docPath, docPath)
+
+    const remaining = await listSnapshots(userDataDir, docPath)
+    expect(remaining).toHaveLength(1)
+    expect(remaining[0].id).toBe(oldId)
   })
 })
 

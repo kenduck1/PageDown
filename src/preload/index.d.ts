@@ -30,7 +30,7 @@ export interface FileApi {
   autosaveSnapshot: (content: string, filePath: string) => Promise<void>
   getVersionHistory: (filePath: string) => Promise<SnapshotMeta[]>
   restoreVersionContent: (filePath: string, snapshotId: string) => Promise<string | null>
-  clearPendingAutosave: (filePath: string, sinceIso: string) => Promise<void>
+  clearPendingAutosave: (filePath: string) => Promise<void>
 }
 
 declare global {

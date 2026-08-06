@@ -135,7 +135,15 @@ async function safeClose(
 }
 
 test('Gate 14: opening a document with a newer autosave snapshot silently loads that content', async () => {
-  test.setTimeout(60_000)
+  // Bumped from 60s to 120s (fix-round-2 review): getMainWindow's own
+  // search budget is ALSO 60s (see this file's header/getMainWindow
+  // comments), so a 60s test.setTimeout left zero headroom if window
+  // acquisition ever needed most of its own budget -- the outer test
+  // timeout would fire at essentially the same moment, turning
+  // getMainWindow's specific, actionable "Timed out locating the main
+  // app-shell window" error into an ambiguous "Test timeout exceeded" and
+  // leaving no runway for safeClose's own 15s race in the finally block.
+  test.setTimeout(120_000)
 
   // `close`/`app`/`userDataDir`/`fixtureDir` are declared outside the try so
   // `finally` can reach them, but the ACQUISITION of all of them now
@@ -229,7 +237,9 @@ test('Gate 14: opening a document with a newer autosave snapshot silently loads 
 })
 
 test('Gate 14: clearing pending autosave means a subsequent open does NOT recover the discarded content', async () => {
-  test.setTimeout(60_000)
+  // Same 60s -> 120s bump as the previous test, same reason -- see that
+  // test's own comment.
+  test.setTimeout(120_000)
 
   let app: ElectronApplication | undefined
   let close: (() => Promise<void>) | undefined
@@ -264,7 +274,6 @@ test('Gate 14: clearing pending autosave means a subsequent open does NOT recove
     const backdated = new Date(fileStat.mtimeMs - 60_000)
     await utimes(docPath, backdated, backdated)
 
-    const beforeDiscard = new Date().toISOString()
     await win.evaluate(
       (p) =>
         (
@@ -275,14 +284,20 @@ test('Gate 14: clearing pending autosave means a subsequent open does NOT recove
       docPath
     )
 
+    // No cutoff argument -- window.api.clearPendingAutosave now takes only
+    // the file path; the main process computes the real cutoff itself from
+    // the (backdated, above) file's own on-disk mtime. See this file's
+    // header comment and CLAUDE.md's "Autosave, crash recovery, and version
+    // history" section for the real, shipped bug this signature change
+    // fixes: a renderer-supplied "now" cutoff never matched any existing
+    // snapshot's timestamp (all written in the past relative to "now"), so
+    // clearPendingAutosave silently deleted nothing, ever.
     await win.evaluate(
-      ({ p, since }) =>
+      (p) =>
         (
-          window as unknown as {
-            api: { clearPendingAutosave: (f: string, s: string) => Promise<void> }
-          }
-        ).api.clearPendingAutosave(p, since),
-      { p: docPath, since: beforeDiscard }
+          window as unknown as { api: { clearPendingAutosave: (f: string) => Promise<void> } }
+        ).api.clearPendingAutosave(p),
+      docPath
     )
 
     // Positive proof of the delete itself, not just an inference from
@@ -290,6 +305,20 @@ test('Gate 14: clearing pending autosave means a subsequent open does NOT recove
     // directly off disk (bypassing IPC entirely), using the exact same
     // canonicalization + hashing version-history.ts itself uses, and
     // confirm the snapshot file written above is actually gone.
+    //
+    // Fix-round-2 note: this test previously masked the Critical bug above
+    // -- an earlier version captured a `since` variable BEFORE the
+    // snapshot write and passed it as a second argument, so deletion
+    // succeeded regardless of whether the real production code path
+    // worked. It genuinely discriminates now, for two independent
+    // reasons: (1) no cutoff variable is captured anywhere in this test at
+    // all -- the real handler computes its own cutoff via a fresh stat()
+    // call at clear-time, exactly like a real "Don't Save" click; (2)
+    // verified directly by temporarily reintroducing the exact reviewed
+    // bug (clearPendingAutosaveForFile computing `sinceIso` from
+    // `new Date()` instead of the file's mtime) and confirming this
+    // assertion fails with a real, non-vacuous diff (the snapshot file
+    // was still present) rather than passing vacuously.
     const canonicalPath = await canonicalizeDocumentPath(docPath)
     const snapshotsDir = join(
       userDataDir,
@@ -481,7 +510,9 @@ test('Gate 14: the History sidebar tab lists a real saved version and restoring 
 // broken guard writing into an ALREADY-EXISTING directory couldn't hide
 // behind an unchanged directory count.
 test('Gate 14: the four version-history IPC handlers drop an unknown (non-allowlisted) path instead of touching disk', async () => {
-  test.setTimeout(60_000)
+  // Same 60s -> 120s bump as the first two tests in this file, same
+  // reason -- see the first test's own comment.
+  test.setTimeout(120_000)
 
   let app: ElectronApplication | undefined
   let close: (() => Promise<void>) | undefined
@@ -589,10 +620,8 @@ test('Gate 14: the four version-history IPC handlers drop an unknown (non-allowl
       win.evaluate(
         (p) =>
           (
-            window as unknown as {
-              api: { clearPendingAutosave: (f: string, s: string) => Promise<void> }
-            }
-          ).api.clearPendingAutosave(p, new Date().toISOString()),
+            window as unknown as { api: { clearPendingAutosave: (f: string) => Promise<void> } }
+          ).api.clearPendingAutosave(p),
         neverKnownPath
       )
     ).resolves.toBeUndefined()

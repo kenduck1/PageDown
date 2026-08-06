@@ -72,17 +72,24 @@ function EditorScreen(): React.JSX.Element {
     }
     if (choice === 'discard' && filePath) {
       // "Don't Save" means exactly that -- a pending autosave snapshot must
-      // never silently reappear on next open. `new Date().toISOString()` is
-      // "now" as a reasonable stand-in for "the document's own last-saved
-      // timestamp"; clearPendingAutosave only deletes snapshots STRICTLY
-      // NEWER than this, so it's safe even if it's a few seconds later than
-      // the document's actual on-disk mtime -- the goal is "delete the
-      // pending unsaved autosave," not precise timestamp matching.
-      // Fire-and-forget: clearPendingAutosave's own IPC handler already
-      // validates the path and swallows failures (never rejects), and this
-      // runs after the discard decision is already final, so it can't
-      // affect navigation either way.
-      void window.api.clearPendingAutosave(filePath, new Date().toISOString())
+      // never silently reappear on next open. `clearPendingAutosave` takes
+      // ONLY the file path now, not a renderer-supplied cutoff -- a real,
+      // shipped bug (found in review) used `new Date().toISOString()` (the
+      // moment of this click) as the cutoff, but every snapshot that
+      // already exists was written in the PAST relative to "now," so
+      // `entry.timestamp > sinceIso` was false for all of them and nothing
+      // was ever deleted. The pending snapshot then survived, was more than
+      // MTIME_TOLERANCE_MS newer than the file's untouched mtime, and got
+      // silently "recovered" on the next open -- the exact failure this
+      // feature exists to prevent. The main-process handler now computes
+      // the correct cutoff itself, from the validated path's real on-disk
+      // mtime (see its own comment in src/main/index.ts) -- not something
+      // the renderer can supply, since it has no way to know the mtime
+      // anyway. Fire-and-forget: clearPendingAutosave's own IPC handler
+      // already validates the path and swallows failures (never rejects),
+      // and this runs after the discard decision is already final, so it
+      // can't affect navigation either way.
+      void window.api.clearPendingAutosave(filePath)
     }
     goHome()
   }
