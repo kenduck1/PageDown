@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
@@ -79,9 +79,24 @@ describe('writeSnapshot / getLatestSnapshot / listSnapshots', () => {
     expect((await getLatestSnapshot(userDataDir, docPath))?.content).toBe('doc A content')
   })
 
-  it('readSnapshotContent returns null for an unknown id', async () => {
+  // Renamed from "returns null for an unknown id": once id-format validation was
+  // added (see the path-traversal test below), 'not-a-real-id' fails
+  // SNAPSHOT_ID_PATTERN and returns null via the format-validation early return
+  // WITHOUT ever reaching the readFile try/catch below -- so this now covers
+  // format rejection, not "unknown but well-formed id". See the next test for
+  // that case.
+  it('readSnapshotContent returns null for a malformed (non-conforming) id', async () => {
     await writeSnapshot(userDataDir, docPath, 'x')
     expect(await readSnapshotContent(userDataDir, docPath, 'not-a-real-id')).toBeNull()
+  })
+
+  it('readSnapshotContent returns null for a well-formed id with no backing file', async () => {
+    await writeSnapshot(userDataDir, docPath, 'x')
+    // Passes SNAPSHOT_ID_PATTERN (24-char ISO timestamp + '-' + 4 lowercase hex
+    // chars, 'dead' being valid hex) but was never written, so this exercises the
+    // readFile-fails/catch-returns-null path specifically, not the format guard.
+    const wellFormedButUnknown = `${new Date().toISOString()}-dead`
+    expect(await readSnapshotContent(userDataDir, docPath, wellFormedButUnknown)).toBeNull()
   })
 
   it('readSnapshotContent returns the exact content for a real id', async () => {
@@ -121,6 +136,131 @@ describe('writeSnapshot / getLatestSnapshot / listSnapshots', () => {
     expect(await readSnapshotContent(userDataDir, docPath, '../secret')).toBeNull()
     expect(await readSnapshotContent(userDataDir, docPath, '../../../../etc/passwd')).toBeNull()
     expect(await readSnapshotContent(userDataDir, docPath, '..%2F..%2Fsecret')).toBeNull()
+  })
+})
+
+describe('readIndex corruption resilience', () => {
+  let userDataDir: string
+  const docPath = '/corrupt/doc.md'
+
+  beforeEach(async () => {
+    userDataDir = await mkdtemp(join(tmpdir(), 'pagedown-vh-corrupt-'))
+  })
+
+  afterEach(async () => {
+    await rm(userDataDir, { recursive: true, force: true })
+  })
+
+  // A syntactically valid JSON file can still be the wrong shape. The governing
+  // rule (per fix-round-1 review) is "a corrupted or unreadable index.json is no
+  // history for this document, not an error" -- these write a raw, malformed
+  // index.json directly (bypassing writeSnapshot/writeIndex entirely) and assert
+  // the public read APIs degrade gracefully instead of throwing.
+  async function writeRawIndex(raw: string): Promise<void> {
+    const dir = join(userDataDir, 'version-history', hashDocumentPath(docPath))
+    await mkdir(dir, { recursive: true })
+    await writeFile(join(dir, 'index.json'), raw, 'utf8')
+  }
+
+  it('treats a JSON object (not an array) index.json as no history', async () => {
+    await writeRawIndex('{}')
+    expect(await listSnapshots(userDataDir, docPath)).toEqual([])
+    expect(await getLatestSnapshot(userDataDir, docPath)).toBeNull()
+  })
+
+  it('treats a JSON null index.json as no history', async () => {
+    await writeRawIndex('null')
+    expect(await listSnapshots(userDataDir, docPath)).toEqual([])
+    expect(await getLatestSnapshot(userDataDir, docPath)).toBeNull()
+  })
+
+  it('filters out malformed entries from an otherwise-valid array, keeping well-formed ones', async () => {
+    const validTimestamp = new Date(2026, 0, 1, 0, 0, 0).toISOString()
+    const validId = `${validTimestamp}-abcd`
+    await writeRawIndex(
+      JSON.stringify([
+        null,
+        { id: 123, timestamp: 'x', sizeBytes: 'y' },
+        { id: validId, timestamp: validTimestamp, sizeBytes: 5 }
+      ])
+    )
+    const snapshots = await listSnapshots(userDataDir, docPath)
+    expect(snapshots).toEqual([{ id: validId, timestamp: validTimestamp, sizeBytes: 5 }])
+  })
+})
+
+describe('per-document write serialization', () => {
+  let userDataDir: string
+  const docA = '/concurrent/doc-a.md'
+  const docB = '/concurrent/doc-b.md'
+
+  beforeEach(async () => {
+    userDataDir = await mkdtemp(join(tmpdir(), 'pagedown-vh-concurrency-'))
+  })
+
+  afterEach(async () => {
+    await rm(userDataDir, { recursive: true, force: true })
+  })
+
+  // Regression test for the fix-round-1 Critical finding: writeSnapshot used to
+  // be read-index -> compute -> write-index with no lock, so overlapping calls
+  // for the SAME document (e.g. the 45s autosave timer racing an explicit Save)
+  // could each compute their new index from a stale read, and whichever
+  // writeIndex finished last would silently drop the other's entry from
+  // index.json -- the snapshot .md file stays on disk but becomes permanently
+  // unreachable. Firing several concurrent writeSnapshot calls (distinct
+  // content, so none is deduped as a no-op) and asserting every returned id
+  // ends up in the index directly exercises the fix.
+  it('serializes concurrent writeSnapshot calls for the SAME document so none is lost', async () => {
+    const ids = await Promise.all([
+      writeSnapshot(userDataDir, docA, 'race content 1'),
+      writeSnapshot(userDataDir, docA, 'race content 2'),
+      writeSnapshot(userDataDir, docA, 'race content 3'),
+      writeSnapshot(userDataDir, docA, 'race content 4'),
+      writeSnapshot(userDataDir, docA, 'race content 5')
+    ])
+    const snapshots = await listSnapshots(userDataDir, docA)
+    expect(snapshots).toHaveLength(5)
+    const indexedIds = new Set(snapshots.map((entry) => entry.id))
+    for (const id of ids) {
+      expect(indexedIds.has(id)).toBe(true)
+    }
+  })
+
+  // The serialization queue is keyed PER DOCUMENT (hashDocumentPath), not a
+  // single shared queue -- an autosave for one document must not queue behind
+  // an unrelated document's write. This is a structural property, not just a
+  // final-state one: a (buggy) single global queue would still produce correct
+  // final state for both documents, just slower, so this test discriminates on
+  // completion ORDER rather than outcome alone. docA gets 30 sequential writes
+  // enqueued first; docB's single write is enqueued after all 30. Under a global
+  // queue, docB's call is necessarily queued behind all 30 of docA's and can only
+  // ever resolve LAST. Under the correct per-document queue, docB has no
+  // dependency on docA's backlog and resolves promptly -- it should never be the
+  // very last of the 31 completions.
+  it('does NOT serialize writeSnapshot calls for DIFFERENT documents against each other', async () => {
+    const completions: string[] = []
+
+    const docAWrites = Array.from({ length: 30 }, (_, i) =>
+      writeSnapshot(userDataDir, docA, `doc A content ${i}`).then((id) => {
+        completions.push('A')
+        return id
+      })
+    )
+    const docBWrite = writeSnapshot(userDataDir, docB, 'doc B content').then((id) => {
+      completions.push('B')
+      return id
+    })
+
+    await Promise.all([...docAWrites, docBWrite])
+
+    expect(completions).toContain('B')
+    expect(completions.indexOf('B')).toBeLessThan(completions.length - 1)
+
+    const aSnapshots = await listSnapshots(userDataDir, docA)
+    const bSnapshots = await listSnapshots(userDataDir, docB)
+    expect(aSnapshots).toHaveLength(30)
+    expect(bSnapshots).toHaveLength(1)
   })
 })
 
