@@ -23,7 +23,18 @@ const api = {
   // isKnownPath and drops it if unknown. Passing `null` for an unsaved
   // document is correct and denies all local assets in the export.
   exportPdf: (content: string, filePath: string | null = null) =>
-    ipcRenderer.invoke('file:exportPdf', content, filePath)
+    ipcRenderer.invoke('file:exportPdf', content, filePath),
+  autosaveSnapshot: (content: string, filePath: string) =>
+    ipcRenderer.invoke('file:autosaveSnapshot', content, filePath),
+  getVersionHistory: (filePath: string) => ipcRenderer.invoke('file:getVersionHistory', filePath),
+  restoreVersionContent: (filePath: string, snapshotId: string) =>
+    ipcRenderer.invoke('file:restoreVersionContent', filePath, snapshotId),
+  // No cutoff parameter -- see the file:clearPendingAutosave handler's own
+  // comment in src/main/index.ts for why a correctness-critical timestamp
+  // like this must be computed in the main process from the real on-disk
+  // mtime, not accepted from the renderer.
+  clearPendingAutosave: (filePath: string) =>
+    ipcRenderer.invoke('file:clearPendingAutosave', filePath)
 }
 
 // Use `contextBridge` APIs to expose Electron APIs to

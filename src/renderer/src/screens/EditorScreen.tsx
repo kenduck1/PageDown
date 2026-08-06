@@ -9,6 +9,7 @@ import EditorStatusBar from '../components/EditorStatusBar'
 import PageSetupModal from '../components/PageSetupModal'
 import { extractOutline } from '../lib/extractOutline'
 import { usePageCount } from '../hooks/usePageCount'
+import { useAutosave } from '../hooks/useAutosave'
 import { extractRawFrontmatter, replaceRawFrontmatter } from '../lib/frontmatterSplice'
 import {
   DEFAULT_PAGE_CONFIG,
@@ -27,6 +28,8 @@ function EditorScreen(): React.JSX.Element {
   const activeTabId = useDocumentStore((state) => state.activeTabId)
   const updateContentForTab = useDocumentStore((state) => state.updateContentForTab)
   const replaceContent = useDocumentStore((state) => state.replaceContent)
+  const replaceContentForTab = useDocumentStore((state) => state.replaceContentForTab)
+  const closeTab = useDocumentStore((state) => state.closeTab)
   const isDirty = useDocumentStore((state) => state.isDirty)
   const error = useDocumentStore((state) => state.error)
   const clearError = useDocumentStore((state) => state.clearError)
@@ -36,6 +39,7 @@ function EditorScreen(): React.JSX.Element {
   const [zoom, setZoom] = useState(1)
   const [activeSourceOffset, setActiveSourceOffset] = useState<number | undefined>(undefined)
   const { pageCount } = usePageCount(content, filePath)
+  useAutosave({ content, filePath, isDirty })
 
   const handleSave = async (): Promise<void> => {
     // @milkdown/plugin-listener's onChange fires through an internal 200ms
@@ -66,6 +70,59 @@ function EditorScreen(): React.JSX.Element {
       // with no error at all and leaves isDirty untouched. Either way,
       // don't navigate away from a document that wasn't actually written.
       if (useDocumentStore.getState().isDirty) return
+    }
+    if (choice === 'discard') {
+      // "Don't Save" means exactly that -- a pending autosave snapshot must
+      // never silently reappear on next open. `clearPendingAutosave` takes
+      // ONLY the file path now, not a renderer-supplied cutoff -- a real,
+      // shipped bug (found in review) used `new Date().toISOString()` (the
+      // moment of this click) as the cutoff, but every snapshot that
+      // already exists was written in the PAST relative to "now," so
+      // `entry.timestamp > sinceIso` was false for all of them and nothing
+      // was ever deleted. The pending snapshot then survived, was more than
+      // MTIME_TOLERANCE_MS newer than the file's untouched mtime, and got
+      // silently "recovered" on the next open -- the exact failure this
+      // feature exists to prevent. The main-process handler now computes
+      // the correct cutoff itself, from the validated path's real on-disk
+      // mtime (see its own comment in src/main/index.ts) -- not something
+      // the renderer can supply, since it has no way to know the mtime
+      // anyway. Fire-and-forget: clearPendingAutosave's own IPC handler
+      // already validates the path and swallows failures (never rejects),
+      // and this runs after the discard decision is already final, so it
+      // can't affect navigation either way.
+      //
+      // Guarded on `filePath` because version-history storage is keyed by
+      // path -- an unsaved document has no snapshots to clear (useAutosave
+      // never fires without a path either). The tab close below is NOT so
+      // guarded: discarded content is discarded content, path or no path.
+      if (filePath) {
+        void window.api.clearPendingAutosave(filePath)
+      }
+      // Clearing the snapshots on disk is only half of "Don't Save" -- the
+      // other half, missing until the final whole-branch review found it, is
+      // the in-memory tab. goHome() only sets `screen: 'home'`; it does not
+      // touch documentStore, so the discarded tab used to survive with
+      // isDirty: true and the discarded content still in it (the unmount
+      // flush() even re-pushed the editor's copy into the store on the way
+      // out). The user then returns to the editor later, clicks that old tab,
+      // switchTab restores isDirty: true, useAutosave sees a clean->dirty
+      // transition, and 45s later writes the DISCARDED content back out as a
+      // snapshot -- which the next open silently recovers. A direct reversal
+      // of this feature's core promise that a deliberately discarded edit
+      // never silently reappears.
+      //
+      // Closing the tab removes that resurrection path at the source, and is
+      // also just the honest reading of the user's choice. Ordered AFTER the
+      // clearPendingAutosave dispatch above so the snapshot clear still
+      // happens (it only needs `filePath`, already captured, and it's
+      // fire-and-forget, so the call is already in flight by this line).
+      // Note closeTab never leaves zero tabs: closing the last one replaces
+      // it with a fresh blank "Untitled" tab (see documentStore.closeTab), so
+      // the store is left in exactly the state a fresh launch would produce.
+      // Any late unmount flush() from the outgoing MilkdownEditor targets the
+      // now-removed tab id and is a no-op by construction, since
+      // updateContentForTab only ever maps over tabs that still exist.
+      closeTab(activeTabId)
     }
     goHome()
   }
@@ -110,6 +167,91 @@ function EditorScreen(): React.JSX.Element {
     closePageSetup()
   }
 
+  // Returns the underlying flush+Save+replace promise (rather than
+  // void-discarding it) so EditorHistory's handleRestore can `await` this
+  // before refetching the snapshot list -- without that, the refetch
+  // typically resolves before the flush+Save round trip below even starts,
+  // returning the same stale list. See EditorHistory.tsx's own comment on
+  // its post-restore refetch for the residual gap this doesn't close
+  // (documentStore.save()'s own version-history snapshot write stays
+  // fire-and-forget, by design, so it can still lag behind this promise's
+  // resolution in rare timing).
+  const handleRestoreVersion = (restoredContent: string): Promise<void> => {
+    // Capture the tab being restored into BEFORE the async gap below -- see
+    // documentStore.ts's replaceContentForTab doc comment for the exact
+    // race this closes. `activeTabId` here is this render's own hook
+    // value, correct as of click time (EditorHistory's restore button is
+    // bound to a fresh onClick closure on every render), and determines
+    // which tab actually receives the restored content -- regardless of
+    // which tab is active by the time flushAndRestore resumes after
+    // `await save()`.
+    const targetTabId = activeTabId
+    const flushAndRestore = async (): Promise<void> => {
+      // flush() runs UNCONDITIONALLY, BEFORE anything reads isDirty -- and
+      // the dirty check that follows reads the live store, not this render's
+      // closed-over `isDirty`. Both halves fix one real bug found in the
+      // final whole-branch review.
+      //
+      // The window: Milkdown's markdownUpdated is 200ms-debounced (see
+      // CLAUDE.md), so between a keystroke and that debounce firing, the
+      // editor holds a real unflushed edit while documentStore.isDirty is
+      // still false. Type a character, then click a History row inside that
+      // window, and the OLD code took this path:
+      //   1. `isDirty` (bound at render, and genuinely false) => skip flush,
+      //      skip save, fall straight through to replaceContentForTab, which
+      //      bumps revision.
+      //   2. The revision bump remounts MilkdownEditor; the OUTGOING
+      //      instance's unmount cleanup calls flush(), which pushes the
+      //      unsynced edit through onChange => updateContentForTab, silently
+      //      OVERWRITING the content just restored -- and without a revision
+      //      bump of its own.
+      //   3. The incoming editor is already mounted showing the restored
+      //      content and never re-reads the `content` prop (uncontrolled
+      //      after mount).
+      // End state: the editor DISPLAYS the restored version, the store HOLDS
+      // the pre-restore edit, and the user's next Save writes the pre-restore
+      // edit to disk. The restore silently didn't happen, with no error shown.
+      //
+      // Calling flush() first collapses that window: the edit lands in the
+      // store synchronously, so the dirty check below sees the truth and the
+      // pre-restore Save actually happens. flush() is a documented no-op when
+      // nothing has changed since mount (see MilkdownEditorHandle), so making
+      // it unconditional costs nothing on a genuinely clean document.
+      editorRef.current?.flush()
+      // Read the TARGET TAB's own dirty state from the live store rather than
+      // the top-level `isDirty` mirror bound at render -- stale for the reason
+      // above, and (as with the post-save re-read below) mirror-scoped rather
+      // than tab-scoped.
+      const dirtyBeforeRestore = useDocumentStore
+        .getState()
+        .tabs.find((tab) => tab.id === targetTabId)?.isDirty
+      if (dirtyBeforeRestore) {
+        await save()
+        // documentStore.save() never throws -- a failure (disk error, or
+        // the user cancelling a Save-As dialog for a never-saved document)
+        // is caught into `error` and leaves the target tab's OWN isDirty
+        // untouched, i.e. still true. Re-read THAT TAB's entry directly
+        // from the live `tabs` array -- NOT the top-level `isDirty`
+        // mirror, which by now reflects whichever tab is active, possibly
+        // a DIFFERENT one if the user switched tabs (via the
+        // always-visible EditorTabBar) during the `await` above. If the
+        // target tab is still dirty, its save didn't actually happen, so
+        // abandon the restore rather than falling through to
+        // replaceContentForTab below, which would silently overwrite and
+        // permanently lose content that was never written anywhere. Same
+        // guard, same reasoning, as handleGoHome's own save-then-recheck
+        // above, just tab-scoped instead of mirror-scoped so it survives a
+        // concurrent tab switch. Don't remove this: without it, a failed
+        // pre-restore save is a one-click, silent, unrecoverable
+        // data-loss path.
+        const targetTab = useDocumentStore.getState().tabs.find((tab) => tab.id === targetTabId)
+        if (targetTab?.isDirty) return
+      }
+      replaceContentForTab(targetTabId, restoredContent)
+    }
+    return flushAndRestore()
+  }
+
   return (
     <div className="flex h-full flex-col bg-canvas font-sans text-text-primary">
       <div className="flex h-10 flex-none items-center gap-3 border-b border-border-chrome bg-chrome-dark px-3">
@@ -140,6 +282,8 @@ function EditorScreen(): React.JSX.Element {
           onSelectHeading={handleSelectHeading}
           activeSourceOffset={activeSourceOffset}
           pageCount={pageCount ?? undefined}
+          filePath={filePath}
+          onRestoreVersion={handleRestoreVersion}
         />
         <div
           ref={canvasRef}

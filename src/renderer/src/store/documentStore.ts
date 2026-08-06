@@ -36,7 +36,13 @@ interface DocumentStateValues {
 
 interface DocumentState extends DocumentStateValues {
   newDocument: (initialContent?: string) => void
-  loadDocument: (filePath: string, content: string) => void
+  // startDirty defaults to false so every existing call site (newDocument,
+  // and any future plain load) is unchanged; openFile/openPath pass through
+  // `result.recoveredFromAutosave` so a document recovered from a crash
+  // lands dirty, reusing the app's existing unsaved-changes protections
+  // (dirty-check-before-navigate, the "Save"/"Don't Save"/"Cancel" prompt)
+  // rather than adding recovery-specific UI.
+  loadDocument: (filePath: string, content: string, startDirty?: boolean) => void
   openFile: () => Promise<boolean>
   openPath: (filePath: string) => Promise<boolean>
   save: () => Promise<void>
@@ -77,8 +83,26 @@ interface DocumentState extends DocumentStateValues {
   // remount, the same mechanism newDocument/loadDocument already rely on to
   // re-seed the editor from fresh content.
   replaceContent: (content: string) => void
+  // Same active-tab/mirror update + revision bump as replaceContent, but
+  // targets an EXPLICIT tab id rather than "whichever tab is active right
+  // now" -- the exact race class updateContentForTab already exists to
+  // prevent for MilkdownEditor's onChange, reopened here through a
+  // DIFFERENT async door. Any caller with a real await gap between
+  // deciding to replace a tab's content and actually calling this (e.g.
+  // EditorScreen's handleRestoreVersion, which awaits a flush+Save round
+  // trip first) can have the user switch tabs via the always-visible
+  // EditorTabBar during that gap. replaceContent reads state.activeTabId
+  // at CALL time, so it would silently land the new content on whatever
+  // tab is active BY THEN, not the tab the caller actually meant to
+  // replace -- overwriting an unrelated document and leaving the tab that
+  // should have received it untouched. Callers with such a gap must
+  // capture the target tab id BEFORE the await and pass it here instead of
+  // calling replaceContent after the await resolves.
+  replaceContentForTab: (tabId: string, content: string) => void
   clearError: () => void
-  openTab: (filePath: string | null, content: string) => void
+  // startDirty defaults to false, same as loadDocument above -- a recovered
+  // document is the only caller that ever passes true.
+  openTab: (filePath: string | null, content: string, startDirty?: boolean) => void
   // Closing a dirty tab is a simple in-memory discard for this pass -- no
   // "Save changes before closing?" confirmation. EditorScreen's existing
   // dirty-check-before-navigate flow (window.api.confirmDiscardChanges) only
@@ -130,9 +154,9 @@ function errorMessage(err: unknown): string {
 
 export const useDocumentStore = create<DocumentState>()((set, get) => ({
   ...initialDocumentState,
-  openTab: (filePath, content) =>
+  openTab: (filePath, content, startDirty = false) =>
     set((state) => {
-      const tab: DocumentTab = { id: generateTabId(), filePath, content, isDirty: false }
+      const tab: DocumentTab = { id: generateTabId(), filePath, content, isDirty: startDirty }
       return {
         tabs: [...state.tabs, tab],
         activeTabId: tab.id,
@@ -196,12 +220,13 @@ export const useDocumentStore = create<DocumentState>()((set, get) => ({
   // behavior -- both are thin wrappers around openTab so there is exactly
   // one place ("what does opening a document do") to reason about.
   newDocument: (initialContent = '') => get().openTab(null, initialContent),
-  loadDocument: (filePath, content) => get().openTab(filePath, content),
+  loadDocument: (filePath, content, startDirty = false) =>
+    get().openTab(filePath, content, startDirty),
   openFile: async () => {
     try {
       const result = await window.api.openFile()
       if (!result) return false
-      get().loadDocument(result.filePath, result.content)
+      get().loadDocument(result.filePath, result.content, result.recoveredFromAutosave)
       return true
     } catch (err) {
       set({ error: errorMessage(err) })
@@ -211,7 +236,7 @@ export const useDocumentStore = create<DocumentState>()((set, get) => ({
   openPath: async (filePath) => {
     try {
       const result = await window.api.openPath(filePath)
-      get().loadDocument(result.filePath, result.content)
+      get().loadDocument(result.filePath, result.content, result.recoveredFromAutosave)
       return true
     } catch (err) {
       set({ error: errorMessage(err) })
@@ -219,18 +244,47 @@ export const useDocumentStore = create<DocumentState>()((set, get) => ({
     }
   },
   save: async () => {
-    const { content, filePath } = get()
+    // Capture WHICH tab is being saved synchronously, before the `await`
+    // below -- window.api.saveFile is a real IPC round trip, and the user
+    // can switch tabs via the always-visible EditorTabBar during that gap.
+    // The `set()` callback further down used to read `state.activeTabId`
+    // at RESOLVE time instead, which is the same race class
+    // replaceContentForTab was introduced to close for restore: it would
+    // silently mark whichever tab is active WHEN THE WRITE FINISHES as
+    // saved/clean, not the tab whose content was actually written to disk
+    // -- corrupting an unrelated background tab's isDirty/filePath while
+    // leaving the tab that was truly saved still marked dirty.
+    const { content, filePath, activeTabId: tabId } = get()
     try {
       const result = await window.api.saveFile(filePath, content)
       if (result) {
         set((state) => {
           const tabs = state.tabs.map((tab) =>
-            tab.id === state.activeTabId
-              ? { ...tab, filePath: result.filePath, isDirty: false }
-              : tab
+            tab.id === tabId ? { ...tab, filePath: result.filePath, isDirty: false } : tab
           )
+          // Only refresh the top-level mirror fields when the SAVED tab is
+          // still the active one -- same guard as updateContentForTab/
+          // replaceContentForTab. If the user switched tabs during the
+          // `await` above, `tabs` still picks up the saved tab's new
+          // filePath/isDirty (so switching back to it later shows the
+          // correct saved state), but nothing about what's CURRENTLY on
+          // screen changed, so the mirror fields (and the currently
+          // displayed tab's own state) are left alone. `error` stays
+          // unconditionally cleared either way -- it's deliberately a
+          // global, not per-tab, field (see its own doc comment above),
+          // and a just-succeeded save clearing a stale global error is
+          // reasonable regardless of which tab it belonged to.
+          if (tabId !== state.activeTabId) return { tabs, error: null }
           return { tabs, filePath: result.filePath, isDirty: false, error: null }
         })
+        // Best-effort -- see version-history's own "never blocks a real
+        // Save" invariant. This call happens AFTER the real save already
+        // succeeded and the store has already been updated above, so even a
+        // rejected promise here (autosaveSnapshot's own IPC handler already
+        // swallows failures and never rejects, but this stays fire-and-
+        // forget regardless) can never undo or fail the Save the user just
+        // performed.
+        void window.api.autosaveSnapshot(content, result.filePath)
       }
     } catch (err) {
       set({ error: errorMessage(err) })
@@ -250,11 +304,20 @@ export const useDocumentStore = create<DocumentState>()((set, get) => ({
       if (tabId !== state.activeTabId) return { tabs }
       return { tabs, content, isDirty: true }
     }),
-  replaceContent: (content) =>
+  replaceContent: (content) => get().replaceContentForTab(get().activeTabId, content),
+  replaceContentForTab: (tabId, content) =>
     set((state) => {
       const tabs = state.tabs.map((tab) =>
-        tab.id === state.activeTabId ? { ...tab, content, isDirty: true } : tab
+        tab.id === tabId ? { ...tab, content, isDirty: true } : tab
       )
+      // Only refresh the top-level mirror fields (and bump revision, which
+      // forces EditorScreen's key={revision} remount) when the target tab
+      // is STILL the active one -- mirrors updateContentForTab's own guard
+      // above. If the user has since switched away, `tabs` still picks up
+      // the new content (so switching back to that tab later shows it),
+      // but nothing about what's CURRENTLY on screen changed, so there's
+      // nothing to remount.
+      if (tabId !== state.activeTabId) return { tabs }
       return { tabs, content, isDirty: true, revision: state.revision + 1 }
     }),
   clearError: () => set({ error: null })
