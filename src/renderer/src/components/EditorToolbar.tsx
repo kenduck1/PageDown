@@ -264,30 +264,40 @@ function EditorToolbar({ editorRef }: EditorToolbarProps): ReactElement {
           overflow-x-auto never actually engages.
 
           The native scrollbar is hidden (scrollbar-hide, base.css) in favor
-          of the passive edge-fade overlay below: a visible scrollbar track
-          was both heavy for a 45px toolbar and gave no clear signal of
-          which direction had more content, whereas the fade only appears
-          on the right when there genuinely is more (canScrollRight, kept
-          in sync with real scroll position above). No button/icon chrome
-          -- deliberately subtle, not a call-attention-to-itself control.
+          of a mask-image fade on the scrollable element itself: a visible
+          scrollbar track was both heavy for a 45px toolbar and gave no
+          clear signal of which direction had more content, and the fade
+          only applies when there genuinely is more (canScrollRight, kept
+          in sync with real scroll position above).
 
-          Implemented as an inset box-shadow directly on the scrollable
-          element (not a separate overlay div with a background-color
-          gradient, tried first and reverted): a color gradient FROM the
-          toolbar's own bg-page (white) TO transparent has essentially zero
-          visible contrast against that same white toolbar background --
-          confirmed by screenshotting it, not just reasoning about it. An
-          inset shadow reads as a soft dark vignette regardless of the
-          underlying background color, which is the standard technique for
-          exactly this "more scrollable content this way" affordance (the
-          same one browsers' own overflow indicators, Gmail's message list,
-          etc. use). */}
+          Two earlier approaches were tried and rejected, in order: (1) a
+          separate overlay div with a background-color gradient FROM the
+          toolbar's own bg-page (white) TO transparent -- had essentially
+          zero visible contrast against that same white toolbar background
+          (confirmed by screenshotting it, not assumed); (2) an inset
+          box-shadow -- fixed the contrast problem, but at any strength
+          that was actually visible it read as a distinct rectangular
+          shape/seam rather than a soft fade (also confirmed visually, not
+          assumed). mask-image is the technically correct tool for this:
+          rather than drawing a shape ON TOP of the content, it gradually
+          reduces the CONTENT's own opacity as it nears the edge -- there is
+          no shape to see, only the real icons/text genuinely fading out,
+          which is what actually reads as a fade rather than a box. Needs
+          both the standard and -webkit- prefixed properties (Chromium,
+          which this app always runs under via Electron, still requires the
+          prefixed form for `mask-image`). */}
       <div className="relative min-w-0 flex-1">
         <div
           ref={scrollRef}
-          className={`scrollbar-hide flex items-center gap-x-2.5 overflow-x-auto ${
-            canScrollRight ? 'shadow-[inset_-22px_0_22px_-16px_rgba(0,0,0,0.10)]' : ''
-          }`}
+          className="scrollbar-hide flex items-center gap-x-2.5 overflow-x-auto"
+          style={
+            canScrollRight
+              ? {
+                  WebkitMaskImage: 'linear-gradient(to left, transparent, black 48px)',
+                  maskImage: 'linear-gradient(to left, transparent, black 48px)'
+                }
+              : undefined
+          }
         >
           {/* Sticky left group: undo/redo + paragraph-style/font/size. z-10
               so it paints above the content scrolling underneath it; bg-page
