@@ -176,6 +176,60 @@ describe('EditorScreen', () => {
     expect(savedContent).toContain('Q3')
   })
 
+  // The autosave TIMER's wiring into the app had no coverage at all before
+  // the final whole-branch review: mutation-verified that deleting the
+  // `useAutosave({ content, filePath, isDirty })` call and its import from
+  // EditorScreen.tsx left all 469 tests passing with clean typecheck and
+  // lint -- the one line that makes autosave exist could be removed with a
+  // fully green suite. useAutosave.test.ts covers the hook in isolation; these
+  // two cover that the real screen actually calls it, with the real store's
+  // real fields. Also closes the design doc's own Testing-section ask for
+  // proof that "autosave actually fires on the configured interval while
+  // dirty and stops firing once clean," which the plan silently dropped.
+  //
+  // Fake timers are scoped to each test (not the file-level beforeEach) so
+  // every other test here keeps its real-timer behavior -- several of them
+  // depend on Milkdown's real 200ms debounce and on userEvent's own timing.
+  it('fires an autosave snapshot after 45s while the document is dirty (real useAutosave wiring)', async () => {
+    vi.useFakeTimers()
+    try {
+      useDocumentStore.setState({ filePath: '/tmp/report.md', content: '# Report', isDirty: true })
+      render(<EditorScreen />)
+
+      // Nothing yet -- proves the assertion below is about the interval
+      // firing, not about a call made eagerly at mount.
+      expect(window.api.autosaveSnapshot).not.toHaveBeenCalled()
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(44_000)
+      })
+      expect(window.api.autosaveSnapshot).not.toHaveBeenCalled()
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1_000)
+      })
+      expect(window.api.autosaveSnapshot).toHaveBeenCalledWith('# Report', '/tmp/report.md')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('does NOT fire an autosave snapshot while the document is clean', async () => {
+    vi.useFakeTimers()
+    try {
+      useDocumentStore.setState({ filePath: '/tmp/report.md', content: '# Report', isDirty: false })
+      render(<EditorScreen />)
+
+      // Two full intervals' worth -- a free-running or isDirty-blind timer
+      // would have fired twice by now.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(90_000)
+      })
+      expect(window.api.autosaveSnapshot).not.toHaveBeenCalled()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('clears the error when "Dismiss" is clicked', async () => {
     useDocumentStore.setState({ error: 'File not found' })
     const user = userEvent.setup()
