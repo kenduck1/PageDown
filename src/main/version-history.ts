@@ -116,6 +116,69 @@ function indexPath(userDataDir: string, canonicalPath: string): string {
   return join(documentDir(userDataDir, canonicalPath), 'index.json')
 }
 
+function documentPathFilePath(userDataDir: string, canonicalPath: string): string {
+  return join(documentDir(userDataDir, canonicalPath), 'document-path.json')
+}
+
+// `document-path.json` -- specified in the approved design spec's Storage
+// section as "{ canonicalPath: '...' } -- for debugging/inspection, and as a
+// defensive collision check: on any read, verify this matches the path being
+// looked up; treat a mismatch as 'no history' rather than serving another
+// document's snapshots." Nothing wrote or read it until the final
+// whole-branch review found the gap.
+//
+// What it defends against: documentDir() keys storage by a 16-hex-char
+// (64-bit) truncation of the canonical path's SHA-256. A collision is
+// astronomically unlikely (that truncation is a deliberate, documented
+// legibility-over-paranoia tradeoff), but its failure mode if it ever
+// happened is nasty and completely silent -- document B's snapshots would be
+// served as document A's history, and a restore would load B's content into A
+// AND land it dirty, i.e. one Save away from overwriting A's real file with a
+// different document's text. Cheap to close; expensive to debug if it isn't.
+//
+// Written with flag 'wx' (create-only) so it records the FIRST document to
+// claim a directory and a colliding second document can never overwrite the
+// marker to make itself look legitimate. Every failure -- already exists,
+// unwritable, anything -- is swallowed: this is a defensive marker, and a
+// snapshot write must never fail because of it (the feature's own "best
+// effort, never block a real Save" invariant).
+async function ensureDocumentPathFile(userDataDir: string, canonicalPath: string): Promise<void> {
+  try {
+    await writeFile(
+      documentPathFilePath(userDataDir, canonicalPath),
+      JSON.stringify({ canonicalPath }),
+      { encoding: 'utf8', flag: 'wx' }
+    )
+  } catch {
+    // Already claimed, or the write failed -- neither is worth failing a
+    // snapshot write over.
+  }
+}
+
+// True ONLY when the marker exists, parses, carries a string `canonicalPath`,
+// and that string disagrees with the path being looked up. Every other
+// outcome -- file missing (a directory written before this marker existed, or
+// one whose write failed), unreadable, unparseable JSON, wrong shape -- means
+// "proceed normally," exactly matching how a corrupted index.json is already
+// handled ("no history for this document, not an error", and here not even
+// that). A defensive check that turned a corrupt marker into a total loss of
+// visible history would be strictly worse than the collision it guards
+// against.
+async function hasDocumentPathMismatch(
+  userDataDir: string,
+  canonicalPath: string
+): Promise<boolean> {
+  try {
+    const raw = await readFile(documentPathFilePath(userDataDir, canonicalPath), 'utf8')
+    const parsed: unknown = JSON.parse(raw)
+    const recorded = (parsed as { canonicalPath?: unknown } | null)?.canonicalPath
+    if (typeof recorded !== 'string') return false
+    return recorded !== canonicalPath
+  } catch {
+    return false
+  }
+}
+
 // SECURITY: `id` must be validated against SNAPSHOT_ID_PATTERN before it
 // ever reaches this function. readSnapshotContent (the one path where `id`
 // can originate outside this module -- a later task exposes it to the
@@ -170,6 +233,12 @@ async function writeIndex(
   index: SnapshotMeta[]
 ): Promise<void> {
   await mkdir(documentDir(userDataDir, canonicalPath), { recursive: true })
+  // Written alongside the index, right after the directory is (possibly)
+  // created -- a create-only no-op on every call after the first. This is the
+  // one place both mutating entry points (writeSnapshot and
+  // clearPendingAutosave) funnel through, so no document directory can exist
+  // without its marker.
+  await ensureDocumentPathFile(userDataDir, canonicalPath)
   const finalPath = indexPath(userDataDir, canonicalPath)
   const tempPath = `${finalPath}.tmp`
   await writeFile(tempPath, JSON.stringify(index), 'utf8')
@@ -234,10 +303,25 @@ export async function writeSnapshot(
   })
 }
 
+// The document-path.json collision check (see hasDocumentPathMismatch) is
+// applied HERE, in each PUBLIC read, rather than inside readIndex -- a
+// deliberate placement, not an oversight. writeSnapshot and
+// clearPendingAutosave both call readIndex to compute their next index, so a
+// mismatch short-circuiting readIndex to [] would make the colliding
+// document's very next write REPLACE the incumbent's index.json with a
+// one-entry array -- destroying the history this check exists to protect
+// instead of merely declining to serve it. Reads degrade; writes are left
+// alone. (Residual, accepted: a colliding document's writes still append into
+// the incumbent's directory, so the incumbent's own reads would then see
+// entries it didn't create. The spec specifies only the read-side defense,
+// and at 64 bits of hash this is a belt-and-braces guard against something
+// that realistically never happens -- deliberately not expanded into a
+// re-keying/migration scheme.)
 export async function getLatestSnapshot(
   userDataDir: string,
   canonicalPath: string
 ): Promise<SnapshotWithContent | null> {
+  if (await hasDocumentPathMismatch(userDataDir, canonicalPath)) return null
   const index = await readIndex(userDataDir, canonicalPath)
   const latest = index.at(-1)
   if (!latest) return null
@@ -250,6 +334,7 @@ export async function listSnapshots(
   userDataDir: string,
   canonicalPath: string
 ): Promise<SnapshotMeta[]> {
+  if (await hasDocumentPathMismatch(userDataDir, canonicalPath)) return []
   return readIndex(userDataDir, canonicalPath)
 }
 
@@ -270,6 +355,17 @@ export async function readSnapshotContent(
   // return, since returning null here (rather than throwing) is part of
   // this function's documented contract.
   if (!isValidSnapshotId(id)) return null
+  // Same document-path.json collision check as the two readers above -- this
+  // is the read that actually hands content to the renderer for a restore,
+  // so it is the one where serving another document's snapshot would do real
+  // damage (it lands in the editor AND lands dirty, one Save away from
+  // overwriting this document's real file with a different document's text).
+  // Checked independently rather than relying on the callers above, since
+  // this is a public entry point in its own right (the renderer reaches it
+  // directly as restoreVersionContent). Its only in-module caller besides
+  // getLatestSnapshot is writeSnapshot's dedup read, where a null just means
+  // "don't dedup" -- an extra snapshot, never a wrong one.
+  if (await hasDocumentPathMismatch(userDataDir, canonicalPath)) return null
   try {
     return await readFile(snapshotPath(userDataDir, canonicalPath, id), 'utf8')
   } catch {

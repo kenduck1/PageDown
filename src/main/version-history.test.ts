@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import { mkdtemp, mkdir, rm, writeFile, utimes, stat } from 'node:fs/promises'
+import { mkdtemp, mkdir, rm, writeFile, readFile, utimes, stat } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
@@ -138,6 +138,100 @@ describe('writeSnapshot / getLatestSnapshot / listSnapshots', () => {
     expect(await readSnapshotContent(userDataDir, docPath, '../secret')).toBeNull()
     expect(await readSnapshotContent(userDataDir, docPath, '../../../../etc/passwd')).toBeNull()
     expect(await readSnapshotContent(userDataDir, docPath, '..%2F..%2Fsecret')).toBeNull()
+  })
+})
+
+// document-path.json is specified in the approved design spec's Storage
+// section as a defensive collision check ("on any read, verify this matches
+// the path being looked up; treat a mismatch as 'no history' rather than
+// serving another document's snapshots") -- but nothing wrote or read it
+// until the final whole-branch review found the gap. A 64-bit truncated-hash
+// collision is astronomically unlikely; its failure mode is not -- document
+// B's content would load into document A AND land it dirty, one Save away
+// from overwriting A's real file with a different document's text.
+describe('document-path.json collision marker', () => {
+  let userDataDir: string
+  const docPath = '/collide/doc-a.md'
+
+  beforeEach(async () => {
+    userDataDir = await mkdtemp(join(tmpdir(), 'pagedown-vh-docpath-'))
+  })
+
+  afterEach(async () => {
+    await rm(userDataDir, { recursive: true, force: true })
+  })
+
+  function markerPath(): string {
+    return join(userDataDir, 'version-history', hashDocumentPath(docPath), 'document-path.json')
+  }
+
+  it('writes the marker alongside the index on the first snapshot write', async () => {
+    await writeSnapshot(userDataDir, docPath, '# content')
+    expect(JSON.parse(await readFile(markerPath(), 'utf8'))).toEqual({ canonicalPath: docPath })
+  })
+
+  it('serves history normally when the marker matches', async () => {
+    const id = await writeSnapshot(userDataDir, docPath, '# content')
+    expect(await listSnapshots(userDataDir, docPath)).toHaveLength(1)
+    expect((await getLatestSnapshot(userDataDir, docPath))?.content).toBe('# content')
+    expect(await readSnapshotContent(userDataDir, docPath, id)).toBe('# content')
+  })
+
+  it("treats a MISMATCHED marker as 'no history' across every public read", async () => {
+    const id = await writeSnapshot(userDataDir, docPath, '# document A secret content')
+    // Overwrite the marker with a DIFFERENT document's path -- exactly what
+    // a hash collision would leave behind: doc B claimed this directory
+    // first, and doc A is now looking its own history up in it.
+    await writeFile(
+      markerPath(),
+      JSON.stringify({ canonicalPath: '/collide/some-other-document.md' }),
+      'utf8'
+    )
+
+    expect(await listSnapshots(userDataDir, docPath)).toEqual([])
+    expect(await getLatestSnapshot(userDataDir, docPath)).toBeNull()
+    expect(await readSnapshotContent(userDataDir, docPath, id)).toBeNull()
+  })
+
+  it('proceeds normally when the marker is MISSING (a directory written before this check existed)', async () => {
+    const id = await writeSnapshot(userDataDir, docPath, '# content')
+    await rm(markerPath())
+
+    expect(await listSnapshots(userDataDir, docPath)).toHaveLength(1)
+    expect((await getLatestSnapshot(userDataDir, docPath))?.content).toBe('# content')
+    expect(await readSnapshotContent(userDataDir, docPath, id)).toBe('# content')
+  })
+
+  it('proceeds normally when the marker is CORRUPT or the wrong shape, rather than throwing or hiding history', async () => {
+    const id = await writeSnapshot(userDataDir, docPath, '# content')
+
+    // Same governing rule as a corrupted index.json: degrade, never throw --
+    // and here degrade to "proceed", since a defensive marker that turned
+    // its own corruption into total loss of visible history would be
+    // strictly worse than the collision it guards against.
+    for (const raw of ['not json at all', '{}', 'null', '[]', '{"canonicalPath": 42}']) {
+      await writeFile(markerPath(), raw, 'utf8')
+      expect(await listSnapshots(userDataDir, docPath)).toHaveLength(1)
+      expect(await readSnapshotContent(userDataDir, docPath, id)).toBe('# content')
+    }
+  })
+
+  it('does not let a later write overwrite an existing marker (create-only)', async () => {
+    await writeSnapshot(userDataDir, docPath, '# first')
+    await writeFile(
+      markerPath(),
+      JSON.stringify({ canonicalPath: '/collide/incumbent.md' }),
+      'utf8'
+    )
+
+    // A second write for docPath goes through writeIndex again -- the marker
+    // must survive untouched, so a colliding document can never re-stamp the
+    // directory as its own and make itself look legitimate.
+    await writeSnapshot(userDataDir, docPath, '# second')
+
+    expect(JSON.parse(await readFile(markerPath(), 'utf8'))).toEqual({
+      canonicalPath: '/collide/incumbent.md'
+    })
   })
 })
 
