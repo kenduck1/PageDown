@@ -1,5 +1,6 @@
 import { dialog, type BrowserWindow } from 'electron'
 import { readFile, writeFile, stat, realpath } from 'node:fs/promises'
+import { dirname, basename, join } from 'node:path'
 import { mergeRecentFiles, readRecentFiles, writeRecentFiles, isKnownPath } from './recent-files'
 import type { RecentFileEntry } from './recent-files'
 import { getLatestSnapshot } from './version-history'
@@ -24,9 +25,23 @@ export interface OpenedFile {
 // history entries for what is really one document: an autosave written
 // under one spelling would never be found by a lookup under the other,
 // permanently splitting the document's history and defeating recovery.
-// realpath throws for a path that doesn't exist yet (e.g. a brand-new,
-// not-yet-saved document) -- fall back to the raw path rather than let that
-// reject the caller.
+//
+// realpath(filePath) itself throws for two realistic reasons: the file
+// doesn't exist yet (a brand-new, not-yet-saved document), or it existed a
+// moment ago but doesn't right now (deleted, or a transient race). Falling
+// straight back to the fully raw path for either case would silently
+// reintroduce the exact split-history bug this function exists to prevent,
+// in precisely the scenario the feature cares most about: if the file's
+// PARENT directory is itself reached through a symlink (or any other
+// raw !== canonical spelling), a not-yet-existing or since-deleted file
+// keyed by the raw path would land in a different hash bucket than every
+// other lookup for the same logical document, keyed by its canonical form.
+// So the fallback canonicalizes the PARENT directory instead and rejoins
+// the file's own basename -- correct whenever the parent exists, which
+// covers both the not-yet-created-file and deleted-file cases. Only once
+// even the parent can't be resolved (neither the file nor its directory
+// exists) does this fall all the way back to the fully raw path, as a last
+// resort rather than the first one.
 //
 // Exported so src/main/index.ts's four version-history IPC handlers
 // canonicalize exactly the same way as the recovery check below -- factored
@@ -36,16 +51,57 @@ export async function canonicalizeDocumentPath(filePath: string): Promise<string
   try {
     return await realpath(filePath)
   } catch {
-    return filePath
+    try {
+      return join(await realpath(dirname(filePath)), basename(filePath))
+    } catch {
+      return filePath
+    }
   }
 }
 
-// Best-effort: an autosave snapshot newer than the file's own on-disk mtime
+// Filesystem mtime is not a monotonic clock directly comparable, bare, to a
+// locally-generated Date#toISOString() timestamp -- two realistic failure
+// modes, both silent loss of genuinely saved work, if compared with a bare
+// `>`:
+//   - mtime GRANULARITY TRUNCATION. Snapshot timestamps are millisecond-
+//     precision; mtime is not, on any filesystem short of APFS/ext4-with-ns
+//     (exFAT/FAT32 -- USB sticks -- truncate to 2s; HFS+ and many SMB/NFS
+//     shares to 1s). An autosave at 10:00:00.500 followed by a real Save at
+//     10:00:00.900 can yield an mtime of 10:00:00.000 on a truncating
+//     filesystem -- the PRE-save snapshot would then compare as newer than
+//     the save that superseded it, silently reverting the save on reopen.
+//   - MTIME-PRESERVING RESTORES. `rsync -t`, `tar -x`, `unzip`, and most
+//     backup/sync tools reinstate the original mtime, so a user who
+//     deliberately restores a backup over their document would get it
+//     silently overridden by a since-written, now-stale PageDown snapshot.
+// MTIME_TOLERANCE_MS absorbs both: a snapshot must be newer by MORE than
+// this margin to count as "meaningfully newer," not just newer by any
+// nonzero amount. Chosen to comfortably exceed the coarsest realistic mtime
+// granularity above (FAT32/exFAT's 2s).
+const MTIME_TOLERANCE_MS = 2000
+
+// Best-effort: an autosave snapshot meaningfully newer than the file's own
+// on-disk mtime, AND whose content actually differs from what's on disk,
 // means the app (or OS) crashed after an autosave tick but before the next
 // real Save, so what's on disk is stale relative to what the user last saw
 // -- silently prefer that snapshot's content over the on-disk bytes so the
 // document reopens exactly where the user left off (Task 3 surfaces the
 // returned `recoveredFromAutosave` flag as a passive banner, not a prompt).
+// The content-equality check guards a narrower case than the tolerance
+// above: a snapshot that IS meaningfully newer by the clock, but whose
+// bytes are already identical to disk (e.g. a Save landed, then an autosave
+// tick fired on the same unchanged content before the next edit) has
+// nothing to recover -- flagging it as a "recovery" would just be noise.
+//
+// Reverse clock skew (the system clock stepping BACKWARD between an
+// autosave tick and this comparison) fails SAFE here and is intentionally
+// not compensated for: it can only ever make a genuinely-newer snapshot
+// compare as not-newer, so recovery simply doesn't fire -- the snapshot
+// itself is never deleted by this function and stays fully reachable via
+// the version-history UI (Task 3/4). Do not "fix" that direction too; only
+// forward skew (mtime granularity truncation, mtime-preserving restores) is
+// the failure mode MTIME_TOLERANCE_MS guards against.
+//
 // The whole body is wrapped in try/catch and degrades to the on-disk
 // content on ANY failure (a deleted file racing the stat call, a corrupted
 // history, anything) -- this must never turn an otherwise-successful file
@@ -62,7 +118,11 @@ async function resolveContentWithRecovery(
     const fileStat = await stat(filePath)
     const canonicalPath = await canonicalizeDocumentPath(filePath)
     const latest = await getLatestSnapshot(userDataDir, canonicalPath)
-    if (latest && new Date(latest.timestamp).getTime() > fileStat.mtimeMs) {
+    const isMeaningfullyNewer =
+      latest !== null &&
+      new Date(latest.timestamp).getTime() > fileStat.mtimeMs + MTIME_TOLERANCE_MS
+    const differsFromDisk = latest !== null && latest.content !== onDiskContent
+    if (latest && isMeaningfullyNewer && differsFromDisk) {
       return { content: latest.content, recoveredFromAutosave: true }
     }
     return { content: onDiskContent, recoveredFromAutosave: false }
