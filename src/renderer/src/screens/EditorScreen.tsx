@@ -126,6 +126,23 @@ function EditorScreen(): React.JSX.Element {
     closePageSetup()
   }
 
+  const handleRestoreVersion = (restoredContent: string): void => {
+    // Restoring is an externally-originated content change, exactly like
+    // Page Setup's Apply -- the live editor must remount to pick it up
+    // rather than silently overwrite it on the next real edit. If there
+    // are unsaved edits right now, flush + Save them first so nothing
+    // is lost -- the currently-unsaved state becomes its own snapshot on
+    // the next autosave tick or explicit Save, never silently discarded.
+    const flushAndRestore = async (): Promise<void> => {
+      if (isDirty) {
+        editorRef.current?.flush()
+        await save()
+      }
+      replaceContent(restoredContent)
+    }
+    void flushAndRestore()
+  }
+
   return (
     <div className="flex h-full flex-col bg-canvas font-sans text-text-primary">
       <div className="flex h-10 flex-none items-center gap-3 border-b border-border-chrome bg-chrome-dark px-3">
@@ -156,6 +173,8 @@ function EditorScreen(): React.JSX.Element {
           onSelectHeading={handleSelectHeading}
           activeSourceOffset={activeSourceOffset}
           pageCount={pageCount ?? undefined}
+          filePath={filePath}
+          onRestoreVersion={handleRestoreVersion}
         />
         <div
           ref={canvasRef}
