@@ -212,4 +212,76 @@ describe('EditorHistory', () => {
 
     expect(screen.getAllByRole('button', { name: /restore/i })).toHaveLength(2)
   })
+
+  it('does not let a stale post-restore refetch for the PREVIOUS document overwrite the list of the document now being displayed after a mid-restore tab switch', async () => {
+    // The exact composed race the individual F1 (tab-switch-safe restore)
+    // and F3 (requestId staleness guard) fixes don't cover on their own:
+    // handleRestore captures `filePath` ("/a.md") in its closure at click
+    // time. Its `await onRestore(content)` gap (standing in for
+    // EditorScreen's real flush+Save round trip) can span a tab switch to
+    // a DIFFERENT document ("/b.md") -- now an explicitly SAFE, supported
+    // action per replaceContentForTab's own fix. EditorHistory is never
+    // remounted on that switch (EditorSidebar renders it with no `key`),
+    // so the SAME component instance re-renders with the new `filePath`
+    // prop, its effect correctly fetches and displays "/b.md"'s list, and
+    // only THEN does the original handleRestore call finally resume and
+    // fire its OWN refetch -- still for "/a.md", dispatched LAST. A
+    // requestId-only guard would wave that through (it genuinely is the
+    // most recently dispatched request); only the currentFilePathRef
+    // identity check catches it.
+    const aList: SnapshotMeta[] = [
+      { id: 'a-snap', timestamp: '2026-08-05T11:00:00.000Z', sizeBytes: 10 }
+    ]
+    const bList: SnapshotMeta[] = [
+      { id: 'b-snap-1', timestamp: '2026-08-01T12:00:00.000Z', sizeBytes: 10 },
+      { id: 'b-snap-2', timestamp: '2026-08-05T12:00:00.000Z', sizeBytes: 10 }
+    ]
+    vi.mocked(window.api.getVersionHistory).mockImplementation((path) =>
+      Promise.resolve(path === '/a.md' ? aList : bList)
+    )
+    vi.mocked(window.api.restoreVersionContent).mockResolvedValue('# Restored content')
+
+    // Stands in for EditorScreen's real flush+Save async gap -- controlled
+    // so the test can switch documents WHILE handleRestore's own
+    // `await onRestore(content)` is still pending, matching the real
+    // sequence step by step.
+    let resolveOnRestore: () => void = () => {}
+    const onRestore = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveOnRestore = resolve
+        })
+    )
+
+    const user = userEvent.setup()
+    const { rerender } = render(<EditorHistory filePath="/a.md" onRestore={onRestore} />)
+
+    const row = await screen.findByRole('button', { name: /restore/i })
+    await user.click(row)
+
+    await waitFor(() => {
+      expect(onRestore).toHaveBeenCalled()
+    })
+
+    // The tab switch: EditorHistory is never remounted (no `key` in
+    // EditorSidebar), so this is exactly what a real one produces -- a new
+    // `filePath` prop on the SAME component instance, while the original
+    // restore's own async work (still keyed to "/a.md") is still in flight.
+    rerender(<EditorHistory filePath="/b.md" onRestore={onRestore} />)
+
+    await waitFor(() => {
+      expect(screen.getAllByRole('button', { name: /restore/i })).toHaveLength(2)
+    })
+
+    // Now let the original restore's flush+Save gap finish -- handleRestore
+    // resumes and fires its own refetch, still for "/a.md".
+    resolveOnRestore()
+
+    // Give that stale "/a.md" refetch every chance to resolve and (if the
+    // identity guard were missing) overwrite "/b.md"'s correctly-displayed
+    // list.
+    await new Promise((resolve) => setTimeout(resolve, 20))
+
+    expect(screen.getAllByRole('button', { name: /restore/i })).toHaveLength(2)
+  })
 })

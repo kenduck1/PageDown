@@ -78,8 +78,38 @@ function EditorHistory({ filePath, onRestore }: EditorHistoryProps): React.JSX.E
   // to a new one would otherwise silently overwrite the new document's
   // correctly-fetched list.
   const latestRequestRef = useRef(0)
+  // A SECOND, independent axis of staleness, not redundant with the
+  // counter above: latestRequestRef only tracks DISPATCH ORDER, not WHICH
+  // DOCUMENT a request was for. handleRestore's own refetch closes over
+  // `filePath` from the render that created the clicked button, then does
+  // TWO further awaits (restoreVersionContent, then the caller's own
+  // onRestore -- EditorScreen's real flush+Save gap) before it dispatches
+  // that refetch. If the user switches tabs during that gap -- now an
+  // explicitly SAFE, supported action per replaceContentForTab's own fix
+  // in documentStore.ts -- this component re-renders with a new `filePath`
+  // prop, its effect correctly fetches and displays the NEW document's
+  // list, and then handleRestore's delayed refetch finally fires for the
+  // OLD (now-wrong) document, dispatched LAST. latestRequestRef alone
+  // would wave that stale-document response through, since "dispatched
+  // last" is exactly what it checks -- it has no way to know the response
+  // is for a document that isn't being displayed anymore. currentFilePathRef
+  // tracks the CURRENT prop, so a response can be checked against "is this
+  // even still the right document" independently of "is this the most
+  // recently dispatched request for whatever document it's for."
+  const currentFilePathRef = useRef(filePath)
 
   useEffect(() => {
+    // Updated here, inside the effect, rather than as a plain mutation in
+    // the render body -- eslint's react-hooks/refs rule flags mutating a
+    // ref during render (React docs: refs are for use outside of render).
+    // This still runs correctly ordered: this effect fires synchronously
+    // as part of React's render+commit+effects cycle for the update that
+    // changed `filePath`, which fully completes (ref included) before any
+    // previously-dispatched promise's `.then()` callback gets a chance to
+    // run (those are queued microtasks that can't preempt synchronous JS,
+    // including this cycle) -- so by the time any stale response resolves,
+    // this ref is guaranteed to already reflect the current prop.
+    currentFilePathRef.current = filePath
     // No fetch to make for an unsaved document -- and no state to reset
     // either: the render below returns its own "save this document first"
     // branch unconditionally whenever `filePath` is null, before `loading`/
@@ -99,6 +129,7 @@ function EditorHistory({ filePath, onRestore }: EditorHistoryProps): React.JSX.E
     const requestId = ++latestRequestRef.current
     window.api.getVersionHistory(filePath).then((result) => {
       if (latestRequestRef.current !== requestId) return
+      if (filePath !== currentFilePathRef.current) return
       setSnapshots(result)
       setLoading(false)
     })
@@ -139,6 +170,19 @@ function EditorHistory({ filePath, onRestore }: EditorHistoryProps): React.JSX.E
     const requestId = ++latestRequestRef.current
     const refreshed = await window.api.getVersionHistory(filePath)
     if (latestRequestRef.current !== requestId) return
+    // `filePath` here is THIS closure's value -- captured from whichever
+    // render created the specific handleRestore instance the clicked
+    // button was bound to, frozen for this function's entire lifetime.
+    // If the user switched documents during either await above (both
+    // restoreVersionContent and onRestore are real async gaps), this
+    // component has since re-rendered with a DIFFERENT filePath prop, its
+    // own effect has already fetched and displayed that document's
+    // correct list, and this refetch -- for the OLD document, dispatched
+    // LAST -- would otherwise pass the latestRequestRef check above (it
+    // genuinely is the most recently dispatched request) and silently
+    // clobber the correctly-displayed list with the wrong document's
+    // history. Bail if the document has moved on.
+    if (filePath !== currentFilePathRef.current) return
     setSnapshots(refreshed)
   }
 
