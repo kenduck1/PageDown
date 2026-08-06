@@ -302,4 +302,65 @@ describe('EditorScreen', () => {
       expect(useAppStore.getState().screen).toBe('home')
     })
   })
+
+  it('restoring a version flushes and saves dirty edits first, then replaces content, when the pre-restore save succeeds', async () => {
+    useDocumentStore.setState({
+      filePath: '/tmp/report.md',
+      content: '# Unsaved edits',
+      isDirty: true
+    })
+    vi.mocked(window.api.saveFile).mockResolvedValue({ filePath: '/tmp/report.md' })
+    vi.mocked(window.api.getVersionHistory).mockResolvedValue([
+      { id: 'snap-1', timestamp: '2026-08-05T12:00:00.000Z', sizeBytes: 10 }
+    ])
+    vi.mocked(window.api.restoreVersionContent).mockResolvedValue('# Restored Report')
+    const user = userEvent.setup()
+    render(<EditorScreen />)
+
+    await user.click(screen.getByRole('button', { name: 'History' }))
+    const restoreButton = await screen.findByRole('button', { name: /restore/i })
+    await user.click(restoreButton)
+
+    await waitFor(() => {
+      expect(window.api.saveFile).toHaveBeenCalledWith('/tmp/report.md', '# Unsaved edits')
+    })
+    await waitFor(() => {
+      expect(useDocumentStore.getState().content).toBe('# Restored Report')
+    })
+  })
+
+  it('abandons the restore without touching content when the pre-restore save leaves the document dirty', async () => {
+    // saveFile resolving null is this codebase's own established stand-in
+    // for "the save didn't actually happen" (see the Save-As-cancelled
+    // tests above) -- documentStore.save()'s `if (result)` branch never
+    // runs, so isDirty stays true exactly as it would after a real
+    // disk-write failure.
+    useDocumentStore.setState({
+      filePath: '/tmp/report.md',
+      content: '# Unsaved edits',
+      isDirty: true
+    })
+    vi.mocked(window.api.saveFile).mockResolvedValue(null)
+    vi.mocked(window.api.getVersionHistory).mockResolvedValue([
+      { id: 'snap-1', timestamp: '2026-08-05T12:00:00.000Z', sizeBytes: 10 }
+    ])
+    vi.mocked(window.api.restoreVersionContent).mockResolvedValue('# Restored Report')
+    const user = userEvent.setup()
+    render(<EditorScreen />)
+
+    await user.click(screen.getByRole('button', { name: 'History' }))
+    const restoreButton = await screen.findByRole('button', { name: /restore/i })
+    await user.click(restoreButton)
+
+    await waitFor(() => {
+      expect(window.api.saveFile).toHaveBeenCalledWith('/tmp/report.md', '# Unsaved edits')
+    })
+    // Give handleRestoreVersion's async flushAndRestore every chance to
+    // reach (and wrongly act past) its guard before asserting nothing
+    // changed -- there are no further awaits after saveFile resolves, so
+    // this is generous, not load-bearing timing.
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    expect(useDocumentStore.getState().content).toBe('# Unsaved edits')
+    expect(useDocumentStore.getState().isDirty).toBe(true)
+  })
 })

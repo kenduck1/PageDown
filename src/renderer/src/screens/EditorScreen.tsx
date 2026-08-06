@@ -137,6 +137,20 @@ function EditorScreen(): React.JSX.Element {
       if (isDirty) {
         editorRef.current?.flush()
         await save()
+        // documentStore.save() never throws -- a failure (disk error, or
+        // the user cancelling a Save-As dialog for a never-saved document)
+        // is caught into `error` and leaves `isDirty` untouched, i.e. still
+        // true. Re-check the LIVE store state here, not the `isDirty` value
+        // captured in this render's closure (stale by the time this async
+        // function resumes after `await save()`) -- if the document is
+        // still dirty, the save didn't actually happen, so abandon the
+        // restore rather than falling through to replaceContent below,
+        // which would silently overwrite and permanently lose content that
+        // was never written anywhere. Same guard, same reasoning, as
+        // handleGoHome's own save-then-recheck above. Don't remove this:
+        // without it, a failed pre-restore save is a one-click, silent,
+        // unrecoverable data-loss path.
+        if (useDocumentStore.getState().isDirty) return
       }
       replaceContent(restoredContent)
     }
