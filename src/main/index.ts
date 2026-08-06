@@ -28,7 +28,7 @@ import {
   writeSnapshot,
   listSnapshots,
   readSnapshotContent,
-  clearPendingAutosave as clearPendingAutosaveSnapshots
+  clearPendingAutosaveForFile
 } from './version-history'
 
 // Must run before app.whenReady() is awaited anywhere — Electron requires
@@ -353,19 +353,35 @@ app.whenReady().then(() => {
     }
   )
 
-  ipcMain.handle(
-    'file:clearPendingAutosave',
-    async (_event, filePath: string, sinceIso: string) => {
-      const userDataDir = app.getPath('userData')
-      try {
-        if (!(await isKnownPath(userDataDir, filePath))) return
-        const canonicalPath = await canonicalizeDocumentPath(filePath)
-        await clearPendingAutosaveSnapshots(userDataDir, canonicalPath, sinceIso)
-      } catch (err) {
-        console.error('Failed to clear pending autosave snapshots', err)
-      }
+  // No renderer-supplied cutoff -- CRITICAL FIX (found in review): this
+  // handler used to accept `sinceIso` from the renderer, with
+  // EditorScreen's "Don't Save" path passing `new Date().toISOString()`
+  // (the moment of the click). version-history.ts's clearPendingAutosave
+  // deletes only entries whose `timestamp > sinceIso` -- but every
+  // snapshot that already exists was written in the PAST relative to
+  // "now," so that comparison was false for all of them and NOTHING was
+  // ever deleted. The pending snapshot then survived, was more than
+  // MTIME_TOLERANCE_MS newer than the file's untouched on-disk mtime, and
+  // got silently "recovered" on the very next open -- a direct violation
+  // of this feature's own core promise (a deliberately discarded edit
+  // must never reappear). The design spec's own wording is "deletes every
+  // snapshot newer than ... the file's own on-disk mtime" -- so the
+  // cutoff is computed from the validated path's real `stat()` result, not
+  // accepted as a parameter. Delegated to version-history.ts's
+  // `clearPendingAutosaveForFile` (not done inline here) so this
+  // previously-buggy logic is directly unit-testable under plain Vitest --
+  // this handler itself stays a thin, Electron-touching wrapper, same
+  // pattern as isKnownPath/canonicalizeDocumentPath above.
+  ipcMain.handle('file:clearPendingAutosave', async (_event, filePath: string) => {
+    const userDataDir = app.getPath('userData')
+    try {
+      if (!(await isKnownPath(userDataDir, filePath))) return
+      const canonicalPath = await canonicalizeDocumentPath(filePath)
+      await clearPendingAutosaveForFile(userDataDir, canonicalPath, filePath)
+    } catch (err) {
+      console.error('Failed to clear pending autosave snapshots', err)
     }
-  )
+  })
 
   ipcMain.handle('dialog:confirmDiscard', () => confirmDiscardChanges(mainWindow))
 

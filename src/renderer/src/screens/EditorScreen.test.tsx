@@ -228,9 +228,23 @@ describe('EditorScreen', () => {
     await waitFor(() => expect(useAppStore.getState().screen).toBe('home'))
   })
 
-  it('clears pending autosave for the document when the user chooses "Don\'t Save"', async () => {
+  it('clears pending autosave for the document when the user chooses "Don\'t Save", passing ONLY the file path', async () => {
     // "Don't Save" means exactly that -- a pending autosave snapshot must
-    // never silently reappear on next open.
+    // never silently reappear on next open. Regression test for a real,
+    // shipped Critical bug (caught in review): an earlier version called
+    // this with a SECOND argument, `new Date().toISOString()`, as a
+    // renderer-supplied cutoff -- but every snapshot that already exists
+    // was written in the past relative to "now," so that cutoff matched
+    // nothing and clearPendingAutosave silently deleted zero snapshots
+    // every single time it ran. The fix removes the second argument
+    // entirely: the main-process handler now computes the correct cutoff
+    // itself from the validated path's real on-disk mtime (see
+    // src/main/index.ts's own file:clearPendingAutosave handler and its
+    // main-process-level test in src/main/version-history.test.ts for the
+    // end-to-end semantics this unit test can't reach). This test's job is
+    // narrower but still load-bearing: assert the renderer call site never
+    // regresses back to passing a second argument the main process would
+    // silently ignore (window.api's real signature no longer accepts one).
     useAppStore.setState({ screen: 'editor' })
     useDocumentStore.setState({ filePath: '/tmp/report.md', content: '# Report', isDirty: true })
     vi.mocked(window.api.confirmDiscardChanges).mockResolvedValue('discard')
@@ -240,11 +254,10 @@ describe('EditorScreen', () => {
     await user.click(screen.getByRole('button', { name: '← Home' }))
 
     await waitFor(() => {
-      expect(window.api.clearPendingAutosave).toHaveBeenCalledWith(
-        '/tmp/report.md',
-        expect.any(String)
-      )
+      expect(window.api.clearPendingAutosave).toHaveBeenCalledWith('/tmp/report.md')
     })
+    expect(window.api.clearPendingAutosave).toHaveBeenCalledTimes(1)
+    expect(vi.mocked(window.api.clearPendingAutosave).mock.calls[0]).toHaveLength(1)
   })
 
   it('does NOT clear pending autosave when the user chooses to Save (not discard)', async () => {

@@ -29,8 +29,12 @@ const api = {
   getVersionHistory: (filePath: string) => ipcRenderer.invoke('file:getVersionHistory', filePath),
   restoreVersionContent: (filePath: string, snapshotId: string) =>
     ipcRenderer.invoke('file:restoreVersionContent', filePath, snapshotId),
-  clearPendingAutosave: (filePath: string, sinceIso: string) =>
-    ipcRenderer.invoke('file:clearPendingAutosave', filePath, sinceIso)
+  // No cutoff parameter -- see the file:clearPendingAutosave handler's own
+  // comment in src/main/index.ts for why a correctness-critical timestamp
+  // like this must be computed in the main process from the real on-disk
+  // mtime, not accepted from the renderer.
+  clearPendingAutosave: (filePath: string) =>
+    ipcRenderer.invoke('file:clearPendingAutosave', filePath)
 }
 
 // Use `contextBridge` APIs to expose Electron APIs to

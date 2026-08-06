@@ -1,5 +1,5 @@
 import { createHash, randomBytes } from 'node:crypto'
-import { mkdir, readFile, writeFile, rename, rm } from 'node:fs/promises'
+import { mkdir, readFile, writeFile, rename, rm, stat } from 'node:fs/promises'
 import { join } from 'node:path'
 
 // Electron-free by design, exactly like recent-files.ts: this module takes
@@ -278,6 +278,47 @@ export async function clearPendingAutosave(
         .map((entry) => rm(snapshotPath(userDataDir, canonicalPath, entry.id), { force: true }))
     )
   })
+}
+
+// CRITICAL FIX (fix-round-2 review): computes the discard cutoff from the
+// document's OWN on-disk mtime via a real stat() call, then delegates to
+// clearPendingAutosave above -- extracted into this Electron-free module
+// (rather than left inline in index.ts's IPC handler) specifically so this
+// real, previously-buggy code path is directly unit-testable under plain
+// Vitest, matching this file's own "Electron-free by design" header
+// comment and the established isKnownPath/canonicalizeDocumentPath
+// precedent (CLAUDE.md's File I/O security invariant section) for exactly
+// this reason.
+//
+// The bug this replaces: an earlier version of the caller (EditorScreen's
+// "Don't Save" handler) passed `new Date().toISOString()` -- the moment of
+// the click -- as clearPendingAutosave's own `sinceIso` parameter directly.
+// That function only deletes entries with `timestamp > sinceIso`, but
+// every snapshot that already exists was necessarily written in the PAST
+// relative to "now," so that comparison was false for every real entry and
+// NOTHING was ever deleted -- confirmed empirically against this exact
+// module. The pending snapshot then survived, compared as meaningfully
+// newer than the file's own untouched mtime (file-io.ts's
+// MTIME_TOLERANCE_MS check), and got silently recovered on the very next
+// open: a direct violation of this feature's own core promise that a
+// deliberately discarded edit must never reappear. The design spec's own
+// wording -- "deletes every snapshot newer than ... the file's own on-disk
+// mtime" -- is what this function actually implements: `filePath` must be
+// a real, currently-existing file (the caller's own isKnownPath check has
+// already validated it before this is ever reached), and its mtime, not a
+// caller-supplied instant, is the only correct cutoff. `canonicalPath` is
+// accepted separately (not derived here) so callers keep using the same
+// canonicalization this whole module's storage keying depends on
+// (CLAUDE.md's "keyed off the CANONICAL path" note) -- this function only
+// ever adds the ONE extra piece (the real mtime) that was missing before.
+export async function clearPendingAutosaveForFile(
+  userDataDir: string,
+  canonicalPath: string,
+  filePath: string
+): Promise<void> {
+  const fileStat = await stat(filePath)
+  const sinceIso = new Date(fileStat.mtimeMs).toISOString()
+  return clearPendingAutosave(userDataDir, canonicalPath, sinceIso)
 }
 
 // Pure: last 30 days kept in full; older than that, thinned to the single
