@@ -407,10 +407,52 @@ function EditorScreen(): React.JSX.Element {
               this fix -- MilkdownEditor's own root div has no background/
               shadow/width constraint of its own, so the editor rendered as
               plain canvas-gray with no visible document boundary at all.
-              Values match the mock's own numbers (640px, 22px/64px/34px
-              padding) using tokens that already existed in base.css for
+              Background/shadow/radius/font values match the mock's own
+              numbers, using tokens that already existed in base.css for
               exactly this purpose (--shadow-page, --color-page) but were
               never applied here.
+
+              Width/side-padding do NOT match the mock's own 640px/64px --
+              merge-conflict finding (Document Typography sub-project vs
+              this fix, both landing the same night): the mock's numbers
+              were an eyeballed approximation authored before this project
+              had a single authoritative page geometry. max-w-[624px] on
+              MilkdownEditor's own root div (see that component) is now
+              real, measured Letter-page-at-96dpi-with-1in-margins content
+              width (page-geometry.ts's CONTENT_WIDTH_PX), enforced by
+              Gate 10 to stay pixel-identical to the paginated preview/PDF
+              -- the exact print-fidelity guarantee this whole app exists
+              for. The mock's 640px total width with 64px padding each side
+              only leaves 512px for content, silently squeezing
+              MilkdownEditor's 624px constraint down to 512px and failing
+              Gate 10 (measured: 624 expected, 512 received). Widening this
+              card to 816px (PAGE_WIDTH_PX) with 96px padding each side
+              (PAGE_MARGIN_PX, i.e. Tailwind's pl-24/pr-24) makes 816 - 192
+              = 624 -- the same real page width and real 1in margin every
+              other surface already uses, not an arbitrary patch chosen to
+              make one assertion pass.
+
+              Fixed width (`w-`), not `max-w-` -- verified empirically, not
+              assumed: a `max-w` cap only shrinks a block box below its
+              container's available width, it never forces one WIDER than
+              its container, and this app's default window (900px, minus
+              the 216px sidebar) leaves only 684px for the canvas area --
+              narrower than 816px. With `max-w-[816px]`, the card just
+              filled that 684px and reflowed its content down to 492px,
+              failing Gate 10 differently but just as badly (confirmed by
+              rerunning it). A real page must stay at its true size
+              regardless of window width -- exactly what `canvasRef`'s own
+              `transform: scale(zoom)` above already exists to handle
+              (fitting an unchanged, full-size layout visually into a
+              smaller viewport, the same way Word/Google Docs zoom out
+              rather than reflow text at less than 100%) -- so the card
+              needs a width the CSS box model won't shrink on its own,
+              letting `overflow-auto` on the canvas scroll horizontally at
+              low zoom/narrow windows instead of silently changing the
+              content's real layout width. Top/bottom padding (22px/34px, from
+              the mock) are untouched: Gate 10 only measures block
+              positions relative to each surface's own content root, so
+              vertical chrome outside the editing root doesn't affect it.
 
               Deliberately natural-height (grows/shrinks with the document,
               not stretched to fill the canvas) -- an earlier version of
@@ -427,7 +469,7 @@ function EditorScreen(): React.JSX.Element {
               above implements the actual correct behavior instead. */}
           <div
             data-testid="page-card"
-            className="mx-auto my-8 max-w-[640px] rounded-sm bg-page pb-[34px] pl-16 pr-16 pt-[22px] shadow-page"
+            className="mx-auto my-8 w-[816px] shrink-0 rounded-sm bg-page pb-[34px] pl-24 pr-24 pt-[22px] shadow-page"
             onMouseDown={handlePageCardMouseDown}
             onClick={handlePageCardClick}
           >
