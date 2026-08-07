@@ -82,6 +82,28 @@
     margin: 0;
   }
 
+  /* Native macOS text fields tint the insertion point with the app's own
+     accent color, not plain black matching the surrounding text -- which
+     is what the browser default (`caret-color: currentColor`, confirmed via
+     computed style) gives us otherwise. Matches --color-accent, the same
+     blue already used for links/selected UI state elsewhere in this app. */
+  .milkdown-mount .ProseMirror {
+    caret-color: var(--color-accent);
+  }
+
+  /* Suppresses Chromium's own default focus outline on the editor's
+     contenteditable root -- unstyled, it renders as a bright 1px amber
+     "auto" outline around the entire document content area the instant you
+     click into it (confirmed by screenshotting the real app, not assumed).
+     No real prose/rich-text editor (Google Docs, Notion, Word) draws a
+     visible border around the content region on focus -- the blinking text
+     caret already is the focus indicator while actively editing, so this
+     isn't the accessibility regression removing a *button's* or *link's*
+     focus ring would be. */
+  .milkdown-mount .ProseMirror:focus {
+    outline: none;
+  }
+
   /* Hides the native scrollbar while leaving real scroll behavior (wheel,
      trackpad, drag) fully intact -- used by EditorToolbar's horizontally
      scrollable region, which signals "more content" via its own edge-fade
