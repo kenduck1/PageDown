@@ -24,34 +24,46 @@
    resources/pagination-render/index.html's own "Keep both copies... in
    sync" comment) -- if any number here changes, check
    docs/superpowers/specs/2026-08-06-document-typography-design.md and this
-   comment block for anywhere it's restated. */
+   comment block for anywhere it's restated.
 
-h1,
-h2,
-h3,
-p,
-ul,
-ol,
-li,
-blockquote,
-table,
-th,
-td {
+   Every selector below is scoped under .pagedown-document. This file is
+   imported unscoped into base.css's global @layer base (see Task 4), so
+   without a scope class its bare tag selectors (h1, p, ul, table, ...)
+   would apply to the WHOLE app shell, not just document content -- caught
+   in review as a real regression in HomeScreen/PageSetupModal/sidebar
+   chrome. BOTH consumers named above must supply the .pagedown-document
+   class on their own wrapper for these rules to apply at all: the Milkdown
+   mount div carries it directly (src/renderer/src/milkdown/MilkdownEditor.tsx),
+   and the sandboxed render context puts it on its <body> (Task 6). Removing
+   the class from either surface silently disables every rule in this file
+   there -- it won't error, it'll just stop matching. */
+
+.pagedown-document h1,
+.pagedown-document h2,
+.pagedown-document h3,
+.pagedown-document p,
+.pagedown-document ul,
+.pagedown-document ol,
+.pagedown-document li,
+.pagedown-document blockquote,
+.pagedown-document table,
+.pagedown-document th,
+.pagedown-document td {
   font-family: var(--font-serif);
 }
 
-pre,
-code {
+.pagedown-document pre,
+.pagedown-document code {
   /* Code content stays monospace regardless of surrounding document
      typography -- matches the design handoff's "Raw source mode" font row,
      not the document body serif face. */
   font-family: var(--font-mono);
 }
 
-p,
-li,
-td,
-blockquote {
+.pagedown-document p,
+.pagedown-document li,
+.pagedown-document td,
+.pagedown-document blockquote {
   font-size: var(--text-14);
   line-height: 1.7;
 }
@@ -60,20 +72,20 @@ blockquote {
    a standard prose convention -- see the design doc's spacing section for
    why this is expressed as a relationship (em, self-scaling per element)
    rather than a hand-picked px value. */
-p,
-ul,
-ol,
-blockquote {
+.pagedown-document p,
+.pagedown-document ul,
+.pagedown-document ol,
+.pagedown-document blockquote {
   margin: 0 0 1em 0;
 }
 
-li {
+.pagedown-document li {
   margin: 0 0 0.35em 0;
 }
 
-h1,
-h2,
-h3 {
+.pagedown-document h1,
+.pagedown-document h2,
+.pagedown-document h3 {
   font-weight: 700;
   /* margin-top: 1.5x / margin-bottom: 0.5x the element's OWN font-size --
      using `em` here (not a hardcoded px value per level) is what makes this
@@ -86,19 +98,19 @@ h3 {
   margin-bottom: 0.5em;
 }
 
-h1 {
+.pagedown-document h1 {
   font-size: var(--text-26);
 }
 
-h2 {
+.pagedown-document h2 {
   font-size: var(--text-20);
 }
 
-h3 {
+.pagedown-document h3 {
   font-size: var(--text-16);
 }
 
-table {
+.pagedown-document table {
   font-size: var(--text-14);
   line-height: 1.7;
   border-collapse: collapse;
@@ -106,37 +118,37 @@ table {
   margin: 0 0 1em 0;
 }
 
-th,
-td {
+.pagedown-document th,
+.pagedown-document td {
   text-align: left;
   padding: 0.4em 0.6em;
   border-bottom: 1px solid #d0d0d4;
 }
 
-th {
+.pagedown-document th {
   font-weight: 700;
 }
 
-hr {
+.pagedown-document hr {
   border: none;
   border-top: 1px solid #d0d0d4;
   margin: 1.5em 0;
 }
 
-a {
+.pagedown-document a {
   color: inherit;
   text-decoration: underline;
 }
 
-strong {
+.pagedown-document strong {
   font-weight: 700;
 }
 
-em {
+.pagedown-document em {
   font-style: italic;
 }
 
-img {
+.pagedown-document img {
   max-width: 100%;
   height: auto;
 }
