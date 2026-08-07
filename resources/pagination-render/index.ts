@@ -15,6 +15,9 @@
 import { Previewer } from 'pagedjs'
 import { renderMermaidToSvg } from '../../src/diagrams/render-mermaid'
 import { registerBreakHandlers } from '../../src/pagination/break-handlers'
+import documentTypographyCss from '../../src/typography/document-typography.css'
+import sourceSerif4Base64 from '../../src/renderer/src/assets/fonts/source-serif-4-variable.woff2'
+import { PAGE_WIDTH_PX, PAGE_HEIGHT_PX, PAGE_MARGIN_PX } from '../../src/typography/page-geometry'
 
 // Task 10 / Gate 6: register the first-party keep-with-next/table-
 // continuation handlers exactly once, before the first `new Previewer()`
@@ -28,6 +31,75 @@ import { registerBreakHandlers } from '../../src/pagination/break-handlers'
 // re-instantiate and re-fire, these handlers once per past render on every
 // subsequent call).
 registerBreakHandlers()
+
+// Document Typography sub-project: the ONLY place in this render context
+// that builds a real, non-empty stylesheet for previewer.preview() -- every
+// render before this sub-project passed `[]` (see the 'render' handler
+// below for the historical reasoning that's no longer current). Four
+// pieces, concatenated in this order:
+//   1. A `:root` block defining the exact CSS custom properties
+//      document-typography.css's rules (piece 4, below) consume:
+//      --font-serif, --font-mono, --text-14, --text-16, --text-20,
+//      --text-26. Those properties are normally minted by Tailwind's
+//      `@theme static` block in src/renderer/src/assets/base.css, which
+//      exists ONLY in the app-shell renderer -- this sandboxed context has
+//      no Tailwind and no base.css at all, so without this block every one
+//      of document-typography.css's declarations below would be invalid at
+//      computed-value time (an unresolved var() falls back to `unset`, i.e.
+//      inherit) and headings/body text would silently render at inherited
+//      Chromium UA-default sizes. Hand-synced with base.css's `@theme
+//      static` block -- same "kept in sync by hand" pattern already used
+//      for this app's CSP nonce policy string (index.html) and
+//      document-typography.css's own literal px values; if base.css's
+//      values ever change, update these six to match. Nothing else in
+//      base.css's @theme block is referenced by document-typography.css,
+//      so nothing else is duplicated here.
+//   2. An @font-face rule for Source Serif 4, built here rather than
+//      shipped inside document-typography.css itself -- that file is
+//      shared with the Milkdown mount, which loads the SAME font through
+//      its own, already-existing Vite-bundled @font-face in base.css; only
+//      THIS context needs a self-contained, CSP-safe data: URI (see Task 5
+//      for the font-src data: CSP change this rule depends on).
+//   3. An explicit @page rule matching src/typography/page-geometry.ts's
+//      constants (in inches, @page's native unit, matching
+//      DEFAULT_PAGE_CONFIG's own inch-denominated margins) -- this
+//      REPLACES reliance on Paged.js's internal default page box with an
+//      authored value. The design doc flagged this as an open technical
+//      question (does passing a real, non-empty stylesheet change Paged.js's
+//      default-page-box handling at all?) -- passing an explicit @page rule
+//      resolves it by construction: this no longer depends on any default,
+//      whatever it does or doesn't do once stylesheets stops being `[]`.
+//   4. document-typography.css's own tag-selector rules, imported as raw
+//      text (Step 1's build.loader change, scripts/build-pagination-render.ts).
+//      Every selector in that file is scoped under `.pagedown-document` --
+//      this context supplies that class on its own <body> element (see
+//      index.html) so these rules actually match the pages Paged.js
+//      generates underneath it; without that class on <body>, every rule in
+//      this piece silently stops matching (no error, it just never applies).
+const DOCUMENT_STYLESHEET = `
+:root {
+  --font-serif: 'Source Serif 4', serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --text-14: 14px;
+  --text-16: 16px;
+  --text-20: 20px;
+  --text-26: 26px;
+}
+
+@font-face {
+  font-family: 'Source Serif 4';
+  font-style: normal;
+  font-weight: 200 900;
+  src: url(data:font/woff2;base64,${sourceSerif4Base64}) format('woff2-variations');
+}
+
+@page {
+  size: ${PAGE_WIDTH_PX / 96}in ${PAGE_HEIGHT_PX / 96}in;
+  margin: ${PAGE_MARGIN_PX / 96}in;
+}
+
+${documentTypographyCss}
+`
 
 // Trusted bootstrap, runs before any 'render' message can possibly arrive.
 // This whole module is loaded via `<script type="module" src="./index.js">`
@@ -957,21 +1029,29 @@ window.addEventListener('message', async (event: MessageEvent<IncomingMessage>) 
     const t0 = performance.now()
     const previewer = new Previewer()
     activePreviewer = previewer
-    // Passing `[]` for stylesheets: neither markdownToHtml's output nor
-    // this handler's own mermaid post-processing adds any top-level
-    // <style>/<link> tag of `container`'s own — markdownToHtml's sanitize
-    // schema (src/markdown/pipeline.ts) explicitly strips `style` (and
-    // `link` was never in hast-util-sanitize's defaultSchema.tagNames to
-    // begin with), so raw HTML containing either tag never survives into
-    // rendered output regardless of what an author's Markdown source
-    // contains (the <style> elements renderMermaidDiagrams adds live
-    // inside each diagram's own <svg> subtree, not as a direct child of
-    // `container`), so there is nothing for Previewer.wrapContent()/
-    // removeStyles() to harvest from the document; passing `container`
-    // directly as `content` and an explicit empty stylesheet list avoids
-    // Previewer trying to reinterpret the whole render-context <body> as
-    // the source document.
-    const flow = await previewer.preview(container, [], root)
+    // Document Typography sub-project: DOCUMENT_STYLESHEET (constructed
+    // above) is now a real, non-empty stylesheet -- markdownToHtml's own
+    // sanitize schema still strips any <style>/<link> a document's own
+    // Markdown source might contain (src/markdown/pipeline.ts), so this
+    // stylesheet is exclusively PageDown's own authored typography/@page
+    // rules, never anything document-supplied.
+    //
+    // Passed as `[{ 'document-typography': DOCUMENT_STYLESHEET }]`, not the
+    // bare string: Previewer.preview() spreads its stylesheets array into
+    // Polisher.add(...) (node_modules/pagedjs/src/polyfill/previewer.js),
+    // and Polisher.add treats any non-object array entry as a URL to fetch
+    // via request() (node_modules/pagedjs/src/polisher/polisher.js) -- which
+    // this context's `connect-src 'none'` CSP blocks outright, so a raw CSS
+    // string here would silently never apply. The object form
+    // `{ [name]: cssText }` is what actually passes CSS TEXT directly,
+    // matching the shape Previewer's own removeStyles() builds internally
+    // from real <style> elements. Precedent: the Gate 4 header/footer probe
+    // below already does exactly this (`{ 'gate4-probe-stylesheet': css }`).
+    const flow = await previewer.preview(
+      container,
+      [{ 'document-typography': DOCUMENT_STYLESHEET }],
+      root
+    )
     const t1 = performance.now()
 
     // Discard a stale/abandoned run's result rather than publish it — see
