@@ -173,6 +173,26 @@ describe('EditorScreen view-mode coordination: handleSetViewMode flush() call (m
     expect(mockEditorHandle.flush).not.toHaveBeenCalled()
   })
 
+  // Fix round 1 (post-Task-5 review, Important 1): the ONE format<->source
+  // pair Split mode introduces that the initial pass above left untested --
+  // split(format)<->source. The four-boolean formula covers it identically
+  // to every other pair (leavingFormatEditing && enteringSourceEditing for
+  // this direction), but "the formula covers it" and "a test exercises it"
+  // are different claims; this closes that gap the same discriminating way
+  // as its four siblings above.
+  it('Split(format) -> Source calls editorRef.current.flush(), same as a plain Format -> Source transition', async () => {
+    useDocumentStore.setState({ filePath: '/tmp/report.md', content: '# Report' })
+    useAppStore.setState({ viewMode: 'split', splitLeftMode: 'format' })
+    const user = userEvent.setup()
+    render(<EditorScreen />)
+
+    expect(mockEditorHandle.flush).not.toHaveBeenCalled()
+
+    await user.click(screen.getByRole('button', { name: 'Source' }))
+
+    expect(mockEditorHandle.flush).toHaveBeenCalledTimes(1)
+  })
+
   // Split mode with a FORMAT left pane is treated as the exact same
   // underlying editing surface as plain Format mode (both are
   // MilkdownEditor) -- so switching between them is not an
