@@ -212,7 +212,16 @@ let schemeHandlerRegistered = false
 // pdf-exporter.ts's own comment for what the slowdown actually turned out
 // to be. Session/partition sharing was NOT the cause, so this stays the
 // single shared session every caller has always used.)
-function ensureRenderInfraRegistered(): Session {
+//
+// Exported (Split mode / Task 2 of the 2026-08-07-split-mode plan) so
+// `split-preview-window.ts`'s own harness -- a second, visible
+// WebContentsView attached to the real mainWindow, not the headless
+// BaseWindow every existing harness uses -- can share this exact session
+// and protocol-handler setup rather than duplicating this function's body.
+// Verified empirically (not just by reading the comment above) that calling
+// this a second time from a second harness module is genuinely safe: see
+// split-preview-window.ts's own manual-verification notes.
+export function ensureRenderInfraRegistered(): Session {
   if (renderSession) return renderSession
 
   // Dedicated, in-memory session partition for the render context. Rendered
