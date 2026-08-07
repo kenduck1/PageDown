@@ -193,18 +193,44 @@ describe('EditorScreen view-mode coordination: handleSetViewMode flush() call (m
     expect(mockEditorHandle.flush).toHaveBeenCalledTimes(1)
   })
 
-  // Split mode with a FORMAT left pane is treated as the exact same
-  // underlying editing surface as plain Format mode (both are
-  // MilkdownEditor) -- so switching between them is not an
-  // entering/leaving-Source-editing transition at all, and must not flush.
-  it('Format -> Split(format) does NOT call flush() -- both are the same Format-editing surface', async () => {
+  // Final whole-branch review finding, C1 (Critical, blocked merge) --
+  // CORRECTED, was previously the exact inverse assertion. format and
+  // split(format) are the same CONCEPTUAL editing surface (both are
+  // MilkdownEditor), but they live at two different STRUCTURAL positions in
+  // the JSX (the single-pane branch vs Split's own left-pane branch), so
+  // React still unmounts the outgoing instance and mounts a fresh one across
+  // this transition -- the fresh instance's mount-time render captures
+  // `content` one tick before flush() would otherwise sync a pending edit,
+  // which is exactly the data-loss bug C1 was. flush() MUST fire here now;
+  // the version of this test that asserted the opposite is what let the
+  // bug ship in the first place (see this describe block's own header
+  // comment and docs/superpowers/plans/2026-08-04-ga-push-decisions-log.md
+  // for the full story).
+  it('Format -> Split(format) DOES call flush() -- same conceptual surface, but a different structural position that remounts it', async () => {
     useDocumentStore.setState({ filePath: '/tmp/report.md', content: '# Report' })
     useAppStore.setState({ viewMode: 'format', splitLeftMode: 'format' })
     const user = userEvent.setup()
     render(<EditorScreen />)
 
+    expect(mockEditorHandle.flush).not.toHaveBeenCalled()
+
     await user.click(screen.getByRole('button', { name: 'Split' }))
 
+    expect(mockEditorHandle.flush).toHaveBeenCalledTimes(1)
+  })
+
+  // Symmetric case: split(format) -> Format also remounts across the same
+  // structural-position change, in the opposite direction.
+  it('Split(format) -> Format DOES call flush()', async () => {
+    useDocumentStore.setState({ filePath: '/tmp/report.md', content: '# Report' })
+    useAppStore.setState({ viewMode: 'split', splitLeftMode: 'format' })
+    const user = userEvent.setup()
+    render(<EditorScreen />)
+
     expect(mockEditorHandle.flush).not.toHaveBeenCalled()
+
+    await user.click(screen.getByRole('button', { name: 'Format' }))
+
+    expect(mockEditorHandle.flush).toHaveBeenCalledTimes(1)
   })
 })

@@ -3,6 +3,17 @@ import { useEffect, useRef } from 'react'
 interface SplitPreviewProps {
   content: string
   filePath: string | null
+  // Final whole-branch review finding (Important, I2): a WebContentsView
+  // composites above ALL DOM unconditionally, so the native preview view
+  // was painting over Page Setup's modal -- including its own right-aligned
+  // Apply/Cancel buttons, which fall inside the preview pane's on-screen
+  // rectangle at this app's default window width. No setVisible primitive
+  // exists on the preload surface (and building one wasn't worth it for
+  // this), but reporting a zero-size rectangle through the EXISTING
+  // setSplitPreviewBounds call removes the view from the modal's way with
+  // no new IPC, no harness teardown, and no re-layout -- see the bounds
+  // effect below.
+  pageSetupOpen: boolean
 }
 
 const DEBOUNCE_MS = 500
@@ -15,7 +26,7 @@ const DEBOUNCE_MS = 500
 // preview's content in sync with the document (debounced
 // sendSplitPreviewDocument, matching usePageCount's own 500ms debounce so
 // this doesn't re-layout on every keystroke).
-function SplitPreview({ content, filePath }: SplitPreviewProps): React.JSX.Element {
+function SplitPreview({ content, filePath, pageSetupOpen }: SplitPreviewProps): React.JSX.Element {
   const placeholderRef = useRef<HTMLDivElement>(null)
   // Tracks the last {content, filePath} pair the harness has CONFIRMED
   // receiving (stamped only inside the .then() below, never before the call)
@@ -40,7 +51,14 @@ function SplitPreview({ content, filePath }: SplitPreviewProps): React.JSX.Eleme
     const el = placeholderRef.current
     if (!el) return
     const reportBounds = (): void => {
-      const rect = el.getBoundingClientRect()
+      // Zero-size while Page Setup is open (I2, see the prop's own doc
+      // comment above) -- ResizeObserver/'resize' don't fire just because
+      // the modal opened or closed (the placeholder's own box hasn't
+      // changed), which is exactly why this effect also depends on
+      // `pageSetupOpen` below: re-running it on every open/close transition
+      // re-invokes reportBounds with the current value, both hiding the view
+      // on open and restoring its real rectangle on close.
+      const rect = pageSetupOpen ? { x: 0, y: 0, width: 0, height: 0 } : el.getBoundingClientRect()
       // Plain CSS-pixel values -- do NOT multiply by devicePixelRatio. Task 3
       // settled this empirically: Electron's WebContentsView#setBounds takes
       // device-independent pixels, and multiplying here would render the
@@ -68,7 +86,7 @@ function SplitPreview({ content, filePath }: SplitPreviewProps): React.JSX.Eleme
       observer.disconnect()
       window.removeEventListener('resize', reportBounds)
     }
-  }, [])
+  }, [pageSetupOpen])
 
   useEffect(() => {
     window.api
