@@ -44,21 +44,39 @@ registerBreakHandlers()
 // pieces, concatenated in this order:
 //   1. A `:root` block defining the exact CSS custom properties
 //      document-typography.css's rules (piece 4, below) consume:
-//      --font-serif, --font-mono, --text-14, --text-16, --text-20,
-//      --text-26. Those properties are normally minted by Tailwind's
-//      `@theme static` block in src/renderer/src/assets/base.css, which
-//      exists ONLY in the app-shell renderer -- this sandboxed context has
-//      no Tailwind and no base.css at all, so without this block every one
-//      of document-typography.css's declarations below would be invalid at
+//      --font-serif, --font-mono, --text-12, --text-13, --text-14,
+//      --text-16, --text-20, --text-26. Those properties are normally
+//      minted by Tailwind's `@theme static` block in
+//      src/renderer/src/assets/base.css, which exists ONLY in the app-shell
+//      renderer -- this sandboxed context has no Tailwind and no base.css
+//      at all, so without this block every one of
+//      document-typography.css's declarations below would be invalid at
 //      computed-value time (an unresolved var() falls back to `unset`, i.e.
 //      inherit) and headings/body text would silently render at inherited
-//      Chromium UA-default sizes. Hand-synced with base.css's `@theme
+//      sizes. Hand-synced with base.css's `@theme
 //      static` block -- same "kept in sync by hand" pattern already used
 //      for this app's CSP nonce policy string (index.html) and
 //      document-typography.css's own literal px values; if base.css's
-//      values ever change, update these six to match. Nothing else in
+//      values ever change, update these to match. Nothing else in
 //      base.css's @theme block is referenced by document-typography.css,
 //      so nothing else is duplicated here.
+//
+//      *** THIS LIST MUST COVER EVERY `var(--...)` IN THE SHARED
+//      STYLESHEET. *** A reference with no definition here is
+//      invalid-at-computed-value-time, and because both `font-size` and
+//      `font-family` INHERIT, the property silently falls back to the
+//      nearest ancestor's value instead of erroring -- so the rule appears
+//      to work, on the pagination surface only, at the wrong value. This is
+//      not hypothetical: the h4-h6 rules added by the final whole-branch
+//      review introduced `--text-13`/`--text-12` into the shared stylesheet
+//      without adding them here, and h5/h6 rendered at the baseline's 14px
+//      in the preview and exported PDF while the editor rendered them at
+//      13px and 12px (with knock-on line-height/margin drift, both being
+//      em-relative). No gate caught it -- neither the corpus nor Gate 10's
+//      fixture contains an h4-h6 heading. `src/typography/
+//      document-typography.test.ts` now closes this mechanically by
+//      cross-checking all three files, so adding a var() reference without a
+//      definition fails `pnpm test:unit` rather than shipping.
 //   2. An @font-face rule for Source Serif 4, built here rather than
 //      shipped inside document-typography.css itself -- that file is
 //      shared with the Milkdown mount, which loads the SAME font through
@@ -120,6 +138,8 @@ const DOCUMENT_STYLESHEET = `
 :root {
   --font-serif: 'Source Serif 4', serif;
   --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --text-12: 12px;
+  --text-13: 13px;
   --text-14: 14px;
   --text-16: 16px;
   --text-20: 20px;
@@ -399,7 +419,10 @@ type Gate7Result = Gate7Phase1Success | Gate7Phase2Success | Gate7Error
 // solely to manufacture that missing signal: it accepts an explicit `css`
 // string (containing real `@page`/`@top-center`/`@bottom-center` rules) and
 // forwards it to `previewer.preview()` as a real, non-empty stylesheet —
-// something no other code path in this render context does — so
+// which, since the Document Typography sub-project, is no longer unique to
+// this probe (the regular 'render' path passes DOCUMENT_STYLESHEET); what
+// remains unique is that the stylesheet is CALLER-SUPPLIED per request and
+// carries margin-box rules — so
 // `phase0/gate4-export.spec.ts` has actual generated running-header/footer
 // content to export and inspect the tagging of. Reuses the SAME
 // `activePreviewer`/`currentRequestId` module state as the 'render' handler
