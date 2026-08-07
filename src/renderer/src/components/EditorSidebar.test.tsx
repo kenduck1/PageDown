@@ -145,7 +145,10 @@ describe('EditorSidebar', () => {
       autosaveSnapshot: vi.fn(),
       getVersionHistory: vi.fn().mockResolvedValue([]),
       restoreVersionContent: vi.fn(),
-      clearPendingAutosave: vi.fn()
+      clearPendingAutosave: vi.fn(),
+      setSplitPreviewBounds: vi.fn(),
+      sendSplitPreviewDocument: vi.fn(),
+      destroySplitPreview: vi.fn()
     }
     const user = userEvent.setup()
     render(
@@ -177,7 +180,10 @@ describe('EditorSidebar', () => {
       autosaveSnapshot: vi.fn(),
       getVersionHistory: vi.fn().mockResolvedValue([]),
       restoreVersionContent: vi.fn(),
-      clearPendingAutosave: vi.fn()
+      clearPendingAutosave: vi.fn(),
+      setSplitPreviewBounds: vi.fn(),
+      sendSplitPreviewDocument: vi.fn(),
+      destroySplitPreview: vi.fn()
     }
     useAppStore.setState({ sidebarTab: 'history' })
     render(

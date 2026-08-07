@@ -23,7 +23,10 @@ beforeEach(() => {
     autosaveSnapshot: vi.fn(),
     getVersionHistory: vi.fn(),
     restoreVersionContent: vi.fn(),
-    clearPendingAutosave: vi.fn()
+    clearPendingAutosave: vi.fn(),
+    setSplitPreviewBounds: vi.fn(),
+    sendSplitPreviewDocument: vi.fn(),
+    destroySplitPreview: vi.fn()
   }
 })
 

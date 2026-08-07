@@ -13,6 +13,7 @@ import { paginateAndTime } from '../pagination/paginate'
 import { exportToPdf } from '../export/export-pdf'
 import { getThumbnail, destroyThumbnailHarness } from './thumbnail-generator'
 import { getPageCount, destroyPageCountHarness } from './page-count-generator'
+import { createSplitPreviewHarness, type SplitPreviewHarness } from './split-preview-window'
 import { exportDocumentToPdf } from './pdf-exporter'
 import {
   openFileDialog,
@@ -96,6 +97,88 @@ globalThis.__pagedownPhase0 = {
   getThumbnail
 }
 
+// Split mode's own lazily-created harness instance and its serializing
+// queue, both held in this module's scope -- mirrors the existing
+// mainWindow-closure pattern every other IPC handler in this file already
+// uses (see CLAUDE.md's "known pre-existing issues" section for the
+// documented staleness limitation that pattern carries; it applies here too
+// and is not re-solved by this task). Created lazily by whichever of
+// split-preview:setBounds/split-preview:sendDocument fires first, torn down
+// and cleared by split-preview:destroy so the next call recreates it fresh.
+let splitPreviewHarnessPromise: Promise<SplitPreviewHarness> | null = null
+
+function getOrCreateSplitPreviewHarness(win: BrowserWindow): Promise<SplitPreviewHarness> {
+  if (!splitPreviewHarnessPromise) {
+    splitPreviewHarnessPromise = createSplitPreviewHarness(win)
+  }
+  return splitPreviewHarnessPromise
+}
+
+// Serializes every call that dispatches work into the split-preview harness
+// -- required for exactly the reason thumbnail-generator.ts's and
+// page-count-generator.ts's own enqueueHarnessWork queues exist (see
+// CLAUDE.md's "the pagination render harness handles exactly ONE in-flight
+// request at a time" invariant): resources/pagination-render/index.ts's
+// render context tracks a single `currentRequestId` module variable and
+// silently drops the result of any request that isn't the most recently
+// dispatched one. Live typing in Split mode will produce a new
+// split-preview:sendDocument call well within the previous one's round trip
+// -- the renderer's own debounce is 500ms, and a full relayout can exceed
+// that -- so without this queue, concurrent calls would race the render
+// context and intermittently time out after 10s. This is a SEPARATE queue
+// from both of those (and from the Phase-0-spike harness in this same
+// file), per this codebase's established "don't couple unrelated harness
+// consumers" rule. Also used to serialize split-preview:destroy behind any
+// already-queued sendDocument work, below, so the harness is never torn
+// down mid-render.
+let splitPreviewQueue: Promise<unknown> = Promise.resolve()
+
+function enqueueSplitPreviewWork<T>(task: () => Promise<T>): Promise<T> {
+  const result = splitPreviewQueue.then(task)
+  // Chain the queue's tail through a value- and rejection-swallowing
+  // continuation, not `result` directly -- otherwise one rejected call would
+  // permanently wedge the queue for every caller after it (same fix as
+  // thumbnail-generator.ts's/page-count-generator.ts's identical pattern).
+  splitPreviewQueue = result.then(
+    () => undefined,
+    () => undefined
+  )
+  return result
+}
+
+// Tears down the lazily-created split-preview harness (if one exists) and
+// clears the module-scope reference so the NEXT setBounds/sendDocument call
+// recreates it fresh. Shared by two callers: the split-preview:destroy IPC
+// handler below (the renderer's own explicit "left Split mode" signal) and
+// `createWindow`'s `mainWindow` `'closed'` handler just below this function
+// -- unlike thumbnail-generator.ts's/page-count-generator.ts's own harnesses,
+// which each own a SEPARATE, dedicated BaseWindow that mainWindow closing
+// never touches, this harness's WebContentsView is a CHILD of mainWindow's
+// own contentView (per Task 2's design, deliberately -- Split mode's whole
+// point is a visibly composited pane, not an off-screen render target).
+// Electron does not appear to destroy a child WebContentsView's own
+// WebContents just because its parent BrowserWindow closes (it's a sibling
+// compositing layer, not the window's primary WebContents) -- so without
+// this call, closing the app's real window while Split mode was ever visited
+// would leak that view's own sandboxed renderer process for the remainder of
+// the app's lifetime. `destroy()` itself is safe to call on an
+// already-destroyed mainWindow (guards with `mainWindow.isDestroyed()`
+// internally, per Task 2), matching the codebase's "never throw from
+// teardown" discipline every other harness here also follows.
+function destroySplitPreviewHarness(): Promise<void> {
+  const harnessPromise = splitPreviewHarnessPromise
+  splitPreviewHarnessPromise = null
+  if (!harnessPromise) return Promise.resolve()
+  return enqueueSplitPreviewWork(async () => {
+    try {
+      const harness = await harnessPromise
+      harness.destroy()
+    } catch (err) {
+      console.error('Failed to destroy split preview harness', err)
+    }
+  })
+}
+
 function createWindow(): BrowserWindow {
   // Create the browser window.
   const mainWindow = new BrowserWindow({
@@ -132,6 +215,11 @@ function createWindow(): BrowserWindow {
   mainWindow.on('closed', () => {
     destroyThumbnailHarness()
     destroyPageCountHarness()
+    // Fire-and-forget, same rationale as every other best-effort teardown in
+    // this codebase (see destroySplitPreviewHarness's own comment above) --
+    // there's no one left to report a failure to by this point, and the
+    // function already logs internally.
+    void destroySplitPreviewHarness()
   })
 
   mainWindow.webContents.setWindowOpenHandler((details) => {
@@ -281,6 +369,97 @@ app.whenReady().then(() => {
       return getPageCount(content, documentPath)
     }
   )
+
+  // Split mode IPC surface (Task 3 of the Split mode plan). All three share
+  // the single, lazily-created harness held in this module's scope (see
+  // getOrCreateSplitPreviewHarness above) -- created by whichever of
+  // setBounds/sendDocument fires first, torn down by destroy.
+  //
+  // split-preview:setBounds is `ipcMain.on`/`ipcRenderer.send`, not
+  // `invoke`/`handle` -- it fires on every ResizeObserver tick from the
+  // renderer's preview pane, there is no result the caller needs to await,
+  // and routing a high-frequency resize tick through a round-trip Promise
+  // would be pure overhead. Converts the reported CSS-pixel rectangle to
+  // WebContentsView.setBounds's own Rectangle units via toPhysicalBounds
+  // (Task 1), using mainWindow.webContents.getZoomFactor() as the scale
+  // factor.
+  //
+  // WHY getZoomFactor() ALONE, WITH NO devicePixelRatio MULTIPLY: this was
+  // flagged going in as UNVERIFIED (the plan's own formula multiplied by
+  // devicePixelRatio) and was resolved empirically for this task, not just
+  // inferred -- see task-3-report.md for the full evidence. Short version:
+  // Electron's Rectangle-typed geometry APIs (screen, BrowserWindow,
+  // View/WebContentsView) operate in DIP ("device independent pixels"), the
+  // same unit as a renderer's own getBoundingClientRect() -- confirmed both
+  // by Electron's own screen-module docs (which explicitly distinguish DIP
+  // points from "physical screen points" and provide screenToDipPoint/
+  // dipToScreenPoint converters) and, decisively, by direct measurement on
+  // this development machine's Retina display (devicePixelRatio 2): setting
+  // a WebContentsView's bounds to {width:500,height:400} and then capturing
+  // that view's own real painted content via webContents.capturePage()
+  // produced a PNG at EXACTLY 1000x800 pixels -- proof Chromium already
+  // scales DIP bounds up to the display's real physical pixels internally,
+  // the same way it does for an ordinary BrowserWindow. Multiplying by
+  // devicePixelRatio here would double-apply that scaling and render the
+  // preview at roughly 2x the intended size, badly misplaced next to the
+  // editor pane. getZoomFactor() (rather than a hardcoded 1) is still the
+  // right expression to pass -- not because of the DIP question above, but
+  // because this app's own renderer applies a CSS `zoom` transform to the
+  // editor canvas elsewhere (EditorScreen's Format-mode canvas); if a future
+  // Split mode pane reports bounds relative to that zoomed layout,
+  // getZoomFactor() is where Electron's own current zoom state belongs in
+  // this conversion. Any adjustment for that CSS zoom transform itself
+  // belongs in the RENDERER's reported bounds (Task 4), not re-derived here
+  // -- this handler only converts whatever CSS-pixel rectangle it's given.
+  ipcMain.on(
+    'split-preview:setBounds',
+    (_event, cssBounds: { x: number; y: number; width: number; height: number }) => {
+      void getOrCreateSplitPreviewHarness(mainWindow)
+        .then((harness) => {
+          const scaleFactor = mainWindow.webContents.getZoomFactor()
+          harness.setBounds(cssBounds, scaleFactor)
+        })
+        .catch((err) => {
+          console.error('Failed to apply split preview bounds', err)
+        })
+    }
+  )
+
+  // split-preview:sendDocument, unlike setBounds, needs a real return value
+  // (the PaginationResult driving the preview pane's page-count/diagram/
+  // image overlay state), so it's ipcMain.handle/ipcRenderer.invoke.
+  // `filePath` is renderer-supplied, so CLAUDE.md's File I/O security
+  // invariant binds -- validated with isKnownPath exactly like
+  // file:getPageCount above, and on an unknown path this handler DROPS it
+  // and proceeds with local assets denied rather than throwing, matching
+  // file:getPageCount's own established rationale verbatim: the preview
+  // never strictly needs the path (only local-asset resolution does), and
+  // throwing here would regress a working preview pane the moment a file
+  // ages out of the 10-entry recents allowlist. Queued through
+  // enqueueSplitPreviewWork -- see that function's own comment above for why
+  // every call into the shared sandboxed render context must serialize
+  // itself.
+  ipcMain.handle(
+    'split-preview:sendDocument',
+    async (_event, content: string, filePath: string | null) => {
+      const userDataDir = app.getPath('userData')
+      const validatedPath = filePath && (await isKnownPath(userDataDir, filePath)) ? filePath : null
+      return enqueueSplitPreviewWork(async () => {
+        const harness = await getOrCreateSplitPreviewHarness(mainWindow)
+        return harness.sendDocument(content, validatedPath)
+      })
+    }
+  )
+
+  // Called by the renderer when viewMode leaves 'split' (Task 5), so a user
+  // who never revisits Split mode doesn't keep a second WebContentsView (and
+  // its own sandboxed renderer process) alive for the rest of the session.
+  // Delegates to destroySplitPreviewHarness (defined above, alongside the
+  // rest of this module's split-preview state) -- shared with mainWindow's
+  // own 'closed' handler, see that function's own comment for why both need
+  // it and how the module-scope reference is cleared before the queued
+  // destroy() actually runs.
+  ipcMain.handle('split-preview:destroy', () => destroySplitPreviewHarness())
 
   // Version-history IPC surface (Task 2 of the autosave/crash-recovery/
   // version-history plan). All four validate `filePath` via isKnownPath --
