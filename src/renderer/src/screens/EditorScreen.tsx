@@ -780,7 +780,7 @@ function EditorScreen(): React.JSX.Element {
               branch's own comment above for why a scrolling right pane would
               silently desync the native preview from its placeholder. */}
               <div style={{ width: `${100 - splitRatio}%` }} className="h-full">
-                <SplitPreview content={content} filePath={filePath} />
+                <SplitPreview content={content} filePath={filePath} pageSetupOpen={pageSetupOpen} />
               </div>
             </div>
           ) : (
