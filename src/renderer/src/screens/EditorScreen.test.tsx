@@ -844,7 +844,9 @@ describe('EditorScreen', () => {
       useAppStore.setState({ viewMode: 'source' })
       render(<EditorScreen />)
 
-      expect(screen.getByRole('textbox', { name: '' })).toHaveValue('# Report\n\nBody text')
+      expect(screen.getByRole('textbox', { name: 'Markdown source' })).toHaveValue(
+        '# Report\n\nBody text'
+      )
       expect(screen.queryByTestId('page-card')).not.toBeInTheDocument()
     })
 
@@ -854,7 +856,7 @@ describe('EditorScreen', () => {
       const user = userEvent.setup()
       render(<EditorScreen />)
 
-      const textarea = screen.getByRole('textbox', { name: '' })
+      const textarea = screen.getByRole('textbox', { name: 'Markdown source' })
       await user.clear(textarea)
       await user.type(textarea, 'changed')
 
@@ -906,7 +908,9 @@ describe('EditorScreen', () => {
       // trailing newline on the first real edit to a document (see
       // CLAUDE.md's Milkdown section) -- '# Report Q3\n', not '# Report Q3'.
       await waitFor(() => {
-        const textarea = screen.getByRole('textbox', { name: '' }) as HTMLTextAreaElement
+        const textarea = screen.getByRole('textbox', {
+          name: 'Markdown source'
+        }) as HTMLTextAreaElement
         expect(textarea.value).toContain('# Report Q3')
       })
       expect(useDocumentStore.getState().content).toContain('# Report Q3')
@@ -943,7 +947,7 @@ describe('EditorScreen', () => {
       const user = userEvent.setup()
       render(<EditorScreen />)
 
-      const textarea = screen.getByRole('textbox', { name: '' })
+      const textarea = screen.getByRole('textbox', { name: 'Markdown source' })
       await user.clear(textarea)
       await user.type(textarea, '# Edited In Source')
 
@@ -960,6 +964,73 @@ describe('EditorScreen', () => {
         expect(screen.getByTestId('document-content')).toHaveTextContent('Edited In Source')
       })
       expect(useDocumentStore.getState().content).toBe('# Edited In Source')
+    })
+
+    // F1 (final whole-branch review, CRITICAL): replaceContentForTab used to
+    // set isDirty: true unconditionally, so handleSetViewMode's Source ->
+    // Format same-value rewrite (see that function's own doc comment) had a
+    // second, real effect beyond the revision bump it exists for -- it
+    // manufactured a false "unsaved changes" state on a document nobody had
+    // actually touched. Reviewer's empirical repro: a clean document, click
+    // Source, click Format, zero edits in between -- isDirty went
+    // false -> true. This test pins the fixed behavior end to end, through
+    // the real handleSetViewMode/replaceContentForTab wiring (documentStore's
+    // own unit tests pin the store-level guard in isolation; this is the
+    // integration-level round trip the reviewer named explicitly).
+    it('F1: a Format -> Source -> Format round trip with zero edits does not mark a clean document dirty', async () => {
+      // loadDocument (via openTab) seeds BOTH the top-level mirror fields
+      // AND the matching tabs-array entry consistently, unlike a bare
+      // useDocumentStore.setState({ content, isDirty }) -- necessary here
+      // since replaceContentForTab's same-value guard (F1) compares against
+      // the target tab's OWN content, and openTab's default startDirty is
+      // already false, so this is a genuinely clean document from the start.
+      useDocumentStore.getState().loadDocument('/tmp/report.md', '# Report')
+      useAppStore.setState({ viewMode: 'format' })
+      const revisionBefore = useDocumentStore.getState().revision
+      const user = userEvent.setup()
+      render(<EditorScreen />)
+
+      await waitFor(() => {
+        expect(screen.getByTestId('document-content')).toHaveTextContent('Report')
+      })
+      expect(useDocumentStore.getState().isDirty).toBe(false)
+
+      await user.click(screen.getByRole('button', { name: 'Source' }))
+      await user.click(screen.getByRole('button', { name: 'Format' }))
+
+      // The round trip must still bump revision (MilkdownEditor's own
+      // remount-on-leaving-Source-mode contract, unrelated to F1) while
+      // leaving isDirty exactly as it was.
+      expect(useDocumentStore.getState().revision).toBeGreaterThan(revisionBefore)
+      expect(useDocumentStore.getState().isDirty).toBe(false)
+    })
+
+    // F3 (final whole-branch review, IMPORTANT): mutation-proven gap -- the
+    // reviewer changed SourceEditor's `value={content}` to `defaultValue={content}`
+    // (making the textarea uncontrolled) and every then-existing test in this
+    // suite still passed. The real failure that gap hides: handleRestoreVersion
+    // and handleApplyPageConfig both call replaceContent/replaceContentForTab
+    // directly on documentStore while Source mode may already be on screen --
+    // with an uncontrolled textarea, that external content change would never
+    // reach the DOM node, the textarea would keep showing the PRE-restore
+    // text, and the user's next keystroke would push that stale text back
+    // into the store, silently clobbering the restore. This test reproduces
+    // exactly that call shape (replaceContent while Source mode is displayed)
+    // and asserts the textarea actually reflects it.
+    it('F3: an external content change (History restore / Page Setup) while Source mode is displayed lands in the textarea', () => {
+      useDocumentStore.setState({ filePath: '/tmp/report.md', content: '# Original' })
+      useAppStore.setState({ viewMode: 'source' })
+      render(<EditorScreen />)
+
+      expect(screen.getByRole('textbox', { name: 'Markdown source' })).toHaveValue('# Original')
+
+      act(() => {
+        useDocumentStore.getState().replaceContent('# Restored From History')
+      })
+
+      expect(screen.getByRole('textbox', { name: 'Markdown source' })).toHaveValue(
+        '# Restored From History'
+      )
     })
   })
 

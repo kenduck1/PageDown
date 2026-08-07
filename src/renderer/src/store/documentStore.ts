@@ -98,6 +98,26 @@ interface DocumentState extends DocumentStateValues {
   // should have received it untouched. Callers with such a gap must
   // capture the target tab id BEFORE the await and pass it here instead of
   // calling replaceContent after the await resolves.
+  //
+  // isDirty same-value guard (final whole-branch review, F1): a caller
+  // that replaces a tab's content with content BYTE-IDENTICAL to what that
+  // tab already holds leaves isDirty UNTOUCHED rather than forcing it to
+  // true -- revision still bumps unconditionally. EditorScreen's
+  // handleSetViewMode is exactly this caller on every Source -> Format
+  // switch: it rewrites the SAME content Source mode's own controlled
+  // textarea already synced into the store, purely to force the revision
+  // bump that remounts MilkdownEditor. Before this guard, that same-value
+  // rewrite still unconditionally set isDirty: true, so a Format -> Source
+  // -> Format round trip with zero real edits marked a clean document
+  // dirty -- a false positive in the app's principal data-loss guard
+  // (spurious unsaved-changes indicator, a spurious native Save/Don't
+  // Save/Cancel prompt on Home navigation, a spurious 45s-later
+  // autosave-version-history entry). The same guard is semantically
+  // correct for every other caller too: Page Setup applying a no-op
+  // config, or a History restore to content identical to what's already
+  // loaded, should equally not dirty a clean document. If content DID
+  // change, behavior is unchanged (isDirty: true); if the document was
+  // already dirty, it stays dirty either way.
   replaceContentForTab: (tabId: string, content: string) => void
   clearError: () => void
   // startDirty defaults to false, same as loadDocument above -- a recovered
@@ -307,8 +327,18 @@ export const useDocumentStore = create<DocumentState>()((set, get) => ({
   replaceContent: (content) => get().replaceContentForTab(get().activeTabId, content),
   replaceContentForTab: (tabId, content) =>
     set((state) => {
+      // Same-value isDirty guard (F1, see this action's own doc comment on
+      // the DocumentState interface above for the full rationale): compare
+      // against the TARGET tab's own current content, not the top-level
+      // mirror, since tabId may not be the active tab. A tab id that
+      // doesn't match any real tab (shouldn't happen in practice) is
+      // treated as "changed" -- the pre-existing behavior for an unknown id
+      // was already to write through unconditionally, and this guard only
+      // narrows that, never widens it.
+      const targetTab = state.tabs.find((tab) => tab.id === tabId)
+      const contentChanged = targetTab ? content !== targetTab.content : true
       const tabs = state.tabs.map((tab) =>
-        tab.id === tabId ? { ...tab, content, isDirty: true } : tab
+        tab.id === tabId ? { ...tab, content, isDirty: contentChanged ? true : tab.isDirty } : tab
       )
       // Only refresh the top-level mirror fields (and bump revision, which
       // forces EditorScreen's key={revision} remount) when the target tab
@@ -318,7 +348,15 @@ export const useDocumentStore = create<DocumentState>()((set, get) => ({
       // but nothing about what's CURRENTLY on screen changed, so there's
       // nothing to remount.
       if (tabId !== state.activeTabId) return { tabs }
-      return { tabs, content, isDirty: true, revision: state.revision + 1 }
+      // revision bumps UNCONDITIONALLY even when content is unchanged --
+      // callers like handleSetViewMode rely on the bump alone to force a
+      // remount, independent of whether isDirty should change.
+      return {
+        tabs,
+        content,
+        isDirty: contentChanged ? true : state.isDirty,
+        revision: state.revision + 1
+      }
     }),
   clearError: () => set({ error: null })
 }))

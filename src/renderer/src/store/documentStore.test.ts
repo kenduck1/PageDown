@@ -195,6 +195,60 @@ describe('useDocumentStore', () => {
     expect(tab).toMatchObject({ content: 'new content', isDirty: true })
   })
 
+  // F1 (final whole-branch review): replaceContentForTab used to set
+  // isDirty: true unconditionally, even when the "new" content was
+  // byte-identical to what the tab already held -- a same-value rewrite
+  // (e.g. EditorScreen's handleSetViewMode calling this purely to force a
+  // revision bump when leaving Source mode) therefore manufactured a false
+  // "unsaved changes" state on a genuinely clean, untouched document. These
+  // three tests pin the guard: unchanged content leaves isDirty exactly as
+  // it was (both directions), changed content still marks dirty, and the
+  // revision bump always happens regardless.
+  //
+  // seedTab below sets BOTH the top-level mirror fields AND the matching
+  // entry in the `tabs` array -- the guard under test compares the new
+  // content against the TARGET TAB's own content (not the mirror), so a
+  // setup that only patches the mirror (plain `useDocumentStore.setState({
+  // content, isDirty })`, which leaves the tabs array's own entry at its
+  // stale initial '' content) would make every call look like a genuine
+  // change regardless of what's actually being tested here -- silently
+  // testing nothing. Real production callers never hit this inconsistency:
+  // every store action that changes `content` always keeps `tabs` and the
+  // mirror in sync together (see activeMirror's own doc comment).
+  function seedTab(tabId: string, content: string, isDirty: boolean): void {
+    useDocumentStore.setState((state) => ({
+      content,
+      isDirty,
+      tabs: state.tabs.map((tab) => (tab.id === tabId ? { ...tab, content, isDirty } : tab))
+    }))
+  }
+
+  it('replaceContentForTab leaves a clean tab clean when the new content is byte-identical to the current content', () => {
+    const tabId = useDocumentStore.getState().activeTabId
+    seedTab(tabId, '# Report', false)
+    const before = useDocumentStore.getState().revision
+    useDocumentStore.getState().replaceContentForTab(tabId, '# Report')
+    expect(useDocumentStore.getState()).toMatchObject({
+      content: '# Report',
+      isDirty: false,
+      revision: before + 1
+    })
+  })
+
+  it('replaceContentForTab leaves an already-dirty tab dirty when the new content is byte-identical to the current content', () => {
+    const tabId = useDocumentStore.getState().activeTabId
+    seedTab(tabId, '# Report', true)
+    useDocumentStore.getState().replaceContentForTab(tabId, '# Report')
+    expect(useDocumentStore.getState().isDirty).toBe(true)
+  })
+
+  it('replaceContentForTab still marks the document dirty when the new content genuinely differs', () => {
+    const tabId = useDocumentStore.getState().activeTabId
+    seedTab(tabId, '# Report', false)
+    useDocumentStore.getState().replaceContentForTab(tabId, '# Report v2')
+    expect(useDocumentStore.getState().isDirty).toBe(true)
+  })
+
   it('updateContentForTab targeting the active tab behaves exactly like updateContent', () => {
     const tabId = useDocumentStore.getState().activeTabId
     useDocumentStore.getState().updateContentForTab(tabId, 'new content')
