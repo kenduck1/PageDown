@@ -271,6 +271,51 @@ describe('EditorToolbar', () => {
     expect(useAppStore.getState().viewMode).toBe('format')
   })
 
+  // F2 (final whole-branch review): every control bound to
+  // editorRef.current?.X() silently no-oped in Source mode (MilkdownEditor
+  // is unmounted there, so editorRef.current is null) while still rendering
+  // fully enabled -- clicking Bold, a list button, etc. looked like it
+  // should do something and did nothing. This pins that the editorRef-bound
+  // cluster is disabled whenever viewMode is 'source', and re-enabled the
+  // instant it isn't -- and that everything NOT bound to editorRef (a
+  // still-unwired placeholder button, in this case) is left alone.
+  it('disables exactly the editorRef-bound controls in Source mode, and re-enables them in Format mode', () => {
+    const handle = createFakeEditorHandle()
+    const ref = { current: handle }
+    useAppStore.setState({ viewMode: 'source' })
+    const { rerender } = render(<EditorToolbar editorRef={ref} />)
+
+    const editorRefBoundButtonNames = [
+      'Undo',
+      'Redo',
+      'Bold',
+      'Italic',
+      'Bulleted list',
+      'Numbered list',
+      'Insert link',
+      'Insert table',
+      'Insert page break'
+    ]
+    editorRefBoundButtonNames.forEach((name) => {
+      expect(screen.getByRole('button', { name })).toBeDisabled()
+    })
+    expect(screen.getByRole('combobox', { name: 'Paragraph style' })).toBeDisabled()
+
+    // Controls that do NOT touch editorRef -- an unwired placeholder button,
+    // and the view-mode switcher itself -- must stay enabled even in Source
+    // mode; only the editorRef-bound cluster is in scope for F2.
+    expect(screen.getByRole('button', { name: 'Underline' })).not.toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Source' })).not.toBeDisabled()
+
+    useAppStore.setState({ viewMode: 'format' })
+    rerender(<EditorToolbar editorRef={ref} />)
+
+    editorRefBoundButtonNames.forEach((name) => {
+      expect(screen.getByRole('button', { name })).not.toBeDisabled()
+    })
+    expect(screen.getByRole('combobox', { name: 'Paragraph style' })).not.toBeDisabled()
+  })
+
   it('The page-setup button calls useAppStore.openPageSetup', async () => {
     const ref = createRef<MilkdownEditorHandle>()
     const user = userEvent.setup()

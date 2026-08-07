@@ -131,6 +131,20 @@ function EditorToolbar({ editorRef, onSetViewMode }: EditorToolbarProps): ReactE
   const viewMode = useAppStore((state) => state.viewMode)
   const setViewMode = useAppStore((state) => state.setViewMode)
   const openPageSetup = useAppStore((state) => state.openPageSetup)
+  // F2 (final whole-branch review): every control below bound to
+  // editorRef.current?.X() no-ops in Source mode, because MilkdownEditor is
+  // unmounted there and editorRef.current is null -- but before this guard
+  // they still rendered fully enabled, with no visual signal that clicking
+  // them did nothing. Disabling exactly the editorRef-bound cluster
+  // (undo/redo, paragraph style, bold/italic, both list buttons, link,
+  // table, page break) removes a dead control rather than a capability --
+  // Undo/Redo in particular: a plain <textarea> has real browser-native
+  // undo/redo of its own, so disabling THIS toolbar's Undo/Redo buttons
+  // doesn't remove undo capability in Source mode, just the redundant/dead
+  // duplicate control. Everything else (view-mode switcher, Export PDF,
+  // and every still-unwired placeholder button like Underline/Find/Insert
+  // image) is independent of the Milkdown instance and stays enabled.
+  const isSourceMode = viewMode === 'source'
   const content = useDocumentStore((state) => state.content)
   const filePath = useDocumentStore((state) => state.filePath)
   const [isExporting, setIsExporting] = useState(false)
@@ -396,13 +410,21 @@ function EditorToolbar({ editorRef, onSetViewMode }: EditorToolbarProps): ReactE
           >
             {/* Undo / redo */}
             <div className="flex items-center gap-0.5">
-              <ToolbarIconButton label="Undo" onClick={() => editorRef.current?.undo()}>
+              <ToolbarIconButton
+                label="Undo"
+                onClick={() => editorRef.current?.undo()}
+                disabled={isSourceMode}
+              >
                 <Icon strokeWidth={1.8}>
                   <path d="M7 7 3 11l4 4" />
                   <path d="M3 11h11.5A5.5 5.5 0 0 1 20 16.5v0" />
                 </Icon>
               </ToolbarIconButton>
-              <ToolbarIconButton label="Redo" onClick={() => editorRef.current?.redo()}>
+              <ToolbarIconButton
+                label="Redo"
+                onClick={() => editorRef.current?.redo()}
+                disabled={isSourceMode}
+              >
                 <Icon strokeWidth={1.8}>
                   <path d="M17 7l4 4-4 4" />
                   <path d="M21 11H9.5A5.5 5.5 0 0 0 4 16.5v0" />
@@ -424,9 +446,10 @@ function EditorToolbar({ editorRef, onSetViewMode }: EditorToolbarProps): ReactE
                 <select
                   key={headingSelectResetKey}
                   aria-label="Paragraph style"
-                  className="h-full appearance-none rounded-sm bg-transparent pl-2.5 pr-6 text-12-5 text-text-primary hover:bg-chrome-light"
+                  className="h-full appearance-none rounded-sm bg-transparent pl-2.5 pr-6 text-12-5 text-text-primary hover:bg-chrome-light disabled:cursor-not-allowed disabled:opacity-40"
                   defaultValue="paragraph"
                   onChange={(e) => handleHeadingChange(e.target.value)}
+                  disabled={isSourceMode}
                 >
                   <option value="paragraph">Normal text</option>
                   <option value="1">Heading 1</option>
@@ -480,6 +503,7 @@ function EditorToolbar({ editorRef, onSetViewMode }: EditorToolbarProps): ReactE
               label="Bold"
               active={false}
               onClick={() => editorRef.current?.toggleBold()}
+              disabled={isSourceMode}
             >
               <span className="text-14 font-bold leading-none">B</span>
             </ToolbarIconButton>
@@ -487,6 +511,7 @@ function EditorToolbar({ editorRef, onSetViewMode }: EditorToolbarProps): ReactE
               label="Italic"
               active={false}
               onClick={() => editorRef.current?.toggleItalic()}
+              disabled={isSourceMode}
             >
               <span className="text-14 italic leading-none">I</span>
             </ToolbarIconButton>
@@ -515,6 +540,7 @@ function EditorToolbar({ editorRef, onSetViewMode }: EditorToolbarProps): ReactE
               label="Bulleted list"
               active={false}
               onClick={() => editorRef.current?.toggleBulletList()}
+              disabled={isSourceMode}
             >
               <Icon strokeWidth={1.7}>
                 <circle cx="4.5" cy="7" r="1.3" fill="currentColor" stroke="none" />
@@ -529,6 +555,7 @@ function EditorToolbar({ editorRef, onSetViewMode }: EditorToolbarProps): ReactE
               label="Numbered list"
               active={false}
               onClick={() => editorRef.current?.toggleOrderedList()}
+              disabled={isSourceMode}
             >
               <Icon strokeWidth={1.7}>
                 <text x="2" y="8.5" fontSize="7" stroke="none" fill="currentColor">
@@ -569,7 +596,11 @@ function EditorToolbar({ editorRef, onSetViewMode }: EditorToolbarProps): ReactE
           split-cell have no backing command in this sub-project's scope and
           stay unwired, same treatment as Underline/text-color above. */}
           <div className="flex items-center gap-0.5">
-            <ToolbarIconButton label="Insert link" onClick={handleInsertLink}>
+            <ToolbarIconButton
+              label="Insert link"
+              onClick={handleInsertLink}
+              disabled={isSourceMode}
+            >
               <Icon strokeWidth={1.8}>
                 <path d="M9.5 14.5 14.5 9.5" />
                 <path d="M11 7.5l1-1a3.5 3.5 0 0 1 5 5l-1 1" />
@@ -586,6 +617,7 @@ function EditorToolbar({ editorRef, onSetViewMode }: EditorToolbarProps): ReactE
             <ToolbarIconButton
               label="Insert table"
               onClick={() => editorRef.current?.insertTable()}
+              disabled={isSourceMode}
             >
               <Icon strokeWidth={1.7}>
                 <rect x="3.5" y="5" width="17" height="14" rx="1.5" />
@@ -605,6 +637,7 @@ function EditorToolbar({ editorRef, onSetViewMode }: EditorToolbarProps): ReactE
             <ToolbarIconButton
               label="Insert page break"
               onClick={() => editorRef.current?.insertPageBreak()}
+              disabled={isSourceMode}
             >
               <Icon strokeWidth={1.7}>
                 <rect x="5" y="3" width="14" height="18" rx="1.5" />

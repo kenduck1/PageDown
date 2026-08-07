@@ -62,10 +62,20 @@ function EditorScreen(): React.JSX.Element {
   // docs/superpowers/specs/2026-08-07-source-mode-design.md for why both
   // are necessary, not just one:
   //
-  // Format -> Source: MilkdownEditor's onChange is 200ms-debounced (see
-  // CLAUDE.md's Milkdown section). Without flush() first, Source mode could
-  // read documentStore.content before a very recent edit has synced through,
-  // showing stale text the instant you switch.
+  // Anything else -> Source: MilkdownEditor's onChange is 200ms-debounced
+  // (see CLAUDE.md's Milkdown section). Without flush() first, Source mode
+  // could read documentStore.content before a very recent edit has synced
+  // through, showing stale text the instant you switch. Guarded on
+  // `mode === 'source' && currentViewMode !== 'source'` rather than the
+  // narrower `currentViewMode === 'format' && mode === 'source'` (fix-round
+  // finding, F4) -- the narrower form skips the flush on a hypothetical
+  // 'split' -> 'source' transition, which is harmless today only because
+  // Split mode renders the Format branch below (so the switch unmounts
+  // MilkdownEditor and its own unmount cleanup flushes as a side effect --
+  // see the mutation-testing note further down) but stops being harmless
+  // the moment a real Split mode keeps both editors permanently mounted and
+  // that unmount safety net disappears. flush() is a documented no-op when
+  // nothing changed since mount, so widening this condition is free.
   //
   // Source -> anything else: MilkdownEditor is uncontrolled after mount
   // (content only seeds defaultValueCtx once, at construction) and Source
@@ -80,18 +90,25 @@ function EditorScreen(): React.JSX.Element {
   // rely on. The content argument is the CURRENT content (already fully
   // synced by every Source-mode keystroke's own updateContentForTab call --
   // see SourceEditor's own contract), so this is a same-value rewrite whose
-  // only real effect is the revision bump, not a second content write.
+  // only real effect on CONTENT is the revision bump, not a second content
+  // write -- and, as of the same-value isDirty guard replaceContentForTab
+  // itself now carries (F1, see documentStore.ts's own doc comment on that
+  // action), it genuinely has no OTHER effect either: before that guard
+  // existed, this same-value rewrite still forced isDirty: true
+  // unconditionally, so a Format -> Source -> Format round trip with zero
+  // real edits marked a clean, untouched document dirty. Don't reintroduce
+  // that by calling a different store action here or bypassing the guard --
+  // this call depends on it now.
   //
-  // Reads `viewMode`/`content` from the render closure rather than
-  // useAppStore.getState()/useDocumentStore.getState() -- unlike
-  // handleRestoreVersion's post-save guard (which has to survive a real
-  // async gap where a tab switch can happen mid-flight), this handler is
-  // synchronous end to end: flush()/replaceContentForTab/setViewMode all run
-  // in the same click handler with no `await` in between, so the values
-  // captured at render time cannot go stale before they're used. Source
-  // mode's controlled textarea also keeps `content` synchronous with the
-  // store on every keystroke, so there's no debounce window like the one
-  // that motivates the getState() reads elsewhere in this file.
+  // Reads `viewMode`/`content`/`activeTabId` via getState() rather than the
+  // render closure (fix-round finding, F6) -- this handler is synchronous
+  // end to end (flush()/replaceContentForTab/setViewMode all run in the
+  // same click handler with no `await` in between), so a stale closure read
+  // is not reachable today the way it is for handleRestoreVersion's own
+  // post-save guard below. But this file already establishes the
+  // getState() convention for exactly this risk class, and a stale read
+  // here would be a genuine clobber if that synchronous-handler property
+  // ever stopped holding, so matching the convention costs nothing.
   //
   // Fix-round-1 finding, worth recording here because it's genuinely
   // non-obvious and any future reader will otherwise rediscover it the hard
@@ -124,11 +141,13 @@ function EditorScreen(): React.JSX.Element {
   // that has no unmount auto-flush, so flush() calls on its handle can only
   // come from this function.
   const handleSetViewMode = (mode: ViewMode): void => {
-    if (viewMode === 'format' && mode === 'source') {
+    const currentViewMode = useAppStore.getState().viewMode
+    const { content: currentContent, activeTabId: currentActiveTabId } = useDocumentStore.getState()
+    if (mode === 'source' && currentViewMode !== 'source') {
       editorRef.current?.flush()
     }
-    if (viewMode === 'source' && mode !== 'source') {
-      replaceContentForTab(activeTabId, content)
+    if (currentViewMode === 'source' && mode !== 'source') {
+      replaceContentForTab(currentActiveTabId, currentContent)
     }
     setViewMode(mode)
   }
