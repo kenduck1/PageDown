@@ -127,6 +127,54 @@ function EditorScreen(): React.JSX.Element {
     goHome()
   }
 
+  // Mirrors handleGoHome above -- same confirm/flush/save/clear-autosave
+  // sequence -- but for closing the active tab via EditorTabBar's own "x"
+  // button instead of navigating to Home. Only ever invoked for the
+  // ACTIVE, dirty tab (EditorTabBar's own guard on `onCloseDirtyActiveTab`
+  // ensures that).
+  //
+  // The 'discard' branch's `filePath` read below is the top-level mirror,
+  // same as handleGoHome, and that IS safe: the only await before it is
+  // confirmDiscardChanges' own native dialog, and Electron makes that modal
+  // to this window (disables it on Windows, sheets it on macOS -- see
+  // file-io.ts's confirmDiscardChanges, which passes `win` as the dialog's
+  // parent), so no tab switch can happen in that gap.
+  //
+  // The 'save' branch's post-save check is NOT safe to treat the same way,
+  // and must NOT read the top-level isDirty mirror. save() itself is a
+  // plain async IPC round trip with no modal dialog whenever the document
+  // already has a known path (file-io.ts's saveFile calls writeFile
+  // directly; even its Save-As fallback opens dialog.showSaveDialog with no
+  // parent window, so it isn't modal either) -- the always-visible
+  // EditorTabBar lets the user switch to a DIFFERENT tab while it's in
+  // flight. If they do, and THIS tab's save actually failed, the top-level
+  // mirror reflects the NEWLY active tab by the time save() resolves: if
+  // that other tab happens to be clean, `isDirty` reads false even though
+  // the tab actually being closed is still genuinely dirty, and the old
+  // mirror-based check would fall through to closeTab(tabId) below --
+  // silently discarding real unsaved content whose save just failed. This
+  // is the exact race class replaceContentForTab/updateContentForTab and
+  // handleRestoreVersion's own post-save guard already exist to close (see
+  // their doc comments) -- re-reading the TARGET tab's own entry from the
+  // live `tabs` array by id, not the mirror, is required here too.
+  const handleCloseDirtyActiveTab = async (tabId: string): Promise<void> => {
+    const choice = await window.api.confirmDiscardChanges()
+    if (choice === 'cancel') return
+    if (choice === 'save') {
+      editorRef.current?.flush()
+      await save()
+      const targetTab = useDocumentStore.getState().tabs.find((tab) => tab.id === tabId)
+      if (targetTab?.isDirty) return
+    }
+    if (choice === 'discard' && filePath) {
+      // Same reasoning as handleGoHome's own clearPendingAutosave call --
+      // a discarded edit must never silently reappear as "recovered" the
+      // next time this file is opened.
+      void window.api.clearPendingAutosave(filePath)
+    }
+    closeTab(tabId)
+  }
+
   // Best-effort DOM-based scroll: the outline (EditorOutline, fed by the
   // same extractOutline used here) and the real mounted editor both derive
   // their heading list from the same document in the same order, so the
@@ -274,7 +322,7 @@ function EditorScreen(): React.JSX.Element {
           </button>
         </div>
       )}
-      <EditorTabBar />
+      <EditorTabBar onCloseDirtyActiveTab={handleCloseDirtyActiveTab} />
       <EditorToolbar editorRef={editorRef} />
       <div className="flex flex-1 overflow-hidden">
         <EditorSidebar

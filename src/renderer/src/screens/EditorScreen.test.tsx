@@ -686,4 +686,145 @@ describe('EditorScreen', () => {
     // background.
     expect(useDocumentStore.getState().content).toBe('# B untouched')
   })
+
+  // Tab-close-confirmation: EditorTabBar's "x" button on a dirty ACTIVE tab
+  // now defers to handleCloseDirtyActiveTab instead of discarding directly.
+  // These mirror the handleGoHome dirty-check tests above -- same
+  // confirm/flush/save/clear-autosave sequence, applied to closing a tab
+  // instead of navigating Home. A dirty BACKGROUND tab's close is NOT
+  // covered here -- it's still a direct, unconfirmed closeTab (the
+  // disclosed, deliberately-unfixed gap), and is covered at the
+  // EditorTabBar level instead (EditorTabBar.test.tsx), since that's where
+  // the discriminator actually lives.
+  describe('closing a dirty active tab via its "x" button', () => {
+    function setActiveTabDirty(filePath: string, content: string): void {
+      useDocumentStore.setState((state) => ({
+        filePath,
+        content,
+        isDirty: true,
+        tabs: state.tabs.map((tab) =>
+          tab.id === state.activeTabId ? { ...tab, filePath, content, isDirty: true } : tab
+        )
+      }))
+    }
+
+    it('prompts before closing, and closes after a successful Save', async () => {
+      setActiveTabDirty('/tmp/report.md', '# Report')
+      const activeId = useDocumentStore.getState().activeTabId
+      vi.mocked(window.api.confirmDiscardChanges).mockResolvedValue('save')
+      vi.mocked(window.api.saveFile).mockResolvedValue({ filePath: '/tmp/report.md' })
+      const user = userEvent.setup()
+      render(<EditorScreen />)
+
+      await user.click(screen.getByRole('button', { name: 'Close report.md' }))
+
+      expect(window.api.confirmDiscardChanges).toHaveBeenCalled()
+      await waitFor(() => {
+        expect(window.api.saveFile).toHaveBeenCalledWith('/tmp/report.md', '# Report')
+      })
+      await waitFor(() => {
+        expect(useDocumentStore.getState().tabs.some((tab) => tab.id === activeId)).toBe(false)
+      })
+    })
+
+    it('discards and closes the tab, clearing pending autosave, when the user chooses "Don\'t Save"', async () => {
+      setActiveTabDirty('/tmp/report.md', '# Report')
+      const activeId = useDocumentStore.getState().activeTabId
+      vi.mocked(window.api.confirmDiscardChanges).mockResolvedValue('discard')
+      const user = userEvent.setup()
+      render(<EditorScreen />)
+
+      await user.click(screen.getByRole('button', { name: 'Close report.md' }))
+
+      await waitFor(() => {
+        expect(window.api.clearPendingAutosave).toHaveBeenCalledWith('/tmp/report.md')
+      })
+      await waitFor(() => {
+        expect(useDocumentStore.getState().tabs.some((tab) => tab.id === activeId)).toBe(false)
+      })
+      expect(window.api.saveFile).not.toHaveBeenCalled()
+    })
+
+    it('does nothing when the user cancels -- the tab stays open, nothing is saved or discarded', async () => {
+      setActiveTabDirty('/tmp/report.md', '# Report')
+      const activeId = useDocumentStore.getState().activeTabId
+      vi.mocked(window.api.confirmDiscardChanges).mockResolvedValue('cancel')
+      const user = userEvent.setup()
+      render(<EditorScreen />)
+
+      await user.click(screen.getByRole('button', { name: 'Close report.md' }))
+
+      await waitFor(() => {
+        expect(window.api.confirmDiscardChanges).toHaveBeenCalled()
+      })
+      expect(window.api.saveFile).not.toHaveBeenCalled()
+      expect(window.api.clearPendingAutosave).not.toHaveBeenCalled()
+      expect(useDocumentStore.getState().tabs.some((tab) => tab.id === activeId)).toBe(true)
+    })
+
+    // Regression test for a real bug caught in review of the draft fix: the
+    // draft's post-save re-check read the top-level `isDirty` MIRROR
+    // (whichever tab is active right now), not the tab actually being
+    // closed. save() itself is a plain async IPC round trip with no modal
+    // dialog blocking the renderer (file-io.ts's saveFile writes directly
+    // for an already-known path), so the always-visible EditorTabBar lets
+    // the user switch tabs while it's in flight -- exactly the race
+    // handleRestoreVersion's own post-save guard (tested above) already has
+    // to defend against for restores. Tab A is the one being closed (its
+    // save will fail); tab B is a distinct, CLEAN tab the user switches to
+    // mid-save. A mirror-scoped check would read tab B's isDirty (false)
+    // and wrongly conclude tab A's save succeeded, discarding tab A's real,
+    // never-written content.
+    it('does not close the tab if ITS OWN save failed, even when a different (clean) tab is active by the time save() resolves', async () => {
+      const tabA = { id: 'tab-a', filePath: '/tmp/a.md', content: '# A dirty edit', isDirty: true }
+      const tabB = { id: 'tab-b', filePath: '/tmp/b.md', content: '# B clean', isDirty: false }
+      useDocumentStore.setState({
+        tabs: [tabA, tabB],
+        activeTabId: tabA.id,
+        content: tabA.content,
+        filePath: tabA.filePath,
+        isDirty: tabA.isDirty
+      })
+      vi.mocked(window.api.confirmDiscardChanges).mockResolvedValue('save')
+      let resolveSave: (value: { filePath: string } | null) => void = () => {}
+      vi.mocked(window.api.saveFile).mockReturnValue(
+        new Promise((resolve) => {
+          resolveSave = resolve
+        })
+      )
+      const user = userEvent.setup()
+      render(<EditorScreen />)
+
+      await user.click(screen.getByRole('button', { name: 'Close a.md' }))
+
+      // The pre-close Save is now in flight (saveFile called, but its
+      // promise deliberately not yet resolved) -- switch to the clean tab B
+      // before it resolves.
+      await waitFor(() => {
+        expect(window.api.saveFile).toHaveBeenCalledWith('/tmp/a.md', '# A dirty edit')
+      })
+      await act(async () => {
+        useDocumentStore.getState().switchTab(tabB.id)
+      })
+      expect(useDocumentStore.getState().activeTabId).toBe(tabB.id)
+
+      // saveFile resolving null is this codebase's own established stand-in
+      // for "the save didn't actually happen" (see the Save-As-cancelled
+      // tests above) -- tab A's real isDirty stays true.
+      resolveSave(null)
+
+      // Give handleCloseDirtyActiveTab's continuation every chance to run
+      // (and, if the bug regressed, wrongly close tab A) before asserting.
+      await new Promise((resolve) => setTimeout(resolve, 50))
+
+      const finalTabA = useDocumentStore.getState().tabs.find((tab) => tab.id === tabA.id)
+      expect(finalTabA).toBeDefined()
+      expect(finalTabA?.isDirty).toBe(true)
+      expect(finalTabA?.content).toBe('# A dirty edit')
+      // Tab B, switched to mid-save, must be completely untouched.
+      const finalTabB = useDocumentStore.getState().tabs.find((tab) => tab.id === tabB.id)
+      expect(finalTabB?.content).toBe('# B clean')
+      expect(finalTabB?.isDirty).toBe(false)
+    })
+  })
 })
