@@ -3,7 +3,7 @@ import { create } from 'zustand'
 type Screen = 'home' | 'editor' | 'settings'
 export type ViewMode = 'format' | 'split' | 'source'
 type SidebarTab = 'pages' | 'outline' | 'history'
-type SplitLeftMode = 'source' | 'format'
+export type SplitLeftMode = 'source' | 'format'
 type HomeActiveSection = 'recent' | 'templates'
 
 const MIN_SPLIT_RATIO = 25

@@ -23,7 +23,12 @@ beforeEach(() => {
     restoreVersionContent: vi.fn(),
     clearPendingAutosave: vi.fn(),
     setSplitPreviewBounds: vi.fn(),
-    sendSplitPreviewDocument: vi.fn(),
+    // Resolved (not a bare vi.fn()) as of Task 5, which wires SplitPreview
+    // into EditorScreen for real -- SplitPreview.tsx's own effects call
+    // .then()/.catch() on this unconditionally, which throws synchronously
+    // (Cannot read properties of undefined) against a bare mock the moment
+    // any Split mode test actually mounts it.
+    sendSplitPreviewDocument: vi.fn().mockResolvedValue({ pageCount: 1 }),
     destroySplitPreview: vi.fn()
   }
 })
@@ -1034,6 +1039,76 @@ describe('EditorScreen', () => {
       expect(screen.getByRole('textbox', { name: 'Markdown source' })).toHaveValue(
         '# Restored From History'
       )
+    })
+  })
+
+  // Task 5 of the Split mode sub-project: viewMode 'split' finally renders a
+  // real two-pane layout (SourceEditor or the Milkdown page-card on the
+  // left, per splitLeftMode -- SplitPreview on the right) instead of Source
+  // mode's own plan-era placeholder, which deliberately folded 'split' into
+  // the plain Format branch. See docs/superpowers/sdd/2026-08-07-split-mode/
+  // task-5-brief.md Step 3/5.
+  //
+  // Query note: the brief's own draft used
+  // screen.getByRole('textbox', { name: '' }) for the left-pane textarea --
+  // wrong for the real, shipped SourceEditor, which sets a real
+  // aria-label="Markdown source" (see SourceEditor.tsx and this file's own
+  // pre-existing 'Source mode wiring' tests above, which already query it
+  // that way). Using the correct name here, not the brief's literal string.
+  describe('Split mode wiring', () => {
+    it('renders SourceEditor + SplitPreview side by side when viewMode is split and splitLeftMode is source', async () => {
+      useDocumentStore.setState({ filePath: '/tmp/report.md', content: '# Report' })
+      useAppStore.setState({ viewMode: 'split', splitLeftMode: 'source' })
+      render(<EditorScreen />)
+
+      expect(screen.getByRole('textbox', { name: 'Markdown source' })).toBeInTheDocument()
+      expect(screen.getByTestId('split-preview-placeholder')).toBeInTheDocument()
+      expect(screen.queryByTestId('page-card')).not.toBeInTheDocument()
+    })
+
+    it('renders the Milkdown page-card + SplitPreview side by side when viewMode is split and splitLeftMode is format', async () => {
+      useDocumentStore.setState({ filePath: '/tmp/report.md', content: '# Report' })
+      useAppStore.setState({ viewMode: 'split', splitLeftMode: 'format' })
+      render(<EditorScreen />)
+
+      await waitFor(() => {
+        expect(screen.getByTestId('page-card')).toBeInTheDocument()
+      })
+      expect(screen.getByTestId('split-preview-placeholder')).toBeInTheDocument()
+    })
+
+    // Generalization of the pre-existing 'switching Source -> Format
+    // remounts Milkdown with the edited Source-mode content' test above
+    // (same file), covering the NEW transition Split mode introduces:
+    // leaving a Source-mode-flavored Split left pane for plain Format mode.
+    // Same discriminating-spy technique -- see that test's own comment for
+    // why a spy (not just the outcome) is needed to tell
+    // replaceContentForTab's revision bump apart from the JSX
+    // type-swap/remount that ALSO carries the edit across, today.
+    it('switching Split(source) -> Format remounts Milkdown with the edited Split-mode content, not stale pre-edit content', async () => {
+      useDocumentStore.setState({ filePath: '/tmp/report.md', content: '# Original' })
+      useAppStore.setState({ viewMode: 'split', splitLeftMode: 'source' })
+
+      const realReplaceContentForTab = useDocumentStore.getState().replaceContentForTab
+      const replaceContentForTabSpy = vi.fn(realReplaceContentForTab)
+      useDocumentStore.setState({ replaceContentForTab: replaceContentForTabSpy })
+      const activeTabId = useDocumentStore.getState().activeTabId
+
+      const user = userEvent.setup()
+      render(<EditorScreen />)
+
+      const textarea = screen.getByRole('textbox', { name: 'Markdown source' })
+      await user.clear(textarea)
+      await user.type(textarea, '# Edited In Split Source')
+
+      await user.click(screen.getByRole('button', { name: 'Format' }))
+
+      expect(replaceContentForTabSpy).toHaveBeenCalledWith(activeTabId, '# Edited In Split Source')
+
+      await waitFor(() => {
+        expect(screen.getByTestId('document-content')).toHaveTextContent('Edited In Split Source')
+      })
+      expect(useDocumentStore.getState().content).toBe('# Edited In Split Source')
     })
   })
 
