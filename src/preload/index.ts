@@ -34,7 +34,20 @@ const api = {
   // like this must be computed in the main process from the real on-disk
   // mtime, not accepted from the renderer.
   clearPendingAutosave: (filePath: string) =>
-    ipcRenderer.invoke('file:clearPendingAutosave', filePath)
+    ipcRenderer.invoke('file:clearPendingAutosave', filePath),
+  // `ipcRenderer.send`, not `invoke` -- this fires on every ResizeObserver
+  // tick from the Split mode preview pane and has no result the caller needs
+  // to await (see the split-preview:setBounds handler's own comment in
+  // src/main/index.ts for the full scale-factor rationale).
+  setSplitPreviewBounds: (bounds: { x: number; y: number; width: number; height: number }) =>
+    ipcRenderer.send('split-preview:setBounds', bounds),
+  // `filePath: null` denies all local assets for that render (an unsaved
+  // document, or one the caller hasn't vetted) -- same convention as
+  // getPageCount/exportPdf above. The main-process handler validates a
+  // non-null path with isKnownPath and drops it if unknown.
+  sendSplitPreviewDocument: (content: string, filePath: string | null) =>
+    ipcRenderer.invoke('split-preview:sendDocument', content, filePath),
+  destroySplitPreview: () => ipcRenderer.invoke('split-preview:destroy')
 }
 
 // Use `contextBridge` APIs to expose Electron APIs to
