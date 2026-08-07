@@ -633,13 +633,26 @@ test('Gate 4: split-block fragmentation — a table split across a page boundary
   // actually occurs against it today — see this task's report), and it is
   // one of Gate 1's 8 pinned `corpusFiles` (exact-run-count assertions),
   // so editing it to force a split risks silently breaking that gate's own
-  // carefully-calibrated coverage. 60 rows, built directly as HTML (not
+  // carefully-calibrated coverage. 35 rows, built directly as HTML (not
   // run through markdownToHtml — this is synthetic scaffolding for this
   // one check, not reference content), is enough to force a real 2-page
   // split at this harness's Letter/1in-margin default (confirmed directly
   // below via the measured page count, not assumed).
+  //
+  // Re-tuned from 60 to 35 rows by the Document Typography sub-project:
+  // once the sandboxed render context got real author CSS and an explicit
+  // `@page` rule (8.5in x 11in, 1in margins — replacing Paged.js's own
+  // zero-margin `base.js` default), the content box shrank and per-row
+  // height grew, so the old 60-row count now overflows to a 3-page split
+  // instead of 2. Measured directly against this branch's typography: 21
+  // rows -> 1 page, 22-45 rows -> 2 pages, 46+ rows -> 3 pages. 35 sits
+  // comfortably mid-range (not pinned to either edge) so a small future
+  // typography tweak doesn't immediately knock this back out of a 2-page
+  // split. This count is geometry-sensitive: any future change to page
+  // size, margins, or document typography (font size, line height, cell
+  // padding) will likely require re-measuring and re-tuning it again.
   const rows = Array.from(
-    { length: 60 },
+    { length: 35 },
     (_, i) =>
       `<tr><td>Row ${i + 1}</td><td>Category ${i % 5}</td><td>Some description text for row ${i + 1}</td><td>$${(i * 12.34).toFixed(2)}</td></tr>`
   ).join('\n')
@@ -666,7 +679,7 @@ test('Gate 4: split-block fragmentation — a table split across a page boundary
     pdfBase64: string
   }
   console.log('Gate 4 synthetic table on-screen pageCount:', sendResult.pageCount)
-  // The whole point of 60 rows: confirm this really did split across a page
+  // The whole point of the 35-row count above: confirm this really did split across a page
   // boundary before drawing any conclusion from its tag structure below —
   // a table that happened to fit on one page would make every assertion
   // past this point vacuous.
@@ -726,29 +739,32 @@ test('Gate 4: split-block fragmentation — a table split across a page boundary
   // top-level /Table StructElems in the tag tree — not one /Table element
   // whose /TR children merely happen to point at two different pages. A
   // screen reader consuming this PDF's structure tree would announce this
-  // as two unrelated tables, not one continuous 61-row table.
+  // as two unrelated tables, not one continuous 36-row table.
   expect(
     tableNodes.length,
     "a table split across a page boundary is expected to fragment into 2 separate /Table struct elements (the design doc's predicted failure mode) — if this is now 1, the export pipeline may have improved on this"
   ).toBe(2)
 
-  // All 61 real rows (1 header + 60 data) must still be PRESENT somewhere
+  // All 36 real rows (1 header + 35 data) must still be PRESENT somewhere
   // in the tree — content is duplicated in structure (2 Tables) but not
   // lost or duplicated in substance.
   //
-  // Updated to 62 by Task 10 (Gate 6) — a real, intended change, not a
-  // regression: Task 10's `TableContinuationHandler`
-  // (src/pagination/break-handlers.ts) now clones the original table's
+  // Was 62 (against the original 60-row count) as of Task 10 (Gate 6) — a
+  // real, intended change from Task 10's `TableContinuationHandler`
+  // (src/pagination/break-handlers.ts), which clones the original table's
   // <thead> onto this table's continuation (second-page) fragment, exactly
   // fixing the accessibility gap this test's own comment below used to
   // describe. The extra TR is that repeated header row's own <tr> — genuine
   // intentional duplication of the header specifically (not a data-row
-  // duplication bug): 61 original rows (1 header + 60 data) + 1 repeated
-  // header row on the continuation fragment = 62.
+  // duplication bug). Now 37, after the Document Typography sub-project's
+  // row-count retune (60 -> 35 rows, see the comment above the fixture's
+  // HTML construction) — the formula itself is unchanged: 36 original rows
+  // (1 header + 35 data) + 1 repeated header row on the continuation
+  // fragment = 37.
   expect(
     trNodes.length,
-    'total TR count across both fragments should equal 1 header row + 60 data rows + 1 repeated header row (Task 10)'
-  ).toBe(62)
+    'total TR count across both fragments should equal 1 header row + 35 data rows + 1 repeated header row (Task 10)'
+  ).toBe(37)
 
   // Updated by Task 10 (Gate 6) — this now documents the FIX, not the gap.
   // Before Task 10: only ONE header row's worth of TH elements existed in
