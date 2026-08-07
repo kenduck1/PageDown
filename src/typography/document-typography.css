@@ -1,0 +1,406 @@
+/* Shared document-content typography, applied to BOTH the sandboxed
+   pagination render context (imported as raw text, see
+   resources/pagination-render/index.ts) and the Milkdown editor mount
+   (imported directly into base.css's Tailwind layer system, see
+   src/renderer/src/assets/base.css). One file, two consumers -- see
+   docs/superpowers/specs/2026-08-06-document-typography-design.md,
+   "Single source of truth for typography values", for why this is a plain
+   CSS file rather than a JS object of values, and for the judgment calls
+   behind every number below.
+
+   Content width (624px) is deliberately NOT set here -- it's a wrapper-
+   level concern, and the two surfaces have differently-named wrappers
+   (`.milkdown-mount` vs. Paged.js's own generated page-content structure,
+   which this file's tag selectors can't reach). See Task 4 (Milkdown's own
+   max-width) and Task 6 (the pagination context's own `@page` rule,
+   src/typography/page-geometry.ts's CONTENT_WIDTH_PX) for where that
+   number actually lives -- both independently derive the same 624px this
+   file's rules are meant to fill.
+
+   Values here duplicate the design doc's numbers as literals, not as CSS
+   custom properties referencing a shared TS source -- a plain CSS file has
+   no way to import a TypeScript constant. Kept in sync by hand, the same
+   pattern already used for this app's CSP nonce policy string (see
+   resources/pagination-render/index.html's own "Keep both copies... in
+   sync" comment) -- if any number here changes, check
+   docs/superpowers/specs/2026-08-06-document-typography-design.md and this
+   comment block for anywhere it's restated.
+
+   Every selector below is scoped under .pagedown-document. This file is
+   imported unscoped into base.css's global @layer base (see Task 4), so
+   without a scope class its bare tag selectors (h1, p, ul, table, ...)
+   would apply to the WHOLE app shell, not just document content -- caught
+   in review as a real regression in HomeScreen/PageSetupModal/sidebar
+   chrome. BOTH consumers named above must supply the .pagedown-document
+   class on their own wrapper for these rules to apply at all: the Milkdown
+   mount div carries it directly (src/renderer/src/milkdown/MilkdownEditor.tsx),
+   and the sandboxed render context puts it on its <body> (Task 6). Removing
+   the class from either surface silently disables every rule in this file
+   there -- it won't error, it'll just stop matching. */
+
+/* BASELINE for the whole scope. Everything below this rule is a tag
+   allowlist, and an allowlist with no baseline silently hands every
+   element it forgot to name over to whatever the surrounding surface
+   happens to declare -- which is precisely the mismatch this file exists
+   to remove. Concretely, without this rule an element not enumerated
+   below (an <h4>, a <pre>, a bare text node, an <hr>'s em-denominated
+   margin) resolves against the Milkdown mount's inherited app-shell chrome
+   (13px, --font-sans, Preflight's line-height: 1.5 from `html`) on one
+   surface and Chromium's UA defaults (16px, Times, line-height: normal) on
+   the other -- two different sizes, two different faces, two different
+   leadings, for identical markup. Setting the three inherited text
+   properties once, here, means an unlisted element is merely UNSTYLED
+   rather than DIVERGENT: it lands on the same computed values on both
+   surfaces even when nothing below names it. Added by the final
+   whole-branch review, which found this gap after Gate 10 was already
+   passing at 0.000px -- Gate 10's fixture (REPORT_TEMPLATE) contains only
+   h1/h2/p/table, every one of which sets its own font-size and
+   line-height below, so that gate structurally could not have caught it.
+
+   These are the same three values the body-text rules below already
+   restate for the elements they name (--font-serif, 14px, 1.7); the
+   duplication is deliberate -- those rules must keep working if a future
+   change ever re-scopes or removes this baseline, and CSS gives no way to
+   express "and also inherit these" other than restating them. */
+.pagedown-document {
+  font-family: var(--font-serif);
+  font-size: var(--text-14);
+  line-height: 1.7;
+}
+
+/* First block-level child anywhere in this scope starts flush, no top
+   margin -- Gate 10 measured a flat +39px offset on EVERY row (exactly
+   H1's own 1.5em margin-top, 1.5 * 26px) before this rule existed. Root
+   cause: the two surfaces disagree on whether that margin collapses.
+   Paged.js's own page-content wrapper div doesn't let the H1's margin-top
+   collapse through it (the pagination side visibly renders the 39px gap),
+   while the Milkdown mount's plain block flow DOES collapse it away
+   entirely (ProseMirror sits flush against milkdown-mount's own padding
+   box, so the margin escapes upward and never shows as a gap inside
+   ProseMirror). Explicitly zeroing first-child margin-top makes both
+   surfaces agree on "nothing dangles above whatever's first" instead of
+   leaving it to each surface's own incidental collapse behavior.
+   Empirically confirmed against Gate 10's real per-block output
+   (2026-08-06): removed exactly the 39px constant from every row.
+
+   This selector only ever changes anything for the elements in this file
+   that have a non-zero margin-top to begin with: h1-h6 (1.5em) and hr
+   (1.5em, via its `margin: 1.5em 0` shorthand below) -- every other element
+   here is already at margin-top: 0, whether via an explicit declaration
+   (p/ul/ol/pre/li/blockquote/table/the th>p and td>p rules) or CSS's own
+   initial value (a/strong/em/img/code/th/td, which declare no margin
+   at all), so the selector is a no-op for them whether or not they're a
+   first child.
+
+   Known, accepted asymmetry, not caught by Gate 10: `:first-child` matches
+   ANY element that is the first child of its own immediate parent,
+   anywhere in the subtree -- not just the document's true first block.
+   `.pagedown-document` sits on the Milkdown mount div itself (see this
+   file's header comment above), whose single rendered child is
+   `.ProseMirror` -- there is exactly one linear editing root, not one
+   wrapper per page, so only the document's actual first top-level block
+   can ever match there. On the pagination side, Paged.js
+   clones/wraps content per PAGE (the gate's own selector,
+   `.pagedjs_page_content > div > *`, shows this), so this rule matches the
+   first block of EVERY page, not just page 1. Concretely: a heading (or
+   hr) that happens to land first on page 2+ of a real multi-page document
+   renders with margin-top: 0 in the paginated preview and exported PDF,
+   while the identical heading in the Milkdown editor -- which has no page
+   concept at all -- keeps its full 1.5em, since it's never a first-child
+   there unless it's genuinely the document's first block. Gate 10's fixture
+   (REPORT_TEMPLATE) fits on a single page, so no heading other than the
+   true first block is ever a per-page first-child, and this asymmetry is
+   structurally invisible to it.
+
+   A narrower selector was considered and rejected: `.pagedown-document >
+   *:first-child` (direct-child combinator) would avoid matching a
+   page-2+ heading, but wouldn't match ANYTHING on either surface --
+   the actual first content element is several wrapper divs deep from
+   `.pagedown-document` on both sides (the class sits on `.milkdown-mount`
+   /`<body>`, not on `.ProseMirror`/the per-page content div directly), so
+   a direct-child version is simply broken, not just stricter. A truly
+   page-scoped fix (surface-specific selectors keyed to each surface's own
+   per-page wrapper) would close the gap, but requires surface-specific
+   rules in a file whose entire premise is one set of rules for both
+   surfaces, and is a structural question outside Task 7's "spacing/
+   line-height tuning" scope -- left as a known follow-up for whoever next
+   works on multi-page typography parity, not fixed here. */
+.pagedown-document :first-child {
+  margin-top: 0;
+}
+
+/* Strictly redundant with the baseline's own font-family since that rule was
+   added (font-family inherits, and nothing between .pagedown-document and
+   these elements overrides it on either surface). Kept rather than deleted
+   so the body face survives intact if the baseline is ever re-scoped or
+   narrowed; it does not need extending as new elements are styled below --
+   inheritance already covers them, which is why h4-h6 are absent here. */
+.pagedown-document h1,
+.pagedown-document h2,
+.pagedown-document h3,
+.pagedown-document p,
+.pagedown-document ul,
+.pagedown-document ol,
+.pagedown-document li,
+.pagedown-document blockquote,
+.pagedown-document table,
+.pagedown-document th,
+.pagedown-document td {
+  font-family: var(--font-serif);
+}
+
+.pagedown-document pre,
+.pagedown-document code {
+  /* Code content stays monospace regardless of surrounding document
+     typography -- matches the design handoff's "Raw source mode" font row,
+     not the document body serif face. */
+  font-family: var(--font-mono);
+  /* Explicit, even though 1em is what inheritance would give anyway: an
+     element whose font-family resolves to a monospace stack and whose
+     font-size is left at its initial `medium` keyword hits Chromium's
+     monospace default-font-size quirk (a flat 13px, rather than whatever
+     the surrounding text is) in the sandboxed context, which has no other
+     author rule to contest it -- while the editor's Preflight already pins
+     `code, kbd, samp, pre { font-size: 1em }` (verified in the built CSS)
+     and never sees the quirk at all. Specifying any font-size at all
+     suppresses it, so this one declaration makes the two surfaces agree by
+     construction instead of by luck. */
+  font-size: 1em;
+}
+
+.pagedown-document p,
+.pagedown-document li,
+.pagedown-document td,
+.pagedown-document blockquote {
+  font-size: var(--text-14);
+  line-height: 1.7;
+}
+
+/* Paragraph/list-item spacing: ~1em relative to the 14px body size (14px),
+   a standard prose convention -- see the design doc's spacing section for
+   why this is expressed as a relationship (em, self-scaling per element)
+   rather than a hand-picked px value.
+   `pre` joined this list in the final whole-branch review: it was
+   previously named only by the font-family rule above and so inherited two
+   different block margins, `0` from Preflight in the editor versus the
+   UA's `1em 0` in the sandboxed context -- a code block sat flush against
+   its neighbours on one surface and spaced on the other. Sharing this
+   rule's margin puts it on the same footing as every other block element
+   here. */
+.pagedown-document p,
+.pagedown-document ul,
+.pagedown-document ol,
+.pagedown-document pre,
+.pagedown-document blockquote {
+  margin: 0 0 1em 0;
+}
+
+.pagedown-document li {
+  margin: 0 0 0.35em 0;
+}
+
+.pagedown-document h1,
+.pagedown-document h2,
+.pagedown-document h3,
+.pagedown-document h4,
+.pagedown-document h5,
+.pagedown-document h6 {
+  font-weight: 700;
+  /* Explicit unitless line-height, not left to inherit: neither surface
+     had one before Gate 10's Task 7 run, and they don't inherit the same
+     ambient value -- the Milkdown mount inherits Tailwind Preflight's
+     `line-height: 1.5` (set on `html`), while the sandboxed pagination
+     context has zero author CSS above this file, so its headings fell
+     back to the UA default `line-height: normal` (~1.15, font-metric-
+     dependent). That mismatch showed up as a per-heading-transition delta
+     that grew block by block in Gate 10's table (e.g. +3px to +3.5px at
+     every H1/H2 boundary) even after the first-child fix above removed the
+     flat +39px offset. 1.15 is, critically, a plain number rather than an
+     inherited one, so both surfaces compute the identical heading height
+     regardless of whatever line-height their respective ambient/UA
+     stylesheet would otherwise supply -- the exact value was picked to
+     match Gate 10's real measured output (it does NOT match this file's
+     own paragraph line-height of 1.7 above; headings and body text are
+     deliberately different densities). Empirically confirmed against
+     Gate 10's real per-block output (2026-08-06).
+     margin-top: 1.5x / margin-bottom: 0.5x the element's OWN font-size --
+     using `em` here (not a hardcoded px value per level) is what makes this
+     relationship self-scaling across all six heading levels without six
+     separate numbers to keep in sync; see the design doc's "Block
+     spacing" judgment
+     call for the reasoning and the explicit expectation that these
+     multipliers get tuned against Gate 10's real per-block delta output in
+     Task 7, not treated as final here. */
+  line-height: 1.15;
+  margin-top: 1.5em;
+  margin-bottom: 0.5em;
+}
+
+.pagedown-document h1 {
+  font-size: var(--text-26);
+}
+
+.pagedown-document h2 {
+  font-size: var(--text-20);
+}
+
+.pagedown-document h3 {
+  font-size: var(--text-16);
+}
+
+/* H4-H6 continue the H1-H3 ramp (26/20/16) downward through the token
+   scale, sharing the weight/line-height/margin block above rather than
+   getting their own. They were previously not styled here AT ALL, which
+   made them the widest divergence in the file: Tailwind Preflight flattens
+   every heading to `font-size: inherit; font-weight: inherit` with zero
+   margin, so the editor rendered an H4 as indistinguishable body text,
+   while the sandboxed context had no Preflight and fell back to Chromium's
+   UA per-level sizes (1em/0.83em/0.67em of a 16px base), UA margins, and a
+   serif face -- three separate mismatches on the same element. Naming them
+   here settles all three at once. H6 landing below the 14px body size is
+   intentional and matches the same convention the UA's own ramp follows;
+   weight (700) is what keeps a small heading reading as a heading. */
+.pagedown-document h4 {
+  font-size: var(--text-14);
+}
+
+.pagedown-document h5 {
+  font-size: var(--text-13);
+}
+
+.pagedown-document h6 {
+  font-size: var(--text-12);
+}
+
+/* List markers and indentation, previously declared nowhere -- the single
+   most visible divergence this file had, and a genuine "the preview and
+   the PDF don't match what I'm editing" bug rather than a sub-pixel
+   spacing one. Tailwind Preflight sets `ol, ul, menu { list-style: none }`
+   plus a universal `padding: 0`, and nothing in the editor contested
+   either (no Milkdown theme CSS is imported anywhere in this app), so a
+   bulleted list rendered in the Milkdown canvas with NO bullets and NO
+   indent; the sandboxed context, having no Preflight, kept the UA's
+   `disc`/`decimal` markers and its `padding-inline-start: 40px`. Same
+   Markdown, two structurally different lists.
+   Restated here so both surfaces get markers. The nested `circle`/`square`
+   ramp is the UA's own convention for depth, replicated explicitly so the
+   editor matches what the paginated output has always shown rather than
+   flattening every level to `disc`.
+   The indent is em-denominated (2em = 28px at the 14px body size), NOT the
+   UA's fixed 40px: an absolute indent would stop tracking the body size
+   the moment any of this file's numbers are retuned, which is the same
+   self-scaling argument the block-margin rules above already make. 2em is
+   wide enough to hold a two-to-three-digit ordinal marker (`40.` at 14px
+   is ~24px) without the marker colliding with its own item text.
+   `list-style-type` longhands, not the `list-style` shorthand, on purpose:
+   the two surfaces consume this file through different toolchains (Lightning
+   CSS via Tailwind for the editor, esbuild's raw `text` loader for the
+   sandbox), and the shorthand form is one the minifier rewrites -- `list-style:
+   disc` came out the other side as `list-style: outside`, which happens to
+   compute identically (`disc` IS list-style-type's initial value) but leaves
+   the built editor stylesheet reading nothing like the built sandbox one.
+   The longhand survives both paths verbatim. */
+.pagedown-document ul {
+  list-style-type: disc;
+}
+
+.pagedown-document ul ul {
+  list-style-type: circle;
+}
+
+.pagedown-document ul ul ul {
+  list-style-type: square;
+}
+
+.pagedown-document ol {
+  list-style-type: decimal;
+}
+
+.pagedown-document ul,
+.pagedown-document ol {
+  padding-inline-start: 2em;
+}
+
+.pagedown-document table {
+  font-size: var(--text-14);
+  line-height: 1.7;
+  border-collapse: collapse;
+  width: 100%;
+  margin: 0 0 1em 0;
+}
+
+.pagedown-document th,
+.pagedown-document td {
+  /* border-box, not left to inherit: the Milkdown mount inherits Tailwind
+     Preflight's universal `* { box-sizing: border-box }`, but the
+     sandboxed pagination context has no Preflight and falls back to the
+     UA default `content-box`. Table cells are the one padded/bordered
+     element in this file, so they're the one place that mismatch can
+     change layout: content-box vs. border-box changes what width a cell's
+     own text content is wrapped to under the table's auto-layout
+     algorithm, which can flip a cell between one line and two. Matching
+     Milkdown's (already-correct) border-box here, rather than fighting
+     Preflight's own broad rule to push Milkdown the other way, made the
+     table block's height agree between both surfaces. Empirically
+     confirmed against Gate 10's real per-block output (2026-08-06). */
+  box-sizing: border-box;
+  text-align: left;
+  padding: 0.4em 0.6em;
+  border-bottom: 1px solid #d0d0d4;
+}
+
+.pagedown-document th {
+  font-weight: 700;
+}
+
+/* @milkdown/preset-gfm's table schema sets `cellContent: "paragraph"`
+   (confirmed by reading its source) -- EVERY table cell's content, in
+   BOTH <th> and <td>, is wrapped in a real <p> in the Milkdown mount's
+   DOM. base.css used to neutralize `.milkdown-mount td > p`'s margin
+   (an older, narrower fix predating this file), but not `th > p` -- so the
+   header row's wrapped paragraph still carried this file's own `p {
+   margin: 0 0 1em 0 }` rule above, adding a full 1em (14px at the 14px
+   table font-size) of unwanted bottom margin under the header row alone.
+   This rule supersedes that one outright: the Milkdown mount div carries
+   BOTH `.milkdown-mount` and `.pagedown-document`, so the two selectors
+   matched the same elements at the same specificity with the same
+   declaration, and base.css's copy was deleted as dead weight by the final
+   whole-branch review. If this rule is ever narrowed back to `td` only,
+   the editor's table HEADER row regains that stray 14px -- there is no
+   longer a second rule anywhere covering either half. The pagination
+   side never wraps cell content in <p> at all (GFM table cells are
+   inline-only content per CommonMark, so mdast-util-to-hast renders <th>/
+   <td> with direct inline children) -- so this rule is a genuine no-op
+   there, not a one-sided patch pretending to be shared. Gate 10 measured
+   this as a flat +14px on every row from the header onward (not
+   compounding further), pointing at a one-time addition rather than a
+   per-row spacing error. Empirically confirmed against Gate 10's real
+   per-block output (2026-08-06). */
+.pagedown-document th > p,
+.pagedown-document td > p {
+  margin: 0;
+}
+
+.pagedown-document hr {
+  border: none;
+  border-top: 1px solid #d0d0d4;
+  margin: 1.5em 0;
+}
+
+.pagedown-document a {
+  color: inherit;
+  text-decoration: underline;
+}
+
+.pagedown-document strong {
+  font-weight: 700;
+}
+
+.pagedown-document em {
+  font-style: italic;
+}
+
+.pagedown-document img {
+  max-width: 100%;
+  height: auto;
+}

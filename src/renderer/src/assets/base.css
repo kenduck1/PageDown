@@ -1,4 +1,5 @@
 @import 'tailwindcss';
+@import '../../../typography/document-typography.css' layer(base);
 
 @font-face {
   font-family: 'Source Serif 4';
@@ -40,8 +41,10 @@
   --text-14: 14px;
   --text-15: 15px;
   --text-15-5: 15.5px;
+  --text-16: 16px;
   --text-20: 20px;
   --text-21: 21px;
+  --text-26: 26px;
 
   /* Radius scale */
   --radius-sm: 6px;
@@ -78,10 +81,6 @@
     font-size: var(--text-13);
   }
 
-  .milkdown-mount td > p {
-    margin: 0;
-  }
-
   /* Native macOS text fields tint the insertion point with the app's own
      accent color, not plain black matching the surrounding text -- which
      is what the browser default (`caret-color: currentColor`, confirmed via
@@ -104,6 +103,13 @@
     outline: none;
   }
 
+  /* .milkdown-mount td > p's margin reset used to live here but was deleted
+     as dead weight by the Document Typography sub-project's final review:
+     the shared stylesheet's `.pagedown-document th > p, .pagedown-document
+     td > p` rule (src/typography/document-typography.css) now covers the
+     same elements at the same specificity via the class the Milkdown mount
+     div also carries -- see that file's own comment for the measured
+     Gate 10 finding this superseded. */
   /* Hides the native scrollbar while leaving real scroll behavior (wheel,
      trackpad, drag) fully intact -- used by EditorToolbar's horizontally
      scrollable region, which signals "more content" via its own edge-fade

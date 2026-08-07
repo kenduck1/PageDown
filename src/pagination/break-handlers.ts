@@ -79,16 +79,46 @@ const HEADING_SELECTOR = 'h1, h2, h3, h4, h5, h6'
 //   fit, and (with `data-previous-break-after="avoid"` stamped on it) `prev`
 //   resolves to the heading right before it — exactly keep-with-next.
 //
-// This harness's `sendDocument` path (resources/pagination-render/index.ts)
-// deliberately calls `previewer.preview(container, [], root)` with an
-// EXPLICITLY EMPTY stylesheet array (see that file's own comment on why),
-// so `Breaks`' CSS-declaration-parsing path (`onDeclaration`, which only
-// fires while the `Polisher` parses a real stylesheet) never runs for any
-// document this harness paginates — a `break-after: avoid` CSS rule placed
-// in a `<style>` tag would never reach it. Rather than route CSS text
-// through `Polisher.add()` just to get these two attributes stamped, this
-// handler stamps them directly, driven by heading-matching logic instead
-// of parsed CSS — reusing the EXACT SAME `data-break-after`/
+// PREMISE CORRECTED (final whole-branch review of the Document Typography
+// sub-project). This comment used to justify the attribute-stamping
+// approach below on the grounds that this harness's `sendDocument` path
+// (resources/pagination-render/index.ts) calls `previewer.preview(container,
+// [], root)` with an EXPLICITLY EMPTY stylesheet array, so `Breaks`'
+// CSS-declaration-parsing path (`onDeclaration`) could never run and a
+// `break-after: avoid` rule in a stylesheet could never reach it. That is
+// no longer true: that path now passes a real, non-empty stylesheet
+// (`DOCUMENT_STYLESHEET`, the shared document typography), so the `Polisher`
+// parses author CSS on every render and `Breaks.onDeclaration` DOES run.
+// It is a no-op today only because `document-typography.css` declares none
+// of the four properties it actually reacts to — read from breaks.js
+// directly, those are exactly `page`, `break-before`, `break-after`, and
+// the legacy `page-break-before`/`page-break-after` aliases it normalizes
+// onto the latter two. `break-inside` is NOT among them; Paged.js honours
+// that one on a completely different path, by reading
+// `getComputedStyle(node)["break-inside"]` inside `Layout.findOverflow`
+// (layout.js:383, 565, 572, 589) and via `breakInsideAvoidParentNode`
+// (utils/dom.js:683).
+//
+// So CSS-driven break control is now genuinely AVAILABLE here, by BOTH
+// routes — the Polisher one because a stylesheet is finally being parsed,
+// and the computed-style one because that stylesheet's rules now actually
+// reach the rendered document. A `break-inside: avoid` on tables or
+// headings added to the shared typography stylesheet would be honoured, and
+// is a reasonable thing for a future task to reach for. What survives the
+// correction is the narrower,
+// still-true reason this handler stamps attributes directly rather than
+// declaring CSS: the rule it needs is "keep every heading with WHATEVER
+// element happens to follow it", which is a relationship between two
+// sibling elements, not a property of a selector-matchable one. `Breaks`
+// implements exactly that relationship by stamping `data-break-after` on
+// the matched element AND `data-previous-break-after` on its
+// `displayedElementAfter` — so a hypothetical `h1, h2, ... { break-after:
+// avoid }` rule in the shared stylesheet would produce the same two
+// attributes this handler writes itself, at the cost of putting a
+// pagination-behavior rule inside a file whose whole premise is that both
+// surfaces share it (the Milkdown editor has no page boxes and would
+// simply ignore it). Stamping here keeps break policy in the pagination
+// layer, and reuses the EXACT SAME `data-break-after`/
 // `data-previous-break-after` attribute contract `Breaks`/`layout.js`
 // already implement and rely on, just populated a different way.
 //
