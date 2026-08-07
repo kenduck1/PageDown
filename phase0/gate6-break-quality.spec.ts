@@ -2,7 +2,19 @@ import { test, expect } from '@playwright/test'
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { markdownToHtml } from '../src/markdown/pipeline'
+import { computePageGeometry } from '../src/typography/page-geometry'
+import { DEFAULT_PAGE_CONFIG } from '../src/markdown/page-config'
 import { launchIsolatedApp } from './electron-launch'
+
+// Page Geometry Wiring: harness.sendDocument now requires a real geometry
+// argument, computed here at this file's own Node-side module scope (an
+// app.evaluate() callback runs in a bare V8 context with no working module
+// resolution, so an imported constant can't be referenced from inside one
+// directly — it has to be threaded through app.evaluate()'s own single
+// argument instead). This gate deliberately exercises the DEFAULT
+// (no-frontmatter) geometry — per-document geometry is Task 4's concern,
+// not this gate's.
+const LETTER_GEOMETRY = computePageGeometry(DEFAULT_PAGE_CONFIG)
 
 // Same mechanical deviations from a hypothetical literal brief sample as
 // every other Phase 0 gate spec (see gate1/gate2/gate5/gate7's own
@@ -103,15 +115,16 @@ test('Gate 6: render every break-quality fixture and capture per-page structure 
     const markdown = readFileSync(join(__dirname, 'corpus', file), 'utf8')
     const { html } = markdownToHtml(markdown)
 
-    const result = (await app.evaluate(async (_electronNS, html) => {
-      const harness = (
-        globalThis as unknown as {
-          __gate6Harness: import('../src/main/pagination-window').PaginationHarness
-        }
-      ).__gate6Harness
-      const sendResult = await harness.sendDocument(html)
+    const result = (await app.evaluate(
+      async (_electronNS, { html, geometry }) => {
+        const harness = (
+          globalThis as unknown as {
+            __gate6Harness: import('../src/main/pagination-window').PaginationHarness
+          }
+        ).__gate6Harness
+        const sendResult = await harness.sendDocument(html, geometry)
 
-      const perPageHeadings = await harness.view.webContents.executeJavaScript(`
+        const perPageHeadings = await harness.view.webContents.executeJavaScript(`
         Array.from(document.querySelectorAll('.pagedjs_page')).map((page) =>
           Array.from(page.querySelectorAll('h1, h2, h3, h4, h5, h6')).map((h) => ({
             tag: h.tagName,
@@ -120,25 +133,27 @@ test('Gate 6: render every break-quality fixture and capture per-page structure 
           }))
         )
       `)
-      const tableCount = await harness.view.webContents.executeJavaScript(
-        `document.querySelectorAll('table').length`
-      )
-      const splitTableCount = await harness.view.webContents.executeJavaScript(
-        `document.querySelectorAll('table[data-split-from]').length`
-      )
-      const orderedListCount = await harness.view.webContents.executeJavaScript(
-        `document.querySelectorAll('ol').length`
-      )
+        const tableCount = await harness.view.webContents.executeJavaScript(
+          `document.querySelectorAll('table').length`
+        )
+        const splitTableCount = await harness.view.webContents.executeJavaScript(
+          `document.querySelectorAll('table[data-split-from]').length`
+        )
+        const orderedListCount = await harness.view.webContents.executeJavaScript(
+          `document.querySelectorAll('ol').length`
+        )
 
-      return {
-        pageCount: sendResult.pageCount,
-        perPageHeadings,
-        tableCount,
-        splitTableCount,
-        orderedListCount,
-        diagramBoxes: sendResult.diagramBoxes
-      }
-    }, html)) as FixtureObservation
+        return {
+          pageCount: sendResult.pageCount,
+          perPageHeadings,
+          tableCount,
+          splitTableCount,
+          orderedListCount,
+          diagramBoxes: sendResult.diagramBoxes
+        }
+      },
+      { html, geometry: LETTER_GEOMETRY }
+    )) as FixtureObservation
 
     observations[file] = result
   }
@@ -213,25 +228,26 @@ test('Gate 6: KeepWithNextHandler prevents a stranded heading in mermaid-diagram
   const markdown = readFileSync(join(__dirname, 'corpus', 'mermaid-diagrams.md'), 'utf8')
   const { html } = markdownToHtml(markdown)
 
-  const result = await app.evaluate(async ({ BaseWindow }, html) => {
-    const bridge = (
-      globalThis as unknown as {
-        __pagedownPhase0: {
-          createPaginationHarness: typeof import('../src/main/pagination-window').createPaginationHarness
+  const result = await app.evaluate(
+    async ({ BaseWindow }, { html, geometry }) => {
+      const bridge = (
+        globalThis as unknown as {
+          __pagedownPhase0: {
+            createPaginationHarness: typeof import('../src/main/pagination-window').createPaginationHarness
+          }
         }
-      }
-    ).__pagedownPhase0
-    const win = new BaseWindow({ show: false })
-    const harness = await bridge.createPaginationHarness(win)
-    await harness.sendDocument(html)
+      ).__pagedownPhase0
+      const win = new BaseWindow({ show: false })
+      const harness = await bridge.createPaginationHarness(win)
+      await harness.sendDocument(html, geometry)
 
-    // For every H1 heading and every mermaid-diagram wrapper in the
-    // paginated output (in document order), record which `.pagedjs_page`
-    // index it landed on. A heading is "stranded" (the exact bug
-    // KeepWithNextHandler exists to fix) if the very next content element
-    // after it in the paginated output starts on a LATER page than the
-    // heading itself.
-    return await harness.view.webContents.executeJavaScript(`
+      // For every H1 heading and every mermaid-diagram wrapper in the
+      // paginated output (in document order), record which `.pagedjs_page`
+      // index it landed on. A heading is "stranded" (the exact bug
+      // KeepWithNextHandler exists to fix) if the very next content element
+      // after it in the paginated output starts on a LATER page than the
+      // heading itself.
+      return await harness.view.webContents.executeJavaScript(`
       (() => {
         const pages = Array.from(document.querySelectorAll('.pagedjs_page'))
         const items = Array.from(document.querySelectorAll('h1, .pagedown-mermaid-diagram'))
@@ -246,7 +262,9 @@ test('Gate 6: KeepWithNextHandler prevents a stranded heading in mermaid-diagram
         return items
       })()
     `)
-  }, html)
+    },
+    { html, geometry: LETTER_GEOMETRY }
+  )
 
   console.log('Gate 6 heading/diagram page placement:', JSON.stringify(result, null, 2))
 
@@ -338,19 +356,20 @@ test('Gate 6: TableContinuationHandler repeats the header on a simple 2-page spl
   ).join('\n')
   const html = `<h1>Synthetic Long Table</h1><table><thead><tr><th>Row</th><th>Category</th><th>Description</th><th>Amount</th></tr></thead><tbody>${rows}</tbody></table>`
 
-  const result = await app.evaluate(async ({ BaseWindow }, html) => {
-    const bridge = (
-      globalThis as unknown as {
-        __pagedownPhase0: {
-          createPaginationHarness: typeof import('../src/main/pagination-window').createPaginationHarness
+  const result = await app.evaluate(
+    async ({ BaseWindow }, { html, geometry }) => {
+      const bridge = (
+        globalThis as unknown as {
+          __pagedownPhase0: {
+            createPaginationHarness: typeof import('../src/main/pagination-window').createPaginationHarness
+          }
         }
-      }
-    ).__pagedownPhase0
-    const win = new BaseWindow({ show: false })
-    const harness = await bridge.createPaginationHarness(win)
-    const sendResult = await harness.sendDocument(html)
+      ).__pagedownPhase0
+      const win = new BaseWindow({ show: false })
+      const harness = await bridge.createPaginationHarness(win)
+      const sendResult = await harness.sendDocument(html, geometry)
 
-    const perPage = await harness.view.webContents.executeJavaScript(`
+      const perPage = await harness.view.webContents.executeJavaScript(`
       Array.from(document.querySelectorAll('.pagedjs_page')).map((page) => {
         const area = page.querySelector('.pagedjs_page_content') || page.querySelector('.pagedjs_area')
         const areaRect = area ? area.getBoundingClientRect() : null
@@ -380,8 +399,10 @@ test('Gate 6: TableContinuationHandler repeats the header on a simple 2-page spl
         }
       })
     `)
-    return { pageCount: sendResult.pageCount, perPage }
-  }, html)
+      return { pageCount: sendResult.pageCount, perPage }
+    },
+    { html, geometry: LETTER_GEOMETRY }
+  )
 
   console.log('Gate 6 35-row table result:', JSON.stringify(result, null, 2))
 
@@ -459,19 +480,20 @@ test('Gate 6: TableContinuationHandler on a 3+ page split only repeats the heade
   ).join('\n')
   const html = `<h1>Synthetic Long Table</h1><table><thead><tr><th>Row</th><th>Category</th><th>Description</th><th>Amount</th></tr></thead><tbody>${rows}</tbody></table>`
 
-  const result = await app.evaluate(async ({ BaseWindow }, html) => {
-    const bridge = (
-      globalThis as unknown as {
-        __pagedownPhase0: {
-          createPaginationHarness: typeof import('../src/main/pagination-window').createPaginationHarness
+  const result = await app.evaluate(
+    async ({ BaseWindow }, { html, geometry }) => {
+      const bridge = (
+        globalThis as unknown as {
+          __pagedownPhase0: {
+            createPaginationHarness: typeof import('../src/main/pagination-window').createPaginationHarness
+          }
         }
-      }
-    ).__pagedownPhase0
-    const win = new BaseWindow({ show: false })
-    const harness = await bridge.createPaginationHarness(win)
-    const sendResult = await harness.sendDocument(html)
+      ).__pagedownPhase0
+      const win = new BaseWindow({ show: false })
+      const harness = await bridge.createPaginationHarness(win)
+      const sendResult = await harness.sendDocument(html, geometry)
 
-    const perPage = await harness.view.webContents.executeJavaScript(`
+      const perPage = await harness.view.webContents.executeJavaScript(`
       Array.from(document.querySelectorAll('.pagedjs_page')).map((page) => {
         const area = page.querySelector('.pagedjs_page_content') || page.querySelector('.pagedjs_area')
         const areaRect = area ? area.getBoundingClientRect() : null
@@ -496,8 +518,10 @@ test('Gate 6: TableContinuationHandler on a 3+ page split only repeats the heade
         }
       })
     `)
-    return { pageCount: sendResult.pageCount, perPage }
-  }, html)
+      return { pageCount: sendResult.pageCount, perPage }
+    },
+    { html, geometry: LETTER_GEOMETRY }
+  )
 
   console.log('Gate 6 150-row table result:', JSON.stringify(result, null, 2))
 
@@ -586,28 +610,29 @@ test("Gate 6: nested ordered list numbering (Paged.js's own built-in Lists handl
   }).join('\n')
   const html = `<h1>Long Nested List</h1><ol>${topItems}</ol>`
 
-  const result = await app.evaluate(async ({ BaseWindow }, html) => {
-    const bridge = (
-      globalThis as unknown as {
-        __pagedownPhase0: {
-          createPaginationHarness: typeof import('../src/main/pagination-window').createPaginationHarness
+  const result = await app.evaluate(
+    async ({ BaseWindow }, { html, geometry }) => {
+      const bridge = (
+        globalThis as unknown as {
+          __pagedownPhase0: {
+            createPaginationHarness: typeof import('../src/main/pagination-window').createPaginationHarness
+          }
         }
-      }
-    ).__pagedownPhase0
-    const win = new BaseWindow({ show: false })
-    const harness = await bridge.createPaginationHarness(win)
-    const sendResult = await harness.sendDocument(html)
+      ).__pagedownPhase0
+      const win = new BaseWindow({ show: false })
+      const harness = await bridge.createPaginationHarness(win)
+      const sendResult = await harness.sendDocument(html, geometry)
 
-    // For every <ol> on every page: its `start`, its first child's
-    // `data-item-num` (must equal `start` if Lists.afterPageLayout ran
-    // correctly), whether it's the (single) top-level list or one of the
-    // per-item nested ones, and its first rendered item's own TEXT --
-    // captured so the assertions below can derive an expected number from
-    // the actual source content independently of Paged.js's own
-    // `data-item-num` bookkeeping (see the comment below on why comparing
-    // `start` only against `data-item-num` would be partially circular:
-    // both come from the same Lists handler).
-    const perPageLists = await harness.view.webContents.executeJavaScript(`
+      // For every <ol> on every page: its `start`, its first child's
+      // `data-item-num` (must equal `start` if Lists.afterPageLayout ran
+      // correctly), whether it's the (single) top-level list or one of the
+      // per-item nested ones, and its first rendered item's own TEXT --
+      // captured so the assertions below can derive an expected number from
+      // the actual source content independently of Paged.js's own
+      // `data-item-num` bookkeeping (see the comment below on why comparing
+      // `start` only against `data-item-num` would be partially circular:
+      // both come from the same Lists handler).
+      const perPageLists = await harness.view.webContents.executeJavaScript(`
       Array.from(document.querySelectorAll('.pagedjs_page')).map((page) =>
         Array.from(page.querySelectorAll('ol')).map((ol) => ({
           start: ol.start,
@@ -617,8 +642,10 @@ test("Gate 6: nested ordered list numbering (Paged.js's own built-in Lists handl
         }))
       )
     `)
-    return { pageCount: sendResult.pageCount, perPageLists }
-  }, html)
+      return { pageCount: sendResult.pageCount, perPageLists }
+    },
+    { html, geometry: LETTER_GEOMETRY }
+  )
 
   console.log('Gate 6 nested-list result:', JSON.stringify(result, null, 2))
 

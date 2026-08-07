@@ -2,7 +2,20 @@ import { test, expect } from '@playwright/test'
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { markdownToHtml } from '../src/markdown/pipeline'
+import { computePageGeometry } from '../src/typography/page-geometry'
+import { DEFAULT_PAGE_CONFIG } from '../src/markdown/page-config'
 import { launchIsolatedApp } from './electron-launch'
+
+// Page Geometry Wiring: harness.sendDocument now requires a real geometry
+// argument. Computed here, at this file's own Node-side module scope, not
+// inside an app.evaluate() callback -- that callback runs in a bare V8
+// context with no working module resolution (see this file's own comment
+// below on the __pagedownPhase0 bridge), so an imported constant can't be
+// referenced from inside it directly; it has to be threaded through
+// app.evaluate()'s own single argument instead. This gate deliberately
+// exercises the DEFAULT (no-frontmatter) geometry -- per-document geometry
+// is Task 4's concern, not this gate's.
+const LETTER_GEOMETRY = computePageGeometry(DEFAULT_PAGE_CONFIG)
 
 // Same two mechanical deviations from the brief's literal sample as every
 // other Phase 0 gate spec (see gate1/gate5/gate7's own comments for the
@@ -34,18 +47,21 @@ test('Gate 3: Mermaid diagrams render with non-zero, deterministic size in the W
   const markdown = readFileSync(join(__dirname, 'corpus', 'mermaid-diagrams.md'), 'utf8')
   const { html } = markdownToHtml(markdown)
 
-  const result = (await app.evaluate(async ({ BaseWindow }, html) => {
-    const { createPaginationHarness } = (
-      globalThis as unknown as {
-        __pagedownPhase0: {
-          createPaginationHarness: (typeof import('../src/main/pagination-window'))['createPaginationHarness']
+  const result = (await app.evaluate(
+    async ({ BaseWindow }, { html, geometry }) => {
+      const { createPaginationHarness } = (
+        globalThis as unknown as {
+          __pagedownPhase0: {
+            createPaginationHarness: (typeof import('../src/main/pagination-window'))['createPaginationHarness']
+          }
         }
-      }
-    ).__pagedownPhase0
-    const win = new BaseWindow({ show: false })
-    const harness = await createPaginationHarness(win)
-    return harness.sendDocument(html)
-  }, html)) as SendDocumentResult
+      ).__pagedownPhase0
+      const win = new BaseWindow({ show: false })
+      const harness = await createPaginationHarness(win)
+      return harness.sendDocument(html, geometry)
+    },
+    { html, geometry: LETTER_GEOMETRY }
+  )) as SendDocumentResult
 
   console.log(
     'Gate 3 result:',
@@ -131,51 +147,52 @@ test('Gate 3: oversized-diagram page-break behavior is deterministic, and CSP st
   const markdown = readFileSync(join(__dirname, 'corpus', 'mermaid-diagrams.md'), 'utf8')
   const { html } = markdownToHtml(markdown)
 
-  const result = await app.evaluate(async ({ BaseWindow }, html) => {
-    const { createPaginationHarness } = (
-      globalThis as unknown as {
-        __pagedownPhase0: {
-          createPaginationHarness: (typeof import('../src/main/pagination-window'))['createPaginationHarness']
+  const result = await app.evaluate(
+    async ({ BaseWindow }, { html, geometry }) => {
+      const { createPaginationHarness } = (
+        globalThis as unknown as {
+          __pagedownPhase0: {
+            createPaginationHarness: (typeof import('../src/main/pagination-window'))['createPaginationHarness']
+          }
         }
-      }
-    ).__pagedownPhase0
-    const win = new BaseWindow({ show: false })
-    const harness = await createPaginationHarness(win)
+      ).__pagedownPhase0
+      const win = new BaseWindow({ show: false })
+      const harness = await createPaginationHarness(win)
 
-    const consoleMessages: string[] = []
-    harness.view.webContents.on('console-message', (event) => {
-      consoleMessages.push(event.message)
-    })
+      const consoleMessages: string[] = []
+      harness.view.webContents.on('console-message', (event) => {
+        consoleMessages.push(event.message)
+      })
 
-    const sendResult = await harness.sendDocument(html)
+      const sendResult = await harness.sendDocument(html, geometry)
 
-    // Structural "did it split across pages" check: counts how many
-    // elements carry the oversized diagram's data-mermaid-diagram-id in the
-    // final paginated output. `break-inside: avoid-page` is applied to this
-    // wrapper (see ensureMermaidPageBreakStyleInjected in
-    // resources/pagination-render/index.ts), but — measured for real here,
-    // not assumed — Paged.js does NOT honor it when the block's own content
-    // is taller than a full page: instead of moving the whole figure to one
-    // fresh page and letting it overflow, the chunker falls back to its
-    // normal overflow-splitting behavior, which clones the wrapper into
-    // each page it spans and relies on the page container's own overflow
-    // clipping to show only the relevant vertical band per page (the same
-    // mechanism Paged.js uses to split an ordinary long paragraph or image
-    // across pages — it has no special case for "unbreakable" content that
-    // is simply too tall). This matches the design doc's own caveat that
-    // Paged.js's break-inside handling is "incompletely implemented" and
-    // explicitly flagged for validation, not an assumption this test makes
-    // on its own — see this task's report/findings-doc entry for the full
-    // writeup.
-    const oversizedWrapperCount = await harness.view.webContents.executeJavaScript(
-      `document.querySelectorAll('[data-mermaid-diagram-id="pagedown-mermaid-2"]').length`
-    )
+      // Structural "did it split across pages" check: counts how many
+      // elements carry the oversized diagram's data-mermaid-diagram-id in the
+      // final paginated output. `break-inside: avoid-page` is applied to this
+      // wrapper (see ensureMermaidPageBreakStyleInjected in
+      // resources/pagination-render/index.ts), but — measured for real here,
+      // not assumed — Paged.js does NOT honor it when the block's own content
+      // is taller than a full page: instead of moving the whole figure to one
+      // fresh page and letting it overflow, the chunker falls back to its
+      // normal overflow-splitting behavior, which clones the wrapper into
+      // each page it spans and relies on the page container's own overflow
+      // clipping to show only the relevant vertical band per page (the same
+      // mechanism Paged.js uses to split an ordinary long paragraph or image
+      // across pages — it has no special case for "unbreakable" content that
+      // is simply too tall). This matches the design doc's own caveat that
+      // Paged.js's break-inside handling is "incompletely implemented" and
+      // explicitly flagged for validation, not an assumption this test makes
+      // on its own — see this task's report/findings-doc entry for the full
+      // writeup.
+      const oversizedWrapperCount = await harness.view.webContents.executeJavaScript(
+        `document.querySelectorAll('[data-mermaid-diagram-id="pagedown-mermaid-2"]').length`
+      )
 
-    // A real, grounded comparison for "does it overflow past its own
-    // page's usable content height": the oversized diagram's own measured
-    // height against an ACTUAL rendered `.pagedjs_page` element's height in
-    // the same document (not an assumed/guessed page size).
-    const pageMetrics = await harness.view.webContents.executeJavaScript(`
+      // A real, grounded comparison for "does it overflow past its own
+      // page's usable content height": the oversized diagram's own measured
+      // height against an ACTUAL rendered `.pagedjs_page` element's height in
+      // the same document (not an assumed/guessed page size).
+      const pageMetrics = await harness.view.webContents.executeJavaScript(`
       (() => {
         const page = document.querySelector('.pagedjs_page')
         const rect = page ? page.getBoundingClientRect() : null
@@ -183,25 +200,25 @@ test('Gate 3: oversized-diagram page-break behavior is deterministic, and CSP st
       })()
     `)
 
-    // Direct proof the CSP-nonce reattachment fix actually took effect —
-    // not just "no violation was logged" (checked below via console
-    // messages) but that every Mermaid-generated <style> element inside a
-    // diagram wrapper genuinely carries this page-load's real nonce value,
-    // read the same way resources/pagination-render/index.ts's own
-    // bootstrap shim reads it. Also checks the SECOND CSP problem found by
-    // actually running this gate (not anticipated by the design doc, which
-    // only discusses the <style> BLOCK): Mermaid's SVG output also carries
-    // many individual inline `style="..."` ATTRIBUTES on shape/marker
-    // elements, which CSP blocks outright (no nonce mechanism applies to
-    // attributes) — resources/pagination-render/index.ts's
-    // hoistInlineStyleAttributes moves these into the same nonced
-    // stylesheet, so `styleAttrCount` here (elements with a lingering
-    // `style=""` anywhere inside a rendered diagram) must be exactly 0, and
-    // the hoisted rules must be genuinely ACTIVE (not just present as inert
-    // text) — checked via the CSSOM (`sheet.cssRules`), which is empty/null
-    // for a <style> element CSP actually blocked, not just inspecting the
-    // source text.
-    const nonceCheck = await harness.view.webContents.executeJavaScript(`
+      // Direct proof the CSP-nonce reattachment fix actually took effect —
+      // not just "no violation was logged" (checked below via console
+      // messages) but that every Mermaid-generated <style> element inside a
+      // diagram wrapper genuinely carries this page-load's real nonce value,
+      // read the same way resources/pagination-render/index.ts's own
+      // bootstrap shim reads it. Also checks the SECOND CSP problem found by
+      // actually running this gate (not anticipated by the design doc, which
+      // only discusses the <style> BLOCK): Mermaid's SVG output also carries
+      // many individual inline `style="..."` ATTRIBUTES on shape/marker
+      // elements, which CSP blocks outright (no nonce mechanism applies to
+      // attributes) — resources/pagination-render/index.ts's
+      // hoistInlineStyleAttributes moves these into the same nonced
+      // stylesheet, so `styleAttrCount` here (elements with a lingering
+      // `style=""` anywhere inside a rendered diagram) must be exactly 0, and
+      // the hoisted rules must be genuinely ACTIVE (not just present as inert
+      // text) — checked via the CSSOM (`sheet.cssRules`), which is empty/null
+      // for a <style> element CSP actually blocked, not just inspecting the
+      // source text.
+      const nonceCheck = await harness.view.webContents.executeJavaScript(`
       (() => {
         const meta = document.querySelector('meta[name="csp-style-nonce"]')
         const nonce = meta ? meta.getAttribute('content') : null
@@ -226,47 +243,50 @@ test('Gate 3: oversized-diagram page-break behavior is deterministic, and CSP st
       })()
     `)
 
-    // Negative control, alongside the diagram content above (not in a
-    // separate harness): CSP must still block a genuine inline-script
-    // injection attempt after the render context has been through the new
-    // Mermaid/document.createElement-heavy code path. Same payload shape as
-    // Gate 5's own script-injection regression test (an onerror attribute,
-    // not a <script> tag — <script> inserted via innerHTML never executes
-    // at all, CSP or no CSP, so it would pass vacuously).
-    //
-    // `consoleMessagesBeforeInjection` snapshots the count HERE, immediately
-    // before sending the payload — not asserted against directly, but read
-    // below to isolate violations caused BY the injection specifically.
-    // Asserting "some violation was logged" against the FULL message list
-    // (Gate 5's own check) would be vacuous here in a way it isn't there:
-    // Mermaid's own internal rendering above already logs ~970 style-src
-    // violations of its own (see the findings-doc/report writeup), so
-    // `consoleMessages.length > 0` would trivially pass regardless of
-    // whether the injection attempt produced its own violation at all —
-    // exactly the kind of "test that can't fail" shape Gate 5's own review
-    // history already flagged once. Snapshotting first and diffing after
-    // keeps this check genuinely tied to the injection, not to noise
-    // already present from an unrelated part of this same render pass.
-    const consoleMessagesBeforeInjection = consoleMessages.length
-    await harness.sendDocument(
-      '<img src="this-file-does-not-exist.png" onerror="window.__pwned = true">'
-    )
-    await new Promise((resolve) => setTimeout(resolve, 500))
-    const pwned = await harness.view.webContents.executeJavaScript(`typeof (window).__pwned`)
-    const injectionViolationCount = consoleMessages
-      .slice(consoleMessagesBeforeInjection)
-      .filter((m) => /content security policy|refused to/i.test(m)).length
+      // Negative control, alongside the diagram content above (not in a
+      // separate harness): CSP must still block a genuine inline-script
+      // injection attempt after the render context has been through the new
+      // Mermaid/document.createElement-heavy code path. Same payload shape as
+      // Gate 5's own script-injection regression test (an onerror attribute,
+      // not a <script> tag — <script> inserted via innerHTML never executes
+      // at all, CSP or no CSP, so it would pass vacuously).
+      //
+      // `consoleMessagesBeforeInjection` snapshots the count HERE, immediately
+      // before sending the payload — not asserted against directly, but read
+      // below to isolate violations caused BY the injection specifically.
+      // Asserting "some violation was logged" against the FULL message list
+      // (Gate 5's own check) would be vacuous here in a way it isn't there:
+      // Mermaid's own internal rendering above already logs ~970 style-src
+      // violations of its own (see the findings-doc/report writeup), so
+      // `consoleMessages.length > 0` would trivially pass regardless of
+      // whether the injection attempt produced its own violation at all —
+      // exactly the kind of "test that can't fail" shape Gate 5's own review
+      // history already flagged once. Snapshotting first and diffing after
+      // keeps this check genuinely tied to the injection, not to noise
+      // already present from an unrelated part of this same render pass.
+      const consoleMessagesBeforeInjection = consoleMessages.length
+      await harness.sendDocument(
+        '<img src="this-file-does-not-exist.png" onerror="window.__pwned = true">',
+        geometry
+      )
+      await new Promise((resolve) => setTimeout(resolve, 500))
+      const pwned = await harness.view.webContents.executeJavaScript(`typeof (window).__pwned`)
+      const injectionViolationCount = consoleMessages
+        .slice(consoleMessagesBeforeInjection)
+        .filter((m) => /content security policy|refused to/i.test(m)).length
 
-    return {
-      sendResult,
-      consoleMessages,
-      oversizedWrapperCount,
-      pageMetrics,
-      nonceCheck,
-      pwned,
-      injectionViolationCount
-    }
-  }, html)
+      return {
+        sendResult,
+        consoleMessages,
+        oversizedWrapperCount,
+        pageMetrics,
+        nonceCheck,
+        pwned,
+        injectionViolationCount
+      }
+    },
+    { html, geometry: LETTER_GEOMETRY }
+  )
 
   console.log('Gate 3 page metrics:', JSON.stringify(result.pageMetrics))
   console.log('Gate 3 mermaid style nonce check:', JSON.stringify(result.nonceCheck))

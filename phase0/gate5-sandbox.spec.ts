@@ -1,6 +1,18 @@
 import { test, expect } from '@playwright/test'
 import { realpath } from 'node:fs/promises'
+import { computePageGeometry, type PageGeometry } from '../src/typography/page-geometry'
+import { DEFAULT_PAGE_CONFIG } from '../src/markdown/page-config'
 import { launchIsolatedApp } from './electron-launch'
+
+// Page Geometry Wiring: harness.sendDocument now requires a real geometry
+// argument, computed here at this file's own Node-side module scope (an
+// app.evaluate() callback runs in a bare V8 context with no working module
+// resolution, so an imported constant can't be referenced from inside one
+// directly — it has to be threaded through app.evaluate()'s own single
+// argument instead). This gate deliberately exercises the DEFAULT
+// (no-frontmatter) geometry — per-document geometry is Task 4's concern,
+// not this gate's.
+const LETTER_GEOMETRY = computePageGeometry(DEFAULT_PAGE_CONFIG)
 
 // electronApplication.evaluate() runs each callback below in a bare V8
 // context reached via CDP — no `require`, no working dynamic `import()`
@@ -47,7 +59,7 @@ test('Gate 5: sandboxed render context loads under its own origin and completes 
   const expectedUserDataDir = await realpath(userDataDir)
   expect(await realpath(actualUserDataDir)).toBe(expectedUserDataDir)
 
-  const result = await app.evaluate(async ({ BaseWindow }) => {
+  const result = await app.evaluate(async ({ BaseWindow }, geometry) => {
     const { createPaginationHarness } = (
       globalThis as unknown as {
         __pagedownPhase0: {
@@ -91,7 +103,10 @@ test('Gate 5: sandboxed render context loads under its own origin and completes 
     })
     await harness.view.webContents.loadURL('pagedown-render://render/index.html')
 
-    const sendResult = await harness.sendDocument('<h1>Test</h1><p>Hello from the sandbox.</p>')
+    const sendResult = await harness.sendDocument(
+      '<h1>Test</h1><p>Hello from the sandbox.</p>',
+      geometry
+    )
 
     // Runtime proof (not just code inspection) that the render context has
     // no Node/Electron surface: with sandbox: true, contextIsolation: true,
@@ -108,7 +123,7 @@ test('Gate 5: sandboxed render context loads under its own origin and completes 
     )
 
     return { url, sendResult, consoleMessages, sandboxLeaks }
-  })
+  }, LETTER_GEOMETRY)
 
   expect(result.url).toBe('pagedown-render://render/index.html')
   expect(result.sendResult.ready).toBe(true)
@@ -137,7 +152,7 @@ test('Gate 5: sandboxed render context loads under its own origin and completes 
 test('Gate 5: CSP blocks inline script execution in rendered content', async () => {
   const { app, close } = await launchIsolatedApp(['.'])
 
-  const result = await app.evaluate(async ({ BaseWindow }) => {
+  const result = await app.evaluate(async ({ BaseWindow }, geometry) => {
     const { createPaginationHarness } = (
       globalThis as unknown as {
         __pagedownPhase0: {
@@ -166,7 +181,7 @@ test('Gate 5: CSP blocks inline script execution in rendered content', async () 
     // block with `<img onerror=...>`), and the one that proves the CSP
     // boundary is doing real work.
     const payload = '<img src="this-file-does-not-exist.png" onerror="window.__pwned = true">'
-    await harness.sendDocument(payload)
+    await harness.sendDocument(payload, geometry)
 
     // sendDocument()'s own round trip only waits for the synthetic
     // pagination result, which the render script publishes synchronously
@@ -178,7 +193,7 @@ test('Gate 5: CSP blocks inline script execution in rendered content', async () 
     const pwned = await harness.view.webContents.executeJavaScript(`typeof (window).__pwned`)
 
     return { pwned, consoleMessages }
-  })
+  }, LETTER_GEOMETRY)
 
   // The assertion that actually proves the boundary holds: the inline
   // event-handler attribute must NOT have executed.
@@ -196,7 +211,7 @@ test('Gate 5: CSP blocks inline script execution in rendered content', async () 
 test('Gate 5: navigation away from the render context origin is blocked', async () => {
   const { app, close } = await launchIsolatedApp(['.'])
 
-  const result = await app.evaluate(async ({ BaseWindow }) => {
+  const result = await app.evaluate(async ({ BaseWindow }, geometry) => {
     const { createPaginationHarness } = (
       globalThis as unknown as {
         __pagedownPhase0: {
@@ -217,7 +232,8 @@ test('Gate 5: navigation away from the render context origin is blocked', async 
     // (and read results from) that attacker page instead of the sandboxed
     // render context. This regression test would have caught it.
     await harness.sendDocument(
-      '<meta http-equiv="refresh" content="0;url=https://example.invalid/leak">'
+      '<meta http-equiv="refresh" content="0;url=https://example.invalid/leak">',
+      geometry
     )
 
     // Give the (should-be-blocked) navigation timer a chance to fire.
@@ -226,7 +242,7 @@ test('Gate 5: navigation away from the render context origin is blocked', async 
     const urlAfter = harness.view.webContents.getURL()
 
     return { urlBefore, urlAfter }
-  })
+  }, LETTER_GEOMETRY)
 
   expect(result.urlBefore).toBe('pagedown-render://render/index.html')
   expect(result.urlAfter).toBe('pagedown-render://render/index.html')
@@ -243,7 +259,7 @@ test('Gate 5: navigation away from the render context origin is blocked', async 
 test('Gate 5: empty document does not hang the harness or brick it for subsequent documents', async () => {
   const { app, close } = await launchIsolatedApp(['.'])
 
-  const result = await app.evaluate(async ({ BaseWindow }) => {
+  const result = await app.evaluate(async ({ BaseWindow }, geometry) => {
     const { createPaginationHarness } = (
       globalThis as unknown as {
         __pagedownPhase0: {
@@ -263,7 +279,7 @@ test('Gate 5: empty document does not hang the harness or brick it for subsequen
     // this regresses was a full, silent 10-second hang, not just a wrong
     // return value.
     const emptyStart = Date.now()
-    const emptyResult = await harness.sendDocument('')
+    const emptyResult = await harness.sendDocument('', geometry)
     const emptyElapsedMs = Date.now() - emptyStart
 
     // The actual regression: a SUBSEQUENT real document must still work.
@@ -271,11 +287,14 @@ test('Gate 5: empty document does not hang the harness or brick it for subsequen
     // call, so this would hang for the harness's own full 10-second
     // deadline.
     const afterStart = Date.now()
-    const afterResult = await harness.sendDocument('<h1>Still alive</h1><p>Real content.</p>')
+    const afterResult = await harness.sendDocument(
+      '<h1>Still alive</h1><p>Real content.</p>',
+      geometry
+    )
     const afterElapsedMs = Date.now() - afterStart
 
     return { emptyResult, emptyElapsedMs, afterResult, afterElapsedMs }
-  })
+  }, LETTER_GEOMETRY)
 
   expect(result.emptyResult.ready).toBe(true)
   expect(result.emptyResult.pageCount).toBe(0)
@@ -293,7 +312,7 @@ test('Gate 5: empty document does not hang the harness or brick it for subsequen
 test('Gate 5: a render-context failure surfaces as a prompt rejection, not a 10-second hang', async () => {
   const { app, close } = await launchIsolatedApp(['.'])
 
-  const result = await app.evaluate(async ({ BaseWindow }) => {
+  const result = await app.evaluate(async ({ BaseWindow }, geometry) => {
     const { createPaginationHarness } = (
       globalThis as unknown as {
         __pagedownPhase0: {
@@ -312,15 +331,20 @@ test('Gate 5: a render-context failure surfaces as a prompt rejection, not a 10-
     // end rather than only via code inspection. This is exactly the class
     // of failure Tasks 7-10 are expected to hit for real (a rejecting
     // previewer.preview() call), just triggered here through a reliable,
-    // synthetic input instead of a hard-to-construct real one.
+    // synthetic input instead of a hard-to-construct real one. Only the
+    // `html` parameter bypasses the real signature here -- `geometry` is
+    // still a genuine, real PageGeometry value, so this test exercises
+    // exactly one deliberate deviation (non-string html) rather than
+    // conflating it with a second, unintended one (missing geometry).
     const sendDocumentUnsafe = harness.sendDocument as unknown as (
-      html: unknown
+      html: unknown,
+      geometry: PageGeometry
     ) => Promise<unknown>
 
     const start = Date.now()
     let errorMessage: string | null = null
     try {
-      await sendDocumentUnsafe(null)
+      await sendDocumentUnsafe(null, geometry)
     } catch (err) {
       errorMessage = err instanceof Error ? err.message : String(err)
     }
@@ -328,10 +352,13 @@ test('Gate 5: a render-context failure surfaces as a prompt rejection, not a 10-
 
     // The harness must still work afterward -- a caught, published error
     // must not brick anything either.
-    const afterResult = await harness.sendDocument('<h1>Still alive</h1><p>Real content.</p>')
+    const afterResult = await harness.sendDocument(
+      '<h1>Still alive</h1><p>Real content.</p>',
+      geometry
+    )
 
     return { errorMessage, elapsedMs, afterResult }
-  })
+  }, LETTER_GEOMETRY)
 
   expect(result.errorMessage).not.toBeNull()
   expect(result.errorMessage).toMatch(/Pagination failed in render context/)
@@ -345,7 +372,7 @@ test('Gate 5: a render-context failure surfaces as a prompt rejection, not a 10-
 test('Gate 5: repeated sendDocument calls do not leak Polisher <style> elements into <head>', async () => {
   const { app, close } = await launchIsolatedApp(['.'])
 
-  const result = await app.evaluate(async ({ BaseWindow }) => {
+  const result = await app.evaluate(async ({ BaseWindow }, geometry) => {
     const { createPaginationHarness } = (
       globalThis as unknown as {
         __pagedownPhase0: {
@@ -359,7 +386,8 @@ test('Gate 5: repeated sendDocument calls do not leak Polisher <style> elements 
     const styleCounts: number[] = []
     for (let i = 0; i < 5; i++) {
       await harness.sendDocument(
-        `<h1>Run ${i}</h1><p>Some real paragraph content for run ${i}.</p>`
+        `<h1>Run ${i}</h1><p>Some real paragraph content for run ${i}.</p>`,
+        geometry
       )
       const count = await harness.view.webContents.executeJavaScript(
         `document.head.querySelectorAll('style').length`
@@ -368,7 +396,7 @@ test('Gate 5: repeated sendDocument calls do not leak Polisher <style> elements 
     }
 
     return { styleCounts }
-  })
+  }, LETTER_GEOMETRY)
 
   // Each run's OWN Polisher is still present at the moment its count is
   // sampled (destruction happens at the START of the NEXT run, not

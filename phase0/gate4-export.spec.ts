@@ -2,8 +2,20 @@ import { test, expect } from '@playwright/test'
 import { readFileSync, writeFileSync, mkdirSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { markdownToHtml } from '../src/markdown/pipeline'
+import { computePageGeometry } from '../src/typography/page-geometry'
+import { DEFAULT_PAGE_CONFIG } from '../src/markdown/page-config'
 import { PDFDocument, PDFName, PDFDict, PDFArray, PDFRef } from 'pdf-lib'
 import { launchIsolatedApp } from './electron-launch'
+
+// Page Geometry Wiring: harness.sendDocument now requires a real geometry
+// argument, computed here at this file's own Node-side module scope (an
+// app.evaluate() callback runs in a bare V8 context with no working module
+// resolution, so an imported constant can't be referenced from inside one
+// directly — it has to be threaded through app.evaluate()'s own single
+// argument instead). This gate deliberately exercises the DEFAULT
+// (no-frontmatter) geometry — per-document geometry is Task 4's concern,
+// not this gate's.
+const LETTER_GEOMETRY = computePageGeometry(DEFAULT_PAGE_CONFIG)
 
 // Same mechanical deviations from the brief's literal sample as every other
 // Phase 0 gate spec (see gate1/gate5/gate7's own comments for the full
@@ -306,41 +318,42 @@ test('Gate 4: exported PDF page count and per-page text match the on-screen Page
     const markdown = readFileSync(join(corpusDir, file), 'utf8')
     const { html } = markdownToHtml(markdown)
 
-    const evalResult = await app.evaluate(async (_electronNS, html) => {
-      const harness = (
-        globalThis as unknown as {
-          __gate4Harness: import('../src/main/pagination-window').PaginationHarness
-        }
-      ).__gate4Harness
-      const sendResult = await harness.sendDocument(html)
-      // Cloning each page and stripping <style> descendants before reading
-      // textContent is load-bearing, not cosmetic — found directly by
-      // running this test against mermaid-diagrams.md: `element.textContent`
-      // includes the text content of any descendant `<style>` element (real
-      // per the DOM spec — a `<style>` tag's content IS text, even though
-      // it's never rendered as page content), and every Mermaid diagram
-      // wrapper carries its own nonced `<style>` block (Task 8/Gate 3 —
-      // 15/24/46 hoisted CSS rules per diagram). Reading textContent
-      // directly off the live page pulled in hundreds of characters of raw
-      // CSS text ("#pagedown-mermaid-0{font-family...}") that has nothing
-      // to do with visible page content, making any comparison against the
-      // exported PDF's real text meaningless for that file. Stripping
-      // <style> first is a no-op for every other corpus file (none of them
-      // contain a <style> element at all).
-      const pagesText = await harness.view.webContents.executeJavaScript(`
+    const evalResult = await app.evaluate(
+      async (_electronNS, { html, geometry }) => {
+        const harness = (
+          globalThis as unknown as {
+            __gate4Harness: import('../src/main/pagination-window').PaginationHarness
+          }
+        ).__gate4Harness
+        const sendResult = await harness.sendDocument(html, geometry)
+        // Cloning each page and stripping <style> descendants before reading
+        // textContent is load-bearing, not cosmetic — found directly by
+        // running this test against mermaid-diagrams.md: `element.textContent`
+        // includes the text content of any descendant `<style>` element (real
+        // per the DOM spec — a `<style>` tag's content IS text, even though
+        // it's never rendered as page content), and every Mermaid diagram
+        // wrapper carries its own nonced `<style>` block (Task 8/Gate 3 —
+        // 15/24/46 hoisted CSS rules per diagram). Reading textContent
+        // directly off the live page pulled in hundreds of characters of raw
+        // CSS text ("#pagedown-mermaid-0{font-family...}") that has nothing
+        // to do with visible page content, making any comparison against the
+        // exported PDF's real text meaningless for that file. Stripping
+        // <style> first is a no-op for every other corpus file (none of them
+        // contain a <style> element at all).
+        const pagesText = await harness.view.webContents.executeJavaScript(`
         Array.from(document.querySelectorAll('.pagedjs_page')).map(p => {
           const clone = p.cloneNode(true)
           clone.querySelectorAll('style').forEach(s => s.remove())
           return clone.textContent
         })
       `)
-      // Durable DOM-side evidence for the two bugs this task found, turned
-      // into standing test data (not just a one-time manual observation) —
-      // cheap: both queries are no-ops (empty arrays) for every file that
-      // doesn't happen to contain an `<img>` or the oversized diagram's
-      // wrapper, so this runs unconditionally for every corpus file rather
-      // than needing a per-file branch here.
-      const imgInfo = await harness.view.webContents.executeJavaScript(`
+        // Durable DOM-side evidence for the two bugs this task found, turned
+        // into standing test data (not just a one-time manual observation) —
+        // cheap: both queries are no-ops (empty arrays) for every file that
+        // doesn't happen to contain an `<img>` or the oversized diagram's
+        // wrapper, so this runs unconditionally for every corpus file rather
+        // than needing a per-file branch here.
+        const imgInfo = await harness.view.webContents.executeJavaScript(`
         Array.from(document.querySelectorAll('img')).map(img => ({
           src: img.src,
           alt: img.alt,
@@ -349,7 +362,7 @@ test('Gate 4: exported PDF page count and per-page text match the on-screen Page
           naturalHeight: img.naturalHeight
         }))
       `)
-      const mermaidOversizedDiagramInfo = await harness.view.webContents.executeJavaScript(`
+        const mermaidOversizedDiagramInfo = await harness.view.webContents.executeJavaScript(`
         Array.from(document.querySelectorAll('[data-mermaid-diagram-id="pagedown-mermaid-2"]')).map((wrapper, instance) => {
           const svg = wrapper.querySelector('svg')
           return {
@@ -360,27 +373,29 @@ test('Gate 4: exported PDF page count and per-page text match the on-screen Page
           }
         })
       `)
-      const bridge = (
-        globalThis as unknown as {
-          __pagedownPhase0: { exportToPdf: typeof import('../src/export/export-pdf').exportToPdf }
+        const bridge = (
+          globalThis as unknown as {
+            __pagedownPhase0: { exportToPdf: typeof import('../src/export/export-pdf').exportToPdf }
+          }
+        ).__pagedownPhase0
+        // Real, measured export timing (not an uncommitted, ad hoc scratch
+        // number) — `Date.now()` around the SAME `exportToPdf` call every
+        // other check in this test already makes, so this costs nothing
+        // beyond two timestamps.
+        const exportStart = Date.now()
+        const pdf = await bridge.exportToPdf(harness)
+        const exportMs = Date.now() - exportStart
+        return {
+          sendResult,
+          pagesText,
+          imgInfo,
+          mermaidOversizedDiagramInfo,
+          exportMs,
+          pdfBase64: pdf.toString('base64')
         }
-      ).__pagedownPhase0
-      // Real, measured export timing (not an uncommitted, ad hoc scratch
-      // number) — `Date.now()` around the SAME `exportToPdf` call every
-      // other check in this test already makes, so this costs nothing
-      // beyond two timestamps.
-      const exportStart = Date.now()
-      const pdf = await bridge.exportToPdf(harness)
-      const exportMs = Date.now() - exportStart
-      return {
-        sendResult,
-        pagesText,
-        imgInfo,
-        mermaidOversizedDiagramInfo,
-        exportMs,
-        pdfBase64: pdf.toString('base64')
-      }
-    }, html)
+      },
+      { html, geometry: LETTER_GEOMETRY }
+    )
 
     const { sendResult, pagesText, imgInfo, mermaidOversizedDiagramInfo, exportMs, pdfBase64 } =
       evalResult as {
@@ -664,21 +679,24 @@ test('Gate 4: split-block fragmentation — a table split across a page boundary
   ).join('\n')
   const html = `<h1>Synthetic Long Table</h1><table><thead><tr><th>Row</th><th>Category</th><th>Description</th><th>Amount</th></tr></thead><tbody>${rows}</tbody></table>`
 
-  const evalResult = await app.evaluate(async ({ BaseWindow }, html) => {
-    const bridge = (
-      globalThis as unknown as {
-        __pagedownPhase0: {
-          createPaginationHarness: typeof import('../src/main/pagination-window').createPaginationHarness
-          exportToPdf: typeof import('../src/export/export-pdf').exportToPdf
+  const evalResult = await app.evaluate(
+    async ({ BaseWindow }, { html, geometry }) => {
+      const bridge = (
+        globalThis as unknown as {
+          __pagedownPhase0: {
+            createPaginationHarness: typeof import('../src/main/pagination-window').createPaginationHarness
+            exportToPdf: typeof import('../src/export/export-pdf').exportToPdf
+          }
         }
-      }
-    ).__pagedownPhase0
-    const win = new BaseWindow({ show: false })
-    const harness = await bridge.createPaginationHarness(win)
-    const sendResult = await harness.sendDocument(html)
-    const pdf = await bridge.exportToPdf(harness)
-    return { sendResult, pdfBase64: pdf.toString('base64') }
-  }, html)
+      ).__pagedownPhase0
+      const win = new BaseWindow({ show: false })
+      const harness = await bridge.createPaginationHarness(win)
+      const sendResult = await harness.sendDocument(html, geometry)
+      const pdf = await bridge.exportToPdf(harness)
+      return { sendResult, pdfBase64: pdf.toString('base64') }
+    },
+    { html, geometry: LETTER_GEOMETRY }
+  )
 
   const { sendResult, pdfBase64 } = evalResult as {
     sendResult: { pageCount: number }

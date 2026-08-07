@@ -2,7 +2,8 @@ import { WebContentsView, BaseWindow, session, type Session } from 'electron'
 import { randomUUID, randomBytes } from 'node:crypto'
 import path from 'node:path'
 import { readFile, realpath, stat } from 'node:fs/promises'
-import { PAGE_WIDTH_PX, PAGE_HEIGHT_PX } from '../typography/page-geometry'
+import { PAGE_WIDTH_PX, PAGE_HEIGHT_PX, type PageGeometry } from '../typography/page-geometry'
+import type { RenderRequestMessage } from '../pagination/render-message'
 
 // __dirname here resolves at runtime to the directory of the bundled main
 // process output (out/main/), regardless of this file's pre-bundle source
@@ -422,7 +423,14 @@ export interface PaginationHarness {
   // a longer allowance than the default without changing that default for
   // every other caller (thumbnail generation, Phase 0 gates) that's always
   // been fine with it.
-  sendDocument(html: string, timeoutMs?: number): Promise<PaginationResult>
+  //
+  // `geometry` (Page Geometry Wiring) is REQUIRED, not defaulted here: this
+  // harness has no document content of its own to derive a PageConfig from
+  // (it only ever sees already-converted HTML), so every real caller must
+  // compute it from the document's own frontmatter (Task 4's job) or from
+  // DEFAULT_PAGE_CONFIG where there is deliberately no document to read one
+  // from (see src/pagination/paginate.ts and the phase0 gate specs).
+  sendDocument(html: string, geometry: PageGeometry, timeoutMs?: number): Promise<PaginationResult>
 }
 
 // The general-purpose default every existing caller (thumbnail-generator.ts,
@@ -479,12 +487,17 @@ export async function createPaginationHarness(win: BaseWindow): Promise<Paginati
 
   async function sendDocument(
     html: string,
+    geometry: PageGeometry,
     timeoutMs: number = DEFAULT_SEND_DOCUMENT_TIMEOUT_MS
   ): Promise<PaginationResult> {
     const requestId = randomUUID()
-    await view.webContents.executeJavaScript(
-      `window.postMessage(${JSON.stringify({ type: 'render', html, requestId })}, '*')`
-    )
+    // Built through an explicitly-typed local, not an inline object literal,
+    // so a forgotten field (e.g. `geometry`) is a real tsc error here rather
+    // than a silent runtime NaN in the render context's `@page` rule -- see
+    // src/pagination/render-message.ts's own header comment for the full
+    // rationale.
+    const message: RenderRequestMessage = { type: 'render', html, requestId, geometry }
+    await view.webContents.executeJavaScript(`window.postMessage(${JSON.stringify(message)}, '*')`)
 
     const deadline = Date.now() + timeoutMs
     while (Date.now() < deadline) {
