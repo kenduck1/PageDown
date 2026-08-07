@@ -339,22 +339,40 @@ function EditorScreen(): React.JSX.Element {
           className="flex-1 overflow-auto"
           style={{ transform: `scale(${zoom})`, transformOrigin: 'top center' }}
         >
-          <MilkdownEditor
-            ref={editorRef}
-            key={revision}
-            content={content}
-            // Bound to THIS render's activeTabId, not the bare updateContent
-            // store action -- see documentStore.ts's updateContentForTab doc
-            // comment for the tab-switch race this closes: any change to
-            // activeTabId always bumps revision (remounting this component
-            // with a fresh key), so the activeTabId captured here is
-            // guaranteed correct for this specific MilkdownEditor instance's
-            // entire lifetime, even after a late flush() fires (e.g. on
-            // unmount, when the user has switched tabs) well after the
-            // store's own activeTabId has moved on.
-            onChange={(markdown) => updateContentForTab(activeTabId, markdown)}
-            onError={(message) => useDocumentStore.setState({ error: message })}
-          />
+          {/* The "page" card -- per the design handoff (PageDown.dc.html,
+              Format-mode mock): a white sheet with a real drop shadow,
+              floating on the canvas-gray scroll area, not a flat borderless
+              region flush with the background. Was entirely missing before
+              this fix -- MilkdownEditor's own root div has no background/
+              shadow/width constraint of its own, so the editor rendered as
+              plain canvas-gray with no visible document boundary at all.
+              Values match the mock's own numbers (640px, 22px/64px/34px
+              padding) using tokens that already existed in base.css for
+              exactly this purpose (--shadow-page, --color-page) but were
+              never applied here. A plain block child of an overflow-auto
+              scroll container sizes to its own content by default (nothing
+              here forces it to stretch), so this naturally grows/shrinks
+              with the document like a real page, rather than always
+              filling the scroll container's height. */}
+          <div className="mx-auto my-8 max-w-[640px] rounded-sm bg-page pb-[34px] pl-16 pr-16 pt-[22px] shadow-page">
+            <MilkdownEditor
+              ref={editorRef}
+              key={revision}
+              content={content}
+              // Bound to THIS render's activeTabId, not the bare
+              // updateContent store action -- see documentStore.ts's
+              // updateContentForTab doc comment for the tab-switch race
+              // this closes: any change to activeTabId always bumps
+              // revision (remounting this component with a fresh key), so
+              // the activeTabId captured here is guaranteed correct for
+              // this specific MilkdownEditor instance's entire lifetime,
+              // even after a late flush() fires (e.g. on unmount, when the
+              // user has switched tabs) well after the store's own
+              // activeTabId has moved on.
+              onChange={(markdown) => updateContentForTab(activeTabId, markdown)}
+              onError={(message) => useDocumentStore.setState({ error: message })}
+            />
+          </div>
         </div>
       </div>
       <EditorStatusBar
