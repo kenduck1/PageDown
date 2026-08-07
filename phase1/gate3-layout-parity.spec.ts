@@ -18,45 +18,66 @@ import { launchIsolatedApp } from '../phase0/electron-launch'
 //
 // --- What this gate actually found before a single comparison ran --------
 //
-// The brief's Step 1 asks to "read resources/pagination-render/index.html
+// HISTORICAL, AND NO LONGER TRUE OF THE APP — but still true of, and still
+// the reason for, this gate's own fixture. Everything in this section
+// describes the pagination render context AS IT WAS during Phase 1. The
+// Document Typography sub-project (docs/superpowers/specs/2026-08-06-
+// document-typography-design.md) has since given both surfaces one real
+// shared typographic system (src/typography/document-typography.css, fed to
+// `previewer.preview()` as a real, non-empty stylesheet), and
+// phase0/gate10-editor-layout-parity.spec.ts measures the REAL app's parity
+// at 0px against it. This gate is a Phase 1 spike record, deliberately
+// still measuring the untouched Phase 1 fixture; it is EXPECTED TO KEEP
+// FAILING and its assertions are correct as written — see the findings doc
+// before changing anything here.
+//
+// The brief's Step 1 asked to "read resources/pagination-render/index.html
 // and index.ts first to find the exact CSS values the pagination context
-// uses (font stack, font size, line height, content width)". Reading both
-// files start to finish finds NO such CSS at all: index.html's <style> is
-// nonexistent (only a CSP <meta> tag), and index.ts never sets a
-// font-family/font-size/line-height rule anywhere, nor injects any
+// uses (font stack, font size, line height, content width)". At the time,
+// reading both files start to finish found NO such CSS at all: index.html's
+// <style> was nonexistent (only a CSP <meta> tag), and index.ts never set a
+// font-family/font-size/line-height rule anywhere, nor injected any
 // stylesheet into Paged.js -- `previewer.preview(container, [], root)`
-// (the regular render path every corpus document goes through) always
-// passes an EMPTY stylesheet array. index.ts's own extensive Gate 4
-// commentary (Task 9, on the same file) independently confirms the same
-// underlying fact from a different angle: "NO @page at-rule ever reaches
-// Paged.js's Polisher for ANY document this harness paginates today."
+// (the regular render path every corpus document went through) always
+// passed an EMPTY stylesheet array. index.ts's own extensive Gate 4
+// commentary (Task 9, on the same file) independently confirmed the same
+// underlying fact from a different angle. (Both of those files now say the
+// opposite; that is the change described above, not a contradiction.)
 //
 // Rather than guess from that absence, this task actually launched the
 // real Electron app (the same `_electron.launch` + `__pagedownPhase0`
 // bridge pattern this file uses below) and read back real
 // `getComputedStyle()` values from a real render of phase0/corpus/mixed.md
-// through the unmodified harness. Confirmed empirically, not assumed:
+// through the then-unmodified harness. Confirmed empirically, not assumed:
 //   - body/every content element: font-family "Times", font-size "16px",
 //     line-height "normal" -- Chromium's plain UA defaults. Nothing in
-//     this app sets any of these anywhere in the pagination render path.
+//     the app set any of these anywhere in the pagination render path.
 //   - .pagedjs_area (the actual laid-out content box): 624px wide. This
-//     IS a real, concrete, replicable number -- but it's Paged.js's OWN
-//     hardcoded default page-box geometry (base.js: `--pagedjs-width:
-//     8.5in`, `--pagedjs-margin-{top,right,bottom,left}: 1in`, giving
-//     8.5in - 1in - 1in = 6.5in = 624px @ 96dpi), not an app-authored
-//     design decision -- this app has never passed Paged.js a stylesheet
-//     with an @page rule of its own (see index.ts's Gate 4 section again).
+//     IS a real, concrete, replicable number -- and it is what Paged.js's
+//     own base.js `:root` custom-property defaults produce
+//     (`--pagedjs-width: 8.5in`, `--pagedjs-margin-{top,right,bottom,
+//     left}: 1in`, giving 8.5in - 1in - 1in = 6.5in = 624px @ 96dpi),
+//     rather than an app-authored design decision, since the app had never
+//     passed Paged.js an @page rule of its own. Worth stating precisely,
+//     because the branch that later added one briefly got this backwards:
+//     base.js ALSO injects `@page { size: letter; margin: 0 }`, but that is
+//     the BROWSER PRINT page rule (it stops Chromium adding its own margins
+//     around the generated sheets) and does not feed the custom properties
+//     above -- `baseStyles` is raw CSS that never goes through atpage.js.
+//     The content box was 624 x 864 both before and after that change; the
+//     app's own explicit @page rule restates the same geometry, and what
+//     actually moved page counts was the typography.
 //
-// So: there is no designed typographic system to replicate here, only one
-// concrete width value, itself inherited from a library default rather
-// than chosen. phase1/fixtures/milkdown-compare.html replicates exactly
-// that -- 624px width, zero font CSS of its own -- and its own top-of-file
-// comment documents the same finding. This is itself a real Phase 1
-// finding, of the same shape as Task 4/Gate 1's frontmatter-destruction
-// result and its broken vitest command: a brief assumption ("there is CSS to
-// extract here") that doesn't hold once actually checked, surfaced here
-// instead of silently working around it by inventing a plausible-looking
-// font stack that neither surface actually uses today.
+// So, AS OF PHASE 1: there was no designed typographic system to replicate,
+// only one concrete width value, itself inherited from a library default
+// rather than chosen. phase1/fixtures/milkdown-compare.html replicates
+// exactly that -- 624px width, zero font CSS of its own -- and its own
+// top-of-file comment documents the same finding. This is itself a real
+// Phase 1 finding, of the same shape as Task 4/Gate 1's
+// frontmatter-destruction result and its broken vitest command: a brief
+// assumption ("there is CSS to extract here") that didn't hold once
+// actually checked, surfaced here instead of silently working around it by
+// inventing a plausible-looking font stack that neither surface used then.
 //
 // --- Electron vs. plain chromium.launch() (brief Step 2's choice) --------
 //

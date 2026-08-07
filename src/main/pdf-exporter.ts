@@ -9,6 +9,7 @@ import {
   type PaginationHarness
 } from './pagination-window'
 import { exportToPdf } from '../export/export-pdf'
+import { PAGE_WIDTH_PX, PAGE_HEIGHT_PX } from '../typography/page-geometry'
 
 // --- Fix-round finding (verified empirically, not theorized) --------------
 //
@@ -63,7 +64,7 @@ async function withFreshHarness<T>(task: (harness: PaginationHarness) => Promise
   const harnessWindow = new BaseWindow({ show: false })
   try {
     const harness = await createPaginationHarness(harnessWindow)
-    harness.view.setBounds({ x: 0, y: 0, width: 816, height: 1056 })
+    harness.view.setBounds({ x: 0, y: 0, width: PAGE_WIDTH_PX, height: PAGE_HEIGHT_PX })
     return await task(harness)
   } finally {
     // Destroying the dedicated window destroys its owned WebContentsView

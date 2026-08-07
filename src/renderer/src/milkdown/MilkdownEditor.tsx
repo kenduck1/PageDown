@@ -247,7 +247,29 @@ const MilkdownEditor = forwardRef<MilkdownEditorHandle, MilkdownEditorProps>(
       // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [])
 
-    return <div ref={rootRef} className="milkdown-mount flow-root min-h-full px-8 py-6" />
+    // max-w-[624px] mx-auto, NOT px-8 for horizontal spacing: 624px is
+    // CONTENT_WIDTH_PX (src/typography/page-geometry.ts) -- the page's real
+    // content-box width after margins, which the pagination render context
+    // (Task 6) also targets via its own @page rule. Horizontal ambient
+    // padding here would make the actual rendered TEXT narrower than 624px
+    // (padding subtracts from the box that max-width constrains), silently
+    // reintroducing a width mismatch this whole plan exists to remove --
+    // Paged.js's own page-content box has no equivalent extra inner
+    // padding beyond its page margin, which IS the 624px boundary already.
+    // py-6 stays: vertical spacing doesn't affect content WIDTH parity.
+    //
+    // pagedown-document: the shared document-typography.css scope class
+    // (src/typography/document-typography.css) -- every selector in that
+    // stylesheet is scoped under .pagedown-document specifically so its
+    // bare tag rules (h1, p, ul, table, ...) don't leak into the app shell's
+    // own chrome via base.css's global @layer base import. Removing this
+    // class silently disables all of that file's rules for this mount.
+    return (
+      <div
+        ref={rootRef}
+        className="milkdown-mount pagedown-document flow-root min-h-full max-w-[624px] mx-auto py-6"
+      />
+    )
   }
 )
 

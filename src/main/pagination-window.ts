@@ -2,6 +2,7 @@ import { WebContentsView, BaseWindow, session, type Session } from 'electron'
 import { randomUUID, randomBytes } from 'node:crypto'
 import path from 'node:path'
 import { readFile, realpath, stat } from 'node:fs/promises'
+import { PAGE_WIDTH_PX, PAGE_HEIGHT_PX } from '../typography/page-geometry'
 
 // __dirname here resolves at runtime to the directory of the bundled main
 // process output (out/main/), regardless of this file's pre-bundle source
@@ -184,7 +185,7 @@ export function sniffImageContentType(buffer: Buffer): string | null {
 // real `Content-Security-Policy` response header as well covers the whole
 // navigation from the very first byte, the way CSP is normally deployed.
 const CSP_POLICY_TEMPLATE =
-  "default-src 'self'; style-src 'self' 'nonce-%%CSP_STYLE_NONCE%%'; script-src 'self'; img-src 'self' data:; connect-src 'none';"
+  "default-src 'self'; style-src 'self' 'nonce-%%CSP_STYLE_NONCE%%'; script-src 'self'; img-src 'self' data:; font-src data:; connect-src 'none';"
 
 let renderSession: Session | undefined
 let schemeHandlerRegistered = false
@@ -464,7 +465,7 @@ export async function createPaginationHarness(win: BaseWindow): Promise<Paginati
   // project's Phase 0 spike wiring in src/main/index.ts) are responsible
   // for repositioning it after creation — this default is just "big enough
   // to lay out a page," not "hidden."
-  view.setBounds({ x: 0, y: 0, width: 816, height: 1056 })
+  view.setBounds({ x: 0, y: 0, width: PAGE_WIDTH_PX, height: PAGE_HEIGHT_PX })
   await view.webContents.loadURL(`${RENDER_SCHEME}://${RENDER_HOST}/index.html`)
 
   async function sendDocument(
@@ -623,13 +624,15 @@ export async function sendGate7Phase2(
 //
 // See resources/pagination-render/index.ts's block comment above its
 // 'gate4-header-footer-probe' handler for why this exists: this harness's
-// regular sendDocument() path always calls previewer.preview() with an
-// empty stylesheet array, so no corpus document ever gets real `@page`
-// running-header/footer/page-number content to inspect the tagging of.
-// This sends real `@page` CSS (containing @top-center/@bottom-center margin
-// box rules) alongside the body HTML so the render context actually
-// generates that content once, for phase0/gate4-export.spec.ts to export
-// and inspect.
+// regular sendDocument() path passes an `@page` rule that declares only
+// `size` and `margin` and no margin-box rules at all, so no corpus document
+// ever gets real running-header/footer/page-number content to inspect the
+// tagging of. (It used to pass an empty stylesheet array; that changed with
+// the Document Typography sub-project, but the consequence for THIS probe
+// did not — margin boxes still need `@top-center`/`@bottom-center` rules
+// nobody supplies.) This sends real `@page` CSS containing those margin-box
+// rules alongside the body HTML so the render context actually generates
+// that content once, for phase0/gate4-export.spec.ts to export and inspect.
 export interface Gate4ProbeResult {
   pageCount: number
 }

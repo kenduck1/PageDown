@@ -25,6 +25,23 @@ export interface IsolatedApp {
 export async function launchIsolatedApp(args: string[]): Promise<IsolatedApp> {
   const userDataDir = await mkdtemp(join(tmpdir(), 'pagedown-gate-userdata-'))
   const app = await electron.launch({ args: [...args, `--user-data-dir=${userDataDir}`] })
+  // SECOND, independent reason every gate must go through this helper (the
+  // first is the userData isolation above): Playwright's _electron.launch()
+  // resolves as soon as it can talk to the main process, which is BEFORE
+  // Electron's own `app.whenReady()` has fired. A gate that immediately calls
+  // app.evaluate() into main-process code can race that readiness. The one
+  // this suite hit constantly is session.fromPartition() inside
+  // ensureRenderInfraRegistered() (src/main/pagination-window.ts), which
+  // throws `TypeError: Session can only be received when app is ready` --
+  // the stack points into src/main so it reads like a product regression,
+  // but it is only a launch race (reliable under concurrent machine load,
+  // rare on a quiet machine). Gates that don't evaluate immediately instead
+  // show the downstream symptom "Timed out locating the main app-shell
+  // window". Awaiting readiness once, here, before returning, closes the
+  // race for every caller instead of relying on each gate to work around it.
+  await app.evaluate(async ({ app: a }) => {
+    await a.whenReady()
+  })
   return {
     app,
     userDataDir,
