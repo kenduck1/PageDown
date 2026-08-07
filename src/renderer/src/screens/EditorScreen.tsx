@@ -233,7 +233,7 @@ function EditorScreen(): React.JSX.Element {
   const handleSetViewMode = (mode: ViewMode): void => {
     const { viewMode: currentViewMode, splitLeftMode: currentSplitLeftMode } =
       useAppStore.getState()
-    const { content: currentContent, activeTabId: currentActiveTabId } = useDocumentStore.getState()
+    const { activeTabId: currentActiveTabId } = useDocumentStore.getState()
 
     const isFormatEditing = (m: ViewMode): boolean =>
       m === 'format' || (m === 'split' && currentSplitLeftMode === 'format')
@@ -245,11 +245,54 @@ function EditorScreen(): React.JSX.Element {
     const enteringSourceEditing = isSourceEditing(mode) && !isSourceEditing(currentViewMode)
     const leavingSourceEditing = isSourceEditing(currentViewMode) && !isSourceEditing(mode)
 
-    if (enteringSourceEditing && leavingFormatEditing) {
+    // Fix-round finding (Split mode final whole-branch review, C1 -- a real,
+    // reproduced data-loss bug, not theoretical): format<->split(format) is
+    // classified as NEITHER entering NOR leaving Format editing by the two
+    // booleans above (both sides are "Format editing"), so neither branch
+    // below used to fire for it -- but the JSX still tears down and rebuilds
+    // MilkdownEditor across this transition regardless (see this function's
+    // own (2b) comment above: the page-card lives at two different
+    // structural positions, the single-pane branch and Split's left-pane
+    // branch, and React reconciles a swap between them as a real unmount+
+    // mount). Reproduced: switching format->split(format) or back within
+    // Milkdown's 200ms debounce window silently reverted an unflushed edit,
+    // and it became permanently lost the moment the user typed again (the
+    // freshly-mounted instance seeded itself from the STALE `content` value
+    // captured by the render that triggered the swap -- one render tick
+    // before the outgoing instance's own unmount-triggered flush had a
+    // chance to update the store, since React runs unmount effects, then
+    // mount effects, strictly AFTER the render that decided to swap the
+    // tree, not before). `formatEditingPositionChanges` names this missing
+    // case explicitly and feeds it into both branches below, exactly
+    // mirroring the review's own stated direction: flush() whenever the
+    // outgoing Format-editing surface is about to remount, and
+    // replaceContentForTab() whenever a Format-editing surface mounts fresh
+    // after one, regardless of whether the transition also changes which
+    // conceptual "editing surface" (Format vs Source) is active.
+    const formatEditingPositionChanges =
+      isFormatEditing(currentViewMode) &&
+      isFormatEditing(mode) &&
+      (currentViewMode === 'split') !== (mode === 'split')
+
+    if ((enteringSourceEditing && leavingFormatEditing) || formatEditingPositionChanges) {
       editorRef.current?.flush()
     }
-    if (leavingSourceEditing && enteringFormatEditing) {
-      replaceContentForTab(currentActiveTabId, currentContent)
+    if ((leavingSourceEditing && enteringFormatEditing) || formatEditingPositionChanges) {
+      // Re-read content HERE, after the flush() call above rather than from
+      // a snapshot taken at the top of this function -- load-bearing, not
+      // stylistic (review finding): when formatEditingPositionChanges is
+      // true, BOTH branches above can fire in the same call, and flush()
+      // synchronously updates the store's content via updateContentForTab
+      // (zustand's set() is synchronous, no microtask gap) -- a
+      // top-of-function snapshot taken before that flush would be exactly
+      // the stale pre-edit value, and passing it here would silently
+      // overwrite the edit flush() JUST wrote, reintroducing C1's data loss
+      // through a different mechanism. Reading fresh is always correct for
+      // the pre-existing Source->Format case too (nothing else in this
+      // synchronous, no-await handler can change content between the top of
+      // this function and here), so this isn't a narrower fix for the new
+      // case at the expense of the old one.
+      replaceContentForTab(currentActiveTabId, useDocumentStore.getState().content)
     }
     setViewMode(mode)
   }
