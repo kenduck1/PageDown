@@ -402,15 +402,21 @@ app.whenReady().then(() => {
   // the same way it does for an ordinary BrowserWindow. Multiplying by
   // devicePixelRatio here would double-apply that scaling and render the
   // preview at roughly 2x the intended size, badly misplaced next to the
-  // editor pane. getZoomFactor() (rather than a hardcoded 1) is still the
-  // right expression to pass -- not because of the DIP question above, but
-  // because this app's own renderer applies a CSS `zoom` transform to the
-  // editor canvas elsewhere (EditorScreen's Format-mode canvas); if a future
-  // Split mode pane reports bounds relative to that zoomed layout,
-  // getZoomFactor() is where Electron's own current zoom state belongs in
-  // this conversion. Any adjustment for that CSS zoom transform itself
-  // belongs in the RENDERER's reported bounds (Task 4), not re-derived here
-  // -- this handler only converts whatever CSS-pixel rectangle it's given.
+  // editor pane. getZoomFactor() (rather than a hardcoded 1) accounts for
+  // ELECTRON'S OWN webContents zoom level (Ctrl/Cmd+=, or a future
+  // webContents.setZoomFactor() call) -- a genuine, separate axis from the
+  // DIP question above. Nothing in this codebase calls setZoomFactor()
+  // today (verified: zero occurrences), so in practice this returns 1.0
+  // right now and the DIP-only conversion above is the only thing actually
+  // being exercised. IMPORTANT, and easy to get backwards: this does NOT
+  // account for EditorScreen's own CSS `zoom` state (Format-mode canvas's
+  // `transform: scale(zoom)`, src/renderer/src/screens/EditorScreen.tsx) --
+  // that's a renderer-local React useState driving a CSS transform, has
+  // nothing to do with Electron's webContents zoom, and getZoomFactor()
+  // cannot see it. If a future Split mode pane needs the preview to track
+  // THAT CSS zoom, the adjustment belongs in the RENDERER's reported bounds
+  // (Task 4), not here -- this handler only converts whatever CSS-pixel
+  // rectangle it's given using Electron's own current zoom state.
   ipcMain.on(
     'split-preview:setBounds',
     (_event, cssBounds: { x: number; y: number; width: number; height: number }) => {
