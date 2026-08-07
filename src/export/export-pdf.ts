@@ -21,10 +21,14 @@ import type { PaginationHarness } from '../main/pagination-window'
 // - `printBackground: true` — without this, background colors/images in the
 //   rendered content are silently dropped from the PDF.
 // - `margins: { marginType: 'none' }` — Paged.js already lays out margins as
-//   part of its own `@page` box (or its default page-box fallback — see
-//   pagination-window.ts's PaginationResult for how this harness currently
-//   has no explicit page stylesheet); a second, Chromium-applied print
-//   margin on top would double-margin the output.
+//   part of its own `@page` box; a second, Chromium-applied print margin on
+//   top would double-margin the output. (This used to add "or its default
+//   page-box fallback — see pagination-window.ts's PaginationResult for how
+//   this harness currently has no explicit page stylesheet". Both halves are
+//   now stale: the render context authors a real `@page` rule of its own
+//   since the Document Typography sub-project — see `DOCUMENT_STYLESHEET` in
+//   resources/pagination-render/index.ts — and `PaginationResult` never
+//   carried a note about stylesheets to point at in the first place.)
 // - `generateTaggedPDF: true` — Electron/Chromium's experimental tagged-PDF
 //   option (see printToPDF's docs). Phase 0 Gate 4
 //   (phase0/gate4-export.spec.ts) exists specifically to try this for real

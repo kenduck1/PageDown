@@ -15,7 +15,15 @@
 // value Chromium/Paged.js use internally and the value implied by every
 // existing `816`/`1056` literal this module replaces (8.5in and 11in at
 // 96dpi).
-const DPI = 96
+//
+// Exported, not module-private: the pagination render context
+// (resources/pagination-render/index.ts) builds an `@page` rule in inches
+// (@page's native unit) and therefore has to divide these pixel constants
+// back out by the same density. It used to hardcode its own `/ 96` there,
+// which is exactly the kind of independently-restated magic number this
+// module exists to eliminate -- so the constant itself is part of the
+// module's public surface, not just the values derived from it.
+export const DPI = 96
 
 export const PAGE_WIDTH_PX = 8.5 * DPI // 816
 export const PAGE_HEIGHT_PX = 11 * DPI // 1056

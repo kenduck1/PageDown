@@ -15,18 +15,36 @@
 // `*.css` broadly, which would silently change the type of every OTHER
 // `.css` import in the app-shell renderer too (e.g. `import
 // './assets/base.css'`, a real side-effect-only Vite import that must stay
-// typed as the empty module). When two ambient module patterns both match
-// a given specifier, TypeScript resolves the ambiguity by preferring
-// whichever pattern's matched WILDCARD substring is shortest -- equivalently,
-// whichever pattern has the longest fixed, non-wildcard portion. For the
-// specifier '../../src/typography/document-typography.css':
-//   - '*.css'                       matches with wildcard text
-//                                    '../../src/typography/document-typography'
-//   - '*/document-typography.css'   matches with wildcard text
-//                                    '../../src/typography'
-// The second pattern's wildcard match is shorter, so it wins -- this is the
-// exact same tie-break rule vite/client.d.ts itself relies on to give
-// `*.module.css` (CSS Modules) a different type than plain `*.css`.
+// typed as the empty module).
+//
+// HOW THE AMBIGUITY IS ACTUALLY RESOLVED -- stated precisely, because an
+// earlier version of this comment got it wrong in a way that sounded
+// authoritative (it claimed TypeScript prefers whichever pattern's matched
+// WILDCARD substring is shortest, and that vite/client.d.ts relies on the
+// same rule to distinguish `*.module.css` from `*.css`; neither is true).
+// The real rule is `findBestPatternMatch` (TypeScript's own source): among
+// all ambient module patterns that match, it keeps the one with the longest
+// PREFIX -- the fixed text BEFORE the `*` -- and nothing else. The suffix
+// after the `*` is not considered at all, and the comparison is a strict
+// `>`, so the FIRST match found wins any tie. For the specifier
+// '../../src/typography/document-typography.css':
+//   - '*.css'                      has prefix '' (length 0)
+//   - '*/document-typography.css'  has prefix '' (length 0)
+// Both prefixes are empty, so this is a tie, and which declaration wins is
+// therefore determined by the order the program happened to discover the
+// two .d.ts files -- not by either pattern being "more specific".
+// (vite/client.d.ts's own `*.module.css` vs `*.css` pair is the same tie,
+// and works only because both live in ONE file with the more specific
+// pattern written first.)
+//
+// Kept anyway, deliberately: it resolves correctly today, and the failure
+// mode if discovery order ever flipped is LOUD, not silent -- the default
+// import below would resolve against vite's empty `*.css` module and
+// `pnpm run typecheck:web` would fail with "has no default export", exactly
+// the error this file exists to prevent. Nothing would silently mistype or
+// mis-bundle. If that ever happens, the fix is to give this pattern a real
+// non-empty prefix (e.g. declare the full relative specifier verbatim
+// instead of a wildcard), not to broaden `*.css`.
 declare module '*/document-typography.css' {
   const css: string
   export default css

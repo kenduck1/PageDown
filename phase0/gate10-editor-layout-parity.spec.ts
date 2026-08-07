@@ -1,6 +1,7 @@
 import { test, expect, type ElectronApplication, type Page } from '@playwright/test'
 import { markdownToHtml } from '../src/markdown/pipeline'
 import { REPORT_TEMPLATE } from '../src/renderer/src/templates/report.md'
+import { CONTENT_WIDTH_PX } from '../src/typography/page-geometry'
 import { launchIsolatedApp } from './electron-launch'
 
 // Phase 1 Gate 3 (docs/superpowers/plans/2026-07-28-phase1-findings.md)
@@ -175,6 +176,21 @@ test('Gate 10: editor/paginator layout parity for the real mounted Milkdown canv
 
   console.log(`\nGate 10 per-block layout comparison (tolerance: ${TOLERANCE_PX}px):`)
   console.table(rows)
+  console.log(`Gate 10 Milkdown editing-root width: ${milkdownParsed.rootWidth}px`)
+
+  // The width half of parity, made explicit. Every delta compared below is a
+  // VERTICAL position, so all seven of them can agree perfectly while the two
+  // surfaces still wrap text at different line lengths -- a same-height,
+  // different-width layout is exactly what the pre-typography editor had (an
+  // unconstrained content width with no relationship to the page box at all).
+  // The measurement was already being taken here and simply never asserted;
+  // pinning it against the shared constant, rather than a literal 624,
+  // is what makes `src/typography/page-geometry.ts` the actual source of
+  // truth for both sides instead of just the pagination side.
+  expect(
+    milkdownParsed.rootWidth,
+    "the Milkdown editing root must be exactly as wide as the paginated page's content box"
+  ).toBe(CONTENT_WIDTH_PX)
 
   expect(
     milkdownParsed.blocks.length,
