@@ -1,0 +1,142 @@
+/* Shared document-content typography, applied to BOTH the sandboxed
+   pagination render context (imported as raw text, see
+   resources/pagination-render/index.ts) and the Milkdown editor mount
+   (imported directly into base.css's Tailwind layer system, see
+   src/renderer/src/assets/base.css). One file, two consumers -- see
+   docs/superpowers/specs/2026-08-06-document-typography-design.md,
+   "Single source of truth for typography values", for why this is a plain
+   CSS file rather than a JS object of values, and for the judgment calls
+   behind every number below.
+
+   Content width (624px) is deliberately NOT set here -- it's a wrapper-
+   level concern, and the two surfaces have differently-named wrappers
+   (`.milkdown-mount` vs. Paged.js's own generated page-content structure,
+   which this file's tag selectors can't reach). See Task 4 (Milkdown's own
+   max-width) and Task 6 (the pagination context's own `@page` rule,
+   src/typography/page-geometry.ts's CONTENT_WIDTH_PX) for where that
+   number actually lives -- both independently derive the same 624px this
+   file's rules are meant to fill.
+
+   Values here duplicate the design doc's numbers as literals, not as CSS
+   custom properties referencing a shared TS source -- a plain CSS file has
+   no way to import a TypeScript constant. Kept in sync by hand, the same
+   pattern already used for this app's CSP nonce policy string (see
+   resources/pagination-render/index.html's own "Keep both copies... in
+   sync" comment) -- if any number here changes, check
+   docs/superpowers/specs/2026-08-06-document-typography-design.md and this
+   comment block for anywhere it's restated. */
+
+h1,
+h2,
+h3,
+p,
+ul,
+ol,
+li,
+blockquote,
+table,
+th,
+td {
+  font-family: var(--font-serif);
+}
+
+pre,
+code {
+  /* Code content stays monospace regardless of surrounding document
+     typography -- matches the design handoff's "Raw source mode" font row,
+     not the document body serif face. */
+  font-family: var(--font-mono);
+}
+
+p,
+li,
+td,
+blockquote {
+  font-size: var(--text-14);
+  line-height: 1.7;
+}
+
+/* Paragraph/list-item spacing: ~1em relative to the 14px body size (14px),
+   a standard prose convention -- see the design doc's spacing section for
+   why this is expressed as a relationship (em, self-scaling per element)
+   rather than a hand-picked px value. */
+p,
+ul,
+ol,
+blockquote {
+  margin: 0 0 1em 0;
+}
+
+li {
+  margin: 0 0 0.35em 0;
+}
+
+h1,
+h2,
+h3 {
+  font-weight: 700;
+  /* margin-top: 1.5x / margin-bottom: 0.5x the element's OWN font-size --
+     using `em` here (not a hardcoded px value per level) is what makes this
+     relationship self-scaling across H1/H2/H3 without three separate
+     numbers to keep in sync; see the design doc's "Block spacing" judgment
+     call for the reasoning and the explicit expectation that these
+     multipliers get tuned against Gate 10's real per-block delta output in
+     Task 7, not treated as final here. */
+  margin-top: 1.5em;
+  margin-bottom: 0.5em;
+}
+
+h1 {
+  font-size: var(--text-26);
+}
+
+h2 {
+  font-size: var(--text-20);
+}
+
+h3 {
+  font-size: var(--text-16);
+}
+
+table {
+  font-size: var(--text-14);
+  line-height: 1.7;
+  border-collapse: collapse;
+  width: 100%;
+  margin: 0 0 1em 0;
+}
+
+th,
+td {
+  text-align: left;
+  padding: 0.4em 0.6em;
+  border-bottom: 1px solid #d0d0d4;
+}
+
+th {
+  font-weight: 700;
+}
+
+hr {
+  border: none;
+  border-top: 1px solid #d0d0d4;
+  margin: 1.5em 0;
+}
+
+a {
+  color: inherit;
+  text-decoration: underline;
+}
+
+strong {
+  font-weight: 700;
+}
+
+em {
+  font-style: italic;
+}
+
+img {
+  max-width: 100%;
+  height: auto;
+}
