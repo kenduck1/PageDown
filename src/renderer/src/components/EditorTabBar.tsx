@@ -26,12 +26,44 @@ function tabLabel(filePath: string | null): string {
 // button) rather than hardcoding a new hex, per this project's
 // tokens-exclusively styling convention. This is a deliberate, minor
 // deviation from the mock's literal hex -- see GA_TRACK_1_REPORT.md.
-function EditorTabBar(): React.JSX.Element {
+interface EditorTabBarProps {
+  // Called instead of the store's plain closeTab(tabId) ONLY when the tab
+  // being closed is BOTH dirty AND the currently active one -- the one case
+  // that needs a live MilkdownEditor flush() (to pick up an edit still
+  // sitting inside the ~200ms onChange debounce) and Save capability this
+  // component doesn't own (EditorScreen does, via editorRef/save() -- same
+  // machinery its own handleGoHome already uses for the "<- Home" button,
+  // see that function's doc comments for the full reasoning this mirrors).
+  //
+  // Every OTHER close -- a clean tab, or a dirty BACKGROUND tab -- still
+  // goes straight to the store's closeTab, unchanged from before this prop
+  // existed. A dirty background tab's close-confirmation is a real, still-
+  // deferred gap, not silently dropped by this change: documentStore.ts's
+  // own closeTab doc comment already discloses it, and closing it properly
+  // would need a tab-scoped save (documentStore.save() only ever operates
+  // on the ACTIVE tab's mirror fields today) -- out of scope for this pass,
+  // which targets the far more common "closing the tab you're currently
+  // looking at" case.
+  //
+  // Optional so every existing test rendering <EditorTabBar /> standalone
+  // (none of which puts a dirty tab in play) keeps working unchanged.
+  onCloseDirtyActiveTab?: (tabId: string) => void
+}
+
+function EditorTabBar({ onCloseDirtyActiveTab }: EditorTabBarProps): React.JSX.Element {
   const tabs = useDocumentStore((state) => state.tabs)
   const activeTabId = useDocumentStore((state) => state.activeTabId)
   const switchTab = useDocumentStore((state) => state.switchTab)
   const closeTab = useDocumentStore((state) => state.closeTab)
   const openTab = useDocumentStore((state) => state.openTab)
+
+  const handleClose = (tabId: string, isDirty: boolean): void => {
+    if (isDirty && tabId === activeTabId && onCloseDirtyActiveTab) {
+      onCloseDirtyActiveTab(tabId)
+      return
+    }
+    closeTab(tabId)
+  }
 
   const handleTabKeyDown = (event: React.KeyboardEvent, tabId: string): void => {
     if (event.key === 'Enter' || event.key === ' ') {
@@ -71,7 +103,7 @@ function EditorTabBar(): React.JSX.Element {
               aria-label={`Close ${label}`}
               onClick={(event) => {
                 event.stopPropagation()
-                closeTab(tab.id)
+                handleClose(tab.id, tab.isDirty)
               }}
               className={`text-13 leading-none text-text-tertiary ${
                 isActive ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'
