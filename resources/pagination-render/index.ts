@@ -17,7 +17,12 @@ import { renderMermaidToSvg } from '../../src/diagrams/render-mermaid'
 import { registerBreakHandlers } from '../../src/pagination/break-handlers'
 import documentTypographyCss from '../../src/typography/document-typography.css'
 import sourceSerif4Base64 from '../../src/renderer/src/assets/fonts/source-serif-4-variable.woff2'
-import { PAGE_WIDTH_PX, PAGE_HEIGHT_PX, PAGE_MARGIN_PX } from '../../src/typography/page-geometry'
+import {
+  DPI,
+  PAGE_WIDTH_PX,
+  PAGE_HEIGHT_PX,
+  PAGE_MARGIN_PX
+} from '../../src/typography/page-geometry'
 
 // Task 10 / Gate 6: register the first-party keep-with-next/table-
 // continuation handlers exactly once, before the first `new Previewer()`
@@ -59,16 +64,51 @@ registerBreakHandlers()
 //      shared with the Milkdown mount, which loads the SAME font through
 //      its own, already-existing Vite-bundled @font-face in base.css; only
 //      THIS context needs a self-contained, CSP-safe data: URI (see Task 5
-//      for the font-src data: CSP change this rule depends on).
+//      for the font-src data: CSP change this rule depends on). Kept
+//      declaration-for-declaration in sync with base.css's copy, including
+//      `font-display: block` -- inert here (Paged.js's Chunker.loadFonts()
+//      awaits every FontFace in document.fonts before it lays anything out,
+//      so there is no window in which a fallback face could paint), but the
+//      two rules are documented as a hand-synced pair and an unexplained
+//      one-declaration difference between them reads as drift.
 //   3. An explicit @page rule matching src/typography/page-geometry.ts's
 //      constants (in inches, @page's native unit, matching
-//      DEFAULT_PAGE_CONFIG's own inch-denominated margins) -- this
-//      REPLACES reliance on Paged.js's internal default page box with an
-//      authored value. The design doc flagged this as an open technical
-//      question (does passing a real, non-empty stylesheet change Paged.js's
-//      default-page-box handling at all?) -- passing an explicit @page rule
-//      resolves it by construction: this no longer depends on any default,
-//      whatever it does or doesn't do once stylesheets stops being `[]`.
+//      DEFAULT_PAGE_CONFIG's own inch-denominated margins).
+//      What this rule does and does NOT do -- corrected by the final
+//      whole-branch review, which found the original claim here (and in
+//      CLAUDE.md, Gate 4 and Gate 6) to be flatly wrong:
+//        - It does NOT change the page box. Paged.js's base.js DOES
+//          unconditionally inject `@page { size: letter; margin: 0 }`, but
+//          that is the BROWSER PRINT page rule -- it exists to stop
+//          Chromium adding its own margins around the `.pagedjs_sheet`
+//          elements Paged.js generates. The actual content box is driven by
+//          CSS custom properties in that same file, which already default
+//          to one inch: `--pagedjs-margin-top/right/bottom/left: 1in`
+//          (node_modules/pagedjs/src/polisher/base.js:12-15), consumed by
+//          the `.pagedjs_pagebox` grid template at lines 264-265. `baseStyles`
+//          is inserted as raw CSS and never parsed through atpage.js, so
+//          those defaults stood. This context's content box has therefore
+//          been 624 x 864 px all along -- confirmed independently by
+//          phase0/gate3-mermaid.spec.ts's untouched `expect(sequence.width)
+//          .toBe(624)` assertion, which passes both before and after this
+//          rule existed. This rule restates that same geometry exactly, so
+//          it is geometrically a no-op today.
+//        - What it DOES buy is robustness, which is the real reason to keep
+//          it: the layout no longer silently depends on an undocumented
+//          library default that a Paged.js upgrade could change without
+//          warning. It also answers the design doc's open technical
+//          question (does a real, non-empty stylesheet change Paged.js's
+//          default-page-box handling?) by construction rather than by
+//          measurement -- an authored @page rule doesn't care what the
+//          default would have been.
+//        - Every page-count change measured on this branch (Gate 4/Gate 6's
+//          synthetic-table row retune, tables-spanning-pages.md moving
+//          1 -> 2) is caused by piece 4 below, the TYPOGRAPHY: 14px/1.7 body
+//          text against the UA's 16px/`normal`, a 1.15 heading line-height,
+//          and 0.4em 0.6em table cell padding. The page box did not change;
+//          what fills it did. (Gate 2's own corpus counts, sometimes quoted
+//          alongside those, did NOT move at all across this branch --
+//          re-measured at 108/322, matching its committed baseline.)
 //   4. document-typography.css's own tag-selector rules, imported as raw
 //      text (Step 1's build.loader change, scripts/build-pagination-render.ts).
 //      Every selector in that file is scoped under `.pagedown-document` --
@@ -90,12 +130,13 @@ const DOCUMENT_STYLESHEET = `
   font-family: 'Source Serif 4';
   font-style: normal;
   font-weight: 200 900;
+  font-display: block;
   src: url(data:font/woff2;base64,${sourceSerif4Base64}) format('woff2-variations');
 }
 
 @page {
-  size: ${PAGE_WIDTH_PX / 96}in ${PAGE_HEIGHT_PX / 96}in;
-  margin: ${PAGE_MARGIN_PX / 96}in;
+  size: ${PAGE_WIDTH_PX / DPI}in ${PAGE_HEIGHT_PX / DPI}in;
+  margin: ${PAGE_MARGIN_PX / DPI}in;
 }
 
 ${documentTypographyCss}
@@ -325,26 +366,35 @@ type Gate7Result = Gate7Phase1Success | Gate7Phase2Success | Gate7Error
 // --- Task 9 / Gate 4: header/footer artifact-vs-content tagging probe -----
 //
 // A separate, deliberately narrow message type/result channel, added ONLY
-// because of what Gate 4 found by actually running it: this harness's
-// regular 'render' path (above) always calls `previewer.preview(container,
-// [], root)` — an explicitly EMPTY stylesheet array (see the 'render'
-// handler's own comment on why `[]`, not falsy, matters: Previewer.preview()
-// only calls its own `removeStyles()` auto-detection when `stylesheets` is
-// falsy, and `[]` is truthy) — which means NO `@page` at-rule ever reaches
-// Paged.js's Polisher for ANY document this harness paginates today. Traced
-// directly (not assumed): `node_modules/pagedjs/src/chunker/page.js` never
-// creates the per-page margin-box DOM elements; that template lives in
-// `chunker.js`'s page template (14 `.pagedjs_margin-*` divs, always present,
-// always empty absent a matching `@page` rule) and is populated only by
-// `src/modules/paged-media/atpage.js`'s `@page`-rule handler — which never
-// runs here, since there is no stylesheet for it to read. Net effect: this
-// harness's on-screen render and PDF export never contain ANY running
-// header/footer/page-number content for ANY corpus document today (a real,
+// because of what Gate 4 found by actually running it.
+//
+// PREMISE CORRECTED by the Document Typography sub-project (and by the
+// final whole-branch review that caught this comment still asserting the
+// old one). As originally written, this said the regular 'render' path
+// always passes an explicitly EMPTY stylesheet array, so "NO `@page`
+// at-rule ever reaches Paged.js's Polisher for ANY document this harness
+// paginates today". That is no longer true: the regular path now passes
+// DOCUMENT_STYLESHEET (see the top of this file), which contains a real
+// `@page` rule, so `atpage.js`'s handler DOES run on every render.
+//
+// The probe's PURPOSE survives that correction intact, because the thing it
+// manufactures was never merely "an `@page` rule" — it is running
+// header/footer/page-number CONTENT. Traced directly (not assumed):
+// `node_modules/pagedjs/src/chunker/page.js` never creates the per-page
+// margin-box DOM elements; that template lives in `chunker.js`'s page
+// template (14 `.pagedjs_margin-*` divs, always present, always empty absent
+// a matching MARGIN-BOX rule) and is populated only by
+// `src/modules/paged-media/atpage.js`'s `@page`-rule handler, from
+// `@top-center`/`@bottom-center`-style nested rules. DOCUMENT_STYLESHEET's
+// `@page` rule declares only `size` and `margin` and contains no margin-box
+// rules at all, so those 14 divs are still always empty for every real
+// document: this harness's on-screen render and PDF export still contain NO
+// running header/footer/page-number content for ANY corpus document (a real,
 // separate gap from this task's own scope — Gate 2's findings doc already
 // flagged that frontmatter page/margin metadata isn't wired into an `@page`
 // stylesheet at all). That means the design doc's "are running
 // headers/footers/page numbers tagged as content vs. artifacts" Gate 4
-// criterion has literally nothing to inspect against this harness's regular
+// criterion still has nothing to inspect against this harness's regular
 // output — not a pass, not a fail, just no signal at all. This probe exists
 // solely to manufacture that missing signal: it accepts an explicit `css`
 // string (containing real `@page`/`@top-center`/`@bottom-center` rules) and

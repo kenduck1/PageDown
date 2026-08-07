@@ -639,12 +639,18 @@ test('Gate 4: split-block fragmentation — a table split across a page boundary
   // split at this harness's Letter/1in-margin default (confirmed directly
   // below via the measured page count, not assumed).
   //
-  // Re-tuned from 60 to 35 rows by the Document Typography sub-project:
-  // once the sandboxed render context got real author CSS and an explicit
-  // `@page` rule (8.5in x 11in, 1in margins — replacing Paged.js's own
-  // zero-margin `base.js` default), the content box shrank and per-row
-  // height grew, so the old 60-row count now overflows to a 3-page split
-  // instead of 2. Measured directly against this branch's typography: 21
+  // Re-tuned from 60 to 35 rows by the Document Typography sub-project,
+  // for a reason that was originally recorded WRONG here and corrected by
+  // the final whole-branch review. The page box did NOT shrink: Paged.js's
+  // `base.js` already defaulted `--pagedjs-margin-*` to 1in, so this
+  // harness's content box has been 624 x 864 px throughout (the
+  // `expect(sequence.width).toBe(624)` assertion in
+  // phase0/gate3-mermaid.spec.ts is untouched by that branch and passes on
+  // both sides of it). What changed is the TYPOGRAPHY that fills the box:
+  // 14px/1.7 body text replacing the UA's 16px/`normal`, and 0.4em 0.6em
+  // padding on every table cell, which together grew per-row height enough
+  // that the old 60-row count now overflows to a 3-page split instead of 2.
+  // Measured directly against this branch's typography: 21
   // rows -> 1 page, 22-45 rows -> 2 pages, 46+ rows -> 3 pages. 35 sits
   // comfortably mid-range (not pinned to either edge) so a small future
   // typography tweak doesn't immediately knock this back out of a 2-page
@@ -840,14 +846,16 @@ test('Gate 4: running header/footer/page-number content is excluded from the tag
   // repeats more than once (measured: 2 pages). See
   // src/main/pagination-window.ts's `sendGate4HeaderFooterProbe` and
   // resources/pagination-render/index.ts's 'gate4-header-footer-probe'
-  // handler for WHY this probe exists at all: this harness's regular
-  // sendDocument() path never gives Paged.js any @page stylesheet (`[]`,
-  // explicitly empty — Previewer.preview() only auto-detects document
-  // <style>/<link> tags when its `stylesheets` argument is FALSY, and `[]`
-  // is truthy), so no corpus document, run through the regular path, ever
-  // generates any running header/footer/page-number content at all — there
-  // is nothing for this criterion to inspect without a real @page rule
-  // reaching Paged.js's Polisher, which is what this probe supplies.
+  // handler for WHY this probe exists at all. (That comment's premise was
+  // corrected by the final whole-branch review: the regular sendDocument()
+  // path used to pass an explicitly empty `[]` stylesheet array, but since
+  // the Document Typography sub-project it passes a real one containing a
+  // real `@page` rule. The conclusion is unchanged, because that rule
+  // declares only `size` and `margin` and contains no MARGIN-BOX rules.) So
+  // no corpus document, run through the regular path, ever generates any
+  // running header/footer/page-number content at all — there is nothing for
+  // this criterion to inspect without `@top-center`/`@bottom-center`-style
+  // rules reaching Paged.js's Polisher, which is what this probe supplies.
   const paragraphCount = 45
   const bodyHtml = Array.from(
     { length: paragraphCount },
@@ -878,8 +886,8 @@ test('Gate 4: running header/footer/page-number content is excluded from the tag
       const harness = await bridge.createPaginationHarness(win)
       const probeResult = await bridge.sendGate4HeaderFooterProbe(harness, bodyHtml, css)
       // The margin-box container Paged.js's page template always creates
-      // (chunker.js) — populated here, for the first time in this app's
-      // history, by a real @page rule. Its `.textContent` is checked
+      // (chunker.js) — populated here, and only here in this app's whole
+      // history, by real @page margin-box rules. Its `.textContent` is checked
       // directly too, as a second, independent confirmation alongside the
       // PDF-side checks below: CSS `content: "..."` on a margin box is
       // GENERATED content (rendered visually, extractable from the printed

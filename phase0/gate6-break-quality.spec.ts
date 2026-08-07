@@ -23,22 +23,28 @@ import { launchIsolatedApp } from './electron-launch'
 // A real, load-bearing finding this whole file is built around, not
 // assumed going in: THREE of the four brief-named "break-quality-relevant"
 // corpus fixtures — tables-spanning-pages.md, headings-near-page-bottom.md,
-// nested-lists.md — used to measure to exactly ONE page at this harness's
-// then-current (zero-margin) page-box default, meaning none of them
-// exercised the page-break scenario they were written to test (matching
-// the SAME finding Task 9/Gate 4 already made specifically for
-// tables-spanning-pages.md — see that gate's own "Split-block
-// fragmentation" section). Only mermaid-diagrams.md (5-6 pages) naturally
-// spanned multiple pages.
+// nested-lists.md — used to measure to exactly ONE page under this
+// harness's original, completely unstyled rendering (Chromium UA defaults,
+// no author CSS at all), meaning none of them exercised the page-break
+// scenario they were written to test (matching the SAME finding Task
+// 9/Gate 4 already made specifically for tables-spanning-pages.md — see
+// that gate's own "Split-block fragmentation" section). Only
+// mermaid-diagrams.md (5-6 pages) naturally spanned multiple pages.
 //
-// The Document Typography sub-project's real, explicit `@page` rule
-// (8.5in x 11in, 1in margins — replacing Paged.js's own zero-margin
-// `base.js` default) is exactly the "future page-box/margin/font change"
-// this file's own pinned-count comment (directly above Test 1's four
-// page-count assertions below) always said would eventually need this
-// updating: tables-spanning-pages.md now genuinely splits (1 -> 2 pages)
-// under the new geometry — see that comment for the full before/after and
-// why the other three fixtures' pinned counts did NOT move. As of this
+// The Document Typography sub-project is exactly the "future
+// page-box/margin/font change" this file's own pinned-count comment
+// (directly above Test 1's four page-count assertions below) always said
+// would eventually need this updating: tables-spanning-pages.md now
+// genuinely splits (1 -> 2 pages) — see that comment for the full
+// before/after and why the other three fixtures' pinned counts did NOT
+// move. Note WHICH half of that sub-project actually moved it, corrected by
+// the final whole-branch review after this file first credited the wrong
+// one: the explicit `@page` rule it added (8.5in x 11in, 1in margins) is
+// geometrically a NO-OP, because Paged.js's `base.js` already defaults
+// `--pagedjs-margin-*` to 1in and this harness's content box has been
+// 624 x 864 px all along. The counts moved because of the shared document
+// TYPOGRAPHY: 14px/1.7 body text against the UA's 16px/`normal`, a 1.15
+// heading line-height, and 0.4em 0.6em table cell padding. As of this
 // branch it's TWO of the four (headings-near-page-bottom.md and
 // nested-lists.md) that still measure to exactly ONE page;
 // tables-spanning-pages.md has joined mermaid-diagrams.md as a fixture
@@ -148,31 +154,41 @@ test('Gate 6: render every break-quality fixture and capture per-page structure 
   // The load-bearing finding described in this file's top comment, made
   // into a durable, checked regression guard rather than left only as
   // prose. Originally: exactly 3 of the 4 pinned fixtures never spanned a
-  // page boundary at this harness's then-current (zero-margin) page-box
-  // default. This comment always anticipated its own obsolescence: "If a
+  // page boundary under this harness's original, completely unstyled
+  // rendering. This comment always anticipated its own obsolescence: "If a
   // future page-box/margin/font change ever makes one of these actually
   // split, that's a genuinely interesting event for this gate ... this
   // assertion is what would need updating the day that happens, rather
   // than the file silently going stale."
   //
-  // That day arrived with the Document Typography sub-project: the
-  // sandboxed render context got a real, explicit `@page` rule (8.5in x
-  // 11in, 1in margins), replacing Paged.js's own zero-margin `base.js`
-  // default. Measured directly against the new geometry (not assumed):
-  // only tables-spanning-pages.md's pinned count actually moved, from 1
-  // page to 2 (updated below, per this comment's own instructions).
-  // headings-near-page-bottom.md and nested-lists.md still measure to
-  // exactly 1 page under the new margins — their assertions are
+  // That day arrived with the Document Typography sub-project, which gave
+  // the sandboxed render context real author CSS for the first time.
+  // Measured directly (not assumed): only tables-spanning-pages.md's pinned
+  // count actually moved, from 1 page to 2 (updated below, per this
+  // comment's own instructions). headings-near-page-bottom.md and
+  // nested-lists.md still measure to exactly 1 page — their assertions are
   // unchanged. mermaid-diagrams.md's pinned count also did NOT move
   // (still 6 pages, unchanged from Task 10's KeepWithNextHandler
-  // baseline) despite the same geometry change — worth calling out
+  // baseline) — worth calling out
   // explicitly because that fixture has a documented relationship to Gate
   // 3's own `oversizedWrapperCount` comment (phase0/gate3-mermaid.spec.ts)
   // and to Task 10's KeepWithNextHandler; if its count HAD moved, both of
   // those would need a fresh look, but since it didn't, neither does.
+  //
+  // ATTRIBUTION CORRECTED by the final whole-branch review: this used to
+  // credit the sub-project's explicit `@page` rule (8.5in x 11in, 1in
+  // margins) for the move, on the belief that it replaced a zero-margin
+  // Paged.js default. It did not — `base.js` already defaults
+  // `--pagedjs-margin-*` to 1in, so the content box was 624 x 864 px both
+  // before and after, and the authored `@page` rule restates exactly that.
+  // The mover is the shared document TYPOGRAPHY (14px/1.7 body text against
+  // the UA's 16px/`normal`, 1.15 heading line-height, 0.4em 0.6em table
+  // cell padding). The pinned numbers below are unaffected by that
+  // correction — they are measured values, and only their stated cause was
+  // wrong.
   expect(
     observations['tables-spanning-pages.md'].pageCount,
-    "tables-spanning-pages.md now DOES naturally split at this harness's current (post-Document-Typography, 1in-margin) page box — was 1 page before this branch's real @page rule, is 2 pages after. Table-continuation behavior (header repeat, struct-tree fragmentation counts) is still verified separately below via a synthetic table — this pinned-fixture check only confirms the split itself now occurs, not the handler's specific repair behavior"
+    "tables-spanning-pages.md now DOES naturally split at this harness's Letter/1in-margin page box — was 1 page before this branch's shared document typography, is 2 pages after (the page box itself is unchanged; see this test's comment above). Table-continuation behavior (header repeat, struct-tree fragmentation counts) is still verified separately below via a synthetic table — this pinned-fixture check only confirms the split itself now occurs, not the handler's specific repair behavior"
   ).toBe(2)
   expect(
     observations['headings-near-page-bottom.md'].pageCount,
@@ -184,7 +200,7 @@ test('Gate 6: render every break-quality fixture and capture per-page structure 
   ).toBe(1)
   expect(
     observations['mermaid-diagrams.md'].pageCount,
-    "mermaid-diagrams.md is the one fixture that DOES span multiple pages (see Task 8/Gate 3 and this gate's own keep-with-next test below) — still 6 pages after the Document Typography sub-project's real @page rule, unchanged from Task 10's KeepWithNextHandler baseline (was 5 before THAT; see phase0/gate3-mermaid.spec.ts's updated oversizedWrapperCount comment for why)"
+    "mermaid-diagrams.md is the one fixture that DOES span multiple pages (see Task 8/Gate 3 and this gate's own keep-with-next test below) — still 6 pages after the Document Typography sub-project's shared typography, unchanged from Task 10's KeepWithNextHandler baseline (was 5 before THAT; see phase0/gate3-mermaid.spec.ts's updated oversizedWrapperCount comment for why)"
   ).toBe(6)
 
   await close()
@@ -307,11 +323,13 @@ test('Gate 6: TableContinuationHandler repeats the header on a simple 2-page spl
   // Re-tuned from 60 to 35 rows by the Document Typography sub-project,
   // for the same reason and against the same measured boundaries as Gate
   // 4's identical fixture: the sandboxed render context's new real author
-  // CSS and explicit `@page` rule (8.5in x 11in, 1in margins) shrank the
-  // content box, so the old 60-row count now overflows to 3 pages instead
-  // of 2 (measured: 21 rows -> 1 page, 22-45 rows -> 2 pages, 46+ rows ->
-  // 3 pages). This count is geometry-sensitive: any future change to page
-  // size, margins, or document typography will likely require
+  // CSS grew per-row height (14px/1.7 body text replacing the UA's
+  // 16px/`normal`, plus 0.4em 0.6em cell padding), so the old 60-row count
+  // now overflows to 3 pages instead of 2 (measured: 21 rows -> 1 page,
+  // 22-45 rows -> 2 pages, 46+ rows -> 3 pages). The content box itself did
+  // NOT change — see this file's top comment for the corrected attribution.
+  // This count is geometry- and typography-sensitive: any future change to
+  // page size, margins, or document typography will likely require
   // re-measuring and re-tuning it again.
   const rows = Array.from(
     { length: 35 },
@@ -420,8 +438,9 @@ test('Gate 6: TableContinuationHandler on a 3+ page split only repeats the heade
   const { app, close } = await launchIsolatedApp(['.'])
 
   // 150 rows forces a real multi-page split (7 pages, measured, at this
-  // harness's current Letter/1in-margin default post-Document-Typography —
-  // was 5 pages before that sub-project's real author CSS/@page rule; the
+  // harness's Letter/1in-margin page box with the shared document
+  // typography applied — was 5 pages before that sub-project's real author
+  // CSS, which grew per-row height without changing the page box; the
   // exact count isn't pinned here, only asserted >= 4 below, since this
   // test only needs a genuine MIDDLE continuation page to exist) —
   // deliberately larger than Gate 4's 35-row/2-page fixture so this

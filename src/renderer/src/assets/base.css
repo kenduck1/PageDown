@@ -81,10 +81,6 @@
     font-size: var(--text-13);
   }
 
-  .milkdown-mount td > p {
-    margin: 0;
-  }
-
   /* Hides the native scrollbar while leaving real scroll behavior (wheel,
      trackpad, drag) fully intact -- used by EditorToolbar's horizontally
      scrollable region, which signals "more content" via its own edge-fade

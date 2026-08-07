@@ -624,13 +624,15 @@ export async function sendGate7Phase2(
 //
 // See resources/pagination-render/index.ts's block comment above its
 // 'gate4-header-footer-probe' handler for why this exists: this harness's
-// regular sendDocument() path always calls previewer.preview() with an
-// empty stylesheet array, so no corpus document ever gets real `@page`
-// running-header/footer/page-number content to inspect the tagging of.
-// This sends real `@page` CSS (containing @top-center/@bottom-center margin
-// box rules) alongside the body HTML so the render context actually
-// generates that content once, for phase0/gate4-export.spec.ts to export
-// and inspect.
+// regular sendDocument() path passes an `@page` rule that declares only
+// `size` and `margin` and no margin-box rules at all, so no corpus document
+// ever gets real running-header/footer/page-number content to inspect the
+// tagging of. (It used to pass an empty stylesheet array; that changed with
+// the Document Typography sub-project, but the consequence for THIS probe
+// did not — margin boxes still need `@top-center`/`@bottom-center` rules
+// nobody supplies.) This sends real `@page` CSS containing those margin-box
+// rules alongside the body HTML so the render context actually generates
+// that content once, for phase0/gate4-export.spec.ts to export and inspect.
 export interface Gate4ProbeResult {
   pageCount: number
 }
