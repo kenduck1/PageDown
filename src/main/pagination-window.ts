@@ -185,7 +185,7 @@ export function sniffImageContentType(buffer: Buffer): string | null {
 // real `Content-Security-Policy` response header as well covers the whole
 // navigation from the very first byte, the way CSP is normally deployed.
 const CSP_POLICY_TEMPLATE =
-  "default-src 'self'; style-src 'self' 'nonce-%%CSP_STYLE_NONCE%%'; script-src 'self'; img-src 'self' data:; connect-src 'none';"
+  "default-src 'self'; style-src 'self' 'nonce-%%CSP_STYLE_NONCE%%'; script-src 'self'; img-src 'self' data:; font-src data:; connect-src 'none';"
 
 let renderSession: Session | undefined
 let schemeHandlerRegistered = false
