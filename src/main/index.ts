@@ -380,9 +380,10 @@ app.whenReady().then(() => {
   // renderer's preview pane, there is no result the caller needs to await,
   // and routing a high-frequency resize tick through a round-trip Promise
   // would be pure overhead. Converts the reported CSS-pixel rectangle to
-  // WebContentsView.setBounds's own Rectangle units via toPhysicalBounds
-  // (Task 1), using mainWindow.webContents.getZoomFactor() as the scale
-  // factor.
+  // WebContentsView.setBounds's own Rectangle units via toViewBounds (Task 1,
+  // renamed from toPhysicalBounds in the final whole-branch review -- it was
+  // never converting to physical pixels at all, see that file's own comment),
+  // using mainWindow.webContents.getZoomFactor() as the scale factor.
   //
   // WHY getZoomFactor() ALONE, WITH NO devicePixelRatio MULTIPLY: this was
   // flagged going in as UNVERIFIED (the plan's own formula multiplied by
