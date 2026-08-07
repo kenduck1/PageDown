@@ -51,22 +51,13 @@ async function getMainWindow(app: ElectronApplication): Promise<Page> {
 }
 
 test('Gate 10: editor/paginator layout parity for the real mounted Milkdown canvas', async () => {
-  // This is a deliberately-failing gate, not a red test to explain away:
-  // the design doc's Testing section recommends "belongs in phase1/ if it's
-  // framed as completing Gate 3's finding" since phase0/ is meant to be a
-  // suite that fully passes end-to-end. Relocating the file this late was
-  // judged a real (if small) config-compatibility risk, so instead this
-  // uses Playwright's own mechanism for an intentionally-failing test:
-  // test.fail() flips the suite's own accounting -- the run reports GREEN
-  // as long as this test keeps failing, and loudly reports a NEW failure if
-  // the underlying finding is ever fixed (i.e. if this starts *passing*
-  // unexpectedly). See CLAUDE.md's "Milkdown/ProseMirror" section and
-  // docs/superpowers/plans/2026-08-04-overnight-decisions-log.md for the
-  // full root-cause writeup (two unrelated typographic systems: the
-  // sandboxed pagination context has zero author CSS, the Milkdown mount
-  // inherits the app shell's Tailwind Preflight reset).
-  test.fail()
-
+  // No longer a deliberately-failing gate as of the Document Typography
+  // sub-project (docs/superpowers/specs/2026-08-06-document-typography-
+  // design.md): both surfaces now share one real typography system
+  // (src/typography/), so this runs as a genuine regression gate at its
+  // original 1px tolerance. See that design doc and
+  // docs/superpowers/plans/2026-08-06-document-typography.md for the full
+  // history of why this was red-by-design for as long as it was.
   test.setTimeout(60_000)
 
   const { app, close } = await launchIsolatedApp(['out/main/index.js'])
