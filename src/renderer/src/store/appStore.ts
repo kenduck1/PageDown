@@ -1,7 +1,7 @@
 import { create } from 'zustand'
 
 type Screen = 'home' | 'editor' | 'settings'
-type ViewMode = 'format' | 'split' | 'source'
+export type ViewMode = 'format' | 'split' | 'source'
 type SidebarTab = 'pages' | 'outline' | 'history'
 type SplitLeftMode = 'source' | 'format'
 type HomeActiveSection = 'recent' | 'templates'

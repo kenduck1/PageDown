@@ -248,6 +248,29 @@ describe('EditorToolbar', () => {
     expect(useAppStore.getState().viewMode).toBe('format')
   })
 
+  it('calls the onSetViewMode prop instead of the store action directly, when provided', async () => {
+    const handle = createFakeEditorHandle()
+    const ref = { current: handle }
+    const onSetViewMode = vi.fn()
+    const user = userEvent.setup()
+    render(<EditorToolbar editorRef={ref} onSetViewMode={onSetViewMode} />)
+
+    // Exact string, not /split/i -- the toolbar also has a "Split cell"
+    // table-editing button whose accessible name matches that regex, making
+    // it ambiguous (getByRole throws on multiple matches). 'Split' exactly
+    // matches only the view-mode segmented-control button, same convention
+    // already used by the sibling 'view-mode segmented control' test below.
+    await user.click(screen.getByRole('button', { name: 'Split' }))
+
+    expect(onSetViewMode).toHaveBeenCalledWith('split')
+    // The prop path does NOT also call the store action directly -- the
+    // caller (EditorScreen) is responsible for calling setViewMode itself,
+    // after its own flush/remount coordination. Asserting this distinguishes
+    // "delegated to the prop" from "did both," which would silently double
+    // the mode change.
+    expect(useAppStore.getState().viewMode).toBe('format')
+  })
+
   it('The page-setup button calls useAppStore.openPageSetup', async () => {
     const ref = createRef<MilkdownEditorHandle>()
     const user = userEvent.setup()
