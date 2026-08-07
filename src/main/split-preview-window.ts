@@ -8,14 +8,14 @@ import {
   unregisterAssetRoot,
   type PaginationResult
 } from './pagination-window'
-import { toPhysicalBounds } from '../typography/split-preview-bounds'
+import { toViewBounds } from '../typography/split-preview-bounds'
 
 // Structurally identical to (but deliberately not imported from)
 // split-preview-bounds.ts's own private `CssRect` -- that interface isn't
 // exported there, and this task's brief scopes changes to ONE new file plus
 // a minimal export addition to pagination-window.ts, not a second edit to
 // Task 1's file for a type alias. TypeScript's structural typing means this
-// is interchangeable with toPhysicalBounds' own parameter type below.
+// is interchangeable with toViewBounds' own parameter type below.
 interface CssRect {
   x: number
   y: number
@@ -37,12 +37,14 @@ export interface SplitPreviewHarness {
   // of registerAssetRoot in this codebase.
   sendDocument(content: string, filePath: string | null): Promise<PaginationResult>
   // Converts `cssBounds` (the renderer's own getBoundingClientRect()-shaped
-  // rectangle for the right-hand preview pane) via toPhysicalBounds (Task 1)
-  // and applies it to the view. The caller supplies whatever scale factor
-  // it has determined is correct -- this module does not itself decide
-  // between devicePixelRatio, a zoom factor, or their product; see this
-  // file's own header comment and this sub-project's Task 2 report for what
-  // manual verification did and did not settle about that question.
+  // rectangle for the right-hand preview pane) via toViewBounds (Task 1,
+  // renamed from toPhysicalBounds in the final whole-branch review -- see
+  // that file's own comment: WebContentsView.setBounds() takes DIP, not
+  // physical pixels) and applies it to the view. The caller supplies
+  // whatever scale factor it has determined is correct -- see
+  // src/main/index.ts's `split-preview:setBounds` handler for the settled
+  // answer (mainWindow.webContents.getZoomFactor() alone, no
+  // devicePixelRatio multiply) and the empirical evidence behind it.
   setBounds(cssBounds: CssRect, scaleFactor: number): void
   // Tears the view down and detaches it from mainWindow.contentView. Safe
   // to call more than once -- the second call is a deliberate no-op, never
@@ -187,7 +189,7 @@ export async function createSplitPreviewHarness(
 
   function setBounds(cssBounds: CssRect, scaleFactor: number): void {
     if (destroyed) return
-    view.setBounds(toPhysicalBounds(cssBounds, scaleFactor))
+    view.setBounds(toViewBounds(cssBounds, scaleFactor))
   }
 
   function destroy(): void {
