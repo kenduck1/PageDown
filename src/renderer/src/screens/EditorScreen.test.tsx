@@ -1219,6 +1219,111 @@ describe('EditorScreen', () => {
       })
       expect(useDocumentStore.getState().content).toBe('# Edited In Split Source Pane')
     })
+
+    // Final whole-branch review finding, C1 (Critical, blocked merge): unlike
+    // the splitLeftMode toggle tests above, format<->split(format) goes
+    // through handleSetViewMode's own flush/remount coordination -- and the
+    // four-boolean model there originally classified this pair as NEITHER
+    // entering NOR leaving Format editing (both sides ARE Format editing), so
+    // neither flush() nor replaceContentForTab() fired for it. The JSX still
+    // unmounts/remounts MilkdownEditor across this transition regardless (the
+    // page-card lives at two different structural positions -- the
+    // single-pane branch vs Split's left-pane branch), so the freshly-mounted
+    // instance seeded itself from content captured one render tick BEFORE the
+    // outgoing instance's own unmount-triggered flush could update the store
+    // -- reverting the edit, and making it permanently lost the moment the
+    // user typed again. These two tests reproduce both directions with a
+    // real, unflushed Milkdown edit (same direct-DOM-mutation technique as
+    // the splitLeftMode toggle tests above) and would have failed against the
+    // pre-fix handleSetViewMode.
+    it('switching Format -> Split(format) does not lose an in-flight, unflushed Milkdown edit', async () => {
+      useDocumentStore.setState({ filePath: '/tmp/report.md', content: '# Report' })
+      useAppStore.setState({ viewMode: 'format', splitLeftMode: 'format' })
+      const user = userEvent.setup()
+      render(<EditorScreen />)
+
+      await waitFor(() => {
+        expect(document.querySelector('.milkdown-mount .ProseMirror')).toBeInTheDocument()
+      })
+
+      const h1 = document.querySelector('.ProseMirror h1')
+      if (!h1?.firstChild) throw new Error('expected a text node inside the mounted h1')
+      h1.firstChild.textContent = `${h1.firstChild.textContent} Q3`
+      const range = document.createRange()
+      range.selectNodeContents(h1)
+      range.collapse(false)
+      const selection = window.getSelection()
+      selection?.removeAllRanges()
+      selection?.addRange(range)
+
+      await new Promise((resolve) => setTimeout(resolve, 20))
+      expect(useDocumentStore.getState().content).toBe('# Report')
+
+      await user.click(screen.getByRole('button', { name: 'Split' }))
+
+      await waitFor(() => {
+        expect(useDocumentStore.getState().content).toContain('# Report Q3')
+      })
+      // The edit must be visible in the newly-mounted split-left instance
+      // too, not just in the store -- the store alone updating doesn't rule
+      // out the mount having already captured a stale prop before this
+      // assertion runs.
+      await waitFor(() => {
+        expect(document.querySelector('.ProseMirror h1')?.textContent).toContain('Report Q3')
+      })
+
+      // Proves the loss isn't merely deferred: a further edit must compose
+      // with the flushed one, not silently drop it the way the pre-fix
+      // report's own "STORE AFTER LATER EDIT" repro showed.
+      const h1Again = document.querySelector('.ProseMirror h1')
+      if (!h1Again?.firstChild) throw new Error('expected a text node inside the mounted h1')
+      h1Again.firstChild.textContent = `${h1Again.firstChild.textContent} FY26`
+      const range2 = document.createRange()
+      range2.selectNodeContents(h1Again)
+      range2.collapse(false)
+      const selection2 = window.getSelection()
+      selection2?.removeAllRanges()
+      selection2?.addRange(range2)
+      await waitFor(
+        () => {
+          expect(useDocumentStore.getState().content).toContain('Q3 FY26')
+        },
+        { timeout: 500 }
+      )
+    })
+
+    it('switching Split(format) -> Format does not lose an in-flight, unflushed Milkdown edit', async () => {
+      useDocumentStore.setState({ filePath: '/tmp/report.md', content: '# Report' })
+      useAppStore.setState({ viewMode: 'split', splitLeftMode: 'format' })
+      const user = userEvent.setup()
+      render(<EditorScreen />)
+
+      await waitFor(() => {
+        expect(document.querySelector('.milkdown-mount .ProseMirror')).toBeInTheDocument()
+      })
+
+      const h1 = document.querySelector('.ProseMirror h1')
+      if (!h1?.firstChild) throw new Error('expected a text node inside the mounted h1')
+      h1.firstChild.textContent = `${h1.firstChild.textContent} Q3`
+      const range = document.createRange()
+      range.selectNodeContents(h1)
+      range.collapse(false)
+      const selection = window.getSelection()
+      selection?.removeAllRanges()
+      selection?.addRange(range)
+
+      await new Promise((resolve) => setTimeout(resolve, 20))
+      expect(useDocumentStore.getState().content).toBe('# Report')
+
+      await user.click(screen.getByRole('button', { name: 'Format' }))
+
+      await waitFor(() => {
+        expect(useDocumentStore.getState().content).toContain('# Report Q3')
+      })
+      await waitFor(() => {
+        expect(document.querySelector('.ProseMirror h1')?.textContent).toContain('Report Q3')
+      })
+    })
   })
 
   describe('page-card blank-space click behavior (focusEnd)', () => {
