@@ -838,6 +838,104 @@ describe('EditorScreen', () => {
   // MilkdownEditor.test.tsx) -- these tests cover the REAL click-routing
   // decision at the EditorScreen level: which clicks get redirected there,
   // and, just as importantly, which don't.
+  describe('Source mode wiring', () => {
+    it('renders SourceEditor, not the Milkdown page-card, when viewMode is source', async () => {
+      useDocumentStore.setState({ filePath: '/tmp/report.md', content: '# Report\n\nBody text' })
+      useAppStore.setState({ viewMode: 'source' })
+      render(<EditorScreen />)
+
+      expect(screen.getByRole('textbox', { name: '' })).toHaveValue('# Report\n\nBody text')
+      expect(screen.queryByTestId('page-card')).not.toBeInTheDocument()
+    })
+
+    it('typing in Source mode updates documentStore content directly, no debounce wait needed', async () => {
+      useDocumentStore.setState({ filePath: '/tmp/report.md', content: 'start' })
+      useAppStore.setState({ viewMode: 'source' })
+      const user = userEvent.setup()
+      render(<EditorScreen />)
+
+      const textarea = screen.getByRole('textbox', { name: '' })
+      await user.clear(textarea)
+      await user.type(textarea, 'changed')
+
+      expect(useDocumentStore.getState().content).toBe('changed')
+    })
+
+    it('switching Format -> Source flushes the outgoing Milkdown editor before Source mode reads content', async () => {
+      useDocumentStore.setState({ filePath: '/tmp/report.md', content: '# Report' })
+      useAppStore.setState({ viewMode: 'format' })
+      const user = userEvent.setup()
+      render(<EditorScreen />)
+
+      await waitFor(() => {
+        expect(screen.getByTestId('document-content')).toHaveTextContent('Report')
+      })
+
+      // Put the store into the exact state flush() exists to recover from: a
+      // real ProseMirror edit the store has NOT seen yet, because the 200ms
+      // markdownUpdated debounce hasn't fired. Same direct-DOM-mutation
+      // technique as the 'Save picks up the editor current content' test
+      // above -- a genuine unsynced edit, not an attempt to win a timing
+      // race. If handleSetViewMode omitted the flush() call, Source mode
+      // would read documentStore.content as it stood BEFORE this edit, and
+      // the assertion below (checking for the just-typed text) would fail.
+      const h1 = document.querySelector('.ProseMirror h1')
+      if (!h1?.firstChild) throw new Error('expected a text node inside the mounted h1')
+      h1.firstChild.textContent = `${h1.firstChild.textContent} Q3`
+      const range = document.createRange()
+      range.selectNodeContents(h1)
+      range.collapse(false)
+      const selection = window.getSelection()
+      selection?.removeAllRanges()
+      selection?.addRange(range)
+
+      // One tick for ProseMirror's MutationObserver to register the edit
+      // into its own state, but nowhere near the 200ms onChange debounce --
+      // acting well within that window is the whole point of this test.
+      await new Promise((resolve) => setTimeout(resolve, 20))
+      expect(useDocumentStore.getState().content).toBe('# Report')
+
+      await user.click(screen.getByRole('button', { name: 'Source' }))
+
+      // The unflushed edit must have made it into the store, and Source
+      // mode's textarea must display it -- proving handleSetViewMode
+      // actually called flush() before switching, not just that Source mode
+      // renders without throwing. Asserts CONTAINS rather than an exact
+      // match: flush() re-serializes through Milkdown's real
+      // remark-stringify pipeline (PINNED_STRINGIFY_OPTIONS), which adds a
+      // trailing newline on the first real edit to a document (see
+      // CLAUDE.md's Milkdown section) -- '# Report Q3\n', not '# Report Q3'.
+      await waitFor(() => {
+        const textarea = screen.getByRole('textbox', { name: '' }) as HTMLTextAreaElement
+        expect(textarea.value).toContain('# Report Q3')
+      })
+      expect(useDocumentStore.getState().content).toContain('# Report Q3')
+    })
+
+    it('switching Source -> Format remounts Milkdown with the edited Source-mode content, not stale pre-edit content', async () => {
+      useDocumentStore.setState({ filePath: '/tmp/report.md', content: '# Original' })
+      useAppStore.setState({ viewMode: 'source' })
+      const user = userEvent.setup()
+      render(<EditorScreen />)
+
+      const textarea = screen.getByRole('textbox', { name: '' })
+      await user.clear(textarea)
+      await user.type(textarea, '# Edited In Source')
+
+      await user.click(screen.getByRole('button', { name: 'Format' }))
+
+      // This is the test that would have caught the clobbering bug the
+      // design doc warns about: if EditorScreen didn't force a revision
+      // bump on the way out of Source mode, MilkdownEditor would remain
+      // (or remount) showing the STALE pre-Source-mode content, silently
+      // discarding the edit just made above.
+      await waitFor(() => {
+        expect(screen.getByTestId('document-content')).toHaveTextContent('Edited In Source')
+      })
+      expect(useDocumentStore.getState().content).toBe('# Edited In Source')
+    })
+  })
+
   describe('page-card blank-space click behavior (focusEnd)', () => {
     it("clicking the page card's own blank space (not on real content) focuses the real ProseMirror editor", async () => {
       useDocumentStore.setState({ filePath: '/tmp/report.md', content: '# Report\n\nBody text' })

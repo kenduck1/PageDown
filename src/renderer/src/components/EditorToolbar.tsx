@@ -1,30 +1,35 @@
 import { useEffect, useRef, useState, type ReactElement, type RefObject } from 'react'
-import { useAppStore } from '../store/appStore'
+import { useAppStore, type ViewMode } from '../store/appStore'
 import { useDocumentStore } from '../store/documentStore'
 import type { MilkdownEditorHandle } from '../milkdown/MilkdownEditor'
 
 // The formatting toolbar described in docs/design-handoff/README.md's
-// "Editor — shared chrome" section, item 3. This component is deliberately
-// NOT mounted into EditorScreen.tsx yet -- see this sub-project's own task
-// brief and CLAUDE.md's Milkdown section for why ("Still explicitly NOT
-// built: ... formatting toolbar"). A future integration step wires
-// `editorRef` to the real mounted MilkdownEditor and renders this above the
-// canvas; for now it's built and tested against a fake ref standing in for
-// that real editor instance.
+// "Editor — shared chrome" section, item 3. Mounted into EditorScreen.tsx
+// (see that file's `<EditorToolbar editorRef={editorRef} ... />`) as of the
+// Source Mode sub-project, which also wired the view-mode segmented control
+// up to real mode-switching -- see this component's own `onSetViewMode` prop
+// below and EditorScreen.tsx's `handleSetViewMode`.
 //
-// KNOWN CLAUDE.md DEVIATION, left for that future integration step: this
-// component calls `window.api.exportPdf` and `useDocumentStore.setState`
-// directly (see handleExportPdf below) rather than through a documentStore
-// action, which CLAUDE.md's State Management section requires ("screen
-// components should call its actions, never window.api directly"). This
-// could not be fixed properly during this track's original build --
-// `documentStore.ts` was off-limits (owned by a concurrent track in a
-// separate worktree) -- and remains off-limits in this fix round for the
-// same reason. Whoever integrates this component into EditorScreen.tsx
+// KNOWN CLAUDE.md DEVIATION, still outstanding: this component calls
+// `window.api.exportPdf` and `useDocumentStore.setState` directly (see
+// handleExportPdf below) rather than through a documentStore action, which
+// CLAUDE.md's State Management section requires ("screen components should
+// call its actions, never window.api directly"). `documentStore.ts` is not
+// off-limits any longer (the concurrent track that once owned it finished
+// long ago) -- this simply hasn't been cleaned up yet. Whoever picks this up
 // should add a real `exportPdf` action to documentStore.ts and have this
 // component call that instead.
 export interface EditorToolbarProps {
   editorRef: RefObject<MilkdownEditorHandle | null>
+  // Optional: when provided, mode-switch clicks call this INSTEAD of the
+  // store's setViewMode action directly -- lets EditorScreen intercept the
+  // transition to flush Milkdown's pending edit before entering Source
+  // mode, or force a remount before leaving it (see EditorScreen's
+  // handleSetViewMode and docs/superpowers/specs/2026-08-07-source-mode-design.md).
+  // Falls back to calling the store action directly when omitted, so this
+  // component's existing standalone tests (rendered with only `editorRef`)
+  // keep passing unchanged.
+  onSetViewMode?: (mode: ViewMode) => void
 }
 
 // All icon paths below are adapted from docs/design-handoff/PageDown.dc.html's
@@ -122,7 +127,7 @@ function ToolbarIconButton({
   )
 }
 
-function EditorToolbar({ editorRef }: EditorToolbarProps): ReactElement {
+function EditorToolbar({ editorRef, onSetViewMode }: EditorToolbarProps): ReactElement {
   const viewMode = useAppStore((state) => state.viewMode)
   const setViewMode = useAppStore((state) => state.setViewMode)
   const openPageSetup = useAppStore((state) => state.openPageSetup)
@@ -666,7 +671,7 @@ function EditorToolbar({ editorRef }: EditorToolbarProps): ReactElement {
               key={mode}
               type="button"
               aria-pressed={viewMode === mode}
-              onClick={() => setViewMode(mode)}
+              onClick={() => (onSetViewMode ? onSetViewMode(mode) : setViewMode(mode))}
               className={`flex items-center gap-1.5 rounded-sm px-2.5 py-1 text-12-5 ${
                 viewMode === mode
                   ? 'bg-page text-text-primary shadow-flat'

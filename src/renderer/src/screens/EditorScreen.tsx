@@ -1,7 +1,8 @@
 import { useMemo, useRef, useState } from 'react'
-import { useAppStore } from '../store/appStore'
+import { useAppStore, type ViewMode } from '../store/appStore'
 import { useDocumentStore } from '../store/documentStore'
 import MilkdownEditor, { type MilkdownEditorHandle } from '../milkdown/MilkdownEditor'
+import SourceEditor from '../components/SourceEditor'
 import EditorTabBar from '../components/EditorTabBar'
 import EditorToolbar from '../components/EditorToolbar'
 import EditorSidebar from '../components/EditorSidebar'
@@ -22,6 +23,8 @@ function EditorScreen(): React.JSX.Element {
   const goHome = useAppStore((state) => state.goHome)
   const pageSetupOpen = useAppStore((state) => state.pageSetupOpen)
   const closePageSetup = useAppStore((state) => state.closePageSetup)
+  const viewMode = useAppStore((state) => state.viewMode)
+  const setViewMode = useAppStore((state) => state.setViewMode)
   const filePath = useDocumentStore((state) => state.filePath)
   const content = useDocumentStore((state) => state.content)
   const revision = useDocumentStore((state) => state.revision)
@@ -51,6 +54,52 @@ function EditorScreen(): React.JSX.Element {
     // it's always safe to call defensively here.
     editorRef.current?.flush()
     await save()
+  }
+
+  // EditorToolbar's mode-switcher calls this instead of appStore's setViewMode
+  // directly, so the two directions that need coordination with the live
+  // Milkdown editor instance actually get it -- see
+  // docs/superpowers/specs/2026-08-07-source-mode-design.md for why both
+  // are necessary, not just one:
+  //
+  // Format -> Source: MilkdownEditor's onChange is 200ms-debounced (see
+  // CLAUDE.md's Milkdown section). Without flush() first, Source mode could
+  // read documentStore.content before a very recent edit has synced through,
+  // showing stale text the instant you switch.
+  //
+  // Source -> anything else: MilkdownEditor is uncontrolled after mount
+  // (content only seeds defaultValueCtx once, at construction) and Source
+  // mode writes directly to documentStore.content through a path Milkdown's
+  // own instance never observes. replaceContentForTab's real job here is
+  // its revision bump (a plain updateContentForTab call would leave
+  // MilkdownEditor's key={revision} unchanged, so it would NOT remount, and
+  // would keep showing whatever it had in memory from before Source mode
+  // was entered) -- forcing EditorScreen's key={revision} to remount
+  // MilkdownEditor and re-seed defaultValueCtx from the now-current content,
+  // the same mechanism newDocument/loadDocument/Page-Setup-apply already
+  // rely on. The content argument is the CURRENT content (already fully
+  // synced by every Source-mode keystroke's own updateContentForTab call --
+  // see SourceEditor's own contract), so this is a same-value rewrite whose
+  // only real effect is the revision bump, not a second content write.
+  //
+  // Reads `viewMode`/`content` from the render closure rather than
+  // useAppStore.getState()/useDocumentStore.getState() -- unlike
+  // handleRestoreVersion's post-save guard (which has to survive a real
+  // async gap where a tab switch can happen mid-flight), this handler is
+  // synchronous end to end: flush()/replaceContentForTab/setViewMode all run
+  // in the same click handler with no `await` in between, so the values
+  // captured at render time cannot go stale before they're used. Source
+  // mode's controlled textarea also keeps `content` synchronous with the
+  // store on every keystroke, so there's no debounce window like the one
+  // that motivates the getState() reads elsewhere in this file.
+  const handleSetViewMode = (mode: ViewMode): void => {
+    if (viewMode === 'format' && mode === 'source') {
+      editorRef.current?.flush()
+    }
+    if (viewMode === 'source' && mode !== 'source') {
+      replaceContentForTab(activeTabId, content)
+    }
+    setViewMode(mode)
   }
 
   const handleGoHome = async (): Promise<void> => {
@@ -384,7 +433,7 @@ function EditorScreen(): React.JSX.Element {
         </div>
       )}
       <EditorTabBar onCloseDirtyActiveTab={handleCloseDirtyActiveTab} />
-      <EditorToolbar editorRef={editorRef} />
+      <EditorToolbar editorRef={editorRef} onSetViewMode={handleSetViewMode} />
       <div className="flex flex-1 overflow-hidden">
         <EditorSidebar
           content={content}
@@ -400,7 +449,14 @@ function EditorScreen(): React.JSX.Element {
           className="flex-1 overflow-auto"
           style={{ transform: `scale(${zoom})`, transformOrigin: 'top center' }}
         >
-          {/* The "page" card -- per the design handoff (PageDown.dc.html,
+          {viewMode === 'source' ? (
+            <SourceEditor
+              content={content}
+              onChange={(value) => updateContentForTab(activeTabId, value)}
+            />
+          ) : (
+            <>
+              {/* The "page" card -- per the design handoff (PageDown.dc.html,
               Format-mode mock): a white sheet with a real drop shadow,
               floating on the canvas-gray scroll area, not a flat borderless
               region flush with the background. Was entirely missing before
@@ -467,30 +523,32 @@ function EditorScreen(): React.JSX.Element {
               new content wherever you happened to click, which is what a
               physically-enlarged editable region would do. handlePageCardClick
               above implements the actual correct behavior instead. */}
-          <div
-            data-testid="page-card"
-            className="mx-auto my-8 w-[816px] shrink-0 rounded-sm bg-page pb-[34px] pl-24 pr-24 pt-[22px] shadow-page"
-            onMouseDown={handlePageCardMouseDown}
-            onClick={handlePageCardClick}
-          >
-            <MilkdownEditor
-              ref={editorRef}
-              key={revision}
-              content={content}
-              // Bound to THIS render's activeTabId, not the bare
-              // updateContent store action -- see documentStore.ts's
-              // updateContentForTab doc comment for the tab-switch race
-              // this closes: any change to activeTabId always bumps
-              // revision (remounting this component with a fresh key), so
-              // the activeTabId captured here is guaranteed correct for
-              // this specific MilkdownEditor instance's entire lifetime,
-              // even after a late flush() fires (e.g. on unmount, when the
-              // user has switched tabs) well after the store's own
-              // activeTabId has moved on.
-              onChange={(markdown) => updateContentForTab(activeTabId, markdown)}
-              onError={(message) => useDocumentStore.setState({ error: message })}
-            />
-          </div>
+              <div
+                data-testid="page-card"
+                className="mx-auto my-8 w-[816px] shrink-0 rounded-sm bg-page pb-[34px] pl-24 pr-24 pt-[22px] shadow-page"
+                onMouseDown={handlePageCardMouseDown}
+                onClick={handlePageCardClick}
+              >
+                <MilkdownEditor
+                  ref={editorRef}
+                  key={revision}
+                  content={content}
+                  // Bound to THIS render's activeTabId, not the bare
+                  // updateContent store action -- see documentStore.ts's
+                  // updateContentForTab doc comment for the tab-switch race
+                  // this closes: any change to activeTabId always bumps
+                  // revision (remounting this component with a fresh key), so
+                  // the activeTabId captured here is guaranteed correct for
+                  // this specific MilkdownEditor instance's entire lifetime,
+                  // even after a late flush() fires (e.g. on unmount, when the
+                  // user has switched tabs) well after the store's own
+                  // activeTabId has moved on.
+                  onChange={(markdown) => updateContentForTab(activeTabId, markdown)}
+                  onError={(message) => useDocumentStore.setState({ error: message })}
+                />
+              </div>
+            </>
+          )}
         </div>
       </div>
       <EditorStatusBar
