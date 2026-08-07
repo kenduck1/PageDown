@@ -127,7 +127,8 @@ const MilkdownEditor = forwardRef<MilkdownEditorHandle, MilkdownEditorProps>(
       insertTable: () => commandsRef.current?.insertTable(),
       insertPageBreak: () => commandsRef.current?.insertPageBreak(),
       undo: () => commandsRef.current?.undo(),
-      redo: () => commandsRef.current?.redo()
+      redo: () => commandsRef.current?.redo(),
+      focusEnd: () => commandsRef.current?.focusEnd()
     }))
 
     useEffect(() => {

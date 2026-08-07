@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { act, cleanup, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import EditorScreen from './EditorScreen'
 import { useAppStore, initialAppState } from '../store/appStore'
@@ -825,6 +825,123 @@ describe('EditorScreen', () => {
       const finalTabB = useDocumentStore.getState().tabs.find((tab) => tab.id === tabB.id)
       expect(finalTabB?.content).toBe('# B clean')
       expect(finalTabB?.isDirty).toBe(false)
+    })
+  })
+
+  // Clicking the page card's own blank space (real padding around the
+  // editor, added so the page looks like a real sheet of paper -- see this
+  // div's own comment in EditorScreen.tsx) used to do nothing at all: no
+  // cursor, no way to start typing there, even though it visually looks
+  // like part of the editable page. handlePageCardClick fixes this by
+  // moving the cursor to the end of the document (MilkdownEditorHandle.
+  // focusEnd(), covered directly against a raw Editor in
+  // MilkdownEditor.test.tsx) -- these tests cover the REAL click-routing
+  // decision at the EditorScreen level: which clicks get redirected there,
+  // and, just as importantly, which don't.
+  describe('page-card blank-space click behavior (focusEnd)', () => {
+    it("clicking the page card's own blank space (not on real content) focuses the real ProseMirror editor", async () => {
+      useDocumentStore.setState({ filePath: '/tmp/report.md', content: '# Report\n\nBody text' })
+      const user = userEvent.setup()
+      render(<EditorScreen />)
+
+      const proseMirror = await waitFor(() => {
+        const el = document.querySelector('.ProseMirror')
+        if (!el) throw new Error('not mounted yet')
+        return el as HTMLElement
+      })
+      expect(document.activeElement).not.toBe(proseMirror)
+
+      // jsdom has no real layout engine, so there's no pixel coordinate to
+      // click "below the last line" at -- clicking the page-card div
+      // itself (data-testid="page-card", added for this test) directly,
+      // rather than any of its content descendants, is the DOM-structural
+      // equivalent: its own onClick target is guaranteed to be the div
+      // itself, which is definitely not inside .ProseMirror, the same as a
+      // real click landing in its unoccupied padding would be.
+      const pageCard = screen.getByTestId('page-card')
+      await user.click(pageCard)
+
+      expect(document.activeElement).toBe(proseMirror)
+    })
+
+    it('clicking on real text inside .ProseMirror does not redirect focus -- focusEnd is not what positions a normal in-content click', async () => {
+      useDocumentStore.setState({ filePath: '/tmp/report.md', content: '# Report\n\nBody text' })
+      render(<EditorScreen />)
+
+      await waitFor(() => {
+        expect(screen.getByTestId('document-content')).toHaveTextContent('Report')
+      })
+      const proseMirror = document.querySelector('.ProseMirror') as HTMLElement
+      expect(document.activeElement).not.toBe(proseMirror)
+
+      // fireEvent.click (a bare click, no preceding mousedown) rather than
+      // userEvent.click here on purpose: ProseMirror's own real mousedown
+      // handler unconditionally calls view.posAtCoords for cursor
+      // placement, which throws in jsdom (document.elementFromPoint is not
+      // implemented -- confirmed directly; the exact same gap
+      // MilkdownEditor.test.tsx's own comments already document for
+      // userEvent.type's click step). A bare click event alone doesn't
+      // reach that handler (prosemirror-view registers no separate click
+      // handler of its own), so this reaches handlePageCardClick's real
+      // .closest('.ProseMirror') guard -- the thing under test -- without
+      // depending on machinery jsdom cannot run.
+      const heading = document.querySelector('.ProseMirror h1') as HTMLElement
+      fireEvent.click(heading)
+
+      // If the .closest('.ProseMirror') guard ever regressed (called
+      // focusEnd() unconditionally), this WOULD become proseMirror -- see
+      // the sibling "blank space" test above, which proves focusEnd()
+      // genuinely does that when it's actually supposed to.
+      expect(document.activeElement).not.toBe(proseMirror)
+    })
+
+    it('a drag-selection that starts on real text and releases in the blank page-card space does not clobber it (mousedown-origin tracking)', async () => {
+      // Review-round finding (verified against the real UI Events spec and
+      // real Chromium bug reports, not assumed): when a mousedown and the
+      // following mouseup land on DIFFERENT elements -- exactly what a
+      // click-drag text selection does when it starts on real text and
+      // the mouse is released in the page card's own blank padding --
+      // Chromium fires the resulting `click` event on their nearest common
+      // ancestor, not on either original element. Here, that's the page
+      // card div itself (an ancestor of the heading), which fails
+      // handlePageCardClick's `.closest('.ProseMirror')` check even though
+      // the user's whole gesture was a normal in-content selection --
+      // without mousedown-origin tracking, focusEnd() would silently
+      // collapse/discard the selection they just made.
+      useDocumentStore.setState({ filePath: '/tmp/report.md', content: '# Report\n\nBody text' })
+      render(<EditorScreen />)
+
+      await waitFor(() => {
+        expect(screen.getByTestId('document-content')).toHaveTextContent('Report')
+      })
+      const proseMirror = document.querySelector('.ProseMirror') as HTMLElement
+      const pageCard = screen.getByTestId('page-card')
+      const heading = document.querySelector('.ProseMirror h1') as HTMLElement
+      expect(document.activeElement).not.toBe(proseMirror)
+
+      // jsdom cannot execute a real mousedown on an element inside
+      // .ProseMirror at all (see the sibling test above's own comment), so
+      // the mousedown is dispatched from the page card -- a safe ancestor
+      // that never reaches .ProseMirror's own listener, since bubbling
+      // only travels upward from the dispatch point -- with its `target`
+      // property overridden to the heading. This simulates exactly what a
+      // `target`-reading handler observes for a real cross-element
+      // mousedown, without depending on ProseMirror's real (and here,
+      // unavailable) handling to produce it.
+      const mouseDownEvent = new MouseEvent('mousedown', { bubbles: true, cancelable: true })
+      Object.defineProperty(mouseDownEvent, 'target', { value: heading, configurable: true })
+      fireEvent(pageCard, mouseDownEvent)
+
+      // The click itself genuinely lands on the common ancestor (the page
+      // card div) -- a real, direct fireEvent.click, no override needed.
+      fireEvent.click(pageCard)
+
+      // Must NOT have redirected focus: the gesture's origin was real
+      // content, so whatever selection ProseMirror's own drag-selection
+      // handling would have produced must be left alone. Contrast with the
+      // first test in this block, where BOTH mousedown and click target
+      // the page card -- that case DOES focus.
+      expect(document.activeElement).not.toBe(proseMirror)
     })
   })
 })

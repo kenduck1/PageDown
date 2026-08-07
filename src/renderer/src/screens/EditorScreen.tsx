@@ -194,6 +194,67 @@ function EditorScreen(): React.JSX.Element {
     headingEls?.[index]?.scrollIntoView({ behavior: 'smooth', block: 'start' })
   }
 
+  // The page card (below) has real padding/blank space beyond the last
+  // line of actual content, matching a real sheet of paper -- but unlike a
+  // physically-enlarged editable region (an earlier, wrong-goal version of
+  // this fix), that blank space isn't itself editable content. This
+  // mirrors real editors (Word, Google Docs): clicking below your last
+  // line moves the cursor to the nearest REAL position -- the end of the
+  // document -- rather than either doing nothing (the bug this fixes) or
+  // silently creating new content wherever you clicked (what an enlarged
+  // editable region would do).
+  //
+  // Only acts when the click didn't already land inside the real
+  // ProseMirror content -- `.closest('.ProseMirror')` is how every other
+  // click (on actual text, actually placing the cursor exactly where
+  // clicked) is left alone; this only ever handles the "clicked blank
+  // page" case.
+  //
+  // Delegates to MilkdownEditorHandle.focusEnd() (editor-commands.ts) --
+  // two DOM-only approaches were tried first and reverted, both verified
+  // NOT to work empirically (document.activeElement stayed <body> either
+  // way, checked directly, not assumed): manually setting the native
+  // Selection/Range then calling element.focus(), and dispatching
+  // synthetic mousedown/mouseup MouseEvents at a computed coordinate.
+  // ProseMirror's EditorView owns its own selection state independently of
+  // the native DOM Selection and only reacts to a real dispatched
+  // transaction or a genuine, OS-trusted input event -- neither of which a
+  // JS-constructed MouseEvent/Range is, however plausible either looked.
+  //
+  // Review-round finding: `.closest('.ProseMirror')` on the CLICK event's
+  // own target is not, by itself, a reliable "did the user actually click
+  // real content" check. Per the UI Events spec (confirmed against MDN and
+  // real Chromium bug reports, not assumed) -- and this app is a Chromium
+  // Electron app, so this applies directly -- when a mousedown and the
+  // following mouseup land on two DIFFERENT elements (a click-drag text
+  // selection, e.g. selecting the last paragraph and releasing slightly
+  // past it), the browser fires `click` on the nearest common ancestor of
+  // the two, not on either original element. Selecting real text that
+  // starts inside `.ProseMirror` and ends (mouse released) in the page
+  // card's own blank padding is exactly this case: the resulting click's
+  // `target` is the page card div itself (an ancestor of both), which
+  // fails the `.closest('.ProseMirror')` check even though the user's
+  // whole gesture was a normal in-content selection -- and calling
+  // focusEnd() would silently collapse/discard the selection they just
+  // made. mouseDownInsideProseMirrorRef, set on this same div's onMouseDown
+  // below, tracks where the GESTURE actually started; focusEnd() only
+  // fires when both the click's own target AND its originating mousedown
+  // were outside real content, so a drag that starts on real text is left
+  // alone no matter where the mouse is released.
+  const mouseDownInsideProseMirrorRef = useRef(false)
+
+  const handlePageCardMouseDown = (event: React.MouseEvent<HTMLDivElement>): void => {
+    const target = event.target as HTMLElement
+    mouseDownInsideProseMirrorRef.current = target.closest('.ProseMirror') != null
+  }
+
+  const handlePageCardClick = (event: React.MouseEvent<HTMLDivElement>): void => {
+    const target = event.target as HTMLElement
+    if (target.closest('.ProseMirror')) return
+    if (mouseDownInsideProseMirrorRef.current) return
+    editorRef.current?.focusEnd()
+  }
+
   // Page Setup itself only edits an in-memory PageConfig draft (see its own
   // module comment) -- reading/writing it into the document's real YAML
   // frontmatter is this integration's job. extractPageConfig/applyPageConfig
@@ -349,12 +410,27 @@ function EditorScreen(): React.JSX.Element {
               Values match the mock's own numbers (640px, 22px/64px/34px
               padding) using tokens that already existed in base.css for
               exactly this purpose (--shadow-page, --color-page) but were
-              never applied here. A plain block child of an overflow-auto
-              scroll container sizes to its own content by default (nothing
-              here forces it to stretch), so this naturally grows/shrinks
-              with the document like a real page, rather than always
-              filling the scroll container's height. */}
-          <div className="mx-auto my-8 max-w-[640px] rounded-sm bg-page pb-[34px] pl-16 pr-16 pt-[22px] shadow-page">
+              never applied here.
+
+              Deliberately natural-height (grows/shrinks with the document,
+              not stretched to fill the canvas) -- an earlier version of
+              this fix tried to make the WHOLE card's blank space part of
+              the clickable editable region (via a min-height/flexbox
+              chain forcing ProseMirror's own DOM to physically fill the
+              card), which was the wrong goal entirely, not just hard to
+              get right: a real editor's text only exists where you've
+              actually typed content or pressed Enter, so clicking below
+              the last real line should move the cursor to the nearest
+              real position (the end of the document), not silently start
+              new content wherever you happened to click, which is what a
+              physically-enlarged editable region would do. handlePageCardClick
+              above implements the actual correct behavior instead. */}
+          <div
+            data-testid="page-card"
+            className="mx-auto my-8 max-w-[640px] rounded-sm bg-page pb-[34px] pl-16 pr-16 pt-[22px] shadow-page"
+            onMouseDown={handlePageCardMouseDown}
+            onClick={handlePageCardClick}
+          >
             <MilkdownEditor
               ref={editorRef}
               key={revision}

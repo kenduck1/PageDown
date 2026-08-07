@@ -12,7 +12,7 @@ import { commonmark } from '@milkdown/preset-commonmark'
 import { gfm } from '@milkdown/preset-gfm'
 import { listener, listenerCtx } from '@milkdown/plugin-listener'
 import { getMarkdown, insert } from '@milkdown/utils'
-import { TextSelection } from '@milkdown/prose/state'
+import { NodeSelection, Selection, TextSelection } from '@milkdown/prose/state'
 import { PINNED_STRINGIFY_OPTIONS } from './stringify-options'
 import { EDITOR_SCHEMA_PLUGINS } from './plugins'
 import { EDITOR_COMMAND_PLUGINS } from './commands'
@@ -196,6 +196,121 @@ describe('MilkdownEditorHandle commands needing a real ranged selection — wire
     expect(root.querySelector('div[data-type="pagebreak"]')).toBeInTheDocument()
     expect(root.textContent).toContain('Hello')
     expect(root.textContent).toContain('World')
+  })
+
+  it('focusEnd() moves the selection to the true end of a multi-paragraph document from a selection in the middle', async () => {
+    const editor = await createTestEditor(
+      'First paragraph\n\nSecond paragraph\n\nThird paragraph',
+      PLUGINS
+    )
+    currentEditor = editor
+    const commands = buildEditorCommands(editor)
+
+    // Move the selection somewhere in the MIDDLE of the document first --
+    // computed as roughly the doc's own midpoint rather than a hand-counted
+    // magic number, so this stays correct even if the fixture content
+    // above changes, and snapped to the nearest *valid* selection via
+    // Selection.near (a raw offset can land exactly on a node boundary,
+    // which is not always a legal TextSelection position on its own). The
+    // assertion below must show the selection genuinely MOVED away from
+    // this captured position as a result of focusEnd() -- not merely
+    // "still wherever it started," which would trivially pass if the
+    // document's default mount selection already happened to be at the end.
+    const rawMidpoint = editor.action((ctx) =>
+      Math.floor(ctx.get(editorViewCtx).state.doc.content.size / 2)
+    )
+    editor.action((ctx) => {
+      const view = ctx.get(editorViewCtx)
+      const nearMiddle = Selection.near(view.state.doc.resolve(rawMidpoint))
+      view.dispatch(view.state.tr.setSelection(nearMiddle))
+    })
+    const middlePos = editor.action((ctx) => ctx.get(editorViewCtx).state.selection.from)
+
+    commands.focusEnd()
+
+    // The canonical definition of "the end" is Selection.atEnd(doc) itself
+    // (what the implementation under test calls) -- comparing against
+    // doc.content.size directly is NOT the same thing and is a wrong proxy
+    // here: content.size is the position immediately after the last
+    // paragraph's own closing token, one past the last valid position
+    // INSIDE that paragraph's text, which is where a real text cursor
+    // actually belongs (verified empirically: asserting equality with
+    // content.size fails by exactly one for this fixture). Comparing
+    // against a fresh, independent Selection.atEnd(doc) call is the
+    // correct, principled way to assert "genuinely at the real end,"
+    // without hardcoding that offset relationship into the test.
+    const doc = editor.action((ctx) => ctx.get(editorViewCtx).state.doc)
+    const canonicalEnd = Selection.atEnd(doc)
+    const selectionAfterFocusEnd = editor.action((ctx) => ctx.get(editorViewCtx).state.selection)
+    expect(selectionAfterFocusEnd).toBeInstanceOf(TextSelection)
+    expect(selectionAfterFocusEnd.from).toBe(canonicalEnd.from)
+    expect(selectionAfterFocusEnd.to).toBe(canonicalEnd.to)
+    expect(selectionAfterFocusEnd.from).not.toBe(middlePos)
+  })
+
+  it('focusEnd() does not NodeSelect a trailing pagebreak with nothing after it -- typing appends instead of replacing it', async () => {
+    // Review-round finding (verified empirically, not theorized):
+    // Selection.atEnd(doc) resolves to a NodeSelection, not a collapsed
+    // text cursor, when the document's LAST top-level block is a
+    // selectable atom with nothing after it -- and this schema's pagebreak
+    // node qualifies. doc's own content expression is "block+" (see
+    // @milkdown/preset-commonmark's docSchema), so a document that's real
+    // content ending in a bare pagebreak marker with nothing after it is
+    // genuinely reachable, not a contrived case. Before this fix, calling
+    // focusEnd() on this document and then typing a single character
+    // REPLACED (deleted) the pagebreak node -- ProseMirror's default
+    // typing/insertText behavior over a NodeSelection replaces the
+    // selected node. This test reproduces that exact scenario and asserts
+    // it no longer happens.
+    const editor = await createTestEditor('Some text\n\n<!-- pagebreak -->', PLUGINS)
+    currentEditor = editor
+    const root = document.querySelector('.ProseMirror') as HTMLElement
+    const commands = buildEditorCommands(editor)
+
+    commands.focusEnd()
+
+    const selectionAfterFocusEnd = editor.action((ctx) => ctx.get(editorViewCtx).state.selection)
+    expect(selectionAfterFocusEnd).not.toBeInstanceOf(NodeSelection)
+    expect(selectionAfterFocusEnd).toBeInstanceOf(TextSelection)
+    expect(root.querySelector('div[data-type="pagebreak"]')).toBeInTheDocument()
+
+    // Simulate typing a character at the resulting cursor position via a
+    // real insertText transaction -- the same mechanism a real keypress
+    // produces, and the exact operation that destroyed the pagebreak node
+    // before this fix when the selection was left as a NodeSelection.
+    editor.action((ctx) => {
+      const view = ctx.get(editorViewCtx)
+      view.dispatch(view.state.tr.insertText('X'))
+    })
+
+    expect(root.querySelector('div[data-type="pagebreak"]')).toBeInTheDocument()
+    expect(root.textContent).toContain('X')
+  })
+
+  it('focusEnd() does not NodeSelect a frontmatter-only document -- typing appends a real paragraph instead of destroying the frontmatter', async () => {
+    // Same underlying gap as the pagebreak case above, for this schema's
+    // OTHER trailing-eligible atom: a document whose entire content is a
+    // YAML frontmatter block (e.g. Page Setup applied to a still-empty
+    // document) parses to doc(frontmatter) with nothing else -- verified
+    // empirically against this exact input, not assumed.
+    const editor = await createTestEditor('---\ntitle: hi\n---', PLUGINS)
+    currentEditor = editor
+    const root = document.querySelector('.ProseMirror') as HTMLElement
+    const commands = buildEditorCommands(editor)
+
+    commands.focusEnd()
+
+    const selectionAfterFocusEnd = editor.action((ctx) => ctx.get(editorViewCtx).state.selection)
+    expect(selectionAfterFocusEnd).not.toBeInstanceOf(NodeSelection)
+    expect(root.querySelector('div[data-type="frontmatter"]')).toBeInTheDocument()
+
+    editor.action((ctx) => {
+      const view = ctx.get(editorViewCtx)
+      view.dispatch(view.state.tr.insertText('X'))
+    })
+
+    expect(root.querySelector('div[data-type="frontmatter"]')).toBeInTheDocument()
+    expect(root.textContent).toContain('X')
   })
 })
 
@@ -752,5 +867,53 @@ describe('MilkdownEditor', () => {
 
     ref.current?.redo()
     await waitFor(() => expect(container.querySelector('h1')?.textContent).toBe('Hello World'))
+  })
+
+  // Fix-round: closes the same useImperativeHandle delegation gap the
+  // toggleBold/toggleItalic/insertLink tests above close (see that block's
+  // own comment) for focusEnd specifically -- mutation-testing
+  // `focusEnd: () => commandsRef.current?.focusEnd()` (e.g. rewiring it to
+  // call some other command instead) would pass every OTHER test in this
+  // file, since the raw-Editor "wired-implementation verification" block's
+  // own focusEnd tests call buildEditorCommands(editor) directly and never
+  // exercise this component's real ref delegation line at all.
+  //
+  // No DOM Range/mid-document selection is needed here (jsdom's own
+  // Selection/Range API does not sync into ProseMirror's state.selection,
+  // as the rest of this file's own comments establish): a multi-paragraph
+  // document's default mount selection already resolves near the START of
+  // the document (ProseMirror's own Selection.atStart(doc) default -- the
+  // same default the block-level command tests above rely on), which is
+  // already discriminating against "the end."
+  //
+  // document.activeElement genuinely becoming the ProseMirror root is the
+  // real, user-facing bug this whole fix exists for -- independently
+  // verified against the real built app via a throwaway Playwright script
+  // (document.activeElement.className showed "ProseMirror editor
+  // ProseMirror-focused" after a real click on blank page-card space), and
+  // jsdom implements enough of focus()/activeElement for a contenteditable
+  // element that the same assertion holds here too.
+  it('focusEnd() (via ref) focuses the real mounted ProseMirror element', async () => {
+    const onChange = vi.fn()
+    const onError = vi.fn()
+    const ref = createRef<MilkdownEditorHandle>()
+    const { container } = render(
+      <MilkdownEditor
+        ref={ref}
+        content={'First paragraph\n\nSecond paragraph\n\nThird paragraph'}
+        onChange={onChange}
+        onError={onError}
+      />
+    )
+    const proseMirror = await waitFor(() => {
+      const el = container.querySelector('.ProseMirror')
+      if (!el) throw new Error('not mounted yet')
+      return el as HTMLElement
+    })
+    expect(document.activeElement).not.toBe(proseMirror)
+
+    ref.current?.focusEnd()
+
+    expect(document.activeElement).toBe(proseMirror)
   })
 })
