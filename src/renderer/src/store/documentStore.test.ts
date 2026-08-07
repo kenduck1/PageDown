@@ -228,10 +228,21 @@ describe('useDocumentStore', () => {
     seedTab(tabId, '# Report', false)
     const before = useDocumentStore.getState().revision
     useDocumentStore.getState().replaceContentForTab(tabId, '# Report')
-    expect(useDocumentStore.getState()).toMatchObject({
+    const state = useDocumentStore.getState()
+    expect(state).toMatchObject({
       content: '# Report',
       isDirty: false,
       revision: before + 1
+    })
+    // The per-tab half of the guard, not just the top-level mirror --
+    // switchTab restores isDirty from this entry, so a regression here
+    // (the map branch losing the guard while the mirror keeps it) would
+    // resurrect the false-dirty state the instant the user switches away
+    // from and back to this tab, even though the mirror-only assertion
+    // above stays green throughout.
+    expect(state.tabs.find((tab) => tab.id === tabId)).toMatchObject({
+      content: '# Report',
+      isDirty: false
     })
   })
 
