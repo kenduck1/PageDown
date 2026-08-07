@@ -2,6 +2,7 @@ import { WebContentsView, BaseWindow, session, type Session } from 'electron'
 import { randomUUID, randomBytes } from 'node:crypto'
 import path from 'node:path'
 import { readFile, realpath, stat } from 'node:fs/promises'
+import { PAGE_WIDTH_PX, PAGE_HEIGHT_PX } from '../typography/page-geometry'
 
 // __dirname here resolves at runtime to the directory of the bundled main
 // process output (out/main/), regardless of this file's pre-bundle source
@@ -464,7 +465,7 @@ export async function createPaginationHarness(win: BaseWindow): Promise<Paginati
   // project's Phase 0 spike wiring in src/main/index.ts) are responsible
   // for repositioning it after creation — this default is just "big enough
   // to lay out a page," not "hidden."
-  view.setBounds({ x: 0, y: 0, width: 816, height: 1056 })
+  view.setBounds({ x: 0, y: 0, width: PAGE_WIDTH_PX, height: PAGE_HEIGHT_PX })
   await view.webContents.loadURL(`${RENDER_SCHEME}://${RENDER_HOST}/index.html`)
 
   async function sendDocument(

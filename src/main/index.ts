@@ -30,6 +30,7 @@ import {
   readSnapshotContent,
   clearPendingAutosaveForFile
 } from './version-history'
+import { PAGE_WIDTH_PX, PAGE_HEIGHT_PX } from '../typography/page-geometry'
 
 // Must run before app.whenReady() is awaited anywhere — Electron requires
 // protocol.registerSchemesAsPrivileged() to be called before the `ready`
@@ -415,7 +416,7 @@ app.whenReady().then(() => {
   // Real integration into app UI is out of scope for Task 3.
   createPaginationHarness(mainWindow)
     .then((harness) => {
-      harness.view.setBounds({ x: -9999, y: -9999, width: 816, height: 1056 })
+      harness.view.setBounds({ x: -9999, y: -9999, width: PAGE_WIDTH_PX, height: PAGE_HEIGHT_PX })
       console.log('[phase0] pagination render harness ready:', harness.view.webContents.getURL())
     })
     .catch((err) => {
