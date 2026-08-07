@@ -1110,6 +1110,115 @@ describe('EditorScreen', () => {
       })
       expect(useDocumentStore.getState().content).toBe('# Edited In Split Source')
     })
+
+    // Fix round 1 (post-Task-5 review, Important 1): the reverse direction
+    // of the ONE format<->source pair the initial Task 5 pass left
+    // untested -- plain Source entered from Split(format), i.e. leaving
+    // Source-editing and entering Format-editing. Mirrors the pre-existing
+    // 'switching Source -> Format...' test's spy technique exactly, just
+    // landing on Split(format) instead of plain Format as the destination.
+    it('switching Source -> Split(format) remounts Milkdown with the edited Source-mode content, not stale pre-edit content', async () => {
+      useDocumentStore.setState({ filePath: '/tmp/report.md', content: '# Original' })
+      useAppStore.setState({ viewMode: 'source', splitLeftMode: 'format' })
+
+      const realReplaceContentForTab = useDocumentStore.getState().replaceContentForTab
+      const replaceContentForTabSpy = vi.fn(realReplaceContentForTab)
+      useDocumentStore.setState({ replaceContentForTab: replaceContentForTabSpy })
+      const activeTabId = useDocumentStore.getState().activeTabId
+
+      const user = userEvent.setup()
+      render(<EditorScreen />)
+
+      const textarea = screen.getByRole('textbox', { name: 'Markdown source' })
+      await user.clear(textarea)
+      await user.type(textarea, '# Edited Before Split')
+
+      await user.click(screen.getByRole('button', { name: 'Split' }))
+
+      expect(replaceContentForTabSpy).toHaveBeenCalledWith(activeTabId, '# Edited Before Split')
+
+      await waitFor(() => {
+        expect(screen.getByTestId('document-content')).toHaveTextContent('Edited Before Split')
+      })
+      expect(useDocumentStore.getState().content).toBe('# Edited Before Split')
+    })
+
+    // Fix round 1 (post-Task-5 review, Important 2): the splitLeftMode
+    // toggle (EditorToolbar.tsx) deliberately bypasses handleSetViewMode
+    // entirely -- it calls appStore's setSplitLeftMode directly, with no
+    // flush()/replaceContentForTab coordination of its own. The task-5
+    // report argued this is safe because Split's own left-pane ternary
+    // (splitLeftMode === 'source' ? SourceEditor : the page-card) is a real
+    // element-type swap: MilkdownEditor's own unmount cleanup flushes any
+    // pending edit before destroy, and a fresh mount reads the CURRENT
+    // store content regardless of key. That argument was prose-only before
+    // this fix round -- these two tests exercise it directly, end to end,
+    // through the REAL MilkdownEditor (not the module-mocked fake
+    // EditorScreen.viewMode.test.tsx uses elsewhere in this suite), because
+    // the unmount-flush side effect IS the mechanism under test here, not
+    // something to be isolated away from.
+    it('toggling splitLeftMode from format to source while in Split mode does not lose an in-flight Milkdown edit', async () => {
+      useDocumentStore.setState({ filePath: '/tmp/report.md', content: '# Report' })
+      useAppStore.setState({ viewMode: 'split', splitLeftMode: 'format' })
+      const user = userEvent.setup()
+      render(<EditorScreen />)
+
+      await waitFor(() => {
+        expect(document.querySelector('.milkdown-mount .ProseMirror')).toBeInTheDocument()
+      })
+
+      // A real, unflushed edit the store has not seen yet -- same
+      // direct-DOM-mutation technique used throughout this file for
+      // exercising the 200ms markdownUpdated debounce window (see e.g.
+      // 'switching Format -> Source flushes...' above).
+      const h1 = document.querySelector('.ProseMirror h1')
+      if (!h1?.firstChild) throw new Error('expected a text node inside the mounted h1')
+      h1.firstChild.textContent = `${h1.firstChild.textContent} Q3`
+      const range = document.createRange()
+      range.selectNodeContents(h1)
+      range.collapse(false)
+      const selection = window.getSelection()
+      selection?.removeAllRanges()
+      selection?.addRange(range)
+
+      // One tick for ProseMirror's MutationObserver to register the edit,
+      // nowhere near the 200ms onChange debounce -- the store must NOT know
+      // about this edit yet when the toggle is clicked, or the scenario
+      // (an edit that only survives via the unmount-flush safety net, not
+      // because onChange already synced it) evaporates.
+      await new Promise((resolve) => setTimeout(resolve, 20))
+      expect(useDocumentStore.getState().content).toBe('# Report')
+
+      await user.click(screen.getByRole('button', { name: 'Split left pane: Source' }))
+
+      await waitFor(() => {
+        const textarea = screen.getByRole('textbox', {
+          name: 'Markdown source'
+        }) as HTMLTextAreaElement
+        expect(textarea.value).toContain('# Report Q3')
+      })
+      expect(useDocumentStore.getState().content).toContain('# Report Q3')
+    })
+
+    it('toggling splitLeftMode from source to format while in Split mode does not lose an in-flight Source edit', async () => {
+      useDocumentStore.setState({ filePath: '/tmp/report.md', content: '# Original' })
+      useAppStore.setState({ viewMode: 'split', splitLeftMode: 'source' })
+      const user = userEvent.setup()
+      render(<EditorScreen />)
+
+      const textarea = screen.getByRole('textbox', { name: 'Markdown source' })
+      await user.clear(textarea)
+      await user.type(textarea, '# Edited In Split Source Pane')
+
+      await user.click(screen.getByRole('button', { name: 'Split left pane: Format' }))
+
+      await waitFor(() => {
+        expect(screen.getByTestId('document-content')).toHaveTextContent(
+          'Edited In Split Source Pane'
+        )
+      })
+      expect(useDocumentStore.getState().content).toBe('# Edited In Split Source Pane')
+    })
   })
 
   describe('page-card blank-space click behavior (focusEnd)', () => {

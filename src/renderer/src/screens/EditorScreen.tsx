@@ -157,25 +157,54 @@ function EditorScreen(): React.JSX.Element {
   // same "type-swap-forces-remount" mechanism the original Source mode
   // finding described for the plain Format/Source conditional -- Split mode
   // didn't remove that mechanism, it just added more transitions that ride
-  // on it too. Concretely: (1) MilkdownEditor's own unmount cleanup
-  // (MilkdownEditor.tsx) already calls its internal flushRef.current?.()
-  // before editor.destroy(), and every transition handled by this function
-  // (format<->source, format<->split(source), split(format)<->source, and
-  // even format<->split(format), a same-editing-surface transition this
-  // function's own booleans correctly do NOT flush/remount for) unmounts
-  // MilkdownEditor via that ternary swap regardless -- so an unflushed edit
-  // reaches the store via that path even without this handler's own
-  // flush() call. (2) That same fact means a freshly mounted MilkdownEditor
-  // instance reads the CURRENT `content` prop at mount time regardless of
-  // whether key={revision} changed, so replaceContentForTab's revision bump
-  // is, right now, also not the sole reason Source-editing edits survive a
-  // switch to Format editing. (3) The NEW splitLeftMode toggle (not this
-  // function -- see EditorToolbar.tsx) rides the identical safety net one
-  // level down: Split's own left-pane ternary (`splitLeftMode === 'source'
-  // ? renderSourceEditor() : renderPageCard()`) is exactly the same kind of
-  // type-swap, which is why that toggle's onClick can safely call
-  // setSplitLeftMode directly with no flush/remount coordination of its
-  // own. Both calls below are kept anyway -- mandated by the plan and
+  // on it too. Precisely (fix-round-1 wording tightened -- an earlier draft
+  // of this paragraph said "every transition... unmounts MilkdownEditor...
+  // regardless," which overstated it: only ONE direction of each pair
+  // actually unmounts an existing instance; the reverse direction is a
+  // fresh mount, not an unmount, because there was no MilkdownEditor
+  // mounted beforehand to tear down):
+  //
+  // (1) Every transition that LEAVES Format editing (format->source,
+  // split(format)->source, format->split(source)) unmounts the MilkdownEditor
+  // instance that was actually on screen, via that ternary swap.
+  // MilkdownEditor's own unmount cleanup (MilkdownEditor.tsx) already calls
+  // its internal flushRef.current?.() before editor.destroy() -- so an
+  // unflushed edit reaches the store via that path even without this
+  // handler's own flush() call.
+  //
+  // (2) Symmetrically, every transition that ENTERS Format editing
+  // (source->format, source->split(format), split(source)->format) mounts a
+  // FRESH MilkdownEditor instance (there was none to unmount), which reads
+  // the CURRENT `content` prop at mount time regardless of whether
+  // key={revision} changed -- so replaceContentForTab's revision bump is,
+  // right now, also not the sole reason Source-editing edits survive a
+  // switch to Format editing.
+  //
+  // (2b) format<->split(format) is a special case worth naming separately:
+  // by this function's own four-boolean model it is NEITHER entering NOR
+  // leaving Format editing (both sides count as the identical editing
+  // surface, so neither call below fires for it) -- but the JSX still tears
+  // the DOM instance down and rebuilds it in EITHER direction regardless,
+  // because the page-card literally lives at two different structural
+  // positions (the plain Format branch vs. Split's nested left-pane
+  // branch). That unmount/mount pair is a raw consequence of the ternary's
+  // SHAPE, unrelated to what this function classifies the transition as --
+  // it's why the Task 5 finding above can say Split mode still doesn't keep
+  // both editors permanently mounted, even for the one pair this function
+  // itself treats as a no-op.
+  //
+  // (3) The NEW splitLeftMode toggle (not this function -- see
+  // EditorToolbar.tsx's own onClick, which has a matching comment) rides
+  // the identical safety net one level down: Split's own left-pane ternary
+  // (`splitLeftMode === 'source' ? renderSourceEditor() : renderPageCard()`)
+  // is exactly the same kind of type-swap, which is why that toggle can
+  // safely call setSplitLeftMode directly with no flush/remount
+  // coordination of its own -- verified directly, not just argued from this
+  // mechanism, by EditorScreen.test.tsx's 'toggling splitLeftMode... does
+  // not lose an in-flight edit' tests (real MilkdownEditor, a real
+  // unflushed DOM edit, a real click on the real toggle button).
+  //
+  // Both calls below are kept anyway -- mandated by the plan and
   // docs/superpowers/specs/2026-08-07-split-mode-design.md, and each would
   // become genuinely load-bearing if a FUTURE change restructured
   // `document-content` so the SAME MilkdownEditor instance's tree position
@@ -187,14 +216,20 @@ function EditorScreen(): React.JSX.Element {
   // because today's observable outcomes still don't discriminate between
   // "this call did it" and "an unrelated mechanism did it," the tests
   // covering these two calls remain spy/mutation-based rather than
-  // outcome-only: EditorScreen.test.tsx's 'switching Source -> Format...'
-  // and 'switching Split(source) -> Format...' tests spy on
-  // replaceContentForTab directly (the unmount/onChange path only ever
-  // calls updateContentForTab, never that), and
+  // outcome-only, and now cover every format<->source pair Split mode
+  // introduces, not just the two the initial Task 5 pass happened to add:
+  // EditorScreen.test.tsx's 'switching Source -> Format...', 'switching
+  // Split(source) -> Format...', and 'switching Source -> Split(format)...'
+  // tests spy on replaceContentForTab directly (the unmount/onChange path
+  // only ever calls updateContentForTab, never that), and
   // EditorScreen.viewMode.test.tsx module-mocks MilkdownEditor with a fake
   // that has no unmount auto-flush, so flush() calls on its handle can only
-  // come from this function -- now exercised there for format<->source,
-  // format<->split(source), and split(source)<->format alike.
+  // come from this function -- exercised there for format<->source,
+  // format<->split(source), split(source)<->format, and
+  // split(format)<->source alike. Fix-round-1 also mutation-verified the two
+  // newest tests (the split(format)<->source pair) genuinely discriminate --
+  // see task-5-report.md's "Fix round 1" section for the real commands/
+  // output, not just the claim.
   const handleSetViewMode = (mode: ViewMode): void => {
     const { viewMode: currentViewMode, splitLeftMode: currentSplitLeftMode } =
       useAppStore.getState()

@@ -756,6 +756,30 @@ function EditorToolbar({ editorRef, onSetViewMode }: EditorToolbarProps): ReactE
                 type="button"
                 aria-label={`Split left pane: ${label}`}
                 aria-pressed={splitLeftMode === mode}
+                // Deliberately calls setSplitLeftMode directly rather than
+                // going through a coordination function the way
+                // EditorScreen's own onSetViewMode prop does for the
+                // Format/Split/Source segmented control above -- this is NOT
+                // an oversight; see EditorScreen.tsx's handleSetViewMode doc
+                // comment (item 3) for the full mechanism. Short version:
+                // Split's own left-pane ternary (splitLeftMode === 'source'
+                // ? SourceEditor : the Milkdown page-card) is a real element-
+                // type swap, same as the Format/Source conditional
+                // elsewhere -- so toggling it always unmounts whichever
+                // editor was showing (MilkdownEditor's own unmount cleanup
+                // flushes any pending edit before destroy) and mounts a
+                // fresh instance of the other one, which reads the CURRENT
+                // store content regardless of key. That safety net is
+                // verified directly, not just argued from the mechanism, by
+                // EditorScreen.test.tsx's 'toggling splitLeftMode... does
+                // not lose an in-flight edit' tests (real MilkdownEditor, a
+                // real unflushed edit, a real click on this exact button). If
+                // this ternary's shape ever changes such that the outgoing
+                // and incoming editors could share one instance (no longer a
+                // type swap), this onClick would need to start routing
+                // through an EditorScreen-owned handleSetSplitLeftMode the
+                // same way onSetViewMode already works, not stay a bare
+                // store-action call.
                 onClick={() => setSplitLeftMode(mode)}
                 className={`rounded-sm px-2.5 py-1 text-12-5 ${
                   splitLeftMode === mode
