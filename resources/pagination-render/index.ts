@@ -17,12 +17,7 @@ import { renderMermaidToSvg } from '../../src/diagrams/render-mermaid'
 import { registerBreakHandlers } from '../../src/pagination/break-handlers'
 import documentTypographyCss from '../../src/typography/document-typography.css'
 import sourceSerif4Base64 from '../../src/renderer/src/assets/fonts/source-serif-4-variable.woff2'
-import {
-  DPI,
-  PAGE_WIDTH_PX,
-  PAGE_HEIGHT_PX,
-  PAGE_MARGIN_PX
-} from '../../src/typography/page-geometry'
+import { DPI, type PageGeometry } from '../../src/typography/page-geometry'
 
 // Task 10 / Gate 6: register the first-party keep-with-next/table-
 // continuation handlers exactly once, before the first `new Previewer()`
@@ -134,7 +129,24 @@ registerBreakHandlers()
 //      index.html) so these rules actually match the pages Paged.js
 //      generates underneath it; without that class on <body>, every rule in
 //      this piece silently stops matching (no error, it just never applies).
-const DOCUMENT_STYLESHEET = `
+// Built fresh per-request from the geometry the main process computed
+// from the DOCUMENT'S OWN PageConfig (src/typography/page-geometry.ts's
+// computePageGeometry) -- this sandboxed context never sees raw
+// Markdown/frontmatter at all (only the already-converted HTML, via
+// `html` on the same incoming message), so it cannot compute PageConfig
+// itself and must receive the result. Was a module-level constant built
+// once at load time from the fixed PAGE_WIDTH_PX/PAGE_HEIGHT_PX/
+// PAGE_MARGIN_PX -- Page Geometry Wiring's whole point is that those
+// three fixed values no longer describe every document, so this can no
+// longer be computed once and reused.
+//
+// Per-side margins (not one uniform PAGE_MARGIN_PX) -- @page's `margin`
+// shorthand accepts up to four space-separated values in top/right/
+// bottom/left order (standard CSS box-model order, matching `padding`/
+// `border-width`), so an asymmetric PageConfig produces a real asymmetric
+// @page rule, not a uniform approximation.
+function buildDocumentStylesheet(geometry: PageGeometry): string {
+  return `
 :root {
   --font-serif: 'Source Serif 4', serif;
   --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
@@ -155,12 +167,13 @@ const DOCUMENT_STYLESHEET = `
 }
 
 @page {
-  size: ${PAGE_WIDTH_PX / DPI}in ${PAGE_HEIGHT_PX / DPI}in;
-  margin: ${PAGE_MARGIN_PX / DPI}in;
+  size: ${geometry.pageWidthPx / DPI}in ${geometry.pageHeightPx / DPI}in;
+  margin: ${geometry.marginTopPx / DPI}in ${geometry.marginRightPx / DPI}in ${geometry.marginBottomPx / DPI}in ${geometry.marginLeftPx / DPI}in;
 }
 
 ${documentTypographyCss}
 `
+}
 
 // Trusted bootstrap, runs before any 'render' message can possibly arrive.
 // This whole module is loaded via `<script type="module" src="./index.js">`
@@ -236,6 +249,7 @@ interface IncomingMessage {
   type: 'render'
   html: string
   requestId: string
+  geometry: PageGeometry
 }
 
 interface OutgoingSuccess {
@@ -394,8 +408,9 @@ type Gate7Result = Gate7Phase1Success | Gate7Phase2Success | Gate7Error
 // always passes an explicitly EMPTY stylesheet array, so "NO `@page`
 // at-rule ever reaches Paged.js's Polisher for ANY document this harness
 // paginates today". That is no longer true: the regular path now passes
-// DOCUMENT_STYLESHEET (see the top of this file), which contains a real
-// `@page` rule, so `atpage.js`'s handler DOES run on every render.
+// buildDocumentStylesheet(geometry) (see the top of this file), which
+// contains a real `@page` rule, so `atpage.js`'s handler DOES run on every
+// render.
 //
 // The probe's PURPOSE survives that correction intact, because the thing it
 // manufactures was never merely "an `@page` rule" — it is running
@@ -405,8 +420,9 @@ type Gate7Result = Gate7Phase1Success | Gate7Phase2Success | Gate7Error
 // template (14 `.pagedjs_margin-*` divs, always present, always empty absent
 // a matching MARGIN-BOX rule) and is populated only by
 // `src/modules/paged-media/atpage.js`'s `@page`-rule handler, from
-// `@top-center`/`@bottom-center`-style nested rules. DOCUMENT_STYLESHEET's
-// `@page` rule declares only `size` and `margin` and contains no margin-box
+// `@top-center`/`@bottom-center`-style nested rules. The `@page` rule
+// buildDocumentStylesheet(geometry) builds declares only `size` and `margin`
+// (from the request's own geometry) and contains no margin-box
 // rules at all, so those 14 divs are still always empty for every real
 // document: this harness's on-screen render and PDF export still contain NO
 // running header/footer/page-number content for ANY corpus document (a real,
@@ -420,9 +436,10 @@ type Gate7Result = Gate7Phase1Success | Gate7Phase2Success | Gate7Error
 // string (containing real `@page`/`@top-center`/`@bottom-center` rules) and
 // forwards it to `previewer.preview()` as a real, non-empty stylesheet —
 // which, since the Document Typography sub-project, is no longer unique to
-// this probe (the regular 'render' path passes DOCUMENT_STYLESHEET); what
-// remains unique is that the stylesheet is CALLER-SUPPLIED per request and
-// carries margin-box rules — so
+// this probe (the regular 'render' path passes
+// buildDocumentStylesheet(geometry)'s result); what remains unique is that
+// the stylesheet is CALLER-SUPPLIED per request and carries margin-box
+// rules — so
 // `phase0/gate4-export.spec.ts` has actual generated running-header/footer
 // content to export and inspect the tagging of. Reuses the SAME
 // `activePreviewer`/`currentRequestId` module state as the 'render' handler
@@ -971,7 +988,7 @@ window.addEventListener('message', async (event: MessageEvent<IncomingMessage>) 
   // result against and no caller waiting on one.
   if (event.data?.type !== 'render') return
 
-  const { requestId, html } = event.data
+  const { requestId, html, geometry } = event.data
   currentRequestId = requestId
 
   // Everything below is inside one try/catch, deliberately, so that no path
@@ -1102,16 +1119,20 @@ window.addEventListener('message', async (event: MessageEvent<IncomingMessage>) 
     const t0 = performance.now()
     const previewer = new Previewer()
     activePreviewer = previewer
-    // Document Typography sub-project: DOCUMENT_STYLESHEET (constructed
-    // above) is now a real, non-empty stylesheet -- markdownToHtml's own
-    // sanitize schema still strips any <style>/<link> a document's own
-    // Markdown source might contain (src/markdown/pipeline.ts), so this
-    // stylesheet is exclusively PageDown's own authored typography/@page
-    // rules, never anything document-supplied.
+    // Document Typography sub-project: buildDocumentStylesheet(geometry)
+    // (called inline below) is now a real, non-empty stylesheet --
+    // markdownToHtml's own sanitize schema still strips any <style>/<link> a
+    // document's own Markdown source might contain (src/markdown/pipeline.ts),
+    // so this stylesheet is exclusively PageDown's own authored
+    // typography/@page rules, never anything document-supplied. Page Geometry
+    // Wiring made this a per-request function of the incoming message's own
+    // `geometry` (see buildDocumentStylesheet's own comment above) rather
+    // than a module-level constant, so a document with non-default page
+    // size/orientation/margins produces a genuinely different `@page` rule.
     //
-    // Passed as `[{ 'document-typography': DOCUMENT_STYLESHEET }]`, not the
-    // bare string: Previewer.preview() spreads its stylesheets array into
-    // Polisher.add(...) (node_modules/pagedjs/src/polyfill/previewer.js),
+    // Passed as `[{ 'document-typography': buildDocumentStylesheet(geometry) }]`,
+    // not the bare string: Previewer.preview() spreads its stylesheets array
+    // into Polisher.add(...) (node_modules/pagedjs/src/polyfill/previewer.js),
     // and Polisher.add treats any non-object array entry as a URL to fetch
     // via request() (node_modules/pagedjs/src/polisher/polisher.js) -- which
     // this context's `connect-src 'none'` CSP blocks outright, so a raw CSS
@@ -1122,7 +1143,7 @@ window.addEventListener('message', async (event: MessageEvent<IncomingMessage>) 
     // below already does exactly this (`{ 'gate4-probe-stylesheet': css }`).
     const flow = await previewer.preview(
       container,
-      [{ 'document-typography': DOCUMENT_STYLESHEET }],
+      [{ 'document-typography': buildDocumentStylesheet(geometry) }],
       root
     )
     const t1 = performance.now()
