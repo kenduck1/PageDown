@@ -39,7 +39,19 @@ async function main(): Promise<void> {
     target: 'chrome142', // matches Electron 39's bundled Chromium
     sourcemap: false, // avoid any data: sourceMappingURL interaction with this context's strict CSP
     minify: false,
-    logLevel: 'info'
+    logLevel: 'info',
+    // Document Typography sub-project: the render context needs the shared
+    // typography stylesheet's raw TEXT (to hand to previewer.preview() as a
+    // real stylesheet, see index.ts) and the Source Serif 4 font's raw
+    // BYTES as a self-contained base64 string (this sandboxed context has
+    // no reachable font asset of its own and a strict CSP that disallows
+    // fetching one from elsewhere -- see the design doc's "Delivering a
+    // real stylesheet" section for why a data: URI, not a served static
+    // file, was chosen).
+    loader: {
+      '.css': 'text',
+      '.woff2': 'base64'
+    }
   })
 
   await cp(path.join(srcDir, 'index.html'), path.join(outDir, 'index.html'))

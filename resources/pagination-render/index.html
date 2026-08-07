@@ -57,7 +57,18 @@
   <meta name="csp-style-nonce" content="%%CSP_STYLE_NONCE%%">
   <title>PageDown Pagination Render Context</title>
 </head>
-<body>
+<body class="pagedown-document">
+  <!--
+    Document Typography sub-project: document-typography.css's every
+    selector is scoped under `.pagedown-document` (see that file's own
+    top comment) -- this class is this render context's half of that
+    contract. Paged.js renders its generated pages inside #content-root,
+    a direct child of <body>, so scoping here reaches every page it
+    produces. The Milkdown mount div carries the same class on its side
+    (src/renderer/src/milkdown/MilkdownEditor.tsx). Removing this class
+    silently stops every rule in DOCUMENT_STYLESHEET (index.ts) from
+    matching anything in this context -- no error, it just stops applying.
+  -->
   <div id="content-root"></div>
   <script type="module" src="./index.js"></script>
 </body>
