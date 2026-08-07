@@ -55,16 +55,21 @@
 
    This selector only ever changes anything for the elements in this file
    that have a non-zero margin-top to begin with: h1/h2/h3 (1.5em) and hr
-   (1.5em, via its `margin: 1.5em 0` shorthand below) -- every other rule
-   here already sets margin-top: 0 explicitly, so the selector is a no-op
-   for them whether or not they're a first child.
+   (1.5em, via its `margin: 1.5em 0` shorthand below) -- every other element
+   here is already at margin-top: 0, whether via an explicit declaration
+   (p/ul/ol/li/blockquote/table/the th>p and td>p rules) or CSS's own
+   initial value (a/strong/em/img/pre/code/th/td, which declare no margin
+   at all), so the selector is a no-op for them whether or not they're a
+   first child.
 
    Known, accepted asymmetry, not caught by Gate 10: `:first-child` matches
    ANY element that is the first child of its own immediate parent,
    anywhere in the subtree -- not just the document's true first block.
-   `.pagedown-document` sits on the Milkdown mount's single `.ProseMirror`
-   element on the editor side, so only the document's actual first
-   top-level block can ever match there. On the pagination side, Paged.js
+   `.pagedown-document` sits on the Milkdown mount div itself (see this
+   file's header comment above), whose single rendered child is
+   `.ProseMirror` -- there is exactly one linear editing root, not one
+   wrapper per page, so only the document's actual first top-level block
+   can ever match there. On the pagination side, Paged.js
    clones/wraps content per PAGE (the gate's own selector,
    `.pagedjs_page_content > div > *`, shows this), so this rule matches the
    first block of EVERY page, not just page 1. Concretely: a heading (or
