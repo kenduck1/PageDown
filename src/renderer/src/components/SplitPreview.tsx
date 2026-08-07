@@ -17,13 +17,23 @@ const DEBOUNCE_MS = 500
 // this doesn't re-layout on every keystroke).
 function SplitPreview({ content, filePath }: SplitPreviewProps): React.JSX.Element {
   const placeholderRef = useRef<HTMLDivElement>(null)
-  // Tracks the last {content, filePath} pair actually sent to the harness so
-  // the 500ms-debounced effect below can skip re-sending a value that's
-  // identical to what the mount effect (or a prior debounced send) already
-  // dispatched -- without this, a plain mount with no subsequent edit sends
-  // the SAME initial content twice (once immediately, once again when the
-  // debounce timer fires with nothing having changed), which is a wasted
-  // pagination-harness round trip for zero behavioral benefit.
+  // Tracks the last {content, filePath} pair the harness has CONFIRMED
+  // receiving (stamped only inside the .then() below, never before the call)
+  // so the 500ms-debounced effect can skip re-sending a value that's already
+  // been successfully delivered -- without this, a plain mount with no
+  // subsequent edit sends the SAME initial content twice (once immediately,
+  // once again when the debounce timer fires with nothing having changed),
+  // which is a wasted pagination-harness round trip for zero behavioral
+  // benefit. Stamping this BEFORE the call resolves (or on rejection) would
+  // be a real bug, not just a missed optimization: `sendDocument` genuinely
+  // rejects (a 10s timeout, a pagination error, the post-destroy guard --
+  // see src/main/split-preview-window.ts's sendDocument) and is quite
+  // plausible on cold start while the harness process is still spinning up.
+  // If a failed send were recorded as "sent" anyway, a user opening Split
+  // mode on an already-written document with no further edit would see a
+  // permanently blank preview for the rest of that mount: the debounced
+  // effect would compare content equal to the (falsely) recorded value and
+  // never retry.
   const lastSentRef = useRef<{ content: string; filePath: string | null } | null>(null)
 
   useEffect(() => {
@@ -43,6 +53,14 @@ function SplitPreview({ content, filePath }: SplitPreviewProps): React.JSX.Eleme
       })
     }
     reportBounds()
+    // Tracks resize only -- NOT scroll. getBoundingClientRect() shifts when
+    // an ANCESTOR scrolls too, and neither ResizeObserver nor the window
+    // 'resize' listener fires for that (the placeholder's own box hasn't
+    // changed size, just position). Latent today only because no layout
+    // wraps this component in a scrollable ancestor; a future layout that
+    // does would silently break bounds tracking with no error, since the
+    // native view would keep rendering at its last-reported position while
+    // the DOM scrolls underneath it.
     const observer = new ResizeObserver(reportBounds)
     observer.observe(el)
     window.addEventListener('resize', reportBounds)
@@ -53,8 +71,21 @@ function SplitPreview({ content, filePath }: SplitPreviewProps): React.JSX.Eleme
   }, [])
 
   useEffect(() => {
-    lastSentRef.current = { content, filePath }
-    void window.api.sendSplitPreviewDocument(content, filePath)
+    window.api
+      .sendSplitPreviewDocument(content, filePath)
+      .then(() => {
+        lastSentRef.current = { content, filePath }
+      })
+      .catch(() => {
+        // Split mode's preview is best-effort, same governing rule as the
+        // rest of this app's fire-and-forget IPC calls (see
+        // EditorHistory.tsx's own .catch() for the precedent this matches):
+        // never let a rejection surface as an unhandled promise rejection,
+        // and no dedicated error UI for this task. Deliberately does NOT
+        // stamp lastSentRef on failure -- see that ref's own comment above
+        // for why leaving it unset here is what lets the debounced effect
+        // retry instead of believing this content was already delivered.
+      })
     // Mount-only: sends the initial content immediately rather than waiting
     // out the debounce below for the very first paint.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -64,8 +95,18 @@ function SplitPreview({ content, filePath }: SplitPreviewProps): React.JSX.Eleme
     const timer = setTimeout(() => {
       const last = lastSentRef.current
       if (last && last.content === content && last.filePath === filePath) return
-      lastSentRef.current = { content, filePath }
-      void window.api.sendSplitPreviewDocument(content, filePath)
+      window.api
+        .sendSplitPreviewDocument(content, filePath)
+        .then(() => {
+          lastSentRef.current = { content, filePath }
+        })
+        .catch(() => {
+          // Same as the mount effect's catch above: swallow so this never
+          // becomes an unhandled rejection, and leave lastSentRef unset for
+          // this value so a later edit (or the next unrelated debounce
+          // cycle) retries rather than getting stuck believing a failed
+          // send succeeded.
+        })
     }, DEBOUNCE_MS)
     return () => clearTimeout(timer)
     // Mount's own immediate send (the effect above, empty deps) already
