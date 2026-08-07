@@ -18,6 +18,7 @@ import { registerBreakHandlers } from '../../src/pagination/break-handlers'
 import documentTypographyCss from '../../src/typography/document-typography.css'
 import sourceSerif4Base64 from '../../src/renderer/src/assets/fonts/source-serif-4-variable.woff2'
 import { DPI, type PageGeometry } from '../../src/typography/page-geometry'
+import type { RenderRequestMessage } from '../../src/pagination/render-message'
 
 // Task 10 / Gate 6: register the first-party keep-with-next/table-
 // continuation handlers exactly once, before the first `new Previewer()`
@@ -245,12 +246,11 @@ if (styleNonce) {
   }) as typeof document.createElement
 }
 
-interface IncomingMessage {
-  type: 'render'
-  html: string
-  requestId: string
-  geometry: PageGeometry
-}
+// Derived from the shared src/pagination/render-message.ts contract, not
+// restated by hand -- see that module's own header comment for why: a
+// second, independently-maintained copy of this shape is exactly what let a
+// missing `geometry` field go uncaught by tsc in the first place.
+type IncomingMessage = RenderRequestMessage
 
 interface OutgoingSuccess {
   type: 'result'

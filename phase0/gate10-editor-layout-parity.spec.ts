@@ -1,8 +1,20 @@
 import { test, expect, type ElectronApplication, type Page } from '@playwright/test'
 import { markdownToHtml } from '../src/markdown/pipeline'
 import { REPORT_TEMPLATE } from '../src/renderer/src/templates/report.md'
-import { CONTENT_WIDTH_PX } from '../src/typography/page-geometry'
+import { CONTENT_WIDTH_PX, computePageGeometry } from '../src/typography/page-geometry'
+import { DEFAULT_PAGE_CONFIG } from '../src/markdown/page-config'
 import { launchIsolatedApp } from './electron-launch'
+
+// Page Geometry Wiring: harness.sendDocument now requires a real geometry
+// argument, computed here at this file's own Node-side module scope (an
+// app.evaluate() callback runs in a bare V8 context with no working module
+// resolution, so an imported constant can't be referenced from inside one
+// directly — it has to be threaded through app.evaluate()'s own single
+// argument instead). This gate deliberately exercises the DEFAULT
+// (no-frontmatter) geometry — REPORT_TEMPLATE has no page-config
+// frontmatter, and per-document geometry is Task 4's concern, not this
+// gate's.
+const LETTER_GEOMETRY = computePageGeometry(DEFAULT_PAGE_CONFIG)
 
 // Phase 1 Gate 3 (docs/superpowers/plans/2026-07-28-phase1-findings.md)
 // measured editor/pagination layout parity against a throwaway
@@ -85,15 +97,16 @@ test('Gate 10: editor/paginator layout parity for the real mounted Milkdown canv
 
   const { html } = markdownToHtml(REPORT_TEMPLATE)
 
-  const paginationResult = (await app.evaluate(async (_electronNS, html) => {
-    const harness = (
-      globalThis as unknown as {
-        __gate10Harness: import('../src/main/pagination-window').PaginationHarness
-      }
-    ).__gate10Harness
-    const sendResult = await harness.sendDocument(html)
+  const paginationResult = (await app.evaluate(
+    async (_electronNS, { html, geometry }) => {
+      const harness = (
+        globalThis as unknown as {
+          __gate10Harness: import('../src/main/pagination-window').PaginationHarness
+        }
+      ).__gate10Harness
+      const sendResult = await harness.sendDocument(html, geometry)
 
-    const raw = (await harness.view.webContents.executeJavaScript(`
+      const raw = (await harness.view.webContents.executeJavaScript(`
       (function () {
         var area = document.querySelector('.pagedjs_area')
         if (!area) return JSON.stringify({ error: 'no .pagedjs_area found' })
@@ -107,8 +120,10 @@ test('Gate 10: editor/paginator layout parity for the real mounted Milkdown canv
       })()
     `)) as string
 
-    return { sendResult, blocks: JSON.parse(raw) as BlockMeasurement[] }
-  }, html)) as { sendResult: { pageCount: number }; blocks: BlockMeasurement[] }
+      return { sendResult, blocks: JSON.parse(raw) as BlockMeasurement[] }
+    },
+    { html, geometry: LETTER_GEOMETRY }
+  )) as { sendResult: { pageCount: number }; blocks: BlockMeasurement[] }
 
   expect(
     paginationResult.sendResult.pageCount,

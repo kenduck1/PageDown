@@ -3,7 +3,20 @@ import { readFileSync, mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { build } from 'esbuild'
 import { markdownToHtml } from '../src/markdown/pipeline'
+import { computePageGeometry } from '../src/typography/page-geometry'
+import { DEFAULT_PAGE_CONFIG } from '../src/markdown/page-config'
 import { launchIsolatedApp } from '../phase0/electron-launch'
+
+// Page Geometry Wiring: harness.sendDocument now requires a real geometry
+// argument, computed here at this file's own Node-side module scope (an
+// app.evaluate() callback runs in a bare V8 context with no working module
+// resolution, so an imported constant can't be referenced from inside one
+// directly — it has to be threaded through app.evaluate()'s own single
+// argument instead). This gate deliberately exercises the DEFAULT
+// (no-frontmatter) geometry, matching every other reference-corpus-driven
+// gate — per-document geometry is a later task's concern, not this
+// historical Phase 1 spike's.
+const LETTER_GEOMETRY = computePageGeometry(DEFAULT_PAGE_CONFIG)
 
 // Same mechanical deviations from a hypothetical literal brief sample as
 // every other Phase 0/1 gate spec (see phase0/gate1/gate5/gate7's own
@@ -199,23 +212,24 @@ test('Gate 3: editor/paginator layout parity for mixed.md top-level blocks', asy
 
   const { html } = markdownToHtml(rawMarkdown)
 
-  const paginationResult = (await app.evaluate(async (_electronNS, html) => {
-    const harness = (
-      globalThis as unknown as {
-        __gate3Harness: import('../src/main/pagination-window').PaginationHarness
-      }
-    ).__gate3Harness
-    const sendResult = await harness.sendDocument(html)
+  const paginationResult = (await app.evaluate(
+    async (_electronNS, { html, geometry }) => {
+      const harness = (
+        globalThis as unknown as {
+          __gate3Harness: import('../src/main/pagination-window').PaginationHarness
+        }
+      ).__gate3Harness
+      const sendResult = await harness.sendDocument(html, geometry)
 
-    // `.pagedjs_area` is the real, on-screen laid-out content box (see this
-    // file's header comment for why its 624px width is what it is) --
-    // measuring every top-level block's rect.top relative to ITS top
-    // (rather than an absolute screen coordinate) is what makes this
-    // comparable to the Milkdown side at all: the two pages have no reason
-    // to share an absolute on-screen origin (different window chrome,
-    // different body margins -- see below), only a shared content-flow
-    // start point makes sense to diff.
-    const raw = (await harness.view.webContents.executeJavaScript(`
+      // `.pagedjs_area` is the real, on-screen laid-out content box (see this
+      // file's header comment for why its 624px width is what it is) --
+      // measuring every top-level block's rect.top relative to ITS top
+      // (rather than an absolute screen coordinate) is what makes this
+      // comparable to the Milkdown side at all: the two pages have no reason
+      // to share an absolute on-screen origin (different window chrome,
+      // different body margins -- see below), only a shared content-flow
+      // start point makes sense to diff.
+      const raw = (await harness.view.webContents.executeJavaScript(`
       (function () {
         var area = document.querySelector('.pagedjs_area')
         if (!area) return JSON.stringify({ error: 'no .pagedjs_area found' })
@@ -229,8 +243,10 @@ test('Gate 3: editor/paginator layout parity for mixed.md top-level blocks', asy
       })()
     `)) as string
 
-    return { sendResult, blocks: JSON.parse(raw) as BlockMeasurement[] }
-  }, html)) as { sendResult: { pageCount: number }; blocks: BlockMeasurement[] }
+      return { sendResult, blocks: JSON.parse(raw) as BlockMeasurement[] }
+    },
+    { html, geometry: LETTER_GEOMETRY }
+  )) as { sendResult: { pageCount: number }; blocks: BlockMeasurement[] }
 
   await close()
 

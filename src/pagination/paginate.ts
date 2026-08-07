@@ -1,5 +1,7 @@
 import { markdownToHtml } from '../markdown/pipeline'
 import type { PaginationHarness } from '../main/pagination-window'
+import { computePageGeometry } from '../typography/page-geometry'
+import { DEFAULT_PAGE_CONFIG } from '../markdown/page-config'
 
 // Times the two stages of a full re-pagination pass: the Markdown->HTML
 // pipeline (in-process, synchronous) and the round trip into the sandboxed
@@ -24,8 +26,20 @@ export async function paginateAndTime(
   const { html } = markdownToHtml(markdown)
   stages.markdownToHtml = performance.now() - t
 
+  // Page Geometry Wiring: this timing spike deliberately measures the
+  // DEFAULT Letter/1in geometry, not a per-document one. `paginateAndTime`
+  // only ever receives raw `markdown` and has no validated document path to
+  // pull real frontmatter from at this layer -- extracting a document's own
+  // PageConfig (extractPageConfig, src/markdown/page-config.ts) needs the
+  // raw frontmatter block split out first (extractRawFrontmatter, being
+  // relocated to src/markdown/frontmatter-splice.ts by a later task in this
+  // same sub-project), which is real per-document wiring that belongs to
+  // that task's 4 real callers (page-count-generator.ts,
+  // thumbnail-generator.ts, pdf-exporter.ts, src/main/index.ts), not to this
+  // Phase-0 timing spike. See src/main/pagination-window.ts's own
+  // `PaginationHarness.sendDocument` doc comment for the same distinction.
   t = performance.now()
-  const result = await harness.sendDocument(html)
+  const result = await harness.sendDocument(html, computePageGeometry(DEFAULT_PAGE_CONFIG))
   stages.sendAndPaginate = performance.now() - t
 
   return { stages, pageCount: result.pageCount, layoutMs: result.layoutMs }
