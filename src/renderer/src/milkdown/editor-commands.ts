@@ -1,5 +1,6 @@
 import { editorViewCtx, type Editor } from '@milkdown/core'
 import { callCommand } from '@milkdown/utils'
+import { NodeSelection, Selection, TextSelection } from '@milkdown/prose/state'
 import type { EditorView } from '@milkdown/prose/view'
 import {
   toggleStrongCommand,
@@ -135,6 +136,35 @@ export interface EditorCommands {
   // don't set `addToHistory: false` on themselves).
   undo: () => void
   redo: () => void
+  // Moves the selection to the end of the document and focuses the editor
+  // -- backs EditorScreen's page-card click handler (a click on the page's
+  // own blank space, below the last real line, should behave like clicking
+  // in a real document: move the cursor to the nearest actual position,
+  // not silently do nothing). Genuinely needs ProseMirror's own dispatch
+  // mechanism, not a DOM-level workaround: tried first and reverted,
+  // verified NOT to work -- neither manually setting the native Selection/
+  // Range then calling element.focus(), nor dispatching synthetic
+  // mousedown/mouseup MouseEvents at a computed coordinate, actually moved
+  // focus or the visible cursor (confirmed via document.activeElement
+  // staying <body> and the native Selection landing somewhere unrelated in
+  // both cases) -- ProseMirror's EditorView owns its own selection state
+  // and only a real transaction dispatched through it (or a genuine,
+  // OS-trusted input event, which JS-dispatched synthetic events are not)
+  // actually moves it.
+  //
+  // Review-round finding (verified empirically, not theorized -- see this
+  // method's own implementation comment below): plain `Selection.atEnd`
+  // is NOT always a safe "cursor at the nearest real position" -- when the
+  // document's LAST top-level block is a selectable atom with nothing
+  // after it (this schema's pagebreak and frontmatter nodes both qualify,
+  // and doc's own content expression is "block+", so a document that's
+  // genuinely nothing but a trailing pagebreak, or nothing but
+  // frontmatter, is real schema-valid content, not a contrived case), it
+  // resolves to a NodeSelection over that atom rather than a collapsed
+  // text cursor -- and the very next keystroke then REPLACES (deletes)
+  // that node, per ProseMirror's ordinary "typing over a NodeSelection"
+  // behavior. The implementation below special-cases this.
+  focusEnd: () => void
 }
 
 // Builds the real formatting-toolbar command surface for a live Editor
@@ -234,6 +264,46 @@ export function buildEditorCommands(editor: Editor): EditorCommands {
     },
     redo: () => {
       editor.action(callCommand(redoCommand.key))
+    },
+    focusEnd: () => {
+      editor.action((ctx) => {
+        const view = ctx.get(editorViewCtx)
+        const { doc, schema } = view.state
+        const endSelection = Selection.atEnd(doc)
+        let tr = view.state.tr
+        if (endSelection instanceof NodeSelection) {
+          // Verified empirically (a throwaway scratch test against this
+          // exact schema, deleted after use): dispatching this
+          // NodeSelection as-is is wrong for this method's purpose.
+          // ProseMirror's default typing/insertText behavior REPLACES a
+          // NodeSelection's node with whatever gets typed next -- so
+          // clicking blank space below a trailing pagebreak (or a
+          // frontmatter-only document) and then typing a single character
+          // silently deleted that node, replacing it with a new paragraph
+          // containing the typed character. No real editor lets clicking
+          // below the last line of content "select" that last object such
+          // that the next keystroke destroys it. Appending a fresh empty
+          // paragraph immediately after the atom and placing a real text
+          // cursor inside THAT (the same move Notion/Word/Google Docs make
+          // when you click below a trailing non-text block/embed) gives
+          // the same "click blank space -> real, appendable cursor"
+          // behavior this method exists for, without ever risking the atom
+          // node itself. Accepted, narrow trade-off: this DOES mean a
+          // click alone (no typing) can mark the document dirty in this
+          // one case -- unavoidable, since a genuine "cursor after the
+          // last atom" position cannot be represented at all without
+          // somewhere with inline content to host it, and leaving the
+          // NodeSelection in place is the strictly worse, data-losing
+          // alternative this replaces.
+          const insertPos = endSelection.to
+          tr = tr.insert(insertPos, schema.nodes.paragraph.create())
+          tr = tr.setSelection(TextSelection.create(tr.doc, insertPos + 1))
+        } else {
+          tr = tr.setSelection(endSelection)
+        }
+        view.dispatch(tr)
+        view.focus()
+      })
     }
   }
 }

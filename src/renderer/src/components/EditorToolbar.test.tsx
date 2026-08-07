@@ -26,7 +26,8 @@ function createFakeEditorHandle(): MilkdownEditorHandle {
     insertTable: vi.fn(),
     insertPageBreak: vi.fn(),
     undo: vi.fn(),
-    redo: vi.fn()
+    redo: vi.fn(),
+    focusEnd: vi.fn()
   }
 }
 
