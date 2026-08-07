@@ -915,6 +915,31 @@ describe('EditorScreen', () => {
     it('switching Source -> Format remounts Milkdown with the edited Source-mode content, not stale pre-edit content', async () => {
       useDocumentStore.setState({ filePath: '/tmp/report.md', content: '# Original' })
       useAppStore.setState({ viewMode: 'source' })
+
+      // Fix-round-1 finding: the outcome assertion below (the remounted
+      // editor shows the edit) passes even with handleSetViewMode's own
+      // `replaceContentForTab(activeTabId, content)` call deleted entirely
+      // -- verified by mutation testing, not assumed. Root cause: the
+      // Source/Format JSX conditional swaps MilkdownEditor's element type
+      // in and out of the tree, which React reconciles as a full
+      // unmount-then-mount regardless of whether key={revision} changed, so
+      // a fresh MilkdownEditor instance reads the CURRENT `content` prop at
+      // mount time either way -- the revision bump this call exists to
+      // force is, right now, redundant with that unrelated mechanism. The
+      // call is kept anyway (plan- and design-doc-mandated defense-in-depth
+      // for when the JSX structure changes -- see handleSetViewMode's own
+      // doc comment in EditorScreen.tsx), so this test needs a seam that
+      // actually isolates it: the unmount/onChange path only ever calls
+      // updateContentForTab, never replaceContentForTab, so a direct spy on
+      // the latter genuinely discriminates. Wraps (not replaces) the real
+      // action -- captured before the store swap, so the spy still performs
+      // the real revision-bumping work and the outcome assertions below
+      // remain genuine end-to-end coverage, not just a call-count check.
+      const realReplaceContentForTab = useDocumentStore.getState().replaceContentForTab
+      const replaceContentForTabSpy = vi.fn(realReplaceContentForTab)
+      useDocumentStore.setState({ replaceContentForTab: replaceContentForTabSpy })
+      const activeTabId = useDocumentStore.getState().activeTabId
+
       const user = userEvent.setup()
       render(<EditorScreen />)
 
@@ -923,6 +948,8 @@ describe('EditorScreen', () => {
       await user.type(textarea, '# Edited In Source')
 
       await user.click(screen.getByRole('button', { name: 'Format' }))
+
+      expect(replaceContentForTabSpy).toHaveBeenCalledWith(activeTabId, '# Edited In Source')
 
       // This is the test that would have caught the clobbering bug the
       // design doc warns about: if EditorScreen didn't force a revision
