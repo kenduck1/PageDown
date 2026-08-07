@@ -92,6 +92,37 @@ function EditorScreen(): React.JSX.Element {
   // mode's controlled textarea also keeps `content` synchronous with the
   // store on every keystroke, so there's no debounce window like the one
   // that motivates the getState() reads elsewhere in this file.
+  //
+  // Fix-round-1 finding, worth recording here because it's genuinely
+  // non-obvious and any future reader will otherwise rediscover it the hard
+  // way: BOTH calls below are currently belt-and-braces against today's JSX
+  // shape, not the sole reason either observable outcome holds. (1)
+  // MilkdownEditor's own unmount cleanup (MilkdownEditor.tsx) already calls
+  // its internal flushRef.current?.() before editor.destroy() -- and
+  // switching to Source mode always unmounts MilkdownEditor, because the
+  // Format/Source JSX conditional below swaps element types entirely, which
+  // React reconciles as unmount-then-mount, not a keyed update -- so an
+  // unflushed edit reaches the store via that path even without this
+  // handler's own flush() call. (2) That same type-swap-forces-remount fact
+  // means a fresh MilkdownEditor instance reads the CURRENT `content` prop
+  // at mount time regardless of whether key={revision} changed, so
+  // replaceContentForTab's revision bump is, right now, also not the sole
+  // reason Source-mode edits survive a switch back to Format. Both calls
+  // are kept anyway -- mandated by the plan and
+  // docs/superpowers/specs/2026-08-07-source-mode-design.md, and each
+  // becomes genuinely load-bearing the moment this JSX structure changes
+  // (e.g. a future Split mode that keeps both editors permanently mounted,
+  // at which point the unmount-triggers-flush and type-swap-forces-remount
+  // side effects these calls currently ride on both disappear). Precisely
+  // because today's observable outcomes don't discriminate between "this
+  // call did it" and "an unrelated mechanism did it," the tests covering
+  // these two calls are spy/mutation-based rather than outcome-only:
+  // EditorScreen.test.tsx's 'switching Source -> Format...' test spies on
+  // replaceContentForTab directly (the unmount/onChange path only ever
+  // calls updateContentForTab, never that), and
+  // EditorScreen.viewMode.test.tsx module-mocks MilkdownEditor with a fake
+  // that has no unmount auto-flush, so flush() calls on its handle can only
+  // come from this function.
   const handleSetViewMode = (mode: ViewMode): void => {
     if (viewMode === 'format' && mode === 'source') {
       editorRef.current?.flush()
