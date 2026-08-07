@@ -38,6 +38,24 @@
    the class from either surface silently disables every rule in this file
    there -- it won't error, it'll just stop matching. */
 
+/* First block-level child anywhere in this scope starts flush, no top
+   margin -- Gate 10 measured a flat +39px offset on EVERY row (exactly
+   H1's own 1.5em margin-top, 1.5 * 26px) before this rule existed. Root
+   cause: the two surfaces disagree on whether that margin collapses.
+   Paged.js's own page-content wrapper div doesn't let the H1's margin-top
+   collapse through it (the pagination side visibly renders the 39px gap),
+   while the Milkdown mount's plain block flow DOES collapse it away
+   entirely (ProseMirror sits flush against milkdown-mount's own padding
+   box, so the margin escapes upward and never shows as a gap inside
+   ProseMirror). Explicitly zeroing first-child margin-top makes both
+   surfaces agree on "nothing dangles above whatever's first" instead of
+   leaving it to each surface's own incidental collapse behavior.
+   Empirically confirmed against Gate 10's real per-block output
+   (2026-08-06): removed exactly the 39px constant from every row. */
+.pagedown-document :first-child {
+  margin-top: 0;
+}
+
 .pagedown-document h1,
 .pagedown-document h2,
 .pagedown-document h3,
@@ -87,13 +105,29 @@
 .pagedown-document h2,
 .pagedown-document h3 {
   font-weight: 700;
-  /* margin-top: 1.5x / margin-bottom: 0.5x the element's OWN font-size --
+  /* Explicit unitless line-height, not left to inherit: neither surface
+     had one before Gate 10's Task 7 run, and they don't inherit the same
+     ambient value -- the Milkdown mount inherits Tailwind Preflight's
+     `line-height: 1.5` (set on `html`), while the sandboxed pagination
+     context has zero author CSS above this file, so its headings fell
+     back to the UA default `line-height: normal` (~1.15, font-metric-
+     dependent). That mismatch showed up as a per-heading-transition delta
+     that grew block by block in Gate 10's table (e.g. +3px to +3.5px at
+     every H1/H2 boundary) even after the first-child fix above removed the
+     flat +39px offset. 1.15 matches paragraph text's own visual density at
+     these font sizes and, critically, is a plain number rather than an
+     inherited one, so both surfaces compute the identical heading height
+     regardless of whatever line-height their respective ambient/UA
+     stylesheet would otherwise supply. Empirically confirmed against
+     Gate 10's real per-block output (2026-08-06).
+     margin-top: 1.5x / margin-bottom: 0.5x the element's OWN font-size --
      using `em` here (not a hardcoded px value per level) is what makes this
      relationship self-scaling across H1/H2/H3 without three separate
      numbers to keep in sync; see the design doc's "Block spacing" judgment
      call for the reasoning and the explicit expectation that these
      multipliers get tuned against Gate 10's real per-block delta output in
      Task 7, not treated as final here. */
+  line-height: 1.15;
   margin-top: 1.5em;
   margin-bottom: 0.5em;
 }
@@ -120,6 +154,19 @@
 
 .pagedown-document th,
 .pagedown-document td {
+  /* border-box, not left to inherit: the Milkdown mount inherits Tailwind
+     Preflight's universal `* { box-sizing: border-box }`, but the
+     sandboxed pagination context has no Preflight and falls back to the
+     UA default `content-box`. Table cells are the one padded/bordered
+     element in this file, so they're the one place that mismatch can
+     change layout: content-box vs. border-box changes what width a cell's
+     own text content is wrapped to under the table's auto-layout
+     algorithm, which can flip a cell between one line and two. Matching
+     Milkdown's (already-correct) border-box here, rather than fighting
+     Preflight's own broad rule to push Milkdown the other way, made the
+     table block's height agree between both surfaces. Empirically
+     confirmed against Gate 10's real per-block output (2026-08-06). */
+  box-sizing: border-box;
   text-align: left;
   padding: 0.4em 0.6em;
   border-bottom: 1px solid #d0d0d4;
@@ -127,6 +174,27 @@
 
 .pagedown-document th {
   font-weight: 700;
+}
+
+/* @milkdown/preset-gfm's table schema sets `cellContent: "paragraph"`
+   (confirmed by reading its source) -- EVERY table cell's content, in
+   BOTH <th> and <td>, is wrapped in a real <p> in the Milkdown mount's
+   DOM. base.css already neutralizes `.milkdown-mount td > p`'s margin
+   (an older, narrower fix), but not `th > p` -- so the header row's
+   wrapped paragraph still carried this file's own `p { margin: 0 0 1em 0
+   }` rule above, adding a full 1em (14px at the 14px table font-size)
+   of unwanted bottom margin under the header row alone. The pagination
+   side never wraps cell content in <p> at all (GFM table cells are
+   inline-only content per CommonMark, so mdast-util-to-hast renders <th>/
+   <td> with direct inline children) -- so this rule is a genuine no-op
+   there, not a one-sided patch pretending to be shared. Gate 10 measured
+   this as a flat +14px on every row from the header onward (not
+   compounding further), pointing at a one-time addition rather than a
+   per-row spacing error. Empirically confirmed against Gate 10's real
+   per-block output (2026-08-06). */
+.pagedown-document th > p,
+.pagedown-document td > p {
+  margin: 0;
 }
 
 .pagedown-document hr {
