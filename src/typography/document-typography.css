@@ -51,7 +51,45 @@
    surfaces agree on "nothing dangles above whatever's first" instead of
    leaving it to each surface's own incidental collapse behavior.
    Empirically confirmed against Gate 10's real per-block output
-   (2026-08-06): removed exactly the 39px constant from every row. */
+   (2026-08-06): removed exactly the 39px constant from every row.
+
+   This selector only ever changes anything for the elements in this file
+   that have a non-zero margin-top to begin with: h1/h2/h3 (1.5em) and hr
+   (1.5em, via its `margin: 1.5em 0` shorthand below) -- every other rule
+   here already sets margin-top: 0 explicitly, so the selector is a no-op
+   for them whether or not they're a first child.
+
+   Known, accepted asymmetry, not caught by Gate 10: `:first-child` matches
+   ANY element that is the first child of its own immediate parent,
+   anywhere in the subtree -- not just the document's true first block.
+   `.pagedown-document` sits on the Milkdown mount's single `.ProseMirror`
+   element on the editor side, so only the document's actual first
+   top-level block can ever match there. On the pagination side, Paged.js
+   clones/wraps content per PAGE (the gate's own selector,
+   `.pagedjs_page_content > div > *`, shows this), so this rule matches the
+   first block of EVERY page, not just page 1. Concretely: a heading (or
+   hr) that happens to land first on page 2+ of a real multi-page document
+   renders with margin-top: 0 in the paginated preview and exported PDF,
+   while the identical heading in the Milkdown editor -- which has no page
+   concept at all -- keeps its full 1.5em, since it's never a first-child
+   there unless it's genuinely the document's first block. Gate 10's fixture
+   (REPORT_TEMPLATE) fits on a single page, so no heading other than the
+   true first block is ever a per-page first-child, and this asymmetry is
+   structurally invisible to it.
+
+   A narrower selector was considered and rejected: `.pagedown-document >
+   *:first-child` (direct-child combinator) would avoid matching a
+   page-2+ heading, but wouldn't match ANYTHING on either surface --
+   the actual first content element is several wrapper divs deep from
+   `.pagedown-document` on both sides (the class sits on `.milkdown-mount`
+   /`<body>`, not on `.ProseMirror`/the per-page content div directly), so
+   a direct-child version is simply broken, not just stricter. A truly
+   page-scoped fix (surface-specific selectors keyed to each surface's own
+   per-page wrapper) would close the gap, but requires surface-specific
+   rules in a file whose entire premise is one set of rules for both
+   surfaces, and is a structural question outside Task 7's "spacing/
+   line-height tuning" scope -- left as a known follow-up for whoever next
+   works on multi-page typography parity, not fixed here. */
 .pagedown-document :first-child {
   margin-top: 0;
 }
@@ -114,11 +152,13 @@
      dependent). That mismatch showed up as a per-heading-transition delta
      that grew block by block in Gate 10's table (e.g. +3px to +3.5px at
      every H1/H2 boundary) even after the first-child fix above removed the
-     flat +39px offset. 1.15 matches paragraph text's own visual density at
-     these font sizes and, critically, is a plain number rather than an
+     flat +39px offset. 1.15 is, critically, a plain number rather than an
      inherited one, so both surfaces compute the identical heading height
      regardless of whatever line-height their respective ambient/UA
-     stylesheet would otherwise supply. Empirically confirmed against
+     stylesheet would otherwise supply -- the exact value was picked to
+     match Gate 10's real measured output (it does NOT match this file's
+     own paragraph line-height of 1.7 above; headings and body text are
+     deliberately different densities). Empirically confirmed against
      Gate 10's real per-block output (2026-08-06).
      margin-top: 1.5x / margin-bottom: 0.5x the element's OWN font-size --
      using `em` here (not a hardcoded px value per level) is what makes this
