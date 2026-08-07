@@ -3,6 +3,7 @@ import { useAppStore, type ViewMode } from '../store/appStore'
 import { useDocumentStore } from '../store/documentStore'
 import MilkdownEditor, { type MilkdownEditorHandle } from '../milkdown/MilkdownEditor'
 import SourceEditor from '../components/SourceEditor'
+import SplitPreview from '../components/SplitPreview'
 import EditorTabBar from '../components/EditorTabBar'
 import EditorToolbar from '../components/EditorToolbar'
 import EditorSidebar from '../components/EditorSidebar'
@@ -25,6 +26,8 @@ function EditorScreen(): React.JSX.Element {
   const closePageSetup = useAppStore((state) => state.closePageSetup)
   const viewMode = useAppStore((state) => state.viewMode)
   const setViewMode = useAppStore((state) => state.setViewMode)
+  const splitLeftMode = useAppStore((state) => state.splitLeftMode)
+  const splitRatio = useAppStore((state) => state.splitRatio)
   const filePath = useDocumentStore((state) => state.filePath)
   const content = useDocumentStore((state) => state.content)
   const revision = useDocumentStore((state) => state.revision)
@@ -59,94 +62,158 @@ function EditorScreen(): React.JSX.Element {
   // EditorToolbar's mode-switcher calls this instead of appStore's setViewMode
   // directly, so the two directions that need coordination with the live
   // Milkdown editor instance actually get it -- see
-  // docs/superpowers/specs/2026-08-07-source-mode-design.md for why both
-  // are necessary, not just one:
+  // docs/superpowers/specs/2026-08-07-source-mode-design.md (the original
+  // format<->source contract) and
+  // docs/superpowers/specs/2026-08-07-split-mode-design.md (this function's
+  // generalization onto Split mode, Task 5) for why both calls below are
+  // necessary, not just one.
   //
-  // Anything else -> Source: MilkdownEditor's onChange is 200ms-debounced
-  // (see CLAUDE.md's Milkdown section). Without flush() first, Source mode
-  // could read documentStore.content before a very recent edit has synced
-  // through, showing stale text the instant you switch. Guarded on
+  // Split mode's left pane IS Format or Source editing, just in a different
+  // layout (see renderPageCard/renderSourceEditor below, each called from
+  // BOTH its own plain-mode branch and Split's left-pane ternary) -- so
+  // "am I currently in/entering Format editing" has to mean "plain Format
+  // mode OR Split mode with a Format left pane," and likewise for Source.
+  // isFormatEditing/isSourceEditing below are exactly that predicate, and
+  // note they close over `currentSplitLeftMode` alone (read once, via
+  // getState(), same as everything else in this function) -- correct
+  // because `mode`/`currentViewMode` are the segmented control's own
+  // Format/Split/Source argument, and splitLeftMode itself never changes as
+  // part of THIS transition (that's the toolbar's separate splitLeftMode
+  // toggle, calling appStore's setSplitLeftMode directly -- see
+  // EditorToolbar.tsx -- which does not call this function or flush/remount
+  // at all; it doesn't need to, for the same JSX-type-swap reason explained
+  // in the finding below, just within Split's own left-pane ternary instead
+  // of this function's format/split/source ternary).
+  //
+  // Anything-not-Format-editing -> Source editing: MilkdownEditor's onChange
+  // is 200ms-debounced (see CLAUDE.md's Milkdown section). Without flush()
+  // first, the incoming Source-editing surface could read
+  // documentStore.content before a very recent edit has synced through,
+  // showing stale text the instant you switch. Originally guarded on
   // `mode === 'source' && currentViewMode !== 'source'` rather than the
   // narrower `currentViewMode === 'format' && mode === 'source'` (fix-round
-  // finding, F4) -- the narrower form skips the flush on a hypothetical
-  // 'split' -> 'source' transition, which is harmless today only because
-  // Split mode renders the Format branch below (so the switch unmounts
-  // MilkdownEditor and its own unmount cleanup flushes as a side effect --
-  // see the mutation-testing note further down) but stops being harmless
-  // the moment a real Split mode keeps both editors permanently mounted and
-  // that unmount safety net disappears. flush() is a documented no-op when
-  // nothing changed since mount, so widening this condition is free.
+  // finding, F4, from the Source mode sub-project) specifically because the
+  // narrower form skipped the flush on a 'split' -> 'source' transition --
+  // at the time hypothetical (Split mode wasn't built yet), now real. The
+  // isFormatEditing/isSourceEditing predicates below are the natural
+  // generalization of that same fix: `enteringSourceEditing &&
+  // leavingFormatEditing` covers format->source, split(format)->source,
+  // format->split(source), AND split(format)->split(source) uniformly,
+  // rather than re-deriving F4's fix by hand for each new mode pairing.
+  // flush() is a documented no-op when nothing changed since mount, so this
+  // condition being broad is free.
   //
-  // Source -> anything else: MilkdownEditor is uncontrolled after mount
-  // (content only seeds defaultValueCtx once, at construction) and Source
-  // mode writes directly to documentStore.content through a path Milkdown's
-  // own instance never observes. replaceContentForTab's real job here is
-  // its revision bump (a plain updateContentForTab call would leave
-  // MilkdownEditor's key={revision} unchanged, so it would NOT remount, and
-  // would keep showing whatever it had in memory from before Source mode
-  // was entered) -- forcing EditorScreen's key={revision} to remount
-  // MilkdownEditor and re-seed defaultValueCtx from the now-current content,
-  // the same mechanism newDocument/loadDocument/Page-Setup-apply already
-  // rely on. The content argument is the CURRENT content (already fully
-  // synced by every Source-mode keystroke's own updateContentForTab call --
-  // see SourceEditor's own contract), so this is a same-value rewrite whose
-  // only real effect on CONTENT is the revision bump, not a second content
-  // write -- and, as of the same-value isDirty guard replaceContentForTab
-  // itself now carries (F1, see documentStore.ts's own doc comment on that
-  // action), it genuinely has no OTHER effect either: before that guard
-  // existed, this same-value rewrite still forced isDirty: true
-  // unconditionally, so a Format -> Source -> Format round trip with zero
-  // real edits marked a clean, untouched document dirty. Don't reintroduce
-  // that by calling a different store action here or bypassing the guard --
-  // this call depends on it now.
+  // Leaving Source editing -> entering Format editing: MilkdownEditor is
+  // uncontrolled after mount (content only seeds defaultValueCtx once, at
+  // construction) and Source mode writes directly to documentStore.content
+  // through a path Milkdown's own instance never observes. replaceContentForTab's
+  // real job here is its revision bump (a plain updateContentForTab call
+  // would leave MilkdownEditor's key={revision} unchanged, so it would NOT
+  // remount, and would keep showing whatever it had in memory from before
+  // Source editing was entered) -- forcing EditorScreen's key={revision} to
+  // remount MilkdownEditor and re-seed defaultValueCtx from the now-current
+  // content, the same mechanism newDocument/loadDocument/Page-Setup-apply
+  // already rely on. The content argument is the CURRENT content (already
+  // fully synced by every Source-mode keystroke's own updateContentForTab
+  // call -- see SourceEditor's own contract), so this is a same-value
+  // rewrite whose only real effect on CONTENT is the revision bump, not a
+  // second content write -- and, as of the same-value isDirty guard
+  // replaceContentForTab itself now carries (F1, see documentStore.ts's own
+  // doc comment on that action), it genuinely has no OTHER effect either:
+  // before that guard existed, this same-value rewrite still forced
+  // isDirty: true unconditionally, so a Format -> Source -> Format round
+  // trip with zero real edits marked a clean, untouched document dirty.
+  // Don't reintroduce that by calling a different store action here or
+  // bypassing the guard -- this call depends on it now.
   //
-  // Reads `viewMode`/`content`/`activeTabId` via getState() rather than the
-  // render closure (fix-round finding, F6) -- this handler is synchronous
-  // end to end (flush()/replaceContentForTab/setViewMode all run in the
-  // same click handler with no `await` in between), so a stale closure read
-  // is not reachable today the way it is for handleRestoreVersion's own
-  // post-save guard below. But this file already establishes the
-  // getState() convention for exactly this risk class, and a stale read
-  // here would be a genuine clobber if that synchronous-handler property
-  // ever stopped holding, so matching the convention costs nothing.
+  // Reads `viewMode`/`splitLeftMode`/`content`/`activeTabId` via getState()
+  // rather than the render closure (fix-round finding, F6, from the Source
+  // mode sub-project) -- this handler is synchronous end to end
+  // (flush()/replaceContentForTab/setViewMode all run in the same click
+  // handler with no `await` in between), so a stale closure read is not
+  // reachable today the way it is for handleRestoreVersion's own post-save
+  // guard below. But this file already establishes the getState()
+  // convention for exactly this risk class, and a stale read here would be
+  // a genuine clobber if that synchronous-handler property ever stopped
+  // holding, so matching the convention costs nothing.
   //
-  // Fix-round-1 finding, worth recording here because it's genuinely
-  // non-obvious and any future reader will otherwise rediscover it the hard
-  // way: BOTH calls below are currently belt-and-braces against today's JSX
-  // shape, not the sole reason either observable outcome holds. (1)
-  // MilkdownEditor's own unmount cleanup (MilkdownEditor.tsx) already calls
-  // its internal flushRef.current?.() before editor.destroy() -- and
-  // switching to Source mode always unmounts MilkdownEditor, because the
-  // Format/Source JSX conditional below swaps element types entirely, which
-  // React reconciles as unmount-then-mount, not a keyed update -- so an
-  // unflushed edit reaches the store via that path even without this
-  // handler's own flush() call. (2) That same type-swap-forces-remount fact
-  // means a fresh MilkdownEditor instance reads the CURRENT `content` prop
-  // at mount time regardless of whether key={revision} changed, so
-  // replaceContentForTab's revision bump is, right now, also not the sole
-  // reason Source-mode edits survive a switch back to Format. Both calls
-  // are kept anyway -- mandated by the plan and
-  // docs/superpowers/specs/2026-08-07-source-mode-design.md, and each
-  // becomes genuinely load-bearing the moment this JSX structure changes
-  // (e.g. a future Split mode that keeps both editors permanently mounted,
-  // at which point the unmount-triggers-flush and type-swap-forces-remount
-  // side effects these calls currently ride on both disappear). Precisely
-  // because today's observable outcomes don't discriminate between "this
-  // call did it" and "an unrelated mechanism did it," the tests covering
-  // these two calls are spy/mutation-based rather than outcome-only:
-  // EditorScreen.test.tsx's 'switching Source -> Format...' test spies on
+  // Task 5 finding (Split mode sub-project) -- an UPDATE to a claim the
+  // Source mode sub-project's own fix-round-1 finding made here, not a
+  // restatement of it. That finding predicted both calls below would become
+  // "genuinely load-bearing... the moment this JSX structure changes (e.g. a
+  // future Split mode that keeps both editors permanently mounted)." Having
+  // now built that Split mode (see the `document-content` JSX below), the
+  // answer, checked deliberately rather than assumed: BOTH calls are STILL
+  // currently belt-and-braces, not yet the sole reason either observable
+  // outcome holds -- the predicted moment has not actually arrived, because
+  // this implementation's JSX does NOT keep both editors permanently
+  // mounted. `document-content`'s top level is `viewMode === 'split' ? (two
+  // -pane row) : (single-pane view)` -- a ternary, not a shared position --
+  // so the Format branch's page-card (inside the ternary's false side) and
+  // Split(format)'s page-card (inside the true side's own left-pane
+  // ternary) sit at completely different positions in the render tree.
+  // React reconciles a ternary swap between two structurally different
+  // subtrees as a full unmount-then-mount of whatever's inside, exactly the
+  // same "type-swap-forces-remount" mechanism the original Source mode
+  // finding described for the plain Format/Source conditional -- Split mode
+  // didn't remove that mechanism, it just added more transitions that ride
+  // on it too. Concretely: (1) MilkdownEditor's own unmount cleanup
+  // (MilkdownEditor.tsx) already calls its internal flushRef.current?.()
+  // before editor.destroy(), and every transition handled by this function
+  // (format<->source, format<->split(source), split(format)<->source, and
+  // even format<->split(format), a same-editing-surface transition this
+  // function's own booleans correctly do NOT flush/remount for) unmounts
+  // MilkdownEditor via that ternary swap regardless -- so an unflushed edit
+  // reaches the store via that path even without this handler's own
+  // flush() call. (2) That same fact means a freshly mounted MilkdownEditor
+  // instance reads the CURRENT `content` prop at mount time regardless of
+  // whether key={revision} changed, so replaceContentForTab's revision bump
+  // is, right now, also not the sole reason Source-editing edits survive a
+  // switch to Format editing. (3) The NEW splitLeftMode toggle (not this
+  // function -- see EditorToolbar.tsx) rides the identical safety net one
+  // level down: Split's own left-pane ternary (`splitLeftMode === 'source'
+  // ? renderSourceEditor() : renderPageCard()`) is exactly the same kind of
+  // type-swap, which is why that toggle's onClick can safely call
+  // setSplitLeftMode directly with no flush/remount coordination of its
+  // own. Both calls below are kept anyway -- mandated by the plan and
+  // docs/superpowers/specs/2026-08-07-split-mode-design.md, and each would
+  // become genuinely load-bearing if a FUTURE change restructured
+  // `document-content` so the SAME MilkdownEditor instance's tree position
+  // survived a Format<->Split(format) (or any other now-safety-netted)
+  // transition -- e.g. a single persistent left-pane slot rendered
+  // unconditionally, with only its ternary contents and the right pane's
+  // presence varying by viewMode, rather than the whole two-pane row living
+  // behind its own top-level ternary the way it does today. Precisely
+  // because today's observable outcomes still don't discriminate between
+  // "this call did it" and "an unrelated mechanism did it," the tests
+  // covering these two calls remain spy/mutation-based rather than
+  // outcome-only: EditorScreen.test.tsx's 'switching Source -> Format...'
+  // and 'switching Split(source) -> Format...' tests spy on
   // replaceContentForTab directly (the unmount/onChange path only ever
   // calls updateContentForTab, never that), and
   // EditorScreen.viewMode.test.tsx module-mocks MilkdownEditor with a fake
   // that has no unmount auto-flush, so flush() calls on its handle can only
-  // come from this function.
+  // come from this function -- now exercised there for format<->source,
+  // format<->split(source), and split(source)<->format alike.
   const handleSetViewMode = (mode: ViewMode): void => {
-    const currentViewMode = useAppStore.getState().viewMode
+    const { viewMode: currentViewMode, splitLeftMode: currentSplitLeftMode } =
+      useAppStore.getState()
     const { content: currentContent, activeTabId: currentActiveTabId } = useDocumentStore.getState()
-    if (mode === 'source' && currentViewMode !== 'source') {
+
+    const isFormatEditing = (m: ViewMode): boolean =>
+      m === 'format' || (m === 'split' && currentSplitLeftMode === 'format')
+    const isSourceEditing = (m: ViewMode): boolean =>
+      m === 'source' || (m === 'split' && currentSplitLeftMode === 'source')
+
+    const enteringFormatEditing = isFormatEditing(mode) && !isFormatEditing(currentViewMode)
+    const leavingFormatEditing = isFormatEditing(currentViewMode) && !isFormatEditing(mode)
+    const enteringSourceEditing = isSourceEditing(mode) && !isSourceEditing(currentViewMode)
+    const leavingSourceEditing = isSourceEditing(currentViewMode) && !isSourceEditing(mode)
+
+    if (enteringSourceEditing && leavingFormatEditing) {
       editorRef.current?.flush()
     }
-    if (currentViewMode === 'source' && mode !== 'source') {
+    if (leavingSourceEditing && enteringFormatEditing) {
       replaceContentForTab(currentActiveTabId, currentContent)
     }
     setViewMode(mode)
@@ -460,6 +527,110 @@ function EditorScreen(): React.JSX.Element {
     return flushAndRestore()
   }
 
+  // The Source-editing surface, factored into a function (not a plain JSX
+  // variable computed once per render) rather than left inline at each of
+  // its two call sites below (plain Source mode, and Split mode's left pane
+  // when splitLeftMode === 'source') -- same reasoning, and the same
+  // "don't duplicate" rule, as renderPageCard just below.
+  const renderSourceEditor = (): React.JSX.Element => (
+    <SourceEditor content={content} onChange={(value) => updateContentForTab(activeTabId, value)} />
+  )
+
+  // The "page" card -- per the design handoff (PageDown.dc.html, Format-mode
+  // mock): a white sheet with a real drop shadow, floating on the
+  // canvas-gray scroll area, not a flat borderless region flush with the
+  // background. Was entirely missing before an earlier fix -- MilkdownEditor's
+  // own root div has no background/shadow/width constraint of its own, so
+  // the editor rendered as plain canvas-gray with no visible document
+  // boundary at all. Background/shadow/radius/font values match the mock's
+  // own numbers, using tokens that already existed in base.css for exactly
+  // this purpose (--shadow-page, --color-page) but were never applied here.
+  //
+  // Width/side-padding do NOT match the mock's own 640px/64px --
+  // merge-conflict finding (Document Typography sub-project vs that earlier
+  // fix, both landing the same night): the mock's numbers were an eyeballed
+  // approximation authored before this project had a single authoritative
+  // page geometry. max-w-[624px] on MilkdownEditor's own root div (see that
+  // component) is now real, measured Letter-page-at-96dpi-with-1in-margins
+  // content width (page-geometry.ts's CONTENT_WIDTH_PX), enforced by Gate 10
+  // to stay pixel-identical to the paginated preview/PDF -- the exact
+  // print-fidelity guarantee this whole app exists for. The mock's 640px
+  // total width with 64px padding each side only leaves 512px for content,
+  // silently squeezing MilkdownEditor's 624px constraint down to 512px and
+  // failing Gate 10 (measured: 624 expected, 512 received). Widening this
+  // card to 816px (PAGE_WIDTH_PX) with 96px padding each side
+  // (PAGE_MARGIN_PX, i.e. Tailwind's pl-24/pr-24) makes 816 - 192 = 624 --
+  // the same real page width and real 1in margin every other surface
+  // already uses, not an arbitrary patch chosen to make one assertion pass.
+  //
+  // Fixed width (`w-`), not `max-w-` -- verified empirically, not assumed: a
+  // `max-w` cap only shrinks a block box below its container's available
+  // width, it never forces one WIDER than its container, and this app's
+  // default window (900px, minus the 216px sidebar) leaves only 684px for
+  // the canvas area -- narrower than 816px. With `max-w-[816px]`, the card
+  // just filled that 684px and reflowed its content down to 492px, failing
+  // Gate 10 differently but just as badly (confirmed by rerunning it). A
+  // real page must stay at its true size regardless of window width --
+  // exactly what the zoom-scaled wrapper around this card's OWN call site
+  // below already exists to handle (fitting an unchanged, full-size layout
+  // visually into a smaller viewport, the same way Word/Google Docs zoom out
+  // rather than reflow text at less than 100%) -- so the card needs a width
+  // the CSS box model won't shrink on its own, letting that wrapper's
+  // `overflow-auto` scroll horizontally at low zoom/narrow windows instead
+  // of silently changing the content's real layout width. Top/bottom
+  // padding (22px/34px, from the mock) are untouched: Gate 10 only measures
+  // block positions relative to each surface's own content root, so
+  // vertical chrome outside the editing root doesn't affect it.
+  //
+  // Deliberately natural-height (grows/shrinks with the document, not
+  // stretched to fill the canvas) -- an earlier version of this fix tried to
+  // make the WHOLE card's blank space part of the clickable editable region
+  // (via a min-height/flexbox chain forcing ProseMirror's own DOM to
+  // physically fill the card), which was the wrong goal entirely, not just
+  // hard to get right: a real editor's text only exists where you've
+  // actually typed content or pressed Enter, so clicking below the last real
+  // line should move the cursor to the nearest real position (the end of
+  // the document), not silently start new content wherever you happened to
+  // click, which is what a physically-enlarged editable region would do.
+  // handlePageCardClick above implements the actual correct behavior
+  // instead.
+  //
+  // Factored into a function (Task 5, Split mode sub-project) rather than
+  // left inline in the old Format-only branch, specifically so Split mode's
+  // left pane (when splitLeftMode === 'format') can reuse the EXACT same
+  // element -- same ref/key/onChange/onError wiring -- instead of a second,
+  // independently-wired MilkdownEditor instance. See handleSetViewMode's own
+  // doc comment above for why this function's two call sites still produce
+  // two entirely separate MilkdownEditor mounts at runtime (never both at
+  // once) rather than one instance that survives a Format<->Split(format)
+  // transition -- that's a property of WHERE this function is called from
+  // in the JSX below, not of the function itself.
+  const renderPageCard = (): React.JSX.Element => (
+    <div
+      data-testid="page-card"
+      className="mx-auto my-8 w-[816px] shrink-0 rounded-sm bg-page pb-[34px] pl-24 pr-24 pt-[22px] shadow-page"
+      onMouseDown={handlePageCardMouseDown}
+      onClick={handlePageCardClick}
+    >
+      <MilkdownEditor
+        ref={editorRef}
+        key={revision}
+        content={content}
+        // Bound to THIS render's activeTabId, not the bare updateContent
+        // store action -- see documentStore.ts's updateContentForTab doc
+        // comment for the tab-switch race this closes: any change to
+        // activeTabId always bumps revision (remounting this component with
+        // a fresh key), so the activeTabId captured here is guaranteed
+        // correct for this specific MilkdownEditor instance's entire
+        // lifetime, even after a late flush() fires (e.g. on unmount, when
+        // the user has switched tabs) well after the store's own
+        // activeTabId has moved on.
+        onChange={(markdown) => updateContentForTab(activeTabId, markdown)}
+        onError={(message) => useDocumentStore.setState({ error: message })}
+      />
+    </div>
+  )
+
   return (
     <div className="flex h-full flex-col bg-canvas font-sans text-text-primary">
       <div className="flex h-10 flex-none items-center gap-3 border-b border-border-chrome bg-chrome-dark px-3">
@@ -493,111 +664,54 @@ function EditorScreen(): React.JSX.Element {
           filePath={filePath}
           onRestoreVersion={handleRestoreVersion}
         />
-        <div
-          ref={canvasRef}
-          data-testid="document-content"
-          className="flex-1 overflow-auto"
-          style={{ transform: `scale(${zoom})`, transformOrigin: 'top center' }}
-        >
-          {viewMode === 'source' ? (
-            <SourceEditor
-              content={content}
-              onChange={(value) => updateContentForTab(activeTabId, value)}
-            />
-          ) : (
-            <>
-              {/* The "page" card -- per the design handoff (PageDown.dc.html,
-              Format-mode mock): a white sheet with a real drop shadow,
-              floating on the canvas-gray scroll area, not a flat borderless
-              region flush with the background. Was entirely missing before
-              this fix -- MilkdownEditor's own root div has no background/
-              shadow/width constraint of its own, so the editor rendered as
-              plain canvas-gray with no visible document boundary at all.
-              Background/shadow/radius/font values match the mock's own
-              numbers, using tokens that already existed in base.css for
-              exactly this purpose (--shadow-page, --color-page) but were
-              never applied here.
-
-              Width/side-padding do NOT match the mock's own 640px/64px --
-              merge-conflict finding (Document Typography sub-project vs
-              this fix, both landing the same night): the mock's numbers
-              were an eyeballed approximation authored before this project
-              had a single authoritative page geometry. max-w-[624px] on
-              MilkdownEditor's own root div (see that component) is now
-              real, measured Letter-page-at-96dpi-with-1in-margins content
-              width (page-geometry.ts's CONTENT_WIDTH_PX), enforced by
-              Gate 10 to stay pixel-identical to the paginated preview/PDF
-              -- the exact print-fidelity guarantee this whole app exists
-              for. The mock's 640px total width with 64px padding each side
-              only leaves 512px for content, silently squeezing
-              MilkdownEditor's 624px constraint down to 512px and failing
-              Gate 10 (measured: 624 expected, 512 received). Widening this
-              card to 816px (PAGE_WIDTH_PX) with 96px padding each side
-              (PAGE_MARGIN_PX, i.e. Tailwind's pl-24/pr-24) makes 816 - 192
-              = 624 -- the same real page width and real 1in margin every
-              other surface already uses, not an arbitrary patch chosen to
-              make one assertion pass.
-
-              Fixed width (`w-`), not `max-w-` -- verified empirically, not
-              assumed: a `max-w` cap only shrinks a block box below its
-              container's available width, it never forces one WIDER than
-              its container, and this app's default window (900px, minus
-              the 216px sidebar) leaves only 684px for the canvas area --
-              narrower than 816px. With `max-w-[816px]`, the card just
-              filled that 684px and reflowed its content down to 492px,
-              failing Gate 10 differently but just as badly (confirmed by
-              rerunning it). A real page must stay at its true size
-              regardless of window width -- exactly what `canvasRef`'s own
-              `transform: scale(zoom)` above already exists to handle
-              (fitting an unchanged, full-size layout visually into a
-              smaller viewport, the same way Word/Google Docs zoom out
-              rather than reflow text at less than 100%) -- so the card
-              needs a width the CSS box model won't shrink on its own,
-              letting `overflow-auto` on the canvas scroll horizontally at
-              low zoom/narrow windows instead of silently changing the
-              content's real layout width. Top/bottom padding (22px/34px, from
-              the mock) are untouched: Gate 10 only measures block
-              positions relative to each surface's own content root, so
-              vertical chrome outside the editing root doesn't affect it.
-
-              Deliberately natural-height (grows/shrinks with the document,
-              not stretched to fill the canvas) -- an earlier version of
-              this fix tried to make the WHOLE card's blank space part of
-              the clickable editable region (via a min-height/flexbox
-              chain forcing ProseMirror's own DOM to physically fill the
-              card), which was the wrong goal entirely, not just hard to
-              get right: a real editor's text only exists where you've
-              actually typed content or pressed Enter, so clicking below
-              the last real line should move the cursor to the nearest
-              real position (the end of the document), not silently start
-              new content wherever you happened to click, which is what a
-              physically-enlarged editable region would do. handlePageCardClick
-              above implements the actual correct behavior instead. */}
-              <div
-                data-testid="page-card"
-                className="mx-auto my-8 w-[816px] shrink-0 rounded-sm bg-page pb-[34px] pl-24 pr-24 pt-[22px] shadow-page"
-                onMouseDown={handlePageCardMouseDown}
-                onClick={handlePageCardClick}
-              >
-                <MilkdownEditor
-                  ref={editorRef}
-                  key={revision}
-                  content={content}
-                  // Bound to THIS render's activeTabId, not the bare
-                  // updateContent store action -- see documentStore.ts's
-                  // updateContentForTab doc comment for the tab-switch race
-                  // this closes: any change to activeTabId always bumps
-                  // revision (remounting this component with a fresh key), so
-                  // the activeTabId captured here is guaranteed correct for
-                  // this specific MilkdownEditor instance's entire lifetime,
-                  // even after a late flush() fires (e.g. on unmount, when the
-                  // user has switched tabs) well after the store's own
-                  // activeTabId has moved on.
-                  onChange={(markdown) => updateContentForTab(activeTabId, markdown)}
-                  onError={(message) => useDocumentStore.setState({ error: message })}
-                />
+        <div ref={canvasRef} data-testid="document-content" className="flex-1 overflow-hidden">
+          {viewMode === 'split' ? (
+            // Split mode's own two-pane row lives in a SEPARATE top-level
+            // branch from the single-pane view below, not nested inside its
+            // zoom-scaled/scrolling wrapper -- two independent reasons, both
+            // load-bearing, not a style preference:
+            //
+            // (1) The right pane hosts a real native WebContentsView,
+            // positioned by SplitPreview's own placeholder reporting its
+            // getBoundingClientRect() via ResizeObserver + window 'resize'
+            // (see SplitPreview.tsx). A CSS `transform: scale()` on an
+            // ancestor changes that rect's on-screen size WITHOUT firing
+            // either listener (transform affects paint, not the border-box
+            // ResizeObserver watches, and it isn't a window resize) -- so
+            // reusing the zoom transform here would silently desync the
+            // native view's bounds from its placeholder the instant zoom
+            // changed, with no error. Split's left pane therefore always
+            // renders at 100% regardless of the zoom control.
+            //
+            // (2) The right pane must also not be inside anything that
+            // SCROLLS -- SplitPreview's own comment documents this as its
+            // own accepted limitation (it tracks resize, not scroll): an
+            // ancestor scroll shifts the placeholder's on-screen position
+            // with no event to tell SplitPreview to re-report it, which
+            // would silently desync the native view the same way. This
+            // row's own height is pinned to `h-full` (exactly its parent's
+            // box, from flexbox), so its LEFT pane's own `overflow-auto`
+            // (below) is where scrolling actually happens for a
+            // taller-than-viewport document -- this row itself never grows
+            // past the viewport and never needs to scroll.
+            <div className="flex h-full">
+              <div style={{ width: `${splitRatio}%` }} className="h-full overflow-auto">
+                {splitLeftMode === 'source' ? renderSourceEditor() : renderPageCard()}
               </div>
-            </>
+              {/* Deliberately NOT overflow-auto/overflow-scroll -- see this
+              branch's own comment above for why a scrolling right pane would
+              silently desync the native preview from its placeholder. */}
+              <div style={{ width: `${100 - splitRatio}%` }} className="h-full">
+                <SplitPreview content={content} filePath={filePath} />
+              </div>
+            </div>
+          ) : (
+            <div
+              className="h-full overflow-auto"
+              style={{ transform: `scale(${zoom})`, transformOrigin: 'top center' }}
+            >
+              {viewMode === 'source' ? renderSourceEditor() : renderPageCard()}
+            </div>
           )}
         </div>
       </div>

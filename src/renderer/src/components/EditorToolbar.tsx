@@ -130,6 +130,8 @@ function ToolbarIconButton({
 function EditorToolbar({ editorRef, onSetViewMode }: EditorToolbarProps): ReactElement {
   const viewMode = useAppStore((state) => state.viewMode)
   const setViewMode = useAppStore((state) => state.setViewMode)
+  const splitLeftMode = useAppStore((state) => state.splitLeftMode)
+  const setSplitLeftMode = useAppStore((state) => state.setSplitLeftMode)
   const openPageSetup = useAppStore((state) => state.openPageSetup)
   // F2 (final whole-branch review): every control below bound to
   // editorRef.current?.X() no-ops in Source mode, because MilkdownEditor is
@@ -716,6 +718,56 @@ function EditorToolbar({ editorRef, onSetViewMode }: EditorToolbarProps): ReactE
             </button>
           ))}
         </div>
+
+        {/* Split-left-pane toggle -- visible only in Split mode (Task 5,
+        Split mode sub-project). Placement/style is a bounded judgment call:
+        the design mockup (PageDown.dc.html) DOES show a Format/Source pill
+        pair for this exact choice, but inside the split LEFT PANE's own
+        34px header strip, a structural location this task doesn't build
+        (EditorScreen's Split layout has no per-pane header bar, and this
+        task's own brief names EditorToolbar.tsx, not that pane, as the
+        modification target). Falling back to the brief's own explicitly-
+        sanctioned default instead: a small two-button toggle next to the
+        Format/Split/Source segmented control, in the SAME rounded-md
+        bg-chrome-dark segmented-pill style as that control, so it reads as
+        "a second, narrower version of the same kind of control" rather than
+        a visually unrelated new pattern.
+
+        aria-label overrides (not the plain "Format"/"Source" visible text)
+        are load-bearing, not decoration: the segmented control's OWN
+        Format/Source buttons are simultaneously on screen whenever this
+        toggle is (both only ever show together, since viewMode === 'split'
+        is this toggle's entire precondition) -- a same-string accessible
+        name would make screen.getByRole('button', { name: 'Format' })
+        ambiguous the instant Split mode is active. Verified this really
+        would collide (against the pre-existing 'view-mode segmented
+        control' test, which clicks 'Split' then immediately queries
+        'Source' by exact name) before choosing distinct labels. */}
+        {viewMode === 'split' && (
+          <div className="flex items-center gap-0.5 rounded-md bg-chrome-dark p-0.5">
+            {(
+              [
+                { mode: 'format' as const, label: 'Format' },
+                { mode: 'source' as const, label: 'Source' }
+              ] as const
+            ).map(({ mode, label }) => (
+              <button
+                key={mode}
+                type="button"
+                aria-label={`Split left pane: ${label}`}
+                aria-pressed={splitLeftMode === mode}
+                onClick={() => setSplitLeftMode(mode)}
+                className={`rounded-sm px-2.5 py-1 text-12-5 ${
+                  splitLeftMode === mode
+                    ? 'bg-page text-text-primary shadow-flat'
+                    : 'text-text-secondary hover:text-text-primary'
+                }`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        )}
 
         <ToolbarIconButton label="Page setup" onClick={openPageSetup}>
           <Icon strokeWidth={1.6}>

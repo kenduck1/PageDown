@@ -103,7 +103,10 @@ beforeEach(() => {
     restoreVersionContent: vi.fn(),
     clearPendingAutosave: vi.fn(),
     setSplitPreviewBounds: vi.fn(),
-    sendSplitPreviewDocument: vi.fn(),
+    // See EditorScreen.test.tsx's own comment on this same mock -- resolved
+    // (not bare) as of Task 5, since Split mode transitions in this file's
+    // own new tests below genuinely mount a real SplitPreview.
+    sendSplitPreviewDocument: vi.fn().mockResolvedValue({ pageCount: 1 }),
     destroySplitPreview: vi.fn()
   }
 })
@@ -133,6 +136,54 @@ describe('EditorScreen view-mode coordination: handleSetViewMode flush() call (m
     render(<EditorScreen />)
 
     await user.click(screen.getByRole('button', { name: 'Format' }))
+
+    expect(mockEditorHandle.flush).not.toHaveBeenCalled()
+  })
+
+  // Split mode generalizes the format<->source flush/remount contract onto
+  // "format editing" and "source editing" as abstract concepts, each
+  // covering BOTH the plain mode and Split mode with that left pane (see
+  // handleSetViewMode's own doc comment in EditorScreen.tsx). These two
+  // tests are the Split-mode equivalents of the pair directly above,
+  // discriminated the same way -- against this file's own flush-with-no-
+  // unmount-side-effect fake, so a pass here can only mean
+  // handleSetViewMode's OWN flush() call fired, not MilkdownEditor's
+  // (absent, by this fake's design) unmount cleanup.
+  it('Format -> Split(source) calls editorRef.current.flush(), same as a plain Format -> Source transition', async () => {
+    useDocumentStore.setState({ filePath: '/tmp/report.md', content: '# Report' })
+    useAppStore.setState({ viewMode: 'format', splitLeftMode: 'source' })
+    const user = userEvent.setup()
+    render(<EditorScreen />)
+
+    expect(mockEditorHandle.flush).not.toHaveBeenCalled()
+
+    await user.click(screen.getByRole('button', { name: 'Split' }))
+
+    expect(mockEditorHandle.flush).toHaveBeenCalledTimes(1)
+  })
+
+  it('Split(source) -> Format does NOT call flush() -- entering Format editing from Source editing has nothing outgoing to flush', async () => {
+    useDocumentStore.setState({ filePath: '/tmp/report.md', content: '# Report' })
+    useAppStore.setState({ viewMode: 'split', splitLeftMode: 'source' })
+    const user = userEvent.setup()
+    render(<EditorScreen />)
+
+    await user.click(screen.getByRole('button', { name: 'Format' }))
+
+    expect(mockEditorHandle.flush).not.toHaveBeenCalled()
+  })
+
+  // Split mode with a FORMAT left pane is treated as the exact same
+  // underlying editing surface as plain Format mode (both are
+  // MilkdownEditor) -- so switching between them is not an
+  // entering/leaving-Source-editing transition at all, and must not flush.
+  it('Format -> Split(format) does NOT call flush() -- both are the same Format-editing surface', async () => {
+    useDocumentStore.setState({ filePath: '/tmp/report.md', content: '# Report' })
+    useAppStore.setState({ viewMode: 'format', splitLeftMode: 'format' })
+    const user = userEvent.setup()
+    render(<EditorScreen />)
+
+    await user.click(screen.getByRole('button', { name: 'Split' }))
 
     expect(mockEditorHandle.flush).not.toHaveBeenCalled()
   })

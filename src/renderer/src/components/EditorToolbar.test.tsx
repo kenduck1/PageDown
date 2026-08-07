@@ -319,6 +319,81 @@ describe('EditorToolbar', () => {
     expect(screen.getByRole('combobox', { name: 'Paragraph style' })).not.toBeDisabled()
   })
 
+  // Task 5 of the Split mode sub-project: a small Format/Source toggle for
+  // splitLeftMode, visible only in Split mode. Design-handoff placement
+  // check (task-5-brief.md Step 7): PageDown.dc.html DOES show Split-mode
+  // chrome for this exact choice, but as a pill pair inside the LEFT PANE's
+  // own header bar (a 34px strip above the split editing surface), not in
+  // this toolbar -- a different structural location than the file this
+  // task names as the modification target (EditorToolbar.tsx) and than
+  // EditorScreen's own Split layout (task-5-brief.md Step 5, no per-pane
+  // header bar). Building that separate header bar is real scope beyond
+  // this task's brief, so per Step 7's own "use judgment, don't block"
+  // instruction, this uses the brief's own explicitly-sanctioned fallback
+  // instead: a small two-button toggle next to the existing mode-switcher
+  // segmented control, styled the same way (rounded-md bg-chrome-dark
+  // segmented pill).
+  //
+  // aria-label overrides ("Split left pane: Format" / "... Source") rather
+  // than the plain "Format"/"Source" visible text, on purpose -- the
+  // segmented control's OWN Format/Source buttons are simultaneously
+  // visible whenever this toggle is (both are only reachable from Split
+  // mode, since the toggle's whole precondition is viewMode === 'split').
+  // A same-string accessible name would make screen.getByRole('button',
+  // { name: 'Format' }) ambiguous (two matches) the instant Split mode is
+  // active -- which would have broken the pre-existing 'view-mode segmented
+  // control' test above (it clicks 'Split' then immediately queries
+  // 'Source' by exact name). Verified this really would collide before
+  // choosing distinct labels, not assumed.
+  describe('splitLeftMode toggle', () => {
+    it('is absent when viewMode is format or source', () => {
+      const ref = createRef<MilkdownEditorHandle>()
+      useAppStore.setState({ viewMode: 'format' })
+      const { rerender } = render(<EditorToolbar editorRef={ref} />)
+      expect(
+        screen.queryByRole('button', { name: 'Split left pane: Format' })
+      ).not.toBeInTheDocument()
+      expect(
+        screen.queryByRole('button', { name: 'Split left pane: Source' })
+      ).not.toBeInTheDocument()
+
+      useAppStore.setState({ viewMode: 'source' })
+      rerender(<EditorToolbar editorRef={ref} />)
+      expect(
+        screen.queryByRole('button', { name: 'Split left pane: Format' })
+      ).not.toBeInTheDocument()
+      expect(
+        screen.queryByRole('button', { name: 'Split left pane: Source' })
+      ).not.toBeInTheDocument()
+    })
+
+    it('is present and reflects splitLeftMode when viewMode is split', () => {
+      const ref = createRef<MilkdownEditorHandle>()
+      useAppStore.setState({ viewMode: 'split', splitLeftMode: 'format' })
+      render(<EditorToolbar editorRef={ref} />)
+
+      expect(screen.getByRole('button', { name: 'Split left pane: Format' })).toHaveAttribute(
+        'aria-pressed',
+        'true'
+      )
+      expect(screen.getByRole('button', { name: 'Split left pane: Source' })).toHaveAttribute(
+        'aria-pressed',
+        'false'
+      )
+    })
+
+    it('clicking the toggle calls setSplitLeftMode with the clicked mode', async () => {
+      const ref = createRef<MilkdownEditorHandle>()
+      useAppStore.setState({ viewMode: 'split', splitLeftMode: 'format' })
+      const user = userEvent.setup()
+      render(<EditorToolbar editorRef={ref} />)
+
+      await user.click(screen.getByRole('button', { name: 'Split left pane: Source' }))
+
+      expect(useAppStore.getState().splitLeftMode).toBe('source')
+    })
+  })
+
   it('The page-setup button calls useAppStore.openPageSetup', async () => {
     const ref = createRef<MilkdownEditorHandle>()
     const user = userEvent.setup()
