@@ -22,8 +22,7 @@ interface SourceEditorProps {
 function SourceEditor({ content, onChange }: SourceEditorProps): React.JSX.Element {
   return (
     <textarea
-      key={content}
-      defaultValue={content}
+      value={content}
       onChange={(event) => onChange(event.target.value)}
       spellCheck={false}
       className="h-full w-full flex-1 resize-none bg-canvas p-8 font-mono text-13 text-text-primary outline-none"
