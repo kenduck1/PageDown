@@ -7,9 +7,16 @@ import { EDITOR_SCHEMA_PLUGINS } from './plugins'
 import { EDITOR_COMMAND_PLUGINS } from './commands'
 import { PINNED_STRINGIFY_OPTIONS } from './stringify-options'
 import { buildEditorCommands, type EditorCommands } from './editor-commands'
+import type { PageGeometry } from '../../../typography/page-geometry'
 
 interface MilkdownEditorProps {
   content: string
+  // The document's own real page geometry (computePageGeometry,
+  // src/typography/page-geometry.ts), passed down rather than recomputed
+  // here: EditorScreen already memoizes it per document, and the page card
+  // this mount sits inside is sized from the very same object -- deriving it
+  // twice would let the card and the text column disagree.
+  geometry: PageGeometry
   onChange: (markdown: string) => void
   onError: (message: string) => void
 }
@@ -53,7 +60,7 @@ export interface MilkdownEditorHandle extends EditorCommands {
 }
 
 const MilkdownEditor = forwardRef<MilkdownEditorHandle, MilkdownEditorProps>(
-  function MilkdownEditor({ content, onChange, onError }, ref) {
+  function MilkdownEditor({ content, geometry, onChange, onError }, ref) {
     const rootRef = useRef<HTMLDivElement>(null)
     const editorRef = useRef<Editor | null>(null)
     // Set synchronously (inside a ProseMirror plugin's `apply`, not through
@@ -247,16 +254,25 @@ const MilkdownEditor = forwardRef<MilkdownEditorHandle, MilkdownEditorProps>(
       // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [])
 
-    // max-w-[624px] mx-auto, NOT px-8 for horizontal spacing: 624px is
-    // CONTENT_WIDTH_PX (src/typography/page-geometry.ts) -- the page's real
-    // content-box width after margins, which the pagination render context
-    // (Task 6) also targets via its own @page rule. Horizontal ambient
-    // padding here would make the actual rendered TEXT narrower than 624px
-    // (padding subtracts from the box that max-width constrains), silently
-    // reintroducing a width mismatch this whole plan exists to remove --
-    // Paged.js's own page-content box has no equivalent extra inner
-    // padding beyond its page margin, which IS the 624px boundary already.
-    // py-6 stays: vertical spacing doesn't affect content WIDTH parity.
+    // An inline max-width of geometry.contentWidthPx + mx-auto, NOT px-8 for
+    // horizontal spacing: contentWidthPx is the page's real content-box
+    // width after its own margins (computePageGeometry,
+    // src/typography/page-geometry.ts) -- the exact same number the
+    // pagination render context targets via its per-request @page rule, so
+    // the two surfaces lay text out in identical-width boxes. It's an inline
+    // style rather than the `max-w-[624px]` class this used to carry because
+    // it now follows the document's own page size and margins (Page Geometry
+    // Wiring sub-project); for a document with no frontmatter it still
+    // resolves to exactly CONTENT_WIDTH_PX (624 = 816 - 96 - 96, Letter with
+    // 1in margins), which is what Gate 10
+    // (phase0/gate10-editor-layout-parity.spec.ts) measures against its own
+    // no-frontmatter fixture. Horizontal ambient padding here would make the
+    // actual rendered TEXT narrower than that (padding subtracts from the
+    // box max-width constrains), silently reintroducing the width mismatch
+    // that whole gate exists to catch -- Paged.js's own page-content box has
+    // no equivalent extra inner padding beyond its page margin, which IS the
+    // content-width boundary already. py-6 stays: vertical spacing doesn't
+    // affect content WIDTH parity.
     //
     // pagedown-document: the shared document-typography.css scope class
     // (src/typography/document-typography.css) -- every selector in that
@@ -267,7 +283,8 @@ const MilkdownEditor = forwardRef<MilkdownEditorHandle, MilkdownEditorProps>(
     return (
       <div
         ref={rootRef}
-        className="milkdown-mount pagedown-document flow-root min-h-full max-w-[624px] mx-auto py-6"
+        className="milkdown-mount pagedown-document flow-root min-h-full mx-auto py-6"
+        style={{ maxWidth: geometry.contentWidthPx }}
       />
     )
   }

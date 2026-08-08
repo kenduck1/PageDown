@@ -19,6 +19,17 @@ import { EDITOR_COMMAND_PLUGINS } from './commands'
 import { createTestEditor } from './test-editor'
 import MilkdownEditor, { type MilkdownEditorHandle } from './MilkdownEditor'
 import { buildEditorCommands } from './editor-commands'
+import { computePageGeometry } from '../../../typography/page-geometry'
+import { DEFAULT_PAGE_CONFIG } from '../../../markdown/page-config'
+
+// MilkdownEditor's `geometry` prop (Page Geometry Wiring sub-project) sizes
+// the mount's own text column from the document's real PageConfig. Every
+// test in this file is about editor behavior rather than page sizing, so
+// they all mount with the Letter/1in default geometry -- exactly what a
+// document with no page frontmatter resolves to. The page-card/mount sizing
+// itself is asserted in EditorScreen.test.tsx, where the geometry actually
+// originates.
+const DEFAULT_GEOMETRY = computePageGeometry(DEFAULT_PAGE_CONFIG)
 
 describe('Milkdown listener plugin — API pattern verification', () => {
   it('markdownUpdated fires with the new serialized markdown after a real edit', async () => {
@@ -323,7 +334,12 @@ describe('MilkdownEditor', () => {
     const onChange = vi.fn()
     const onError = vi.fn()
     const { container } = render(
-      <MilkdownEditor content="# Hello World" onChange={onChange} onError={onError} />
+      <MilkdownEditor
+        geometry={DEFAULT_GEOMETRY}
+        content="# Hello World"
+        onChange={onChange}
+        onError={onError}
+      />
     )
 
     await waitFor(() => {
@@ -337,7 +353,12 @@ describe('MilkdownEditor', () => {
     const onChange = vi.fn()
     const onError = vi.fn()
     const { container } = render(
-      <MilkdownEditor content="# Hello" onChange={onChange} onError={onError} />
+      <MilkdownEditor
+        geometry={DEFAULT_GEOMETRY}
+        content="# Hello"
+        onChange={onChange}
+        onError={onError}
+      />
     )
 
     const proseMirror = await waitFor(() => {
@@ -388,7 +409,13 @@ describe('MilkdownEditor', () => {
     const onChange = vi.fn()
     const onError = vi.fn()
     const { container, rerender } = render(
-      <MilkdownEditor key="a" content="# Doc A" onChange={onChange} onError={onError} />
+      <MilkdownEditor
+        geometry={DEFAULT_GEOMETRY}
+        key="a"
+        content="# Doc A"
+        onChange={onChange}
+        onError={onError}
+      />
     )
     await waitFor(() => expect(container.querySelector('h1')?.textContent).toBe('Doc A'))
 
@@ -410,6 +437,7 @@ describe('MilkdownEditor', () => {
     // with content that doesn't even come from this instance's own edit.
     rerender(
       <MilkdownEditor
+        geometry={DEFAULT_GEOMETRY}
         key="b"
         content={'---\ntitle: x\n---\n\n# Doc A edited'}
         onChange={onChange}
@@ -428,11 +456,25 @@ describe('MilkdownEditor', () => {
     const onChange = vi.fn()
     const onError = vi.fn()
     const { container, rerender } = render(
-      <MilkdownEditor key="a" content="# Doc A" onChange={onChange} onError={onError} />
+      <MilkdownEditor
+        geometry={DEFAULT_GEOMETRY}
+        key="a"
+        content="# Doc A"
+        onChange={onChange}
+        onError={onError}
+      />
     )
     await waitFor(() => expect(container.querySelector('h1')?.textContent).toBe('Doc A'))
 
-    rerender(<MilkdownEditor key="b" content="# Doc B" onChange={onChange} onError={onError} />)
+    rerender(
+      <MilkdownEditor
+        geometry={DEFAULT_GEOMETRY}
+        key="b"
+        content="# Doc B"
+        onChange={onChange}
+        onError={onError}
+      />
+    )
 
     await waitFor(() => expect(container.querySelector('h1')?.textContent).toBe('Doc B'))
     // Exactly one editor mount, not two stacked on top of each other.
@@ -461,6 +503,7 @@ describe('MilkdownEditor', () => {
     // that reaches onError, just a less on-point one to assert against.
     render(
       <MilkdownEditor
+        geometry={DEFAULT_GEOMETRY}
         content={{ not: 'a string' } as unknown as string}
         onChange={onChange}
         onError={onError}
@@ -478,7 +521,13 @@ describe('MilkdownEditor', () => {
     const onError = vi.fn()
     const ref = createRef<MilkdownEditorHandle>()
     const { container } = render(
-      <MilkdownEditor ref={ref} content="# Hello" onChange={onChange} onError={onError} />
+      <MilkdownEditor
+        geometry={DEFAULT_GEOMETRY}
+        ref={ref}
+        content="# Hello"
+        onChange={onChange}
+        onError={onError}
+      />
     )
 
     await waitFor(() => {
@@ -505,7 +554,13 @@ describe('MilkdownEditor', () => {
     const onError = vi.fn()
     const ref = createRef<MilkdownEditorHandle>()
     const { container } = render(
-      <MilkdownEditor ref={ref} content="# Hello" onChange={onChange} onError={onError} />
+      <MilkdownEditor
+        geometry={DEFAULT_GEOMETRY}
+        ref={ref}
+        content="# Hello"
+        onChange={onChange}
+        onError={onError}
+      />
     )
 
     const proseMirror = await waitFor(() => {
@@ -592,7 +647,13 @@ describe('MilkdownEditor', () => {
     const onError = vi.fn()
     const ref = createRef<MilkdownEditorHandle>()
     const { container } = render(
-      <MilkdownEditor ref={ref} content="Hello" onChange={onChange} onError={onError} />
+      <MilkdownEditor
+        geometry={DEFAULT_GEOMETRY}
+        ref={ref}
+        content="Hello"
+        onChange={onChange}
+        onError={onError}
+      />
     )
     const proseMirror = await waitFor(() => {
       const el = container.querySelector('.ProseMirror')
@@ -616,7 +677,13 @@ describe('MilkdownEditor', () => {
     const onError = vi.fn()
     const ref = createRef<MilkdownEditorHandle>()
     const { container } = render(
-      <MilkdownEditor ref={ref} content="Hello" onChange={onChange} onError={onError} />
+      <MilkdownEditor
+        geometry={DEFAULT_GEOMETRY}
+        ref={ref}
+        content="Hello"
+        onChange={onChange}
+        onError={onError}
+      />
     )
     const proseMirror = await waitFor(() => {
       const el = container.querySelector('.ProseMirror')
@@ -640,7 +707,13 @@ describe('MilkdownEditor', () => {
     const onError = vi.fn()
     const ref = createRef<MilkdownEditorHandle>()
     const { container } = render(
-      <MilkdownEditor ref={ref} content="Hello" onChange={onChange} onError={onError} />
+      <MilkdownEditor
+        geometry={DEFAULT_GEOMETRY}
+        ref={ref}
+        content="Hello"
+        onChange={onChange}
+        onError={onError}
+      />
     )
     const proseMirror = await waitFor(() => {
       const el = container.querySelector('.ProseMirror')
@@ -676,6 +749,7 @@ describe('MilkdownEditor', () => {
     const ref = createRef<MilkdownEditorHandle>()
     const { container } = render(
       <MilkdownEditor
+        geometry={DEFAULT_GEOMETRY}
         ref={ref}
         content="Some paragraph text"
         onChange={onChange}
@@ -699,7 +773,13 @@ describe('MilkdownEditor', () => {
     const onError = vi.fn()
     const ref = createRef<MilkdownEditorHandle>()
     const { container } = render(
-      <MilkdownEditor ref={ref} content="List target" onChange={onChange} onError={onError} />
+      <MilkdownEditor
+        geometry={DEFAULT_GEOMETRY}
+        ref={ref}
+        content="List target"
+        onChange={onChange}
+        onError={onError}
+      />
     )
     await waitFor(() => expect(container.querySelector('.ProseMirror')).toBeInTheDocument())
 
@@ -716,7 +796,13 @@ describe('MilkdownEditor', () => {
     const onError = vi.fn()
     const ref = createRef<MilkdownEditorHandle>()
     const { container } = render(
-      <MilkdownEditor ref={ref} content="Ordered target" onChange={onChange} onError={onError} />
+      <MilkdownEditor
+        geometry={DEFAULT_GEOMETRY}
+        ref={ref}
+        content="Ordered target"
+        onChange={onChange}
+        onError={onError}
+      />
     )
     await waitFor(() => expect(container.querySelector('.ProseMirror')).toBeInTheDocument())
 
@@ -742,7 +828,13 @@ describe('MilkdownEditor', () => {
     const onError = vi.fn()
     const ref = createRef<MilkdownEditorHandle>()
     const { container } = render(
-      <MilkdownEditor ref={ref} content="1. Ordered item" onChange={onChange} onError={onError} />
+      <MilkdownEditor
+        geometry={DEFAULT_GEOMETRY}
+        ref={ref}
+        content="1. Ordered item"
+        onChange={onChange}
+        onError={onError}
+      />
     )
     await waitFor(() =>
       expect(container.querySelector('ol > li')?.textContent).toBe('Ordered item')
@@ -759,7 +851,13 @@ describe('MilkdownEditor', () => {
     const onError = vi.fn()
     const ref = createRef<MilkdownEditorHandle>()
     const { container } = render(
-      <MilkdownEditor ref={ref} content="- Bullet item" onChange={onChange} onError={onError} />
+      <MilkdownEditor
+        geometry={DEFAULT_GEOMETRY}
+        ref={ref}
+        content="- Bullet item"
+        onChange={onChange}
+        onError={onError}
+      />
     )
     await waitFor(() => expect(container.querySelector('ul > li')?.textContent).toBe('Bullet item'))
 
@@ -780,7 +878,13 @@ describe('MilkdownEditor', () => {
     const onError = vi.fn()
     const ref = createRef<MilkdownEditorHandle>()
     const { container } = render(
-      <MilkdownEditor ref={ref} content="# Heading One" onChange={onChange} onError={onError} />
+      <MilkdownEditor
+        geometry={DEFAULT_GEOMETRY}
+        ref={ref}
+        content="# Heading One"
+        onChange={onChange}
+        onError={onError}
+      />
     )
     await waitFor(() => expect(container.querySelector('h1')?.textContent).toBe('Heading One'))
 
@@ -795,7 +899,13 @@ describe('MilkdownEditor', () => {
     const onError = vi.fn()
     const ref = createRef<MilkdownEditorHandle>()
     const { container } = render(
-      <MilkdownEditor ref={ref} content="### Heading Three" onChange={onChange} onError={onError} />
+      <MilkdownEditor
+        geometry={DEFAULT_GEOMETRY}
+        ref={ref}
+        content="### Heading Three"
+        onChange={onChange}
+        onError={onError}
+      />
     )
     await waitFor(() => expect(container.querySelector('h3')?.textContent).toBe('Heading Three'))
 
@@ -810,7 +920,13 @@ describe('MilkdownEditor', () => {
     const onError = vi.fn()
     const ref = createRef<MilkdownEditorHandle>()
     const { container } = render(
-      <MilkdownEditor ref={ref} content="Doc" onChange={onChange} onError={onError} />
+      <MilkdownEditor
+        geometry={DEFAULT_GEOMETRY}
+        ref={ref}
+        content="Doc"
+        onChange={onChange}
+        onError={onError}
+      />
     )
     await waitFor(() => expect(container.querySelector('.ProseMirror')).toBeInTheDocument())
 
@@ -830,7 +946,13 @@ describe('MilkdownEditor', () => {
     const onError = vi.fn()
     const ref = createRef<MilkdownEditorHandle>()
     const { container } = render(
-      <MilkdownEditor ref={ref} content="Doc" onChange={onChange} onError={onError} />
+      <MilkdownEditor
+        geometry={DEFAULT_GEOMETRY}
+        ref={ref}
+        content="Doc"
+        onChange={onChange}
+        onError={onError}
+      />
     )
     await waitFor(() => expect(container.querySelector('.ProseMirror')).toBeInTheDocument())
 
@@ -844,7 +966,13 @@ describe('MilkdownEditor', () => {
     const onError = vi.fn()
     const ref = createRef<MilkdownEditorHandle>()
     const { container } = render(
-      <MilkdownEditor ref={ref} content="# Hello" onChange={onChange} onError={onError} />
+      <MilkdownEditor
+        geometry={DEFAULT_GEOMETRY}
+        ref={ref}
+        content="# Hello"
+        onChange={onChange}
+        onError={onError}
+      />
     )
 
     const proseMirror = await waitFor(() => {
@@ -899,6 +1027,7 @@ describe('MilkdownEditor', () => {
     const ref = createRef<MilkdownEditorHandle>()
     const { container } = render(
       <MilkdownEditor
+        geometry={DEFAULT_GEOMETRY}
         ref={ref}
         content={'First paragraph\n\nSecond paragraph\n\nThird paragraph'}
         onChange={onChange}

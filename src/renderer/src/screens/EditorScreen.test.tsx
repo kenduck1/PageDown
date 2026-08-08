@@ -1432,4 +1432,58 @@ describe('EditorScreen', () => {
       expect(document.activeElement).not.toBe(proseMirror)
     })
   })
+
+  // Page Geometry Wiring (Task 5): the page card's on-screen size is derived
+  // from the document's own PageConfig through computePageGeometry, instead
+  // of the fixed Letter/1in values it used to hardcode as Tailwind classes
+  // (`w-[816px] pl-24 pr-24`). Asserted as INLINE styles specifically
+  // because that is the only form jsdom can observe -- no Tailwind
+  // stylesheet is loaded in this environment, so a `w-[816px]` class reads
+  // as no width at all here.
+  describe('page-card geometry follows the document own PageConfig', () => {
+    it("the page card's width and padding reflect the document's own PageConfig, not the fixed Letter default", async () => {
+      useDocumentStore.setState({
+        filePath: '/tmp/report.md',
+        content:
+          '---\npage: A4\nmargins:\n  top: 1\n  bottom: 1\n  left: 0.5\n  right: 0.5\n---\n\n# Report'
+      })
+      render(<EditorScreen />)
+
+      // A4 at 96dpi is 8.2677in -> 794px wide (page-geometry.ts's own pinned
+      // sheet dimensions, not CSS's rounded print defaults); 0.5in side
+      // margins -> 48px each.
+      const pageCard = await screen.findByTestId('page-card')
+      expect(pageCard).toHaveStyle({ width: '794px', paddingLeft: '48px', paddingRight: '48px' })
+
+      // Top/bottom padding stay the fixed cosmetic 22px/34px from the design
+      // mock and are deliberately NOT marginTopPx/marginBottomPx -- this
+      // fixture's own 1in top/bottom margins would be 96px if they ever
+      // were, so this assertion fails loudly if someone "completes" the
+      // wiring by hooking them up. See renderPageCard's comment for why.
+      expect(pageCard).toHaveStyle({ paddingTop: '22px', paddingBottom: '34px' })
+
+      // The editor mount inside the card gets the matching content width:
+      // 794 - 48 - 48 = 698.
+      const mount = document.querySelector('.milkdown-mount') as HTMLElement
+      expect(mount).toHaveStyle({ maxWidth: '698px' })
+    })
+
+    it('a document with no frontmatter still gets the Letter/1in default geometry (816 - 96 - 96 = 624)', async () => {
+      // The regression guard for the DEFAULT case: Gate 10
+      // (phase0/gate10-editor-layout-parity.spec.ts) asserts this mount's
+      // real content width is exactly CONTENT_WIDTH_PX (624) for its own
+      // no-frontmatter fixture, so a change that made the default A4, or
+      // that produced NaN geometry from a partial config, would break real
+      // editor/preview layout parity. This test catches both without
+      // needing a browser.
+      useDocumentStore.setState({ filePath: '/tmp/report.md', content: '# Report\n\nBody text' })
+      render(<EditorScreen />)
+
+      const pageCard = await screen.findByTestId('page-card')
+      expect(pageCard).toHaveStyle({ width: '816px', paddingLeft: '96px', paddingRight: '96px' })
+
+      const mount = document.querySelector('.milkdown-mount') as HTMLElement
+      expect(mount).toHaveStyle({ maxWidth: '624px' })
+    })
+  })
 })

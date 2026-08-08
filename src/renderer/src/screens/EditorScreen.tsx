@@ -14,6 +14,7 @@ import { usePageCount } from '../hooks/usePageCount'
 import { useAutosave } from '../hooks/useAutosave'
 import { extractRawFrontmatter, replaceRawFrontmatter } from '../../../markdown/frontmatter-splice'
 import { resolvePageConfig, applyPageConfig, type PageConfig } from '../../../markdown/page-config'
+import { computePageGeometry } from '../../../typography/page-geometry'
 
 function EditorScreen(): React.JSX.Element {
   const goHome = useAppStore((state) => state.goHome)
@@ -507,6 +508,20 @@ function EditorScreen(): React.JSX.Element {
   // back in.
   const pageConfig: PageConfig = useMemo(() => resolvePageConfig(content), [content])
 
+  // The on-screen page card's real pixel geometry, derived from the
+  // PageConfig memo directly above rather than re-derived from `content` --
+  // resolvePageConfig does a real YAML parse, and doing it twice per render
+  // (once here, once there) would be exactly the avoidable per-keystroke
+  // work these memos exist to amortize. computePageGeometry itself is the
+  // same pure function every main-process geometry caller uses
+  // (src/typography/page-geometry.ts), so the editor canvas, the paginated
+  // preview, the page count, and PDF export cannot disagree about what
+  // "this document's page" means. It requires a COMPLETE PageConfig, which
+  // is why this derives from resolvePageConfig's fully-merged result and not
+  // from extractPageConfig's Partial (a partial would yield NaN geometry for
+  // every key a document's frontmatter happens to omit).
+  const pageGeometry = useMemo(() => computePageGeometry(pageConfig), [pageConfig])
+
   const handleApplyPageConfig = (config: PageConfig): void => {
     const newRawYaml = applyPageConfig(extractRawFrontmatter(content), config)
     // replaceContent (not updateContent): this edit originates outside the
@@ -625,37 +640,61 @@ function EditorScreen(): React.JSX.Element {
   // merge-conflict finding (Document Typography sub-project vs that earlier
   // fix, both landing the same night): the mock's numbers were an eyeballed
   // approximation authored before this project had a single authoritative
-  // page geometry. max-w-[624px] on MilkdownEditor's own root div (see that
-  // component) is now real, measured Letter-page-at-96dpi-with-1in-margins
-  // content width (page-geometry.ts's CONTENT_WIDTH_PX), enforced by Gate 10
-  // to stay pixel-identical to the paginated preview/PDF -- the exact
+  // page geometry. The card's real content width -- what MilkdownEditor's
+  // own root div is capped to (see that component) -- is enforced by Gate 10
+  // to stay pixel-identical to the paginated preview/PDF, the exact
   // print-fidelity guarantee this whole app exists for. The mock's 640px
   // total width with 64px padding each side only leaves 512px for content,
-  // silently squeezing MilkdownEditor's 624px constraint down to 512px and
-  // failing Gate 10 (measured: 624 expected, 512 received). Widening this
-  // card to 816px (PAGE_WIDTH_PX) with 96px padding each side
-  // (PAGE_MARGIN_PX, i.e. Tailwind's pl-24/pr-24) makes 816 - 192 = 624 --
-  // the same real page width and real 1in margin every other surface
-  // already uses, not an arbitrary patch chosen to make one assertion pass.
+  // which failed Gate 10 outright (measured: 624 expected, 512 received).
   //
-  // Fixed width (`w-`), not `max-w-` -- verified empirically, not assumed: a
-  // `max-w` cap only shrinks a block box below its container's available
-  // width, it never forces one WIDER than its container, and this app's
-  // default window (900px, minus the 216px sidebar) leaves only 684px for
-  // the canvas area -- narrower than 816px. With `max-w-[816px]`, the card
-  // just filled that 684px and reflowed its content down to 492px, failing
-  // Gate 10 differently but just as badly (confirmed by rerunning it). A
-  // real page must stay at its true size regardless of window width --
-  // exactly what the zoom-scaled wrapper around this card's OWN call site
-  // below already exists to handle (fitting an unchanged, full-size layout
-  // visually into a smaller viewport, the same way Word/Google Docs zoom out
-  // rather than reflow text at less than 100%) -- so the card needs a width
-  // the CSS box model won't shrink on its own, letting that wrapper's
-  // `overflow-auto` scroll horizontally at low zoom/narrow windows instead
-  // of silently changing the content's real layout width. Top/bottom
-  // padding (22px/34px, from the mock) are untouched: Gate 10 only measures
-  // block positions relative to each surface's own content root, so
-  // vertical chrome outside the editing root doesn't affect it.
+  // As of the Page Geometry Wiring sub-project these are no longer the fixed
+  // constants `w-[816px]`/`pl-24 pr-24` (816px = PAGE_WIDTH_PX, 96px =
+  // PAGE_MARGIN_PX) but inline styles computed by computePageGeometry
+  // (src/typography/page-geometry.ts) from the document's OWN frontmatter
+  // page size/orientation/margins, via the pageGeometry memo above. The
+  // identity that Gate 10 actually depends on is preserved and generalized:
+  //
+  //     pageWidthPx - marginLeftPx - marginRightPx = contentWidthPx
+  //
+  // For a document with no frontmatter (Gate 10's own fixture, and
+  // DEFAULT_PAGE_CONFIG's Letter/portrait/1in) that is still exactly
+  // 816 - 96 - 96 = 624 -- the old hardcoded numbers were only this
+  // identity's Letter instance, not a separate decision. Tailwind classes
+  // cannot express this at all: the values are per-document runtime numbers,
+  // and Tailwind's JIT scanner only emits classes it can see as literal
+  // strings in the source.
+  //
+  // A fixed `width`, NOT `maxWidth` -- verified empirically, not assumed
+  // (and the reason it was `w-[816px]` rather than `max-w-[816px]` back when
+  // it was a class): a max-width cap only shrinks a block box below its
+  // container's available width, it never forces one WIDER than its
+  // container, and this app's default window (900px, minus the 216px
+  // sidebar) leaves only 684px for the canvas area -- narrower than a Letter
+  // page's 816px. With `max-w-[816px]`, the card just filled that 684px and
+  // reflowed its content down to 492px, failing Gate 10 differently but just
+  // as badly (confirmed by rerunning it). A real page must stay at its true
+  // size regardless of window width -- exactly what the zoom-scaled wrapper
+  // around this card's OWN call site below already exists to handle (fitting
+  // an unchanged, full-size layout visually into a smaller viewport, the
+  // same way Word/Google Docs zoom out rather than reflow text at less than
+  // 100%) -- so the card needs a width the CSS box model won't shrink on its
+  // own, letting that wrapper's `overflow-auto` scroll horizontally at low
+  // zoom/narrow windows instead of silently changing the content's real
+  // layout width. (MilkdownEditor's own mount div uses `maxWidth` for its
+  // contentWidthPx, which is the correct choice THERE: it sits inside this
+  // already-fixed-width box and only has to cap the text column.)
+  //
+  // Top/bottom padding stay the mock's fixed 22px/34px and are deliberately
+  // NOT geometry.marginTopPx/marginBottomPx, even though left/right now are
+  // the document's real margins. They're cosmetic card chrome, not the
+  // page's own vertical margin: where content actually sits relative to a
+  // page's top/bottom edge is the paginator's concern, and this single
+  // unpaginated card has no page boundaries to place them against in the
+  // first place. Gate 10 only measures block positions relative to each
+  // surface's own content root, so vertical chrome outside the editing root
+  // doesn't affect it either way. Don't "finish the job" by wiring these two
+  // up -- an EditorScreen.test.tsx test asserts they stay 22/34 for a
+  // document whose real top/bottom margins are 96px.
   //
   // Deliberately natural-height (grows/shrinks with the document, not
   // stretched to fill the canvas) -- an earlier version of this fix tried to
@@ -683,7 +722,14 @@ function EditorScreen(): React.JSX.Element {
   const renderPageCard = (): React.JSX.Element => (
     <div
       data-testid="page-card"
-      className="mx-auto my-8 w-[816px] shrink-0 rounded-sm bg-page pb-[34px] pl-24 pr-24 pt-[22px] shadow-page"
+      className="mx-auto my-8 shrink-0 rounded-sm bg-page shadow-page"
+      style={{
+        width: pageGeometry.pageWidthPx,
+        paddingLeft: pageGeometry.marginLeftPx,
+        paddingRight: pageGeometry.marginRightPx,
+        paddingTop: 22,
+        paddingBottom: 34
+      }}
       onMouseDown={handlePageCardMouseDown}
       onClick={handlePageCardClick}
     >
@@ -691,6 +737,7 @@ function EditorScreen(): React.JSX.Element {
         ref={editorRef}
         key={revision}
         content={content}
+        geometry={pageGeometry}
         // Bound to THIS render's activeTabId, not the bare updateContent
         // store action -- see documentStore.ts's updateContentForTab doc
         // comment for the tab-switch race this closes: any change to
