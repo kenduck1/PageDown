@@ -91,3 +91,144 @@ describe('computePageGeometry', () => {
     expect(geometry.contentHeightPx).toBe(864)
   })
 })
+
+// The safety clamp. Margins are the one free-form, attacker-reachable input
+// into this function (page size is a 3-entry allowlist lookup), and a
+// plausible typo -- `6` for `0.6` -- previously produced a NEGATIVE content
+// extent that was interpolated straight into the sandboxed `@page` rule. See
+// computePageGeometry's own comment for what pagedjs@0.4.3 actually does with
+// that (a duplicated-content page explosion, not a hang, verified rather than
+// assumed).
+describe('computePageGeometry margin clamping', () => {
+  it('leaves a NORMAL config bit-for-bit unchanged (regression net for the clamp)', () => {
+    // The whole risk of adding a clamp is that it silently perturbs ordinary
+    // documents. Deep-equality on the WHOLE geometry object, for both the
+    // default config and the asymmetric one the test above pins field by
+    // field, is the direct statement that it does not. On Letter the clamp's
+    // own thresholds are nowhere near: 816 - 96 = 720 available horizontally
+    // against 192 requested, 1056 - 96 = 960 vertically against 192.
+    expect(computePageGeometry(DEFAULT_PAGE_CONFIG)).toEqual({
+      pageWidthPx: 816,
+      pageHeightPx: 1056,
+      marginTopPx: 96,
+      marginBottomPx: 96,
+      marginLeftPx: 96,
+      marginRightPx: 96,
+      contentWidthPx: 624,
+      contentHeightPx: 864
+    })
+    const asymmetric: PageConfig = {
+      ...DEFAULT_PAGE_CONFIG,
+      margins: { top: 0.5, bottom: 1.5, left: 1, right: 2 }
+    }
+    expect(computePageGeometry(asymmetric)).toEqual({
+      pageWidthPx: 816,
+      pageHeightPx: 1056,
+      marginTopPx: 48,
+      marginBottomPx: 144,
+      marginLeftPx: 96,
+      marginRightPx: 192,
+      contentWidthPx: 528,
+      contentHeightPx: 864
+    })
+  })
+
+  it('scales an over-large VERTICAL margin pair proportionally, leaving 1in of content', () => {
+    // 6in top + 6in bottom on an 11in page: 1056 - 576 - 576 = -96px content
+    // height before the clamp. Available total is 1056 - 96 = 960, so each
+    // side scales to 480.
+    const config: PageConfig = {
+      ...DEFAULT_PAGE_CONFIG,
+      margins: { ...DEFAULT_PAGE_CONFIG.margins, top: 6, bottom: 6 }
+    }
+    const geometry = computePageGeometry(config)
+    expect(geometry.marginTopPx).toBe(480)
+    expect(geometry.marginBottomPx).toBe(480)
+    expect(geometry.contentHeightPx).toBe(96)
+    // The horizontal axis is clamped INDEPENDENTLY and was never over-large,
+    // so it must be untouched by the vertical axis's rescaling.
+    expect(geometry.marginLeftPx).toBe(96)
+    expect(geometry.marginRightPx).toBe(96)
+    expect(geometry.contentWidthPx).toBe(624)
+  })
+
+  it('preserves the requested RATIO between the two sides when it scales them', () => {
+    // 3in top : 9in bottom is 1:3. Available total is 960, so the clamped
+    // pair must be 240:720 -- still 1:3 -- not an equal split and not a
+    // truncation of one side alone.
+    const config: PageConfig = {
+      ...DEFAULT_PAGE_CONFIG,
+      margins: { ...DEFAULT_PAGE_CONFIG.margins, top: 3, bottom: 9 }
+    }
+    const geometry = computePageGeometry(config)
+    expect(geometry.marginTopPx).toBe(240)
+    expect(geometry.marginBottomPx).toBe(720)
+    expect(geometry.marginBottomPx / geometry.marginTopPx).toBe(3)
+    expect(geometry.contentHeightPx).toBe(96)
+  })
+
+  it('scales an over-large HORIZONTAL margin pair, leaving 1in of content', () => {
+    // 5in + 5in on an 8.5in page: 816 - 480 - 480 = -144px before the clamp.
+    // Available total is 816 - 96 = 720, so each side scales to 360.
+    const config: PageConfig = {
+      ...DEFAULT_PAGE_CONFIG,
+      margins: { ...DEFAULT_PAGE_CONFIG.margins, left: 5, right: 5 }
+    }
+    const geometry = computePageGeometry(config)
+    expect(geometry.marginLeftPx).toBe(360)
+    expect(geometry.marginRightPx).toBe(360)
+    expect(geometry.contentWidthPx).toBe(96)
+    expect(geometry.contentHeightPx).toBe(864)
+  })
+
+  it('never emits a zero or negative content extent, on either axis, for any margin pair', () => {
+    // The property the clamp exists to guarantee, stated directly against the
+    // failure mode: zero available height is what makes Paged.js emit one
+    // duplicated page per source node.
+    for (const margin of [3, 6, 20, 1000]) {
+      const config: PageConfig = {
+        ...DEFAULT_PAGE_CONFIG,
+        margins: { top: margin, bottom: margin, left: margin, right: margin }
+      }
+      const geometry = computePageGeometry(config)
+      expect(geometry.contentWidthPx).toBeGreaterThanOrEqual(DPI)
+      expect(geometry.contentHeightPx).toBeGreaterThanOrEqual(DPI)
+    }
+  })
+
+  it('clamps a NEGATIVE margin to zero rather than inflating the content box past the page', () => {
+    // parseMargins accepts any finite number, so a negative side is reachable
+    // from frontmatter. Unclamped, -1in left would give a 912px content width
+    // on an 816px page.
+    const config: PageConfig = {
+      ...DEFAULT_PAGE_CONFIG,
+      margins: { top: -1, bottom: 1, left: -0.5, right: 1 }
+    }
+    const geometry = computePageGeometry(config)
+    expect(geometry.marginTopPx).toBe(0)
+    expect(geometry.marginLeftPx).toBe(0)
+    expect(geometry.marginBottomPx).toBe(96)
+    expect(geometry.marginRightPx).toBe(96)
+    expect(geometry.contentWidthPx).toBe(720)
+    expect(geometry.contentHeightPx).toBe(960)
+  })
+
+  it('clamps against the ROTATED extent for landscape, not the portrait one', () => {
+    // Landscape Letter is 1056 x 816, so the horizontal axis now has 960
+    // available and the vertical only 720 -- the opposite of portrait. 5in
+    // per side horizontally (960px total) therefore fits exactly and is NOT
+    // scaled, while the same 5in per side vertically is.
+    const config: PageConfig = {
+      ...DEFAULT_PAGE_CONFIG,
+      orientation: 'landscape',
+      margins: { top: 5, bottom: 5, left: 5, right: 5 }
+    }
+    const geometry = computePageGeometry(config)
+    expect(geometry.marginLeftPx).toBe(480)
+    expect(geometry.marginRightPx).toBe(480)
+    expect(geometry.contentWidthPx).toBe(96)
+    expect(geometry.marginTopPx).toBe(360)
+    expect(geometry.marginBottomPx).toBe(360)
+    expect(geometry.contentHeightPx).toBe(96)
+  })
+})

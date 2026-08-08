@@ -66,7 +66,7 @@
     a direct child of <body>, so scoping here reaches every page it
     produces. The Milkdown mount div carries the same class on its side
     (src/renderer/src/milkdown/MilkdownEditor.tsx). Removing this class
-    silently stops every rule in DOCUMENT_STYLESHEET (index.ts) from
+    silently stops every rule in buildDocumentStylesheet (index.ts) from
     matching anything in this context -- no error, it just stops applying.
   -->
   <div id="content-root"></div>

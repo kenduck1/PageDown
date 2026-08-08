@@ -87,7 +87,7 @@ const HEADING_SELECTOR = 'h1, h2, h3, h4, h5, h6'
 // CSS-declaration-parsing path (`onDeclaration`) could never run and a
 // `break-after: avoid` rule in a stylesheet could never reach it. That is
 // no longer true: that path now passes a real, non-empty stylesheet
-// (`DOCUMENT_STYLESHEET`, the shared document typography), so the `Polisher`
+// (`buildDocumentStylesheet`, the shared document typography), so the `Polisher`
 // parses author CSS on every render and `Breaks.onDeclaration` DOES run.
 // It is a no-op today only because `document-typography.css` declares none
 // of the four properties it actually reacts to — read from breaks.js

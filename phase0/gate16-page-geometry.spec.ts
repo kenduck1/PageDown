@@ -53,44 +53,59 @@ import { mergeRecentFiles, readRecentFiles, writeRecentFiles } from '../src/main
 
 // --- The fixture's page configuration, and the geometry it implies --------
 //
-// A4 portrait with deliberately NON-DEFAULT, deliberately ASYMMETRIC-per-
-// axis margins (0.75in top/bottom, 0.5in left/right). Three independent
-// reasons for those exact choices:
+// A4 portrait with FOUR GENUINELY DIFFERENT margins -- no two sides equal,
+// on purpose. Four independent reasons for those exact choices:
 //   1. A4 (794 x 1123 px at 96dpi) is a different page size from
 //      DEFAULT_PAGE_CONFIG's Letter (816 x 1056), so "the wiring did
 //      nothing" and "the wiring worked" are distinguishable outcomes on
 //      BOTH axes.
-//   2. 0.5in / 0.75in margins are different from the default 1in (96px), so
-//      a surface that read the page SIZE but ignored the MARGINS is also a
-//      distinguishable outcome -- it would show a 794px-wide card with 96px
-//      padding and a 602px content box, not 48px/698px.
+//   2. Every margin differs from the default 1in (96px), so a surface that
+//      read the page SIZE but ignored the MARGINS is also a distinguishable
+//      outcome -- it would show a 794px-wide card with 96px padding and a
+//      602px content box, not 72/144px and 578px.
 //   3. Top/bottom differing from left/right exercises the `@page` margin
 //      shorthand's real four-value form in the sandboxed render context,
 //      rather than a uniform value that would look identical however the
 //      four sides were ordered.
+//   4. **top != bottom and left != right specifically.** An earlier version
+//      of this fixture used 0.75 top/bottom and 0.5 left/right -- asymmetric
+//      BETWEEN the axes but symmetric WITHIN each. That is not enough to pin
+//      the order of `buildDocumentStylesheet`'s `margin: <top> <right>
+//      <bottom> <left>` shorthand (resources/pagination-render/index.ts): a
+//      top <-> bottom or left <-> right transposition left every number this
+//      gate measured completely unchanged, because the content box's SIZE is
+//      a sum (page - start - end) and a sum is transposition-invariant. That
+//      function has no unit test at all (`resources/` is outside vitest's
+//      include), so this gate is the only place its order can be pinned --
+//      hence both distinct-per-axis values AND the content box's OFFSET
+//      within the sheet being asserted below, which is what actually
+//      distinguishes top from bottom.
 const FIXTURE_FRONTMATTER = [
   '---',
   'page: A4',
   'margins:',
-  '  top: 0.75',
-  '  bottom: 0.75',
-  '  left: 0.5',
-  '  right: 0.5',
+  '  top: 0.5',
+  '  bottom: 1.25',
+  '  left: 0.75',
+  '  right: 1.5',
   '---'
 ].join('\n')
 
 // Hand-derived from the frontmatter above at 96 CSS px/in, NOT computed:
 //   width   8.2677in (210mm) * 96 = 793.70 -> 794
 //   height 11.6929in (297mm) * 96 = 1122.52 -> 1123
-//   margins 0.75in * 96 = 72 (top/bottom), 0.5in * 96 = 48 (left/right)
-//   content width  794 - 48 - 48 = 698
-//   content height 1123 - 72 - 72 = 979
+//   margins 0.5in * 96 = 48 (top), 1.25in * 96 = 120 (bottom),
+//           0.75in * 96 = 72 (left), 1.5in * 96 = 144 (right)
+//   content width  794 - 72 - 144 = 578
+//   content height 1123 - 48 - 120 = 955
 const A4_PAGE_WIDTH_PX = 794
 const A4_PAGE_HEIGHT_PX = 1123
-const A4_MARGIN_TB_PX = 72
-const A4_MARGIN_LR_PX = 48
-const A4_CONTENT_WIDTH_PX = 698
-const A4_CONTENT_HEIGHT_PX = 979
+const A4_MARGIN_TOP_PX = 48
+const A4_MARGIN_BOTTOM_PX = 120
+const A4_MARGIN_LEFT_PX = 72
+const A4_MARGIN_RIGHT_PX = 144
+const A4_CONTENT_WIDTH_PX = 578
+const A4_CONTENT_HEIGHT_PX = 955
 
 // The Letter/1in values this gate must NOT see -- asserted against
 // explicitly, so a regression that silently reverts to the old fixed
@@ -172,6 +187,20 @@ interface PreviewGeometryProbe {
   pageCount: number
   sheet: { width: number; height: number } | null
   area: { width: number; height: number } | null
+  // The content box's top-left corner relative to the page box's. This is
+  // what makes the `@page` margin shorthand's ORDER observable: the area's
+  // width and height are sums (page - start - end) and so cannot tell a
+  // top <-> bottom or left <-> right transposition from the correct order,
+  // but its offset can -- it IS the top and left margins, individually.
+  // Structurally guaranteed by Paged.js's own base.js, read directly rather
+  // than assumed: `.pagedjs_pagebox` is a grid whose column/row tracks are
+  // `[left] var(--pagedjs-margin-left) [center] ... [right] ...` /
+  // `[header] var(--pagedjs-margin-top) [page] ... [footer] ...` (lines
+  // 264-265), `.pagedjs_area` is placed at `grid-column: center; grid-row:
+  // page` (line 370-372), and the pagebox itself sits at
+  // `sheet-center`/`sheet-middle` inside `.pagedjs_sheet`, offset only by
+  // the bleed tracks, which are 0 by default and never set here.
+  areaOffset: { top: number; left: number } | null
   text: string
 }
 
@@ -223,11 +252,20 @@ async function probePreviewGeometry(
           var r = el.getBoundingClientRect()
           return { width: r.width, height: r.height }
         }
+        function offset(el, ref) {
+          if (!el || !ref) return null
+          var a = el.getBoundingClientRect()
+          var b = ref.getBoundingClientRect()
+          return { top: a.top - b.top, left: a.left - b.left }
+        }
         var root = document.getElementById('content-root')
+        var sheetEl = document.querySelector('.pagedjs_sheet')
+        var areaEl = document.querySelector('.pagedjs_area')
         return JSON.stringify({
           pageCount: document.querySelectorAll('.pagedjs_page').length,
-          sheet: box(document.querySelector('.pagedjs_sheet')),
-          area: box(document.querySelector('.pagedjs_area')),
+          sheet: box(sheetEl),
+          area: box(areaEl),
+          areaOffset: offset(areaEl, sheetEl),
           text: root ? root.innerText : ''
         })
       })()
@@ -434,11 +472,21 @@ test('Gate 16: a document whose frontmatter sets A4 lays out at A4 in BOTH the e
 
     // The margin half of the wiring: a surface that read `page: A4` but
     // ignored `margins:` would still be 794px wide, with 96px padding.
+    // Asserted per side against DIFFERENT expected values (0.75in left,
+    // 1.5in right), so a left <-> right transposition anywhere in the editor
+    // path fails here rather than cancelling out. (The editor card's own top
+    // and bottom padding are deliberately FIXED at 22/34px rather than the
+    // document's vertical margins -- see EditorScreen's renderPageCard --
+    // because the editor canvas is one continuous card, not a sequence of
+    // sheets, so there is no vertical-margin claim to make on this surface.)
     expect(
       editorGeometry.cardPaddingLeft,
-      'the page card side padding must be the document’s own 0.5in margin'
-    ).toBeCloseTo(A4_MARGIN_LR_PX, 0)
-    expect(editorGeometry.cardPaddingRight).toBeCloseTo(A4_MARGIN_LR_PX, 0)
+      'the page card left padding must be the document’s own 0.75in margin'
+    ).toBeCloseTo(A4_MARGIN_LEFT_PX, 0)
+    expect(
+      editorGeometry.cardPaddingRight,
+      'the page card right padding must be the document’s own 1.5in margin'
+    ).toBeCloseTo(A4_MARGIN_RIGHT_PX, 0)
 
     expect(
       editorGeometry.mountWidth,
@@ -513,12 +561,39 @@ test('Gate 16: a document whose frontmatter sets A4 lays out at A4 in BOTH the e
     ).toBeCloseTo(A4_PAGE_HEIGHT_PX, 0)
     expect(
       probe!.area!.width,
-      `the paginated content box must be ${A4_CONTENT_WIDTH_PX}px wide (${A4_PAGE_WIDTH_PX} - 2 x ${A4_MARGIN_LR_PX})`
+      `the paginated content box must be ${A4_CONTENT_WIDTH_PX}px wide (${A4_PAGE_WIDTH_PX} - ${A4_MARGIN_LEFT_PX} - ${A4_MARGIN_RIGHT_PX})`
     ).toBeCloseTo(A4_CONTENT_WIDTH_PX, 0)
     expect(
       probe!.area!.height,
-      `the paginated content box must be ${A4_CONTENT_HEIGHT_PX}px tall (${A4_PAGE_HEIGHT_PX} - 2 x ${A4_MARGIN_TB_PX})`
+      `the paginated content box must be ${A4_CONTENT_HEIGHT_PX}px tall (${A4_PAGE_HEIGHT_PX} - ${A4_MARGIN_TOP_PX} - ${A4_MARGIN_BOTTOM_PX})`
     ).toBeCloseTo(A4_CONTENT_HEIGHT_PX, 0)
+
+    // THE `@page` MARGIN SHORTHAND'S ORDER, pinned. Everything above this
+    // point measures sums, which are invariant under a top <-> bottom or
+    // left <-> right transposition; these two assertions are the only place
+    // in the repo where `buildDocumentStylesheet`'s
+    // `margin: <top> <right> <bottom> <left>` is checked against the
+    // individual sides it claims to emit. With this fixture's four distinct
+    // margins, emitting them in any other order moves this offset.
+    expect(probe!.areaOffset, 'expected a measurable content-box offset').not.toBeNull()
+    expect(
+      probe!.areaOffset!.top,
+      `the content box must start ${A4_MARGIN_TOP_PX}px down the page (the 0.5in TOP margin, not the 1.25in bottom one)`
+    ).toBeCloseTo(A4_MARGIN_TOP_PX, 0)
+    expect(
+      probe!.areaOffset!.left,
+      `the content box must start ${A4_MARGIN_LEFT_PX}px in from the page edge (the 0.75in LEFT margin, not the 1.5in right one)`
+    ).toBeCloseTo(A4_MARGIN_LEFT_PX, 0)
+    // Stated as the complementary check too: the bottom and right margins are
+    // then whatever is left over, and must be the OTHER two values.
+    expect(probe!.sheet!.height - probe!.areaOffset!.top - probe!.area!.height).toBeCloseTo(
+      A4_MARGIN_BOTTOM_PX,
+      0
+    )
+    expect(probe!.sheet!.width - probe!.areaOffset!.left - probe!.area!.width).toBeCloseTo(
+      A4_MARGIN_RIGHT_PX,
+      0
+    )
 
     // ================================================================
     // (c) CROSS-SURFACE AGREEMENT
