@@ -1,5 +1,5 @@
 import { test, expect, type ElectronApplication, type Page } from '@playwright/test'
-import { mkdtemp, readFile, rm, stat } from 'node:fs/promises'
+import { copyFile, mkdir, mkdtemp, readFile, rm, stat } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { launchIsolatedApp } from './electron-launch'
@@ -53,6 +53,33 @@ async function getMainWindow(app: ElectronApplication): Promise<Page> {
     await new Promise((resolve) => setTimeout(resolve, 200))
   }
   throw new Error('Timed out locating the main app-shell window (only found the sandboxed one)')
+}
+
+const CLOSE_TIMEOUT_MS = 15_000
+
+// Bounded close(), matching gate15-split-mode.spec.ts / gate16-page-geometry.
+// spec.ts. CLAUDE.md records that the tests already in THIS file use a bare,
+// unwrapped close() -- a known, accepted gap -- and that repeated
+// launch/close cycles under host load can hang indefinitely at app.close(),
+// leaking a live 6+-process Electron tree. Retrofitting the pre-existing
+// tests here is out of this task's scope, but the A4 test added at the
+// bottom of this file uses this rather than copying the unsafe pattern.
+async function safeClose(app: ElectronApplication, close: () => Promise<void>): Promise<void> {
+  const closeOutcome = close().then(
+    () => 'closed' as const,
+    () => 'closed' as const
+  )
+  const outcome = await Promise.race([
+    closeOutcome,
+    new Promise<'timeout'>((resolve) => setTimeout(() => resolve('timeout'), CLOSE_TIMEOUT_MS))
+  ])
+  if (outcome === 'timeout') {
+    try {
+      app.process().kill('SIGKILL')
+    } catch {
+      // Best-effort; the process may already be gone.
+    }
+  }
 }
 
 const SAMPLE_MARKDOWN = '# Gate 13 Export\n\nA real paragraph of exported content.\n'
@@ -342,4 +369,137 @@ test("Gate 13: a local image reference using ../ escaping the exported document'
   }
 
   await close()
+})
+
+// Page Geometry Wiring (Task 6). Every other test in this file exports a
+// document with no page-config frontmatter, so all of them only ever
+// exercised the default Letter geometry -- and none of them ever looked at
+// the exported PDF's page DIMENSIONS at all, only its magic bytes, its page
+// count, and its embedded images. That left the last link of this
+// sub-project's chain unverified against a real artifact: `pdf-exporter.ts`
+// computes `computePageGeometry(resolvePageConfig(content))` and hands it to
+// both the harness view's setBounds and sendDocument, the render context
+// turns it into a real `@page` rule, and `printToPDF({ preferCSSPageSize:
+// true })` is supposed to honour that rule rather than Chromium's own
+// default page size. This test is the end of that chain: a real A4 document,
+// exported through the real IPC surface, whose resulting FILE ON DISK is
+// then measured in PDF points.
+//
+// Point conversion: PDF's own unit is 1/72in, independent of this project's
+// 96 CSS px/in. The pipeline rounds to whole CSS pixels first (794 x 1123),
+// so the exported page is 794/96*72 = 595.5 x 1123/96*72 = 842.25 pt --
+// about a third of a point off nominal A4 (595.28 x 841.89). Both are
+// asserted below, at different tolerances, because they answer different
+// questions: "is this genuinely A4 paper" (nominal, +/-5pt, which still
+// leaves a 16pt margin against US Letter's 612pt width and a 50pt one
+// against its 792pt height) and "is it exactly what OUR geometry implies"
+// (+/-1pt around 595.5 x 842.25). Neither expectation is computed by
+// calling computePageGeometry -- see gate16-page-geometry.spec.ts's header
+// for why that would make this vacuous.
+const A4_FRONTMATTER_DOC = [
+  '---',
+  'page: A4',
+  'margins:',
+  '  top: 0.75',
+  '  bottom: 0.75',
+  '  left: 0.5',
+  '  right: 0.5',
+  '---',
+  '',
+  '# Gate 13 A4 Export',
+  '',
+  'A real paragraph in a document whose frontmatter asks for A4 paper.',
+  ''
+].join('\n')
+
+const NOMINAL_A4_WIDTH_PT = 595.28
+const NOMINAL_A4_HEIGHT_PT = 841.89
+const GEOMETRY_A4_WIDTH_PT = 595.5
+const GEOMETRY_A4_HEIGHT_PT = 842.25
+const US_LETTER_WIDTH_PT = 612
+const US_LETTER_HEIGHT_PT = 792
+
+test('Gate 13: a document whose frontmatter sets A4 exports a genuinely A4-sized PDF', async () => {
+  test.setTimeout(60_000)
+
+  // Dynamic import, exactly as gate4-export.spec.ts does it and for exactly
+  // the reason documented at the top of that file: pdfjs-dist's Node entry
+  // point is a pure-ESM .mjs that this file's CommonJS transpile cannot
+  // `require()` (ERR_REQUIRE_ESM), so a static top-level import would fail;
+  // `await import(...)` goes through Node's real ESM loader instead. Safe
+  // here -- unlike inside an app.evaluate() callback -- because this runs in
+  // the Playwright test process, a real modern Node runtime.
+  const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs')
+
+  let app: ElectronApplication | undefined
+  let close: (() => Promise<void>) | undefined
+  let fixtureDir: string | undefined
+
+  try {
+    const launched = await launchIsolatedApp(['.'])
+    app = launched.app
+    close = launched.close
+
+    const win = await getMainWindow(app)
+    await win.waitForFunction(() => (window as unknown as { api?: unknown }).api !== undefined)
+
+    fixtureDir = await mkdtemp(join(tmpdir(), 'pagedown-gate13-a4-'))
+    const targetPath = join(fixtureDir, 'gate13-a4-export.pdf')
+
+    await app.evaluate(({ dialog }, filePath) => {
+      dialog.showSaveDialog = (() =>
+        Promise.resolve({ canceled: false, filePath })) as typeof dialog.showSaveDialog
+    }, targetPath)
+
+    // No document path is passed: `pdf-exporter.ts` reads the page config out
+    // of the CONTENT itself (resolvePageConfig), so this needs no
+    // recent-files seeding and proves the geometry came from the document's
+    // own frontmatter rather than from any path-derived state.
+    const result = await win.evaluate((content) => {
+      const api = (window as unknown as { api: { exportPdf: (c: string) => Promise<unknown> } }).api
+      return api.exportPdf(content)
+    }, A4_FRONTMATTER_DOC)
+
+    expect(result).toEqual({ filePath: targetPath })
+
+    const buffer = await readFile(targetPath)
+    expect(buffer.subarray(0, 5).toString('latin1')).toBe('%PDF-')
+
+    // Real pdfjs page API against the real file's bytes. `getViewport({
+    // scale: 1 })` reports the page's real size in PDF points with any /Rotate
+    // applied; `page.view` is the raw MediaBox, logged alongside it as the
+    // unprocessed source value.
+    const doc = await pdfjs.getDocument({ data: new Uint8Array(buffer) }).promise
+    expect(doc.numPages).toBeGreaterThanOrEqual(1)
+    const page = await doc.getPage(1)
+    const viewport = page.getViewport({ scale: 1 })
+
+    console.log(
+      `Gate 13 A4 export: numPages=${doc.numPages} mediaBox=${JSON.stringify(page.view)} ` +
+        `viewport=${viewport.width}x${viewport.height}pt rotate=${page.rotate}`
+    )
+
+    expect(
+      viewport.width,
+      `exported page width must be A4 (~${NOMINAL_A4_WIDTH_PT}pt), not US Letter's ${US_LETTER_WIDTH_PT}pt`
+    ).toBeCloseTo(NOMINAL_A4_WIDTH_PT, -1)
+    expect(
+      viewport.height,
+      `exported page height must be A4 (~${NOMINAL_A4_HEIGHT_PT}pt), not US Letter's ${US_LETTER_HEIGHT_PT}pt`
+    ).toBeCloseTo(NOMINAL_A4_HEIGHT_PT, -1)
+
+    // Tighter, pipeline-specific pin: the whole-CSS-pixel geometry this
+    // project actually computes, converted to points.
+    expect(Math.abs(viewport.width - GEOMETRY_A4_WIDTH_PT)).toBeLessThanOrEqual(1)
+    expect(Math.abs(viewport.height - GEOMETRY_A4_HEIGHT_PT)).toBeLessThanOrEqual(1)
+
+    // Durable artifact, alongside gate4's own committed exported PDFs, so
+    // this file's dimensions can be re-checked independently of a gate run
+    // (see this sub-project's task-6 report).
+    await mkdir(join(__dirname, 'results'), { recursive: true })
+    await copyFile(targetPath, join(__dirname, 'results', 'gate13-a4-export.pdf'))
+  } finally {
+    if (fixtureDir) await rm(fixtureDir, { recursive: true, force: true })
+    if (app && close) await safeClose(app, close)
+  }
 })
