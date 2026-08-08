@@ -15,12 +15,15 @@ export interface PageNavState {
 }
 
 /**
- * The fraction of the viewport height above which a page counts as "the page
- * you are looking at". A page becomes current once its top edge reaches the
- * upper third of the pane, which is what a reader means by "I'm on page 3"
- * and is stable under partial scrolls (no oscillation at a boundary).
+ * The divisor for the viewport height to find the threshold above which a
+ * page counts as "the page you are looking at". A page becomes current once
+ * its top edge reaches the upper third of the pane, which is what a reader
+ * means by "I'm on page 3" and is stable under partial scrolls (no oscillation
+ * at a boundary). Uses division, not reciprocal multiply (viewportHeight / 3
+ * not viewportHeight * (1/3)), to avoid floating-point precision loss at
+ * exact-boundary cases.
  */
-const CURRENT_PAGE_THRESHOLD = 1 / 3
+const CURRENT_PAGE_THRESHOLD_DIVISOR = 3
 
 /** Clamps a requested 1-based page into `[1, pageCount]`, or 1 if empty. */
 export function clampPageIndex(requested: number, pageCount: number): number {
@@ -40,7 +43,7 @@ export function clampPageIndex(requested: number, pageCount: number): number {
 export function pickCurrentPage(pageTops: readonly number[], viewportHeight: number): number {
   if (pageTops.length === 0) return 1
   if (!(viewportHeight > 0)) return 1
-  const threshold = viewportHeight / 3
+  const threshold = viewportHeight / CURRENT_PAGE_THRESHOLD_DIVISOR
   let current = 1
   for (let index = 0; index < pageTops.length; index += 1) {
     if (pageTops[index] <= threshold) current = index + 1
