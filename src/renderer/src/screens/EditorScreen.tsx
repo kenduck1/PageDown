@@ -12,13 +12,8 @@ import PageSetupModal from '../components/PageSetupModal'
 import { extractOutline } from '../lib/extractOutline'
 import { usePageCount } from '../hooks/usePageCount'
 import { useAutosave } from '../hooks/useAutosave'
-import { extractRawFrontmatter, replaceRawFrontmatter } from '../lib/frontmatterSplice'
-import {
-  DEFAULT_PAGE_CONFIG,
-  extractPageConfig,
-  applyPageConfig,
-  type PageConfig
-} from '../../../markdown/page-config'
+import { extractRawFrontmatter, replaceRawFrontmatter } from '../../../markdown/frontmatter-splice'
+import { resolvePageConfig, applyPageConfig, type PageConfig } from '../../../markdown/page-config'
 
 function EditorScreen(): React.JSX.Element {
   const goHome = useAppStore((state) => state.goHome)
@@ -501,14 +496,16 @@ function EditorScreen(): React.JSX.Element {
 
   // Page Setup itself only edits an in-memory PageConfig draft (see its own
   // module comment) -- reading/writing it into the document's real YAML
-  // frontmatter is this integration's job. extractPageConfig/applyPageConfig
-  // (src/markdown/page-config.ts) operate on the raw text BETWEEN the `---`
-  // fences; frontmatterSplice.ts isolates that text from the full document
-  // and splices the updated text back in.
-  const pageConfig: PageConfig = useMemo(
-    () => ({ ...DEFAULT_PAGE_CONFIG, ...extractPageConfig(extractRawFrontmatter(content)) }),
-    [content]
-  )
+  // frontmatter is this integration's job. The READ side is
+  // `resolvePageConfig` (src/markdown/page-config.ts), the shared
+  // whole-document helper the main-process geometry callers use too, so this
+  // screen and the renderer surfaces can't drift on how a partial/absent
+  // frontmatter block resolves. The WRITE side still works at the raw-YAML
+  // layer -- `applyPageConfig` operates on the text BETWEEN the `---` fences
+  // (that's what makes its mutation surgical), so frontmatter-splice.ts
+  // isolates that text from the full document and splices the updated text
+  // back in.
+  const pageConfig: PageConfig = useMemo(() => resolvePageConfig(content), [content])
 
   const handleApplyPageConfig = (config: PageConfig): void => {
     const newRawYaml = applyPageConfig(extractRawFrontmatter(content), config)

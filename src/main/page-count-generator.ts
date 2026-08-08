@@ -1,6 +1,8 @@
 import { dirname } from 'node:path'
 import { BaseWindow } from 'electron'
 import { markdownToHtml } from '../markdown/pipeline'
+import { resolvePageConfig } from '../markdown/page-config'
+import { computePageGeometry } from '../typography/page-geometry'
 import {
   createPaginationHarness,
   registerAssetRoot,
@@ -234,7 +236,14 @@ export async function getPageCount(
     const assetToken = documentDir ? registerAssetRoot(documentDir) : undefined
     try {
       const { html } = markdownToHtml(content, { assetToken })
-      const result = await harness.sendDocument(html)
+      // The document's own page size/orientation/margins, read out of its
+      // real YAML frontmatter (Page Geometry Wiring) -- the status bar's
+      // count has to reflect the geometry the document is actually
+      // configured for, not a fixed Letter/1in assumption. `resolvePageConfig`
+      // merges over DEFAULT_PAGE_CONFIG, so a document with no frontmatter
+      // (or partial frontmatter) still yields a complete config here.
+      const geometry = computePageGeometry(resolvePageConfig(content))
+      const result = await harness.sendDocument(html, geometry)
       const pageCount = { pageCount: result.pageCount }
       lastContent = content
       lastDocumentDir = documentDir

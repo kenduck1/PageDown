@@ -3,6 +3,8 @@ import { readFile, writeFile, mkdir } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { BaseWindow } from 'electron'
 import { markdownToHtml } from '../markdown/pipeline'
+import { resolvePageConfig } from '../markdown/page-config'
+import { computePageGeometry } from '../typography/page-geometry'
 import {
   createPaginationHarness,
   registerAssetRoot,
@@ -210,7 +212,13 @@ export async function getThumbnail(
     const assetToken = documentDir ? registerAssetRoot(documentDir) : undefined
     try {
       const { html } = markdownToHtml(content, { assetToken })
-      const result = await harness.sendDocument(html)
+      // The document's own page size/orientation/margins, read out of its
+      // real YAML frontmatter (Page Geometry Wiring) -- an A4 or landscape
+      // document's thumbnail has to be that shape, not a fixed Letter one.
+      // `resolvePageConfig` merges over DEFAULT_PAGE_CONFIG, so a document
+      // with no frontmatter (every template) still yields a complete config.
+      const geometry = computePageGeometry(resolvePageConfig(content))
+      const result = await harness.sendDocument(html, geometry)
 
       // sendDocument resolves once the render context publishes its result,
       // immediately after Paged.js finishes mutating the DOM — nothing

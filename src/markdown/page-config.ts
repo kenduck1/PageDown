@@ -158,6 +158,7 @@
 //   real PageDown document is expected to contain.
 
 import { load } from 'js-yaml'
+import { extractRawFrontmatter } from './frontmatter-splice'
 
 export type PageSize = 'Letter' | 'A4' | 'Legal' | 'Custom'
 export type Orientation = 'portrait' | 'landscape'
@@ -310,6 +311,40 @@ export function extractPageConfig(rawFrontmatterYaml: string): Partial<PageConfi
   }
 
   return result
+}
+
+/**
+ * The whole-document convenience wrapper over `extractPageConfig` above:
+ * takes a FULL Markdown document (not the raw YAML block), isolates its
+ * frontmatter text via `extractRawFrontmatter`
+ * (src/markdown/frontmatter-splice.ts), parses the owned keys out of it, and
+ * merges the result over `DEFAULT_PAGE_CONFIG` to return a COMPLETE
+ * `PageConfig`.
+ *
+ * `extractPageConfig` stays the primitive for callers that already hold the
+ * raw YAML block (Page Setup's own read/write round trip works at that
+ * layer, since `applyPageConfig` writes back into that same raw text); this
+ * is for the far more common caller that just has a document string and
+ * wants to know how to lay it out.
+ *
+ * The merge over `DEFAULT_PAGE_CONFIG` is MANDATORY, not a convenience:
+ * `extractPageConfig` returns a `Partial<PageConfig>` that omits every key
+ * the document didn't specify -- which is nearly every key of nearly every
+ * real document. Handing that `Partial` to `computePageGeometry`
+ * (src/typography/page-geometry.ts) instead would read `config.margins.top`
+ * off an absent `margins` and produce NaN geometry, which the render context
+ * turns into a `size: NaNin NaNin; margin: NaNin ...` `@page` rule that
+ * silently mis-paginates rather than failing loudly. Every geometry call
+ * site should route through this function rather than restate the merge, so
+ * that trap exists in exactly one place.
+ *
+ * Safe against partial frontmatter specifically because `parseMargins`
+ * above returns `undefined` unless ALL FOUR sides are present and finite --
+ * so a shallow spread can never leave a half-populated `margins` object with
+ * some sides `undefined`.
+ */
+export function resolvePageConfig(source: string): PageConfig {
+  return { ...DEFAULT_PAGE_CONFIG, ...extractPageConfig(extractRawFrontmatter(source)) }
 }
 
 // Up to 3 decimal places, no trailing zeros (1 -> "1", 1.5 -> "1.5",
