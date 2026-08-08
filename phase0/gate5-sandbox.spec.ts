@@ -1,18 +1,12 @@
 import { test, expect } from '@playwright/test'
 import { realpath } from 'node:fs/promises'
-import { computePageGeometry, type PageGeometry } from '../src/typography/page-geometry'
-import { DEFAULT_PAGE_CONFIG } from '../src/markdown/page-config'
+import { type PageGeometry } from '../src/typography/page-geometry'
 import { launchIsolatedApp } from './electron-launch'
-
-// Page Geometry Wiring: harness.sendDocument now requires a real geometry
-// argument, computed here at this file's own Node-side module scope (an
-// app.evaluate() callback runs in a bare V8 context with no working module
-// resolution, so an imported constant can't be referenced from inside one
-// directly — it has to be threaded through app.evaluate()'s own single
-// argument instead). This gate deliberately exercises the DEFAULT
-// (no-frontmatter) geometry — per-document geometry is Task 4's concern,
-// not this gate's.
-const LETTER_GEOMETRY = computePageGeometry(DEFAULT_PAGE_CONFIG)
+// The shared DEFAULT (no-frontmatter, Letter/portrait/1in) geometry every
+// harness-driving gate paginates at -- see gate-geometry.ts for why it's one
+// shared constant, and why it has to be threaded through app.evaluate()'s
+// own single argument rather than referenced from inside the callback.
+import { LETTER_GEOMETRY } from './gate-geometry'
 
 // electronApplication.evaluate() runs each callback below in a bare V8
 // context reached via CDP — no `require`, no working dynamic `import()`

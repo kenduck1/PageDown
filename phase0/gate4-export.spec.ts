@@ -2,20 +2,13 @@ import { test, expect } from '@playwright/test'
 import { readFileSync, writeFileSync, mkdirSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { markdownToHtml } from '../src/markdown/pipeline'
-import { computePageGeometry } from '../src/typography/page-geometry'
-import { DEFAULT_PAGE_CONFIG } from '../src/markdown/page-config'
 import { PDFDocument, PDFName, PDFDict, PDFArray, PDFRef } from 'pdf-lib'
 import { launchIsolatedApp } from './electron-launch'
-
-// Page Geometry Wiring: harness.sendDocument now requires a real geometry
-// argument, computed here at this file's own Node-side module scope (an
-// app.evaluate() callback runs in a bare V8 context with no working module
-// resolution, so an imported constant can't be referenced from inside one
-// directly — it has to be threaded through app.evaluate()'s own single
-// argument instead). This gate deliberately exercises the DEFAULT
-// (no-frontmatter) geometry — per-document geometry is Task 4's concern,
-// not this gate's.
-const LETTER_GEOMETRY = computePageGeometry(DEFAULT_PAGE_CONFIG)
+// The shared DEFAULT (no-frontmatter, Letter/portrait/1in) geometry every
+// harness-driving gate paginates at -- see gate-geometry.ts for why it's one
+// shared constant, and why it has to be threaded through app.evaluate()'s
+// own single argument rather than referenced from inside the callback.
+import { LETTER_GEOMETRY } from './gate-geometry'
 
 // Same mechanical deviations from the brief's literal sample as every other
 // Phase 0 gate spec (see gate1/gate5/gate7's own comments for the full

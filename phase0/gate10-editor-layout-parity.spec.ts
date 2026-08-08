@@ -1,20 +1,16 @@
 import { test, expect, type ElectronApplication, type Page } from '@playwright/test'
 import { markdownToHtml } from '../src/markdown/pipeline'
 import { REPORT_TEMPLATE } from '../src/renderer/src/templates/report.md'
-import { CONTENT_WIDTH_PX, computePageGeometry } from '../src/typography/page-geometry'
-import { DEFAULT_PAGE_CONFIG } from '../src/markdown/page-config'
+import { CONTENT_WIDTH_PX } from '../src/typography/page-geometry'
 import { launchIsolatedApp } from './electron-launch'
-
-// Page Geometry Wiring: harness.sendDocument now requires a real geometry
-// argument, computed here at this file's own Node-side module scope (an
-// app.evaluate() callback runs in a bare V8 context with no working module
-// resolution, so an imported constant can't be referenced from inside one
-// directly — it has to be threaded through app.evaluate()'s own single
-// argument instead). This gate deliberately exercises the DEFAULT
-// (no-frontmatter) geometry — REPORT_TEMPLATE has no page-config
-// frontmatter, and per-document geometry is Task 4's concern, not this
-// gate's.
-const LETTER_GEOMETRY = computePageGeometry(DEFAULT_PAGE_CONFIG)
+// The shared DEFAULT (no-frontmatter, Letter/portrait/1in) geometry every
+// harness-driving gate paginates at -- see gate-geometry.ts for why it's one
+// shared constant, and why it has to be threaded through app.evaluate()'s
+// own single argument rather than referenced from inside the callback. It is
+// the right one for THIS gate specifically because REPORT_TEMPLATE carries
+// no page-config frontmatter at all; the per-document (A4) case is
+// gate16-page-geometry.spec.ts's job.
+import { LETTER_GEOMETRY } from './gate-geometry'
 
 // Phase 1 Gate 3 (docs/superpowers/plans/2026-07-28-phase1-findings.md)
 // measured editor/pagination layout parity against a throwaway

@@ -3,20 +3,14 @@ import { readFileSync, mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { build } from 'esbuild'
 import { markdownToHtml } from '../src/markdown/pipeline'
-import { computePageGeometry } from '../src/typography/page-geometry'
-import { DEFAULT_PAGE_CONFIG } from '../src/markdown/page-config'
 import { launchIsolatedApp } from '../phase0/electron-launch'
-
-// Page Geometry Wiring: harness.sendDocument now requires a real geometry
-// argument, computed here at this file's own Node-side module scope (an
-// app.evaluate() callback runs in a bare V8 context with no working module
-// resolution, so an imported constant can't be referenced from inside one
-// directly — it has to be threaded through app.evaluate()'s own single
-// argument instead). This gate deliberately exercises the DEFAULT
-// (no-frontmatter) geometry, matching every other reference-corpus-driven
-// gate — per-document geometry is a later task's concern, not this
-// historical Phase 1 spike's.
-const LETTER_GEOMETRY = computePageGeometry(DEFAULT_PAGE_CONFIG)
+// The shared DEFAULT (no-frontmatter, Letter/portrait/1in) geometry every
+// harness-driving gate paginates at -- see phase0/gate-geometry.ts for why
+// it's one shared constant, and why it has to be threaded through
+// app.evaluate()'s own single argument rather than referenced from inside
+// the callback. Imported across the phase1 -> phase0 boundary exactly like
+// launchIsolatedApp directly above it.
+import { LETTER_GEOMETRY } from '../phase0/gate-geometry'
 
 // Same mechanical deviations from a hypothetical literal brief sample as
 // every other Phase 0/1 gate spec (see phase0/gate1/gate5/gate7's own
