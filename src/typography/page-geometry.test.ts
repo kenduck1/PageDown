@@ -113,6 +113,41 @@ describe('computePageGeometry', () => {
     expect(geometry.pageHeightPx).toBe(19200)
   })
 
+  it('clamps a negative custom dimension up to the 2in floor', () => {
+    // Mirrors the margin clamp's own explicit negative-input test below:
+    // parseMargins/frontmatter both admit negative numbers, and a negative
+    // dimension is finite (so it does NOT take the not-a-number fallback
+    // branch) -- it must be clamped like any other too-small request, not
+    // fallen back to Letter.
+    const geometry = computePageGeometry({
+      ...DEFAULT_PAGE_CONFIG,
+      pageSize: 'Custom',
+      customWidth: -10,
+      customHeight: -1000
+    })
+    expect(geometry.pageWidthPx).toBe(192)
+    expect(geometry.pageHeightPx).toBe(192)
+  })
+
+  it('clamps each axis on its own declared role BEFORE the landscape swap rotates them', () => {
+    // The one combination that distinguishes "clamp before swap" from "swap
+    // before clamp": customWidth 300 clamps down to the 200in ceiling,
+    // customHeight 1 clamps up to the 2in floor -- each clamped against its
+    // own declared role, THEN the landscape swap rotates the pair. So the
+    // rendered width comes from the clamped HEIGHT (2in * 96 = 192) and the
+    // rendered height comes from the clamped WIDTH (200in * 96 = 19200).
+    // Hand-derived, not computed by calling computePageGeometry.
+    const geometry = computePageGeometry({
+      ...DEFAULT_PAGE_CONFIG,
+      pageSize: 'Custom',
+      customWidth: 300,
+      customHeight: 1,
+      orientation: 'landscape'
+    })
+    expect(geometry.pageWidthPx).toBe(192)
+    expect(geometry.pageHeightPx).toBe(19200)
+  })
+
   it('still leaves at least 1in of content on a minimum-size custom page', () => {
     const geometry = computePageGeometry({
       ...DEFAULT_PAGE_CONFIG,
