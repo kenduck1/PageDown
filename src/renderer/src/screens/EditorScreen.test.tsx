@@ -29,7 +29,11 @@ beforeEach(() => {
     // (Cannot read properties of undefined) against a bare mock the moment
     // any Split mode test actually mounts it.
     sendSplitPreviewDocument: vi.fn().mockResolvedValue({ pageCount: 1 }),
-    destroySplitPreview: vi.fn()
+    destroySplitPreview: vi.fn(),
+    // Same rationale as sendSplitPreviewDocument above -- SplitPreview.tsx's
+    // own effects call .then()/.catch() on these unconditionally too.
+    scrollSplitPreviewToPage: vi.fn().mockResolvedValue({ currentPage: 1, pageCount: 0 }),
+    getSplitPreviewPage: vi.fn().mockResolvedValue({ currentPage: 1, pageCount: 0 })
   }
 })
 
