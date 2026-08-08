@@ -135,13 +135,41 @@ function clampMarginPair(startPx: number, endPx: number, extentPx: number): [num
   return [scaled, maxTotal - scaled]
 }
 
-// 'Custom' falls back to 'Letter' -- no customWidth/customHeight fields
-// exist on PageConfig (deliberately out of scope), the same non-blocking-
-// fallback treatment this codebase already gives malformed or missing
-// frontmatter elsewhere.
+// A custom page size takes its extent straight from the document's own
+// frontmatter, which removes the protection the named-size allowlist gave
+// us: PAGE_SIZES_IN is a 3-entry lookup no hostile value can escape, but
+// customWidth/customHeight are free-form numbers on the same untrusted,
+// hand-editable input. The floor keeps a page big enough to lay anything out
+// in (below ~2in the margin clamp would eat the entire page); the ceiling is
+// the PDF format's own maximum page dimension, 14400pt = 200in, so we can
+// never emit a page a conforming PDF reader would reject.
+export const MIN_PAGE_DIM_IN = 2
+export const MAX_PAGE_DIM_IN = 200
+
+// Falls back to `fallbackIn` (always Letter's own width/height, i.e. the
+// same non-blocking-fallback treatment this codebase already gives
+// malformed or missing frontmatter elsewhere) when the requested value isn't
+// even a finite number -- `customWidth`/`customHeight` are plain numbers on
+// PageConfig, but nothing stops a hand-edited `.md` file's frontmatter from
+// parsing to `NaN` (e.g. `extractPageConfig` only guards this via
+// `isFiniteNumber` on the way IN; a caller constructing PageConfig directly,
+// as every test in this file does, has no such guard). Once finite, the
+// value is clamped into [MIN_PAGE_DIM_IN, MAX_PAGE_DIM_IN] rather than
+// falling back, since an out-of-range-but-finite number (a typo'd `0.1`, an
+// absurd `100000`) is a real request for a small/large page, just not a safe
+// one -- the same distinction `clampMarginPair` below draws between clamping
+// (a renderable answer close to what was asked) and falling back (there is
+// nothing to scale).
+function clampPageDimension(requestedIn: number, fallbackIn: number): number {
+  if (!Number.isFinite(requestedIn)) return fallbackIn
+  return Math.min(MAX_PAGE_DIM_IN, Math.max(MIN_PAGE_DIM_IN, requestedIn))
+}
+
 export function computePageGeometry(config: PageConfig): PageGeometry {
-  const size = config.pageSize === 'Custom' ? 'Letter' : config.pageSize
-  const { width, height } = PAGE_SIZES_IN[size]
+  const isCustom = config.pageSize === 'Custom'
+  const named = PAGE_SIZES_IN[isCustom ? 'Letter' : config.pageSize]
+  const width = isCustom ? clampPageDimension(config.customWidth, named.width) : named.width
+  const height = isCustom ? clampPageDimension(config.customHeight, named.height) : named.height
   const [wIn, hIn] = config.orientation === 'landscape' ? [height, width] : [width, height]
   const pageWidthPx = Math.round(wIn * DPI)
   const pageHeightPx = Math.round(hIn * DPI)

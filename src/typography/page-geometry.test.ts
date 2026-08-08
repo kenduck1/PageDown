@@ -69,11 +69,73 @@ describe('computePageGeometry', () => {
     expect(geometry.pageHeightPx).toBe(PAGE_WIDTH_PX)
   })
 
-  it('falls back Custom page size to Letter, same as malformed/missing frontmatter elsewhere', () => {
-    const config: PageConfig = { ...DEFAULT_PAGE_CONFIG, pageSize: 'Custom' }
-    const geometry = computePageGeometry(config)
-    expect(geometry.pageWidthPx).toBe(PAGE_WIDTH_PX)
-    expect(geometry.pageHeightPx).toBe(PAGE_HEIGHT_PX)
+  it('uses the document own custom dimensions', () => {
+    const geometry = computePageGeometry({
+      ...DEFAULT_PAGE_CONFIG,
+      pageSize: 'Custom',
+      customWidth: 5,
+      customHeight: 7
+    })
+    expect(geometry.pageWidthPx).toBe(480)
+    expect(geometry.pageHeightPx).toBe(672)
+  })
+
+  it('falls back to Letter dimensions when a custom dimension is not finite', () => {
+    const geometry = computePageGeometry({
+      ...DEFAULT_PAGE_CONFIG,
+      pageSize: 'Custom',
+      customWidth: Number.NaN,
+      customHeight: 7
+    })
+    expect(geometry.pageWidthPx).toBe(816)
+    expect(geometry.pageHeightPx).toBe(672)
+  })
+
+  it('clamps an absurdly small custom page up to the 2in floor', () => {
+    const geometry = computePageGeometry({
+      ...DEFAULT_PAGE_CONFIG,
+      pageSize: 'Custom',
+      customWidth: 0.1,
+      customHeight: 0
+    })
+    expect(geometry.pageWidthPx).toBe(192)
+    expect(geometry.pageHeightPx).toBe(192)
+  })
+
+  it('clamps an absurdly large custom page down to the 200in ceiling', () => {
+    const geometry = computePageGeometry({
+      ...DEFAULT_PAGE_CONFIG,
+      pageSize: 'Custom',
+      customWidth: 100000,
+      customHeight: 100000
+    })
+    expect(geometry.pageWidthPx).toBe(19200)
+    expect(geometry.pageHeightPx).toBe(19200)
+  })
+
+  it('still leaves at least 1in of content on a minimum-size custom page', () => {
+    const geometry = computePageGeometry({
+      ...DEFAULT_PAGE_CONFIG,
+      pageSize: 'Custom',
+      customWidth: 2,
+      customHeight: 2,
+      margins: { top: 1, bottom: 1, left: 1, right: 1 }
+    })
+    expect(geometry.contentWidthPx).toBeGreaterThanOrEqual(96)
+    expect(geometry.contentHeightPx).toBeGreaterThanOrEqual(96)
+  })
+
+  it('leaves every named page size bit-for-bit unchanged', () => {
+    expect(computePageGeometry(DEFAULT_PAGE_CONFIG)).toEqual({
+      pageWidthPx: 816,
+      pageHeightPx: 1056,
+      marginTopPx: 96,
+      marginBottomPx: 96,
+      marginLeftPx: 96,
+      marginRightPx: 96,
+      contentWidthPx: 624,
+      contentHeightPx: 864
+    })
   })
 
   it('computes contentWidthPx/contentHeightPx from EACH side independently, not a doubled uniform value', () => {
