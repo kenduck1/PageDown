@@ -45,17 +45,22 @@
 //   footerLeft: ""
 //   footerCenter: "Page {n} of {total}"
 //   footerRight: ""
+//   headerLeft: ""
+//   headerCenter: ""
+//   headerRight: ""
+//   customWidth: 8.5            # inches; only meaningful when page: Custom
+//   customHeight: 11            # inches; only meaningful when page: Custom
+//   fontFamily: source-serif-4  # 'source-serif-4' | 'inter'
 //   pageNumberFormat: decimal   # 'decimal' | 'roman'
 //   theme: default              # 'default' | 'resume' | 'letter' | 'report'
 //
-// Footer *visibility* (`footer: true/false`) and footer *content*
-// (`footerLeft`/`footerCenter`/`footerRight`) are deliberately separate
+// Footer/header *visibility* (`footer: true/false`, `header: true/false`)
+// and footer/header *content* (`footerLeft`/`footerCenter`/`footerRight`,
+// `headerLeft`/`headerCenter`/`headerRight`) are deliberately separate
 // top-level keys rather than one nested `footer: { show, left, center,
-// right }` object: PageConfig itself has no header-content fields (the
-// design mockup only gives footer a Left/Center/Right row, header is a
-// bare toggle), so nesting footer's show-flag together with its content
-// would create an asymmetric, one-off shape unlike everything else here.
-// Flat keys also keep every owned key at most one YAML "block" deep except
+// right }` object, so nesting a show-flag together with its content would
+// create an asymmetric, one-off shape unlike everything else here. Flat
+// keys also keep every owned key at most one YAML "block" deep except
 // `margins`, which keeps the line-based surgical mutation below simple to
 // reason about.
 //
@@ -164,6 +169,7 @@ export type PageSize = 'Letter' | 'A4' | 'Legal' | 'Custom'
 export type Orientation = 'portrait' | 'landscape'
 export type PageNumberFormat = 'decimal' | 'roman'
 export type PageTheme = 'default' | 'resume' | 'letter' | 'report'
+export type PageFontFamily = 'source-serif-4' | 'inter'
 
 export interface PageMargins {
   top: number
@@ -172,11 +178,15 @@ export interface PageMargins {
   right: number
 }
 
-export interface PageFooter {
+export interface PageRunningContent {
   left: string
   center: string
   right: string
 }
+
+// Kept so existing importers keep compiling; header and footer are the same
+// shape and there is no reason for two identical interfaces.
+export type PageFooter = PageRunningContent
 
 export interface PageConfig {
   pageSize: PageSize
@@ -185,6 +195,10 @@ export interface PageConfig {
   showHeader: boolean
   showFooter: boolean
   footer: PageFooter
+  header: PageRunningContent
+  customWidth: number
+  customHeight: number
+  fontFamily: PageFontFamily
   pageNumberFormat: PageNumberFormat
   theme: PageTheme
 }
@@ -201,6 +215,12 @@ export const DEFAULT_PAGE_CONFIG: PageConfig = {
   showHeader: false,
   showFooter: true,
   footer: { left: '', center: 'Page {n} of {total}', right: '' },
+  header: { left: '', center: '', right: '' },
+  // Letter's own dimensions, so a document selecting `Custom` without
+  // specifying anything renders exactly as it does today.
+  customWidth: 8.5,
+  customHeight: 11,
+  fontFamily: 'source-serif-4',
   pageNumberFormat: 'decimal',
   theme: 'default'
 }
@@ -209,6 +229,7 @@ const PAGE_SIZES: readonly PageSize[] = ['Letter', 'A4', 'Legal', 'Custom']
 const ORIENTATIONS: readonly Orientation[] = ['portrait', 'landscape']
 const PAGE_NUMBER_FORMATS: readonly PageNumberFormat[] = ['decimal', 'roman']
 const THEMES: readonly PageTheme[] = ['default', 'resume', 'letter', 'report']
+const FONT_FAMILIES: readonly PageFontFamily[] = ['source-serif-4', 'inter']
 
 function isFiniteNumber(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value)
@@ -300,6 +321,27 @@ export function extractPageConfig(rawFrontmatterYaml: string): Partial<PageConfi
     }
   }
 
+  const headerLeft = typeof parsed.headerLeft === 'string' ? parsed.headerLeft : undefined
+  const headerCenter = typeof parsed.headerCenter === 'string' ? parsed.headerCenter : undefined
+  const headerRight = typeof parsed.headerRight === 'string' ? parsed.headerRight : undefined
+  if (headerLeft !== undefined || headerCenter !== undefined || headerRight !== undefined) {
+    result.header = {
+      left: headerLeft ?? DEFAULT_PAGE_CONFIG.header.left,
+      center: headerCenter ?? DEFAULT_PAGE_CONFIG.header.center,
+      right: headerRight ?? DEFAULT_PAGE_CONFIG.header.right
+    }
+  }
+
+  if (isFiniteNumber(parsed.customWidth)) result.customWidth = parsed.customWidth
+  if (isFiniteNumber(parsed.customHeight)) result.customHeight = parsed.customHeight
+
+  if (
+    typeof parsed.fontFamily === 'string' &&
+    (FONT_FAMILIES as string[]).includes(parsed.fontFamily)
+  ) {
+    result.fontFamily = parsed.fontFamily as PageFontFamily
+  }
+
   if (
     typeof parsed.pageNumberFormat === 'string' &&
     (PAGE_NUMBER_FORMATS as string[]).includes(parsed.pageNumberFormat)
@@ -342,14 +384,17 @@ export function extractPageConfig(rawFrontmatterYaml: string): Partial<PageConfi
  * be preserved by anything editing `extractPageConfig`: EVERY nested value it
  * can return is all-or-nothing. A shallow spread only merges one level deep,
  * so a nested object that were ever half-populated would survive the merge
- * with `undefined` sides and defeat the completeness guarantee above. Both of
- * `PageConfig`'s nested objects satisfy this today, by different mechanisms:
+ * with `undefined` sides and defeat the completeness guarantee above. All
+ * three of `PageConfig`'s nested objects satisfy this today, by two
+ * mechanisms:
  *
  * - `margins`: `parseMargins` returns `undefined` unless ALL FOUR sides are
  *   present and finite, so `result.margins` is either complete or absent.
- * - `footer`: the `footerLeft`/`footerCenter`/`footerRight` branch fills all
- *   three sides from `DEFAULT_PAGE_CONFIG.footer` whenever ANY one of them is
- *   present, so `result.footer` is likewise either complete or absent.
+ * - `footer`/`header`: each one's own `footerLeft`/`footerCenter`/
+ *   `footerRight` (resp. `headerLeft`/`headerCenter`/`headerRight`) branch
+ *   fills all three sides from `DEFAULT_PAGE_CONFIG`'s own `footer`/`header`
+ *   whenever ANY one of them is present, so the result is likewise either
+ *   complete or absent.
  *
  * Adding a new nested key to `PageConfig`, or relaxing either mechanism to
  * emit a partial object, silently breaks this function's return type in a way
@@ -427,6 +472,27 @@ function buildOwnedLines(updates: Partial<PageConfig>): OwnedLine[] {
     lines.push({ key: 'footerLeft', text: `footerLeft: ${quoteYamlString(f.left)}` })
     lines.push({ key: 'footerCenter', text: `footerCenter: ${quoteYamlString(f.center)}` })
     lines.push({ key: 'footerRight', text: `footerRight: ${quoteYamlString(f.right)}` })
+  }
+  if (updates.header !== undefined) {
+    const h = updates.header
+    lines.push({ key: 'headerLeft', text: `headerLeft: ${quoteYamlString(h.left)}` })
+    lines.push({ key: 'headerCenter', text: `headerCenter: ${quoteYamlString(h.center)}` })
+    lines.push({ key: 'headerRight', text: `headerRight: ${quoteYamlString(h.right)}` })
+  }
+  if (updates.customWidth !== undefined) {
+    lines.push({
+      key: 'customWidth',
+      text: `customWidth: ${formatMarginNumber(updates.customWidth)}`
+    })
+  }
+  if (updates.customHeight !== undefined) {
+    lines.push({
+      key: 'customHeight',
+      text: `customHeight: ${formatMarginNumber(updates.customHeight)}`
+    })
+  }
+  if (updates.fontFamily !== undefined) {
+    lines.push({ key: 'fontFamily', text: `fontFamily: ${updates.fontFamily}` })
   }
   if (updates.pageNumberFormat !== undefined) {
     lines.push({ key: 'pageNumberFormat', text: `pageNumberFormat: ${updates.pageNumberFormat}` })
