@@ -31,12 +31,13 @@ export async function paginateAndTime(
   // only ever receives raw `markdown` and has no validated document path to
   // pull real frontmatter from at this layer -- extracting a document's own
   // PageConfig (extractPageConfig, src/markdown/page-config.ts) needs the
-  // raw frontmatter block split out first (extractRawFrontmatter, being
-  // relocated to src/markdown/frontmatter-splice.ts by a later task in this
-  // same sub-project), which is real per-document wiring that belongs to
-  // that task's 4 real callers (page-count-generator.ts,
-  // thumbnail-generator.ts, pdf-exporter.ts, src/main/index.ts), not to this
-  // Phase-0 timing spike. See src/main/pagination-window.ts's own
+  // raw frontmatter block split out first (extractRawFrontmatter,
+  // src/markdown/frontmatter-splice.ts), which is real per-document wiring
+  // that belongs to that sub-project's 4 real callers
+  // (page-count-generator.ts, thumbnail-generator.ts, pdf-exporter.ts,
+  // split-preview-window.ts), not to this Phase-0 timing spike. Those four
+  // are now wired; this spike deliberately stays on the default geometry.
+  // See src/main/pagination-window.ts's own
   // `PaginationHarness.sendDocument` doc comment for the same distinction.
   t = performance.now()
   const result = await harness.sendDocument(html, computePageGeometry(DEFAULT_PAGE_CONFIG))

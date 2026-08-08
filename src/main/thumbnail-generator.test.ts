@@ -13,6 +13,7 @@ import { join } from 'node:path'
 // userData directory, since the cache read/write is what decides whether the
 // harness is reached at all.
 const mocks = vi.hoisted(() => ({
+  setBounds: vi.fn(),
   sendDocument: vi.fn(async () => ({
     pageCount: 2,
     ready: true,
@@ -32,6 +33,7 @@ vi.mock('electron', () => ({
 vi.mock('./pagination-window', () => ({
   createPaginationHarness: vi.fn(async () => ({
     view: {
+      setBounds: mocks.setBounds,
       webContents: {
         once: vi.fn(),
         // The two-rAF paint wait inside getThumbnail.
@@ -108,6 +110,7 @@ describe('getThumbnail page geometry', () => {
   beforeEach(async () => {
     userDataDir = await mkdtemp(join(tmpdir(), 'pagedown-thumbnail-test-'))
     mocks.sendDocument.mockClear()
+    mocks.setBounds.mockClear()
   })
 
   afterEach(async () => {
@@ -130,6 +133,23 @@ describe('getThumbnail page geometry', () => {
       expect.any(String),
       expect.objectContaining({ pageWidthPx: 816, pageHeightPx: 1056 })
     )
+  })
+
+  // A DISTINCT failure mode from the @page rule: capturePage() captures the
+  // view's own bounds rectangle, which createPaginationHarness fixes at
+  // Letter (816x1056). Without a per-request resize, an A4 page laid out at
+  // 794x1123 has its bottom ~67px cropped out of the captured thumbnail even
+  // though the @page rule was correct.
+  it('sizes the harness view to the document page box before capturing', async () => {
+    await getThumbnail('---\npage: A4\n---\n\n# A4 report', userDataDir)
+
+    expect(mocks.setBounds).toHaveBeenCalledWith({ x: 0, y: 0, width: 794, height: 1123 })
+  })
+
+  it('sizes the harness view for a landscape document too', async () => {
+    await getThumbnail('---\npage: A4\norientation: landscape\n---\n\n# Wide report', userDataDir)
+
+    expect(mocks.setBounds).toHaveBeenCalledWith({ x: 0, y: 0, width: 1123, height: 794 })
   })
 
   // Same NaN trap `resolvePageConfig` closes for every other caller: a
