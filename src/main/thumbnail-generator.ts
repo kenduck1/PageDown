@@ -218,6 +218,34 @@ export async function getThumbnail(
       // `resolvePageConfig` merges over DEFAULT_PAGE_CONFIG, so a document
       // with no frontmatter (every template) still yields a complete config.
       const geometry = computePageGeometry(resolvePageConfig(content))
+      // Resize the view to the page box BEFORE laying out and capturing.
+      // `capturePage()` captures the view's own bounds rectangle, and
+      // `createPaginationHarness` fixes those at Letter (816x1056) at creation
+      // — so without this, an A4 document (794x1123) lays out correctly but
+      // gets its bottom ~67px cropped off the captured image, and a landscape
+      // document (1056x816) loses the right-hand side. Page count is immune
+      // (it never reads pixels), which is why only this generator needs this
+      // and page-count-generator.ts deliberately doesn't.
+      //
+      // Safe with respect to the rAF-throttling bug documented at length on
+      // `getHarness` above: that bug is about VISIBILITY (a view composited
+      // inside a real, shown window gets Chromium's rendering throttle), not
+      // about view SIZE. Resizing a view inside a genuinely never-shown
+      // BaseWindow doesn't reintroduce it — pdf-exporter.ts already does
+      // exactly this per export. Do NOT "hide" this view by moving it
+      // off-canvas (`x: -9999`); that IS the throttling trigger. Keep 0,0.
+      //
+      // These bounds are per-request state on a harness that is memoized and
+      // reused across documents, which is only safe because
+      // `enqueueHarnessWork` (see its own comment above) serializes every
+      // harness-dependent call — no second document can resize this view
+      // between this line and the `capturePage()` below.
+      harness.view.setBounds({
+        x: 0,
+        y: 0,
+        width: geometry.pageWidthPx,
+        height: geometry.pageHeightPx
+      })
       const result = await harness.sendDocument(html, geometry)
 
       // sendDocument resolves once the render context publishes its result,
