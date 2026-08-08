@@ -15,6 +15,10 @@ const FULL_CONFIG: PageConfig = {
   showHeader: true,
   showFooter: true,
   footer: { left: 'Confidential', center: 'Page {n} of {total}', right: 'Acme Corp' },
+  header: { left: 'Acme', center: '', right: 'Confidential' },
+  customWidth: 7.5,
+  customHeight: 9.25,
+  fontFamily: 'inter',
   pageNumberFormat: 'roman',
   theme: 'report'
 }
@@ -32,6 +36,12 @@ const FULL_RAW = [
   'footerLeft: "Confidential"',
   'footerCenter: "Page {n} of {total}"',
   'footerRight: "Acme Corp"',
+  'headerLeft: "Acme"',
+  'headerCenter: ""',
+  'headerRight: "Confidential"',
+  'customWidth: 7.5',
+  'customHeight: 9.25',
+  'fontFamily: inter',
   'pageNumberFormat: roman',
   'theme: report'
 ].join('\n')
@@ -132,6 +142,29 @@ describe('extractPageConfig', () => {
     // not a top-level key PageDown owns.
     const raw = ['customField:', '  page: NotOurs', 'theme: default'].join('\n')
     expect(extractPageConfig(raw)).toEqual({ theme: 'default' })
+  })
+
+  it('fills every header side from defaults when only one is present', () => {
+    const raw = 'headerCenter: Draft'
+    expect(extractPageConfig(raw).header).toEqual({
+      left: DEFAULT_PAGE_CONFIG.header.left,
+      center: 'Draft',
+      right: DEFAULT_PAGE_CONFIG.header.right
+    })
+  })
+
+  it('omits header entirely when none of the three keys are present', () => {
+    expect(extractPageConfig('title: X').header).toBeUndefined()
+  })
+
+  it('reads custom dimensions as finite numbers only', () => {
+    expect(extractPageConfig('customWidth: 7.5').customWidth).toBe(7.5)
+    expect(extractPageConfig('customWidth: wide').customWidth).toBeUndefined()
+  })
+
+  it('accepts only allowlisted font families', () => {
+    expect(extractPageConfig('fontFamily: inter').fontFamily).toBe('inter')
+    expect(extractPageConfig('fontFamily: Comic Sans').fontFamily).toBeUndefined()
   })
 })
 
@@ -826,5 +859,11 @@ describe('resolvePageConfig', () => {
     const source = '---\npage: [unclosed\n---\n\n# Report\n'
 
     expect(resolvePageConfig(source)).toEqual(DEFAULT_PAGE_CONFIG)
+  })
+
+  it('never returns a half-populated header through resolvePageConfig', () => {
+    const config = resolvePageConfig('---\nheaderLeft: Only\n---\n# Doc')
+    expect(config.header.center).toBe(DEFAULT_PAGE_CONFIG.header.center)
+    expect(config.header.right).toBe(DEFAULT_PAGE_CONFIG.header.right)
   })
 })
