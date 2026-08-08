@@ -468,6 +468,47 @@ app.whenReady().then(() => {
   // destroy() actually runs.
   ipcMain.handle('split-preview:destroy', () => destroySplitPreviewHarness())
 
+  // Page navigation (docs/superpowers/specs/2026-08-08-page-navigation-design.md).
+  //
+  // Both are deliberately NON-CREATING: unlike setBounds/sendDocument they must
+  // never call getOrCreateSplitPreviewHarness. Asking "what page is showing"
+  // must not spin up a sandboxed renderer process -- the renderer polls
+  // getSplitPreviewPage on a timer while Split mode is open, and a creating
+  // handler would resurrect a harness that Split mode had just torn down.
+  //
+  // No isKnownPath check applies: neither accepts a path, and the only
+  // renderer-supplied value is an integer the sandbox clamps. Neither rejects
+  // -- page navigation is a convenience and must never break editing.
+  ipcMain.handle('split-preview:scrollToPage', async (_event, pageIndex: number) => {
+    if (!splitPreviewHarnessPromise) return { currentPage: 1, pageCount: 0 }
+    return enqueueSplitPreviewWork(async () => {
+      const harnessPromise = splitPreviewHarnessPromise
+      if (!harnessPromise) return { currentPage: 1, pageCount: 0 }
+      try {
+        const harness = await harnessPromise
+        return await harness.scrollToPage(pageIndex)
+      } catch (err) {
+        console.error('Failed to scroll split preview', err)
+        return { currentPage: 1, pageCount: 0 }
+      }
+    })
+  })
+
+  ipcMain.handle('split-preview:getPage', async () => {
+    if (!splitPreviewHarnessPromise) return { currentPage: 1, pageCount: 0 }
+    return enqueueSplitPreviewWork(async () => {
+      const harnessPromise = splitPreviewHarnessPromise
+      if (!harnessPromise) return { currentPage: 1, pageCount: 0 }
+      try {
+        const harness = await harnessPromise
+        return await harness.getPage()
+      } catch (err) {
+        console.error('Failed to read split preview page', err)
+        return { currentPage: 1, pageCount: 0 }
+      }
+    })
+  })
+
   // Version-history IPC surface (Task 2 of the autosave/crash-recovery/
   // version-history plan). All four validate `filePath` via isKnownPath --
   // same File I/O security invariant as file:openPath/file:save/
