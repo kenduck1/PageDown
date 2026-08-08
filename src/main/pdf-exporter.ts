@@ -9,7 +9,8 @@ import {
   type PaginationHarness
 } from './pagination-window'
 import { exportToPdf } from '../export/export-pdf'
-import { PAGE_WIDTH_PX, PAGE_HEIGHT_PX } from '../typography/page-geometry'
+import { resolvePageConfig } from '../markdown/page-config'
+import { computePageGeometry, type PageGeometry } from '../typography/page-geometry'
 
 // --- Fix-round finding (verified empirically, not theorized) --------------
 //
@@ -60,11 +61,25 @@ import { PAGE_WIDTH_PX, PAGE_HEIGHT_PX } from '../typography/page-geometry'
 // ~12x-slower steady state pushed it past sendDocument's timeout, surfacing
 // to the user as a raw "Pagination harness timed out waiting for a result"
 // IPC error.
-async function withFreshHarness<T>(task: (harness: PaginationHarness) => Promise<T>): Promise<T> {
+async function withFreshHarness<T>(
+  geometry: PageGeometry,
+  task: (harness: PaginationHarness) => Promise<T>
+): Promise<T> {
   const harnessWindow = new BaseWindow({ show: false })
   try {
     const harness = await createPaginationHarness(harnessWindow)
-    harness.view.setBounds({ x: 0, y: 0, width: PAGE_WIDTH_PX, height: PAGE_HEIGHT_PX })
+    // Sized to the DOCUMENT's own real page geometry, not a fixed Letter
+    // constant (Page Geometry Wiring). This is load-bearing, not cosmetic:
+    // `createPaginationHarness` defaults this view to Letter (816x1056), so
+    // exporting a real A4 or landscape document inside a Letter-shaped
+    // WebContentsView would lay it out at the wrong viewport width no matter
+    // what the `@page` rule the render context builds says.
+    harness.view.setBounds({
+      x: 0,
+      y: 0,
+      width: geometry.pageWidthPx,
+      height: geometry.pageHeightPx
+    })
     return await task(harness)
   } finally {
     // Destroying the dedicated window destroys its owned WebContentsView
@@ -153,8 +168,12 @@ export async function exportDocumentToPdf(
   if (result.canceled || !result.filePath) return null
 
   const documentDir = documentPath ? dirname(documentPath) : null
+  // Computed BEFORE withFreshHarness so it's in scope for that helper's own
+  // view-sizing setBounds as well as sendDocument below -- the two have to
+  // agree on one geometry, per the comment inside withFreshHarness.
+  const geometry = computePageGeometry(resolvePageConfig(content))
   const pdfBuffer = await enqueueExport(() =>
-    withFreshHarness(async (harness) => {
+    withFreshHarness(geometry, async (harness) => {
       // Same registerAssetRoot/finally pattern as getThumbnail/getPageCount
       // (see page-count-generator.ts's getPageCount): skipped entirely (not
       // called with a placeholder) when there's no validated document
@@ -163,7 +182,7 @@ export async function exportDocumentToPdf(
       const assetToken = documentDir ? registerAssetRoot(documentDir) : undefined
       try {
         const { html } = markdownToHtml(content, { assetToken })
-        await harness.sendDocument(html, EXPORT_PAGINATION_TIMEOUT_MS)
+        await harness.sendDocument(html, geometry, EXPORT_PAGINATION_TIMEOUT_MS)
         return exportToPdf(harness)
       } finally {
         if (assetToken) unregisterAssetRoot(assetToken)

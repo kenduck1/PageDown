@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { extractRawFrontmatter, replaceRawFrontmatter } from './frontmatterSplice'
+import { extractRawFrontmatter, replaceRawFrontmatter } from './frontmatter-splice'
 
 describe('extractRawFrontmatter', () => {
   it('returns the raw YAML text between the fences', () => {

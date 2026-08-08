@@ -2,6 +2,9 @@ import { WebContentsView, type BrowserWindow } from 'electron'
 import { randomUUID } from 'node:crypto'
 import { dirname } from 'node:path'
 import { markdownToHtml } from '../markdown/pipeline'
+import { resolvePageConfig } from '../markdown/page-config'
+import { computePageGeometry } from '../typography/page-geometry'
+import type { RenderRequestMessage } from '../pagination/render-message'
 import {
   ensureRenderInfraRegistered,
   registerAssetRoot,
@@ -156,10 +159,25 @@ export async function createSplitPreviewHarness(
     const assetToken = documentDir ? registerAssetRoot(documentDir) : undefined
     try {
       const { html } = markdownToHtml(content, { assetToken })
+      // The live preview has to show the document's OWN page geometry (Page
+      // Geometry Wiring) -- Split mode is the one surface where the user
+      // watches page size/orientation/margin changes take effect, so a fixed
+      // Letter/1in assumption here would be immediately visible as wrong.
+      // Computed from `content` directly, since unlike pagination-window.ts's
+      // harness this sendDocument takes raw Markdown rather than pre-rendered
+      // HTML.
+      const geometry = computePageGeometry(resolvePageConfig(content))
 
       const requestId = randomUUID()
+      // Built through an explicitly-typed local, not an inline object
+      // literal, exactly as pagination-window.ts's own sendDocument does --
+      // this is the whole reason src/pagination/render-message.ts exists: an
+      // untyped literal here would let a forgotten field (e.g. `geometry`)
+      // pass tsc silently and surface only as a NaN-valued `@page` rule in
+      // the render context. See that module's header comment.
+      const message: RenderRequestMessage = { type: 'render', html, requestId, geometry }
       await view.webContents.executeJavaScript(
-        `window.postMessage(${JSON.stringify({ type: 'render', html, requestId })}, '*')`
+        `window.postMessage(${JSON.stringify(message)}, '*')`
       )
 
       const deadline = Date.now() + timeoutMs

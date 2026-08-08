@@ -3,6 +3,7 @@ import { load } from 'js-yaml'
 import {
   extractPageConfig,
   applyPageConfig,
+  resolvePageConfig,
   DEFAULT_PAGE_CONFIG,
   type PageConfig
 } from './page-config'
@@ -767,5 +768,63 @@ describe('applyPageConfig', () => {
     expect(result).toContain('footerEcho: *fc')
     expect(() => load(result)).toThrow()
     expect(extractPageConfig(result)).toEqual({})
+  })
+})
+
+// resolvePageConfig is the whole-document wrapper the geometry callers use
+// (page-count-generator.ts, thumbnail-generator.ts, pdf-exporter.ts,
+// split-preview-window.ts, EditorScreen.tsx). Its entire reason to exist is
+// guaranteeing a COMPLETE PageConfig: computePageGeometry reads
+// `config.margins.top` unconditionally, so any Partial reaching it produces
+// NaN geometry, which the render context turns into a silent
+// `size: NaNin NaNin; margin: NaNin ...` @page rule rather than a visible
+// failure.
+describe('resolvePageConfig', () => {
+  it('returns DEFAULT_PAGE_CONFIG for a document with no frontmatter block', () => {
+    expect(resolvePageConfig('# Just a heading\n\nSome body text.\n')).toEqual(DEFAULT_PAGE_CONFIG)
+  })
+
+  it('returns DEFAULT_PAGE_CONFIG for an empty document', () => {
+    expect(resolvePageConfig('')).toEqual(DEFAULT_PAGE_CONFIG)
+  })
+
+  it('fills every unspecified field from DEFAULT_PAGE_CONFIG for partial frontmatter', () => {
+    const source = '---\npage: A4\n---\n\n# Report\n'
+
+    expect(resolvePageConfig(source)).toEqual({ ...DEFAULT_PAGE_CONFIG, pageSize: 'A4' })
+  })
+
+  // The specific shape that would break a shallow merge if parseMargins ever
+  // started returning a partially-populated object: `margins` must be either
+  // fully present or entirely absent, never half-filled with undefined sides.
+  it('never yields a half-populated margins object from partial margin keys', () => {
+    const source = '---\npage: A4\nmargins:\n  top: 2\n  left: 2\n---\n\n# Report\n'
+    const config = resolvePageConfig(source)
+
+    expect(config.margins).toEqual(DEFAULT_PAGE_CONFIG.margins)
+    for (const value of Object.values(config.margins)) {
+      expect(Number.isFinite(value)).toBe(true)
+    }
+  })
+
+  it('reads every owned key when the frontmatter specifies all of them', () => {
+    const source = `---\n${applyPageConfig('', FULL_CONFIG)}\n---\n\n# Report\n`
+
+    expect(resolvePageConfig(source)).toEqual(FULL_CONFIG)
+  })
+
+  it('ignores unrelated keys and preserves defaults alongside them', () => {
+    const source = '---\ntitle: My Report\ntags: [a, b]\norientation: landscape\n---\n\n# Report\n'
+
+    expect(resolvePageConfig(source)).toEqual({
+      ...DEFAULT_PAGE_CONFIG,
+      orientation: 'landscape'
+    })
+  })
+
+  it('falls back to DEFAULT_PAGE_CONFIG when the frontmatter block is malformed YAML', () => {
+    const source = '---\npage: [unclosed\n---\n\n# Report\n'
+
+    expect(resolvePageConfig(source)).toEqual(DEFAULT_PAGE_CONFIG)
   })
 })
