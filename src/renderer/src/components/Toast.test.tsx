@@ -50,4 +50,22 @@ describe('Toast', () => {
     vi.advanceTimersByTime(1)
     expect(onDismiss).toHaveBeenCalledTimes(1)
   })
+
+  it('does not restart the timer when onDismiss is a new function reference on rerender (regression test for the caller-inline-closure bug)', () => {
+    const onDismiss1 = vi.fn()
+    const onDismiss2 = vi.fn()
+    const { rerender } = render(
+      <Toast message="Hello there" onDismiss={onDismiss1} durationMs={3000} />
+    )
+    vi.advanceTimersByTime(1500)
+    // Re-render with a BRAND NEW function reference and the SAME message --
+    // this is what EditorScreen's inline `onDismiss={() => setToast(null)}`
+    // does on every unrelated re-render (e.g. the user typing).
+    rerender(<Toast message="Hello there" onDismiss={onDismiss2} durationMs={3000} />)
+    vi.advanceTimersByTime(1500)
+    // Total elapsed: 3000ms. The LATEST onDismiss should have fired -- and
+    // the timer must not have restarted at the rerender.
+    expect(onDismiss2).toHaveBeenCalledTimes(1)
+    expect(onDismiss1).not.toHaveBeenCalled()
+  })
 })
