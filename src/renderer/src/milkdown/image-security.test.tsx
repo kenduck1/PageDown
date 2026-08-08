@@ -5,6 +5,14 @@ import { isSafeImageSrc } from './image-security'
 import MilkdownEditor from './MilkdownEditor'
 import { createTestEditor } from './test-editor'
 import { EDITOR_SCHEMA_PLUGINS } from './plugins'
+import { computePageGeometry } from '../../../typography/page-geometry'
+import { DEFAULT_PAGE_CONFIG } from '../../../markdown/page-config'
+
+// MilkdownEditor's `geometry` prop (Page Geometry Wiring sub-project) sizes
+// the mount's own text column. Nothing in this file is about page sizing, so
+// every mount here takes the Letter/1in default -- exactly what a document
+// with no page frontmatter resolves to.
+const DEFAULT_GEOMETRY = computePageGeometry(DEFAULT_PAGE_CONFIG)
 
 afterEach(() => {
   cleanup()
@@ -41,7 +49,14 @@ describe('isSafeImageSrc', () => {
 describe('image node view — real editor mount', () => {
   it('never assigns an unsafe src to the actual rendered <img> element (file:)', async () => {
     const content = '![local](file:///etc/hosts)\n'
-    render(<MilkdownEditor content={content} onChange={() => {}} onError={() => {}} />)
+    render(
+      <MilkdownEditor
+        geometry={DEFAULT_GEOMETRY}
+        content={content}
+        onChange={() => {}}
+        onError={() => {}}
+      />
+    )
 
     await waitFor(() => {
       expect(document.querySelector('.milkdown-mount img')).toBeInTheDocument()
@@ -54,7 +69,14 @@ describe('image node view — real editor mount', () => {
 
   it('never assigns an unsafe src to the actual rendered <img> element (http:)', async () => {
     const content = '![remote](http://evil.example.com/track.png)\n'
-    render(<MilkdownEditor content={content} onChange={() => {}} onError={() => {}} />)
+    render(
+      <MilkdownEditor
+        geometry={DEFAULT_GEOMETRY}
+        content={content}
+        onChange={() => {}}
+        onError={() => {}}
+      />
+    )
 
     await waitFor(() => {
       expect(document.querySelector('.milkdown-mount img')).toBeInTheDocument()
@@ -69,7 +91,14 @@ describe('image node view — real editor mount', () => {
     const dataUri =
       'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII='
     const content = `![local](${dataUri})\n`
-    render(<MilkdownEditor content={content} onChange={() => {}} onError={() => {}} />)
+    render(
+      <MilkdownEditor
+        geometry={DEFAULT_GEOMETRY}
+        content={content}
+        onChange={() => {}}
+        onError={() => {}}
+      />
+    )
 
     await waitFor(() => {
       expect(document.querySelector('.milkdown-mount img')).toBeInTheDocument()
