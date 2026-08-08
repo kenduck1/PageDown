@@ -26,7 +26,7 @@ import type { PaginationHarness } from '../main/pagination-window'
 //   page-box fallback — see pagination-window.ts's PaginationResult for how
 //   this harness currently has no explicit page stylesheet". Both halves are
 //   now stale: the render context authors a real `@page` rule of its own
-//   since the Document Typography sub-project — see `DOCUMENT_STYLESHEET` in
+//   since the Document Typography sub-project — see `buildDocumentStylesheet` in
 //   resources/pagination-render/index.ts — and `PaginationResult` never
 //   carried a note about stylesheets to point at in the first place.)
 // - `generateTaggedPDF: true` — Electron/Chromium's experimental tagged-PDF

@@ -7,7 +7,7 @@ import { join } from 'node:path'
 // ways: the app-shell renderer gets them from Tailwind's `@theme static` block
 // in src/renderer/src/assets/base.css, while the sandboxed pagination render
 // context -- which has no Tailwind and no base.css at all -- gets them from a
-// hand-written `:root` block inside the DOCUMENT_STYLESHEET template literal in
+// hand-written `:root` block inside the buildDocumentStylesheet template literal in
 // resources/pagination-render/index.ts.
 //
 // Two files restating one list by hand is a drift hazard with an unusually

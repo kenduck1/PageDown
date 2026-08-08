@@ -108,8 +108,16 @@ describe('createSplitPreviewHarness sendDocument page geometry', () => {
       marginLeftPx: 96,
       marginRightPx: 96
     })
-    for (const value of Object.values(geometry)) {
-      expect(Number.isNaN(value)).toBe(false)
+    // Checked as "still a finite number after the JSON round trip", NOT as
+    // `Number.isNaN(value)`: this harness serializes its payload through
+    // `JSON.stringify`, which maps NaN to `null` -- so a NaN-checking loop
+    // here would be testing `Number.isNaN(null)`, which is false for every
+    // value and can never fail. (The equivalent loop in
+    // page-count-generator.test.ts IS a real NaN check, because that path has
+    // no JSON round trip.) `null` fails both assertions below.
+    for (const [key, value] of Object.entries(geometry)) {
+      expect(typeof value, `${key} must survive JSON.stringify as a number`).toBe('number')
+      expect(Number.isFinite(value), `${key} must be finite`).toBe(true)
     }
   })
 })
