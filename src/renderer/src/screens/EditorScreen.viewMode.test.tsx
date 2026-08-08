@@ -107,7 +107,11 @@ beforeEach(() => {
     // (not bare) as of Task 5, since Split mode transitions in this file's
     // own new tests below genuinely mount a real SplitPreview.
     sendSplitPreviewDocument: vi.fn().mockResolvedValue({ pageCount: 1 }),
-    destroySplitPreview: vi.fn()
+    destroySplitPreview: vi.fn(),
+    // Same rationale as sendSplitPreviewDocument above -- SplitPreview.tsx's
+    // own effects call .then()/.catch() on these unconditionally too.
+    scrollSplitPreviewToPage: vi.fn().mockResolvedValue({ currentPage: 1, pageCount: 0 }),
+    getSplitPreviewPage: vi.fn().mockResolvedValue({ currentPage: 1, pageCount: 0 })
   }
 })
 
