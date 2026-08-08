@@ -19,6 +19,7 @@ import documentTypographyCss from '../../src/typography/document-typography.css'
 import sourceSerif4Base64 from '../../src/renderer/src/assets/fonts/source-serif-4-variable.woff2'
 import { DPI, type PageGeometry } from '../../src/typography/page-geometry'
 import type { RenderRequestMessage } from '../../src/pagination/render-message'
+import { clampPageIndex, pickCurrentPage, type PageNavState } from '../../src/pagination/page-nav'
 
 // Task 10 / Gate 6: register the first-party keep-with-next/table-
 // continuation handlers exactly once, before the first `new Previewer()`
@@ -480,6 +481,55 @@ declare global {
     __pagedownResult?: OutgoingMessage
     __pagedownGate7Result?: Gate7Result
     __pagedownGate4ProbeResult?: Gate4ProbeResult
+    __pagedownPageNav?: {
+      scrollToPage(requestedPage: number): PageNavState
+      getPage(): PageNavState
+    }
+  }
+}
+
+// Page navigation (docs/superpowers/specs/2026-08-08-page-navigation-design.md).
+//
+// Deliberately NOT routed through the postMessage + window.__pagedownResult
+// protocol the 'render' message uses. That protocol exists because pagination
+// is ASYNCHRONOUS -- main has to poll for a result that arrives whenever
+// Paged.js finishes. Scrolling is synchronous, and executeJavaScript already
+// returns the evaluated value straight back to main, so a message type here
+// would add a second in-flight result channel racing the render one for no
+// benefit. RenderRequestMessage stays exactly as it is.
+//
+// Lives in this bundled, type-checked module rather than in a string injected
+// from main: only a validated integer is ever interpolated into injected JS
+// (see split-preview-window.ts). A hostile document cannot reach this --
+// sanitization strips scripts and `script-src 'self'` blocks inline
+// execution -- and in the worst case an override could only break scrolling,
+// never escalate.
+function readPageElements(): HTMLElement[] {
+  return Array.from(document.querySelectorAll<HTMLElement>('.pagedjs_page'))
+}
+
+function currentPageState(pages: HTMLElement[]): PageNavState {
+  const tops = pages.map((page) => page.getBoundingClientRect().top)
+  return {
+    currentPage: pickCurrentPage(tops, window.innerHeight),
+    pageCount: pages.length
+  }
+}
+
+window.__pagedownPageNav = {
+  scrollToPage(requestedPage: number): PageNavState {
+    const pages = readPageElements()
+    if (pages.length === 0) return { currentPage: 1, pageCount: 0 }
+    const target = clampPageIndex(requestedPage, pages.length)
+    // 'auto' rather than 'smooth': main resolves its promise as soon as this
+    // returns, and a smooth scroll would still be animating -- so the state
+    // reported back (and any immediately-following getPage poll) would
+    // describe a position the view is only on its way to.
+    pages[target - 1].scrollIntoView({ behavior: 'auto', block: 'start' })
+    return { currentPage: target, pageCount: pages.length }
+  },
+  getPage(): PageNavState {
+    return currentPageState(readPageElements())
   }
 }
 
