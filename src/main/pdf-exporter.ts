@@ -68,12 +68,31 @@ async function withFreshHarness<T>(
   const harnessWindow = new BaseWindow({ show: false })
   try {
     const harness = await createPaginationHarness(harnessWindow)
-    // Sized to the DOCUMENT's own real page geometry, not a fixed Letter
-    // constant (Page Geometry Wiring). This is load-bearing, not cosmetic:
-    // `createPaginationHarness` defaults this view to Letter (816x1056), so
-    // exporting a real A4 or landscape document inside a Letter-shaped
-    // WebContentsView would lay it out at the wrong viewport width no matter
-    // what the `@page` rule the render context builds says.
+    // Sized to the DOCUMENT's own real page geometry rather than
+    // `createPaginationHarness`'s fixed Letter default (816x1056), so the view
+    // stays consistent with the page box it's hosting (Page Geometry Wiring).
+    //
+    // This is consistency and defence in depth, NOT a correctness requirement
+    // — be precise about that, because the tempting stronger claim is false
+    // and has already cost this repo a review round. Paged.js's layout does
+    // NOT depend on the viewport: the content box is driven by the `@page`
+    // rule and Paged.js's own `--pagedjs-margin-*` custom properties, as
+    // documented at length in resources/pagination-render/index.ts (see its
+    // "What this rule does and does NOT do" note, itself a correction of an
+    // earlier wrong claim) and confirmed independently by
+    // phase0/gate3-mermaid.spec.ts's untouched `expect(sequence.width)
+    // .toBe(624)`. The exported PDF follows the same `@page` box, because
+    // src/export/export-pdf.ts passes `preferCSSPageSize: true` — not the
+    // view bounds. So export would produce correct geometry without this
+    // call; it's here so the view never disagrees with the page it hosts.
+    //
+    // Do NOT read this as a reason to add a matching setBounds to
+    // page-count-generator.ts — that file genuinely does not need one, and
+    // its harness deliberately never calls setBounds at all (see its
+    // getHarness comment on rAF throttling). The one place view bounds really
+    // are load-bearing is thumbnail-generator.ts, for a different and real
+    // mechanism: capturePage() captures the view's own bounds rectangle, so a
+    // Letter-sized view genuinely crops a non-Letter page out of the image.
     harness.view.setBounds({
       x: 0,
       y: 0,

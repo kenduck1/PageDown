@@ -338,10 +338,23 @@ export function extractPageConfig(rawFrontmatterYaml: string): Partial<PageConfi
  * site should route through this function rather than restate the merge, so
  * that trap exists in exactly one place.
  *
- * Safe against partial frontmatter specifically because `parseMargins`
- * above returns `undefined` unless ALL FOUR sides are present and finite --
- * so a shallow spread can never leave a half-populated `margins` object with
- * some sides `undefined`.
+ * Safe against partial frontmatter because of a general invariant that must
+ * be preserved by anything editing `extractPageConfig`: EVERY nested value it
+ * can return is all-or-nothing. A shallow spread only merges one level deep,
+ * so a nested object that were ever half-populated would survive the merge
+ * with `undefined` sides and defeat the completeness guarantee above. Both of
+ * `PageConfig`'s nested objects satisfy this today, by different mechanisms:
+ *
+ * - `margins`: `parseMargins` returns `undefined` unless ALL FOUR sides are
+ *   present and finite, so `result.margins` is either complete or absent.
+ * - `footer`: the `footerLeft`/`footerCenter`/`footerRight` branch fills all
+ *   three sides from `DEFAULT_PAGE_CONFIG.footer` whenever ANY one of them is
+ *   present, so `result.footer` is likewise either complete or absent.
+ *
+ * Adding a new nested key to `PageConfig`, or relaxing either mechanism to
+ * emit a partial object, silently breaks this function's return type in a way
+ * `tsc` cannot catch (the value would still be typed complete while carrying
+ * `undefined` members at runtime).
  */
 export function resolvePageConfig(source: string): PageConfig {
   return { ...DEFAULT_PAGE_CONFIG, ...extractPageConfig(extractRawFrontmatter(source)) }
