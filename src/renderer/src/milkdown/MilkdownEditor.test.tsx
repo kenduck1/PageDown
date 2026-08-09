@@ -11,7 +11,7 @@ import {
 import { commonmark } from '@milkdown/preset-commonmark'
 import { gfm } from '@milkdown/preset-gfm'
 import { listener, listenerCtx } from '@milkdown/plugin-listener'
-import { getMarkdown, insert } from '@milkdown/utils'
+import { $prose, getMarkdown, insert } from '@milkdown/utils'
 import { NodeSelection, Selection, TextSelection } from '@milkdown/prose/state'
 import { PINNED_STRINGIFY_OPTIONS } from './stringify-options'
 import { EDITOR_SCHEMA_PLUGINS } from './plugins'
@@ -19,6 +19,7 @@ import { EDITOR_COMMAND_PLUGINS } from './commands'
 import { createTestEditor } from './test-editor'
 import MilkdownEditor, { type MilkdownEditorHandle } from './MilkdownEditor'
 import { buildEditorCommands } from './editor-commands'
+import { createFindPlugin } from './find-plugin'
 import { computePageGeometry } from '../../../typography/page-geometry'
 import { DEFAULT_PAGE_CONFIG } from '../../../markdown/page-config'
 
@@ -104,6 +105,16 @@ describe('Milkdown listener plugin — API pattern verification', () => {
 // mutation-tested one now fails here directly.
 describe('MilkdownEditorHandle commands needing a real ranged selection — wired-implementation verification', () => {
   const PLUGINS = [...EDITOR_SCHEMA_PLUGINS.flat(), ...EDITOR_COMMAND_PLUGINS]
+  // The find plugin (find-plugin.ts) is constructed per-mount in the real
+  // MilkdownEditor.tsx, not part of the static EDITOR_COMMAND_PLUGINS list
+  // (it closes over a per-mount callback) -- so exercising
+  // setFindState/replaceActiveMatch/replaceAllMatches/getSelectedText
+  // against a raw test editor here means adding it explicitly, the same way
+  // MilkdownEditor.tsx's own mount effect does via $prose(() =>
+  // createFindPlugin(...)). The callback itself is unused by these tests
+  // (they read match state back out via getSelectedText/getMarkdown
+  // instead), so a no-op is enough.
+  const FIND_PLUGINS = [...PLUGINS, $prose(() => createFindPlugin(() => {}))]
 
   // Fix-round (second round) change: destroy is now handled by this
   // afterEach rather than inline at the end of each test body. Reviewer
@@ -322,6 +333,53 @@ describe('MilkdownEditorHandle commands needing a real ranged selection — wire
 
     expect(root.querySelector('div[data-type="frontmatter"]')).toBeInTheDocument()
     expect(root.textContent).toContain('X')
+  })
+
+  it('setFindState selects the active match without marking the document edited', async () => {
+    const editor = await createTestEditor('alpha beta', FIND_PLUGINS)
+    currentEditor = editor
+    const commands = buildEditorCommands(editor)
+    const before = editor.action(getMarkdown())
+    commands.setFindState({
+      query: 'beta',
+      options: { caseSensitive: false, wholeWord: false },
+      activeIndex: 0
+    })
+    expect(commands.getSelectedText()).toBe('beta')
+    expect(editor.action(getMarkdown())).toBe(before)
+  })
+
+  it('replaceActiveMatch rewrites only the active match', async () => {
+    const editor = await createTestEditor('cat cat', FIND_PLUGINS)
+    currentEditor = editor
+    const commands = buildEditorCommands(editor)
+    commands.setFindState({
+      query: 'cat',
+      options: { caseSensitive: false, wholeWord: false },
+      activeIndex: 0
+    })
+    commands.replaceActiveMatch('dog')
+    expect(editor.action(getMarkdown()).trim()).toBe('dog cat')
+  })
+
+  it('replaceAllMatches rewrites every match', async () => {
+    const editor = await createTestEditor('cat cat cat', FIND_PLUGINS)
+    currentEditor = editor
+    const commands = buildEditorCommands(editor)
+    commands.setFindState({
+      query: 'cat',
+      options: { caseSensitive: false, wholeWord: false },
+      activeIndex: 0
+    })
+    commands.replaceAllMatches('dog')
+    expect(editor.action(getMarkdown()).trim()).toBe('dog dog dog')
+  })
+
+  it('getSelectedText returns an empty string with a collapsed selection', async () => {
+    const editor = await createTestEditor('alpha', FIND_PLUGINS)
+    currentEditor = editor
+    const commands = buildEditorCommands(editor)
+    expect(commands.getSelectedText()).toBe('')
   })
 })
 
