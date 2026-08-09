@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState, type ReactElement, type RefObject
 import { useAppStore, type ViewMode } from '../store/appStore'
 import { useDocumentStore } from '../store/documentStore'
 import { useFindStore } from '../store/findStore'
+import { isSourceEditing } from '../lib/editing-surface'
 import { resolvePageConfig, type PageFontFamily } from '../../../markdown/page-config'
 import type { MilkdownEditorHandle } from '../milkdown/MilkdownEditor'
 
@@ -151,6 +152,7 @@ function EditorToolbar({
   const openPageSetup = useAppStore((state) => state.openPageSetup)
   const openShortcutsHelp = useAppStore((state) => state.openShortcutsHelp)
   const openCommentComposer = useAppStore((state) => state.openCommentComposer)
+  const openLinkComposer = useAppStore((state) => state.openLinkComposer)
   // F2 (final whole-branch review): every control below bound to
   // editorRef.current?.X() no-ops in Source mode, because MilkdownEditor is
   // unmounted there and editorRef.current is null -- but before this guard
@@ -167,7 +169,17 @@ function EditorToolbar({
   // enabled. Find in particular MUST stay enabled in Source mode -- it works
   // on both editing surfaces (see useFindController.ts), so disabling it here
   // would remove a real capability rather than a dead control.
-  const isSourceMode = viewMode === 'source'
+  // Uses the shared isSourceEditing predicate, NOT a bare
+  // `viewMode === 'source'` — that was a real bug, found while fixing Insert
+  // link. Split mode's LEFT PANE is Format or Source editing per
+  // splitLeftMode, so with viewMode 'split' and splitLeftMode 'source' the
+  // MilkdownEditor is genuinely unmounted (EditorScreen's own left-pane
+  // ternary swaps element types) and `editorRef.current` is therefore null —
+  // yet every editorRef-bound control above rendered ENABLED and silently did
+  // nothing when clicked. `lib/editing-surface.ts` exists precisely because
+  // "which editing surface is live" cannot be answered from viewMode alone;
+  // this was the one place still trying to.
+  const isSourceMode = isSourceEditing(viewMode, splitLeftMode)
   const content = useDocumentStore((state) => state.content)
   const filePath = useDocumentStore((state) => state.filePath)
   const remoteImagesAllowed = useDocumentStore((state) => state.remoteImagesAllowed)
@@ -322,11 +334,6 @@ function EditorToolbar({
       return
     }
     editorRef.current?.toggleHeading(Number(value) as 1 | 2 | 3)
-  }
-
-  const handleInsertLink = (): void => {
-    const href = window.prompt('Link URL')
-    if (href) editorRef.current?.insertLink(href)
   }
 
   const handleExportPdf = async (): Promise<void> => {
@@ -657,9 +664,21 @@ function EditorToolbar({
           split-cell have no backing command in this sub-project's scope and
           stay unwired, same treatment as Underline/text-color above. */}
           <div className="flex items-center gap-0.5">
+            {/* Opens LinkComposer (a FindBar-style layout row, rendered by
+            EditorScreen), exactly like "Add comment" below opens
+            CommentComposer. This button used to call
+            `window.prompt('Link URL')` directly -- which THROWS in Electron's
+            renderer ("prompt() is not supported.", measured in the real built
+            app), taking the whole handler down before
+            editorRef.current?.insertLink(href) was ever reached, with nothing
+            surfaced to the user. Don't reintroduce window.prompt/alert/confirm
+            anywhere in this renderer for the same reason; only
+            dialog.showMessageBox over IPC (main process) or a real in-app row
+            like this one works. Disabled in Source mode for the same reason as
+            every other editorRef-bound button in this cluster. */}
             <ToolbarIconButton
               label="Insert link"
-              onClick={handleInsertLink}
+              onClick={openLinkComposer}
               disabled={isSourceMode}
             >
               <Icon strokeWidth={1.8}>

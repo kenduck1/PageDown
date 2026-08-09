@@ -164,25 +164,50 @@ describe('EditorToolbar', () => {
     expect(handle.insertPageBreak).toHaveBeenCalledTimes(1)
   })
 
-  it('Insert link prompts for a URL and calls editorRef.current.insertLink(href) when one is given', async () => {
+  // These two tests REPLACE a pair that mocked `window.prompt` -- i.e. that
+  // stubbed out the exact call that was broken, and therefore stayed green
+  // for the entire time Insert link did nothing at all. In Electron's
+  // renderer `window.prompt()` THROWS ("Error: prompt() is not supported.",
+  // measured directly against the real built app: a pageerror fires, no
+  // dialog appears, the document is unchanged, and NOTHING surfaces in the UI
+  // because this renderer has no global error handler, no ErrorBoundary, and
+  // documentStore.error is never touched). jsdom's own `prompt` neither
+  // throws nor opens anything, so a jsdom test can never reproduce the crash
+  // directly -- what it CAN do, and what these tests do, is assert the real
+  // observable contract: the button opens the in-app composer row, and
+  // `window.prompt` is never reached at all. Reintroducing any
+  // prompt/alert/confirm-based flow fails the spy assertion below
+  // deterministically, rather than depending on whether a thrown error
+  // happens to fail the test run.
+  it('Insert link opens the in-app link composer (and never calls window.prompt, which throws in Electron)', async () => {
     const handle = createFakeEditorHandle()
     const ref = createRef<MilkdownEditorHandle>()
     ref.current = handle
-    const promptSpy = vi.spyOn(window, 'prompt').mockReturnValue('https://example.com')
+    // Made to throw exactly the way Electron's own implementation does, so
+    // this spy is a genuine stand-in for the real environment rather than
+    // jsdom's forgiving no-op -- if the implementation regresses to calling
+    // it, the call is both recorded AND fatal to the handler, the same as in
+    // the shipped app.
+    const promptSpy = vi.spyOn(window, 'prompt').mockImplementation(() => {
+      throw new Error('prompt() is not supported.')
+    })
     const user = userEvent.setup()
     render(<EditorToolbar editorRef={ref} />)
 
     await user.click(screen.getByRole('button', { name: 'Insert link' }))
 
-    expect(promptSpy).toHaveBeenCalled()
-    expect(handle.insertLink).toHaveBeenCalledWith('https://example.com')
+    expect(promptSpy).not.toHaveBeenCalled()
+    expect(useAppStore.getState().linkComposerOpen).toBe(true)
   })
 
-  it('Insert link does not call insertLink if the URL prompt is cancelled', async () => {
+  // The toolbar deliberately does NOT call insertLink itself -- it only opens
+  // the composer, which is rendered by EditorScreen and owns the URL the user
+  // actually types (see EditorScreen.test.tsx's 'link composer' block for the
+  // end-to-end wiring, and LinkComposer.test.tsx for the row's own behavior).
+  it('Insert link does not insert anything by itself -- the composer collects the URL first', async () => {
     const handle = createFakeEditorHandle()
     const ref = createRef<MilkdownEditorHandle>()
     ref.current = handle
-    vi.spyOn(window, 'prompt').mockReturnValue(null)
     const user = userEvent.setup()
     render(<EditorToolbar editorRef={ref} />)
 
@@ -330,6 +355,49 @@ describe('EditorToolbar', () => {
     expect(screen.getByRole('button', { name: 'Source' })).not.toBeDisabled()
 
     useAppStore.setState({ viewMode: 'format' })
+    rerender(<EditorToolbar editorRef={ref} />)
+
+    editorRefBoundButtonNames.forEach((name) => {
+      expect(screen.getByRole('button', { name })).not.toBeDisabled()
+    })
+    expect(screen.getByRole('combobox', { name: 'Paragraph style' })).not.toBeDisabled()
+  })
+
+  // Regression test for a real bug the test above could not catch, because it
+  // only ever varied `viewMode`. Split mode's LEFT PANE is Format or Source
+  // editing per `splitLeftMode`, so viewMode 'split' + splitLeftMode 'source'
+  // is a genuine Source-editing surface with the MilkdownEditor unmounted and
+  // `editorRef.current` null -- yet the whole editorRef-bound cluster rendered
+  // ENABLED and silently did nothing on click, because the predicate was a
+  // bare `viewMode === 'source'`. Fixed by using the shared `isSourceEditing`,
+  // which is exactly the "you cannot answer this from viewMode alone"
+  // predicate lib/editing-surface.ts already exists to provide.
+  it('disables the editorRef-bound controls in Split mode with a Source left pane too', () => {
+    const handle = createFakeEditorHandle()
+    const ref = { current: handle }
+    useAppStore.setState({ viewMode: 'split', splitLeftMode: 'source' })
+    const { rerender } = render(<EditorToolbar editorRef={ref} />)
+
+    const editorRefBoundButtonNames = [
+      'Undo',
+      'Redo',
+      'Bold',
+      'Italic',
+      'Bulleted list',
+      'Numbered list',
+      'Insert link',
+      'Insert table',
+      'Insert page break'
+    ]
+    editorRefBoundButtonNames.forEach((name) => {
+      expect(screen.getByRole('button', { name })).toBeDisabled()
+    })
+    expect(screen.getByRole('combobox', { name: 'Paragraph style' })).toBeDisabled()
+
+    // ...and the SAME Split mode with a Format left pane must leave them
+    // enabled -- otherwise this test would also pass against a naive
+    // `viewMode === 'split'` check, which would be a different bug.
+    useAppStore.setState({ viewMode: 'split', splitLeftMode: 'format' })
     rerender(<EditorToolbar editorRef={ref} />)
 
     editorRefBoundButtonNames.forEach((name) => {

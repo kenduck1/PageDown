@@ -23,7 +23,7 @@ describe('SplitPreview', () => {
       <SplitPreview
         content="# Hi"
         filePath={null}
-        pageSetupOpen={false}
+        overlayOpen={false}
         targetPage={1}
         onPageChange={vi.fn()}
         remoteImagesAllowed={false}
@@ -37,7 +37,7 @@ describe('SplitPreview', () => {
       <SplitPreview
         content="# Hi"
         filePath={null}
-        pageSetupOpen={false}
+        overlayOpen={false}
         targetPage={1}
         onPageChange={vi.fn()}
         remoteImagesAllowed={false}
@@ -54,7 +54,7 @@ describe('SplitPreview', () => {
       <SplitPreview
         content="# Hi"
         filePath={null}
-        pageSetupOpen={false}
+        overlayOpen={false}
         targetPage={1}
         onPageChange={vi.fn()}
         remoteImagesAllowed={false}
@@ -70,7 +70,7 @@ describe('SplitPreview', () => {
       <SplitPreview
         content="a"
         filePath={null}
-        pageSetupOpen={false}
+        overlayOpen={false}
         targetPage={1}
         onPageChange={vi.fn()}
         remoteImagesAllowed={false}
@@ -80,7 +80,7 @@ describe('SplitPreview', () => {
       <SplitPreview
         content="ab"
         filePath={null}
-        pageSetupOpen={false}
+        overlayOpen={false}
         targetPage={1}
         onPageChange={vi.fn()}
         remoteImagesAllowed={false}
@@ -90,7 +90,7 @@ describe('SplitPreview', () => {
       <SplitPreview
         content="abc"
         filePath={null}
-        pageSetupOpen={false}
+        overlayOpen={false}
         targetPage={1}
         onPageChange={vi.fn()}
         remoteImagesAllowed={false}
@@ -123,7 +123,7 @@ describe('SplitPreview', () => {
       <SplitPreview
         content="# Hi"
         filePath="/docs/a.md"
-        pageSetupOpen={false}
+        overlayOpen={false}
         targetPage={1}
         onPageChange={vi.fn()}
         remoteImagesAllowed={false}
@@ -141,7 +141,7 @@ describe('SplitPreview', () => {
       <SplitPreview
         content="# Hi"
         filePath="/docs/a.md"
-        pageSetupOpen={false}
+        overlayOpen={false}
         targetPage={1}
         onPageChange={vi.fn()}
         remoteImagesAllowed={true}
@@ -176,7 +176,7 @@ describe('SplitPreview', () => {
       <SplitPreview
         content="# Hi"
         filePath={null}
-        pageSetupOpen={false}
+        overlayOpen={false}
         targetPage={1}
         onPageChange={vi.fn()}
         remoteImagesAllowed={false}
@@ -193,7 +193,7 @@ describe('SplitPreview', () => {
       <SplitPreview
         content="# Hi"
         filePath={null}
-        pageSetupOpen={false}
+        overlayOpen={false}
         targetPage={1}
         onPageChange={vi.fn()}
         remoteImagesAllowed={false}
@@ -213,14 +213,19 @@ describe('SplitPreview', () => {
   // composites above ALL DOM, so the native preview was painting over Page
   // Setup's modal, including its own Apply/Cancel buttons. No setVisible
   // primitive exists on the preload surface -- these tests cover the
-  // zero-size-bounds mitigation instead (see the pageSetupOpen prop's own
-  // doc comment in SplitPreview.tsx).
-  it('reports zero-size bounds instead of the real rectangle while pageSetupOpen is true', async () => {
+  // zero-size-bounds mitigation instead (see the overlayOpen prop's own doc
+  // comment in SplitPreview.tsx). The prop used to be a single-purpose
+  // `pageSetupOpen`, which left ShortcutsHelpModal -- the identical
+  // `fixed inset-0 z-50` shape -- occluded for real; this component only ever
+  // knew "an overlay is up," so the generalization is a rename here and an
+  // `||` at EditorScreen's single call site, covered by that screen's own
+  // test rather than duplicated below.
+  it('reports zero-size bounds instead of the real rectangle while overlayOpen is true', async () => {
     render(
       <SplitPreview
         content="# Hi"
         filePath={null}
-        pageSetupOpen={true}
+        overlayOpen={true}
         targetPage={1}
         onPageChange={vi.fn()}
         remoteImagesAllowed={false}
@@ -236,14 +241,14 @@ describe('SplitPreview', () => {
     })
   })
 
-  it('restores the real bounds when pageSetupOpen transitions back to false, even with no resize', async () => {
+  it('restores the real bounds when overlayOpen transitions back to false, even with no resize', async () => {
     const setSplitPreviewBounds = vi.fn()
     window.api.setSplitPreviewBounds = setSplitPreviewBounds
     const { rerender } = render(
       <SplitPreview
         content="# Hi"
         filePath={null}
-        pageSetupOpen={true}
+        overlayOpen={true}
         targetPage={1}
         onPageChange={vi.fn()}
         remoteImagesAllowed={false}
@@ -257,7 +262,7 @@ describe('SplitPreview', () => {
       <SplitPreview
         content="# Hi"
         filePath={null}
-        pageSetupOpen={false}
+        overlayOpen={false}
         targetPage={1}
         onPageChange={vi.fn()}
         remoteImagesAllowed={false}
@@ -267,14 +272,14 @@ describe('SplitPreview', () => {
     // No ResizeObserver/'resize' event fires here -- jsdom gives every
     // element a 0x0 getBoundingClientRect() regardless, so this asserts the
     // real code path (reportBounds re-invoked because the bounds effect
-    // depends on pageSetupOpen) rather than the specific non-zero numbers a
+    // depends on overlayOpen) rather than the specific non-zero numbers a
     // real layout engine would produce, which is exactly what this test is
     // for: proving the transition alone re-reports bounds, not that a resize
     // did.
     await waitFor(() => {
       expect(setSplitPreviewBounds).toHaveBeenLastCalledWith({ x: 0, y: 0, width: 0, height: 0 })
       // The effect ran again for this transition (not just once at mount) --
-      // distinguishes "reported zero because pageSetupOpen re-triggered it"
+      // distinguishes "reported zero because overlayOpen re-triggered it"
       // from "reported zero because that's jsdom's only value and the effect
       // never re-ran at all."
       expect(setSplitPreviewBounds.mock.calls.length).toBeGreaterThan(1)
@@ -300,7 +305,7 @@ describe('SplitPreview', () => {
           <SplitPreview
             content="# Hi"
             filePath={null}
-            pageSetupOpen={false}
+            overlayOpen={false}
             targetPage={targetPage}
             onPageChange={onPageChange}
             remoteImagesAllowed={false}
@@ -332,7 +337,7 @@ describe('SplitPreview', () => {
         <SplitPreview
           content="# Hi"
           filePath={null}
-          pageSetupOpen={false}
+          overlayOpen={false}
           targetPage={3}
           onPageChange={onPageChange}
           remoteImagesAllowed={false}
@@ -350,7 +355,7 @@ describe('SplitPreview', () => {
         <SplitPreview
           content="# Hi"
           filePath={null}
-          pageSetupOpen={false}
+          overlayOpen={false}
           targetPage={9}
           onPageChange={onPageChange}
           remoteImagesAllowed={false}
@@ -458,7 +463,7 @@ describe('SplitPreview', () => {
         <SplitPreview
           content="# Hi"
           filePath={null}
-          pageSetupOpen={false}
+          overlayOpen={false}
           targetPage={5}
           onPageChange={onPageChange}
           remoteImagesAllowed={false}

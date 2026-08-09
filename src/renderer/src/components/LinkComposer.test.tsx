@@ -1,0 +1,124 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { cleanup, render, screen } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
+import LinkComposer from './LinkComposer'
+import { initialAppState, useAppStore } from '../store/appStore'
+
+// The replacement for EditorToolbar's dead `window.prompt('Link URL')` call
+// (which THREW in Electron -- see LinkComposer.tsx's own module comment).
+// These tests are written so that regressing to a prompt-style flow cannot
+// keep them green: every assertion here is about a real, rendered DOM row
+// (queried by role/accessible name) and a real callback, none of it stubbable
+// by mocking a browser dialog API the way the two tests this feature's fix
+// deleted were.
+beforeEach(() => {
+  useAppStore.setState(initialAppState)
+})
+
+afterEach(() => {
+  cleanup()
+})
+
+describe('LinkComposer', () => {
+  it('renders nothing when linkComposerOpen is false', () => {
+    render(<LinkComposer onInsertLink={vi.fn()} />)
+    expect(screen.queryByRole('group', { name: 'Insert link' })).not.toBeInTheDocument()
+  })
+
+  it('renders the composer row when linkComposerOpen is true', () => {
+    useAppStore.setState({ linkComposerOpen: true })
+    render(<LinkComposer onInsertLink={vi.fn()} />)
+    expect(screen.getByRole('group', { name: 'Insert link' })).toBeInTheDocument()
+    expect(screen.getByRole('textbox', { name: 'Link URL' })).toBeInTheDocument()
+  })
+
+  it('the Insert button is disabled until a real URL is typed', async () => {
+    useAppStore.setState({ linkComposerOpen: true })
+    const user = userEvent.setup()
+    render(<LinkComposer onInsertLink={vi.fn()} />)
+
+    const insertButton = screen.getByRole('button', { name: 'Insert' })
+    expect(insertButton).toBeDisabled()
+
+    await user.type(screen.getByRole('textbox', { name: 'Link URL' }), '   ')
+    expect(insertButton).toBeDisabled()
+
+    await user.type(screen.getByRole('textbox', { name: 'Link URL' }), 'https://example.com')
+    expect(insertButton).not.toBeDisabled()
+  })
+
+  it('Enter inserts the URL and closes, same as clicking Insert', async () => {
+    useAppStore.setState({ linkComposerOpen: true })
+    const onInsertLink = vi.fn()
+    const user = userEvent.setup()
+    render(<LinkComposer onInsertLink={onInsertLink} />)
+
+    await user.type(screen.getByRole('textbox', { name: 'Link URL' }), 'https://example.com{Enter}')
+
+    expect(onInsertLink).toHaveBeenCalledWith('https://example.com')
+    expect(useAppStore.getState().linkComposerOpen).toBe(false)
+  })
+
+  it('clicking Insert inserts the URL and closes', async () => {
+    useAppStore.setState({ linkComposerOpen: true })
+    const onInsertLink = vi.fn()
+    const user = userEvent.setup()
+    render(<LinkComposer onInsertLink={onInsertLink} />)
+
+    await user.type(screen.getByRole('textbox', { name: 'Link URL' }), 'https://example.com')
+    await user.click(screen.getByRole('button', { name: 'Insert' }))
+
+    expect(onInsertLink).toHaveBeenCalledWith('https://example.com')
+    expect(useAppStore.getState().linkComposerOpen).toBe(false)
+  })
+
+  // The old prompt-based code's `if (href)` guard let a whitespace-only
+  // string through, which would have produced a link with a blank href.
+  it('trims surrounding whitespace, and a whitespace-only URL inserts nothing', async () => {
+    useAppStore.setState({ linkComposerOpen: true })
+    const onInsertLink = vi.fn()
+    const user = userEvent.setup()
+    render(<LinkComposer onInsertLink={onInsertLink} />)
+
+    const input = screen.getByRole('textbox', { name: 'Link URL' })
+    await user.type(input, '   {Enter}')
+    expect(onInsertLink).not.toHaveBeenCalled()
+    expect(useAppStore.getState().linkComposerOpen).toBe(true)
+
+    await user.clear(input)
+    await user.type(input, '  https://example.com  {Enter}')
+    expect(onInsertLink).toHaveBeenCalledWith('https://example.com')
+  })
+
+  it('Cancel closes without inserting and clears the typed URL', async () => {
+    useAppStore.setState({ linkComposerOpen: true })
+    const onInsertLink = vi.fn()
+    const user = userEvent.setup()
+    const { rerender } = render(<LinkComposer onInsertLink={onInsertLink} />)
+
+    await user.type(screen.getByRole('textbox', { name: 'Link URL' }), 'https://example.com')
+    await user.click(screen.getByRole('button', { name: 'Cancel' }))
+
+    expect(onInsertLink).not.toHaveBeenCalled()
+    expect(useAppStore.getState().linkComposerOpen).toBe(false)
+
+    useAppStore.setState({ linkComposerOpen: true })
+    rerender(<LinkComposer onInsertLink={onInsertLink} />)
+    expect(screen.getByRole('textbox', { name: 'Link URL' })).toHaveValue('')
+  })
+
+  it('Escape closes without inserting', async () => {
+    useAppStore.setState({ linkComposerOpen: true })
+    const onInsertLink = vi.fn()
+    const user = userEvent.setup()
+    render(<LinkComposer onInsertLink={onInsertLink} />)
+
+    await user.type(
+      screen.getByRole('textbox', { name: 'Link URL' }),
+      'https://example.com{Escape}'
+    )
+
+    expect(onInsertLink).not.toHaveBeenCalled()
+    expect(useAppStore.getState().linkComposerOpen).toBe(false)
+  })
+})

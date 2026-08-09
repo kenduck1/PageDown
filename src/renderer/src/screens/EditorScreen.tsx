@@ -13,6 +13,7 @@ import PageSetupModal from '../components/PageSetupModal'
 import ShortcutsHelpModal from '../components/ShortcutsHelpModal'
 import FindBar from '../components/FindBar'
 import CommentComposer from '../components/CommentComposer'
+import LinkComposer from '../components/LinkComposer'
 import RemoteImageBanner from '../components/RemoteImageBanner'
 import Toast from '../components/Toast'
 import { extractOutline } from '../lib/extractOutline'
@@ -647,6 +648,17 @@ function EditorScreen(): React.JSX.Element {
     editorRef.current?.resolveComment(id)
   }
 
+  // Backs LinkComposer (the layout row that replaced EditorToolbar's dead
+  // `window.prompt('Link URL')` call -- see that component's own module
+  // comment for what "dead" means precisely). Optional-chained like every
+  // other editorRef-bound handler here: MilkdownEditor is unmounted in Source
+  // mode, and although the toolbar's Insert link button is disabled there,
+  // this stays a no-op rather than a crash if the composer is ever reachable
+  // from a surface that isn't.
+  const handleInsertLink = (href: string): void => {
+    editorRef.current?.insertLink(href)
+  }
+
   // authorName '' (the default -- no accounts system, see Preferences'
   // own comment) falls back to the literal label "You" here, matching
   // EditorComments.tsx's own identical fallback for DISPLAYING an existing
@@ -1123,6 +1135,10 @@ function EditorScreen(): React.JSX.Element {
       see CommentComposer.tsx's own module comment. */}
       <CommentComposer onAddComment={handleAddComment} />
       {/* Same layout-row placement/reasoning as FindBar/CommentComposer above
+      -- see LinkComposer.tsx's own module comment, including why the
+      window.prompt call this replaced could never have worked in Electron. */}
+      <LinkComposer onInsertLink={handleInsertLink} />
+      {/* Same layout-row placement/reasoning as FindBar/CommentComposer above
       -- see RemoteImageBanner.tsx's own module comment. */}
       <RemoteImageBanner />
       <div className="flex flex-1 overflow-hidden">
@@ -1206,7 +1222,16 @@ function EditorScreen(): React.JSX.Element {
                 <SplitPreview
                   content={content}
                   filePath={filePath}
-                  pageSetupOpen={pageSetupOpen}
+                  // Every full-screen `fixed inset-0` overlay this screen can
+                  // show, OR'd together -- the native preview view composites
+                  // above ALL DOM, so each of them would otherwise be
+                  // partially painted over (see SplitPreview's own overlayOpen
+                  // doc comment for the measured ShortcutsHelpModal overlap
+                  // that this second term fixes). Any future full-screen
+                  // overlay rendered from this screen belongs in this
+                  // expression too; audited 2026-08-09 and these are the only
+                  // two in src/renderer/src.
+                  overlayOpen={pageSetupOpen || shortcutsHelpOpen}
                   targetPage={effectiveCurrentPage}
                   onPageChange={(state) => setCurrentPage(state.currentPage)}
                   remoteImagesAllowed={remoteImagesAllowed === true}

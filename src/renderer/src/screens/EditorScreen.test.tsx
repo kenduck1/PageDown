@@ -1727,4 +1727,82 @@ describe('EditorScreen', () => {
       expect(screen.queryByRole('dialog', { name: 'Keyboard shortcuts' })).not.toBeInTheDocument()
     })
   })
+
+  // A WebContentsView composites above ALL DOM unconditionally, so every
+  // full-screen overlay this screen can render has to be OR'd into
+  // SplitPreview's `overlayOpen` prop or it is silently painted over. Page
+  // Setup was handled when that mitigation was first built; ShortcutsHelpModal
+  // -- the identical `fixed inset-0 z-50` shape -- was not, and shipped
+  // occluded: measured in the real app at the default window size, the preview
+  // view (x 561-900, y 123-606) overlapped the dialog (x 190-710, y 38-600) by
+  // x:561 y:123 w:149 h:476, hiding 12 of its 25 <kbd> key chips entirely
+  // while their descriptions stayed readable.
+  //
+  // These tests stub getBoundingClientRect to a real, non-zero rectangle
+  // first, which is what makes them discriminating: jsdom performs no layout
+  // and returns 0x0 for every element, so without the stub "reported zeros"
+  // would be indistinguishable from "reported the real (zero) rect" and the
+  // assertions would pass even with the overlay wiring removed entirely.
+  describe('full-screen overlays vs. the Split-mode preview', () => {
+    const REAL_RECT = {
+      x: 561,
+      y: 123,
+      width: 339,
+      height: 483,
+      top: 123,
+      left: 561,
+      right: 900,
+      bottom: 606,
+      toJSON: () => ({})
+    } as DOMRect
+    const ZERO_BOUNDS = { x: 0, y: 0, width: 0, height: 0 }
+    const REAL_BOUNDS = { x: 561, y: 123, width: 339, height: 483 }
+
+    afterEach(() => {
+      vi.restoreAllMocks()
+    })
+
+    async function renderSplitWithLayout(): Promise<ReturnType<typeof vi.fn>> {
+      vi.spyOn(Element.prototype, 'getBoundingClientRect').mockReturnValue(REAL_RECT)
+      const setSplitPreviewBounds = vi.fn()
+      window.api.setSplitPreviewBounds = setSplitPreviewBounds
+      useDocumentStore.setState({ filePath: '/tmp/report.md', content: '# Report' })
+      useAppStore.setState({ viewMode: 'split', splitLeftMode: 'source' })
+      render(<EditorScreen />)
+      await waitFor(() => {
+        expect(setSplitPreviewBounds).toHaveBeenLastCalledWith(REAL_BOUNDS)
+      })
+      return setSplitPreviewBounds
+    }
+
+    it('zero-sizes the preview while the keyboard-shortcuts modal is open, and restores it on close', async () => {
+      const user = userEvent.setup()
+      const setSplitPreviewBounds = await renderSplitWithLayout()
+
+      await user.click(screen.getByRole('button', { name: 'Keyboard shortcuts' }))
+
+      expect(screen.getByRole('dialog', { name: 'Keyboard shortcuts' })).toBeInTheDocument()
+      await waitFor(() => {
+        expect(setSplitPreviewBounds).toHaveBeenLastCalledWith(ZERO_BOUNDS)
+      })
+
+      // Closing has to put the preview back -- a one-way hide would leave the
+      // pane permanently blank for the rest of the Split-mode session.
+      await user.click(screen.getByRole('button', { name: 'Close' }))
+      await waitFor(() => {
+        expect(setSplitPreviewBounds).toHaveBeenLastCalledWith(REAL_BOUNDS)
+      })
+    })
+
+    it('still zero-sizes the preview while Page Setup is open (the pre-existing case the generalization must not drop)', async () => {
+      const user = userEvent.setup()
+      const setSplitPreviewBounds = await renderSplitWithLayout()
+
+      await user.click(screen.getByRole('button', { name: 'Page setup' }))
+
+      await waitFor(() => {
+        expect(setSplitPreviewBounds).toHaveBeenLastCalledWith(ZERO_BOUNDS)
+      })
+    })
+  })
 })
