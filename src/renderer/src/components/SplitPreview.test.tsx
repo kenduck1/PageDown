@@ -314,6 +314,23 @@ describe('SplitPreview', () => {
       expect(onPageChange).not.toHaveBeenCalled()
     })
 
+    it('does not stack poll requests when one is still outstanding', async () => {
+      // The harness serializes ALL its work through a single queue, behind
+      // renders that can take hundreds of ms. An unguarded interval would
+      // enqueue a fresh getPage every tick regardless, so any tick that
+      // outlasts the interval makes the queue grow without bound --
+      // delaying real renders and the teardown that runs on the same queue.
+      vi.useFakeTimers()
+      // Never resolves: simulates a tick stuck behind a long render.
+      window.api.getSplitPreviewPage = vi.fn().mockReturnValue(new Promise(() => {}))
+      renderPreview(1)
+
+      await vi.advanceTimersByTimeAsync(2000)
+
+      expect(window.api.getSplitPreviewPage).toHaveBeenCalledTimes(1)
+      vi.useRealTimers()
+    })
+
     it('reports a manual scroll detected by the poll', async () => {
       vi.useFakeTimers()
       const getSplitPreviewPage = vi.fn().mockResolvedValue({ currentPage: 5, pageCount: 8 })

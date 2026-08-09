@@ -170,6 +170,9 @@ function SplitPreview({
   // render and skip the scroll entirely, so clicking "next page" from Format
   // mode would open Split mode still showing page 1.
   const lastAppliedPageRef = useRef(1)
+  // Guards against the poll piling work onto the harness queue faster than
+  // it drains -- see the poll effect below.
+  const pollInFlightRef = useRef(false)
   // Latest-ref so the poll effect can call the current callback without
   // re-subscribing its interval on every parent render. Assigned inside an
   // effect (not inline during render) per eslint-plugin-react-hooks'
@@ -208,6 +211,17 @@ function SplitPreview({
 
   useEffect(() => {
     const timer = setInterval(() => {
+      // Skip this tick if the previous one hasn't come back yet. Without
+      // this guard the poll is an unconditional heartbeat into a harness
+      // that serializes ALL its work through one queue
+      // (enqueueSplitPreviewWork) behind renders that can take hundreds of
+      // ms -- so whenever a tick outlasts POLL_MS, ticks accumulate faster
+      // than they drain and the queue grows without bound, delaying real
+      // renders and the harness teardown that runs on the same queue. The
+      // poll only ever needs the CURRENT position, so a skipped tick costs
+      // nothing: the next one reports the same thing.
+      if (pollInFlightRef.current) return
+      pollInFlightRef.current = true
       window.api
         .getSplitPreviewPage()
         .then((state) => {
@@ -218,6 +232,9 @@ function SplitPreview({
         })
         .catch(() => {
           // Same as above.
+        })
+        .finally(() => {
+          pollInFlightRef.current = false
         })
     }, POLL_MS)
     return () => clearInterval(timer)
