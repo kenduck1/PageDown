@@ -1490,4 +1490,85 @@ describe('EditorScreen', () => {
       expect(mount).toHaveStyle({ maxWidth: '624px' })
     })
   })
+
+  describe('page navigation', () => {
+    // The status bar only enables its chevrons once a real page count has
+    // arrived, so every test here needs a multi-page document.
+    async function renderWithPages(pages: number): Promise<void> {
+      window.api.getPageCount = vi.fn().mockResolvedValue({ pageCount: pages })
+      useDocumentStore.setState({ filePath: '/tmp/report.md', content: '# Report' })
+      render(<EditorScreen />)
+      await waitFor(() => {
+        expect(screen.getByRole('button', { name: 'Next page' })).toBeEnabled()
+      })
+    }
+
+    it('navigating from Format mode switches to Split mode and sets the page', async () => {
+      const user = userEvent.setup()
+      useAppStore.setState({ viewMode: 'format' })
+      await renderWithPages(12)
+
+      await user.click(screen.getByRole('button', { name: 'Next page' }))
+
+      // Both halves matter: Split is the only surface with real page
+      // boundaries, so navigating from Format has to take the user there,
+      // AND the requested page has to survive the mode switch.
+      expect(useAppStore.getState().viewMode).toBe('split')
+      expect(useAppStore.getState().currentPage).toBe(2)
+    })
+
+    it('navigating while already in Split mode does not change the mode', async () => {
+      const user = userEvent.setup()
+      useAppStore.setState({ viewMode: 'split' })
+      await renderWithPages(12)
+
+      await user.click(screen.getByRole('button', { name: 'Next page' }))
+
+      expect(useAppStore.getState().viewMode).toBe('split')
+      expect(useAppStore.getState().currentPage).toBe(2)
+    })
+
+    it('selecting a page in the Pages sidebar navigates to it', async () => {
+      const user = userEvent.setup()
+      useAppStore.setState({ viewMode: 'split', sidebarTab: 'pages' })
+      await renderWithPages(12)
+
+      await user.click(screen.getByRole('button', { name: 'Page 4' }))
+
+      expect(useAppStore.getState().currentPage).toBe(4)
+    })
+
+    it('clamps a requested page to the real page count', async () => {
+      const user = userEvent.setup()
+      useAppStore.setState({ viewMode: 'split' })
+      await renderWithPages(3)
+
+      // The jump control is the one path that can request out of range at
+      // all (the chevrons disable at the ends), so it is what proves the
+      // clamp. Asking for page 99 of a 3-page document must land on 3.
+      await user.click(screen.getByRole('button', { name: /page 1 of 3/i }))
+      const input = screen.getByRole('spinbutton', { name: /jump to page/i })
+      await user.clear(input)
+      await user.type(input, '99{Enter}')
+
+      expect(useAppStore.getState().currentPage).toBe(3)
+    })
+
+    it('resets to page 1 when a different document is loaded', async () => {
+      await renderWithPages(12)
+      act(() => {
+        useAppStore.getState().setCurrentPage(6)
+      })
+      expect(useAppStore.getState().currentPage).toBe(6)
+
+      // A different document is a different set of pages -- without the
+      // reset, a 2-page letter opened from page 9 of a report leaves the
+      // status bar claiming page 9.
+      act(() => {
+        useDocumentStore.getState().loadDocument('/tmp/other.md', '# Other', false)
+      })
+
+      await waitFor(() => expect(useAppStore.getState().currentPage).toBe(1))
+    })
+  })
 })

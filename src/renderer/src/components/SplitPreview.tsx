@@ -189,6 +189,14 @@ function SplitPreview({
     window.api
       .scrollSplitPreviewToPage(targetPage)
       .then((state) => {
+        // `{ currentPage: 1, pageCount: 0 }` is the main process's
+        // "no harness / nothing rendered yet" sentinel, not a real
+        // position. Reporting it upward would clobber the page the user
+        // just asked for with a 1 -- the same reason the poll below
+        // ignores it. Leaving lastAppliedPageRef pointing at targetPage
+        // (set above) is right: the request stands, and a later real
+        // result or poll tick reconciles it.
+        if (state.pageCount === 0) return
         lastAppliedPageRef.current = state.currentPage
         onPageChangeRef.current(state)
       })
