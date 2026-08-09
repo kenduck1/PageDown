@@ -783,6 +783,9 @@ function EditorScreen(): React.JSX.Element {
           onSelectHeading={handleSelectHeading}
           activeSourceOffset={activeSourceOffset}
           pageCount={pageCount ?? undefined}
+          // Task 9 wires this properly
+          currentPage={1}
+          onSelectPage={() => {}}
           filePath={filePath}
           onRestoreVersion={handleRestoreVersion}
         />
