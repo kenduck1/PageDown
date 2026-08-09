@@ -474,8 +474,21 @@ export async function createPaginationHarness(win: BaseWindow): Promise<Paginati
       sandbox: true,
       contextIsolation: true,
       nodeIntegration: false,
-      session: renderSession
+      session: renderSession,
       // No `preload` — this context has no bridge to Node/Electron APIs.
+      //
+      // Real-world defense-in-depth for the rAF-starvation bug fixed at its
+      // actual source in resources/pagination-render/index.ts (see that
+      // file's own comment on the `requestAnimationFrame` shim installed
+      // there) — this alone does NOT fix that bug (confirmed empirically: it
+      // did not unblock the reproduction described there), because the root
+      // cause isn't Chromium's ordinary background-throttling *rate* (which
+      // this flag governs) but a genuinely never-shown `BaseWindow`'s view
+      // never receiving a real compositor frame callback AT ALL. Kept anyway
+      // because it's a real, low-risk hardening against the *milder*,
+      // well-documented throttling class this flag is designed for, on a
+      // view that legitimately never needs to be de-prioritized.
+      backgroundThrottling: false
     }
   })
 
