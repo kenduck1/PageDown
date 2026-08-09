@@ -22,6 +22,49 @@ export type { SourceMap }
 // absolute reference and must be left untouched by rewriteLocalImageSrcs.
 const URL_SCHEME_PATTERN = /^[a-z][a-z0-9+.-]*:/i
 
+// Passed explicitly to BOTH remark-rehype and the sanitize schema below
+// (each of which defaults to this exact same value independently) so their
+// agreement is a real, enforced coupling rather than two hardcoded library
+// defaults that merely happen to currently match — see
+// undoDoubleClobberPrefix's own comment for why this specific value being
+// shared is load-bearing, not incidental.
+const CLOBBER_PREFIX = 'user-content-'
+const DOUBLED_CLOBBER_PREFIX = CLOBBER_PREFIX + CLOBBER_PREFIX
+
+// mdast-util-to-hast pre-prefixes footnote-generated `id`/`href` pairs with
+// its own `clobberPrefix` ahead of sanitize — but ONLY for the fn-N/fnref-N
+// id<->href pairs a footnote reference and its target need to keep matching
+// (confirmed by reading `footer.js`/`handlers/footnote-reference.js`, the
+// only two places in mdast-util-to-hast that bake this prefix in early). The
+// footnote label's own id/aria-describedby pair is deliberately left BARE by
+// the same code, relying on a downstream sanitizer to prefix both sides
+// identically. hast-util-sanitize's own, separate clobber-prefixing
+// (`id`/`name`/`ariaDescribedBy`/`ariaLabelledBy` on every element,
+// unconditionally — confirmed by reading `propertyValuePrimitive` in its own
+// source, which has no "already prefixed" check) then reapplies the SAME
+// prefix a second time to whichever of those values reach it already
+// prefixed, but only to `id`/`ariaDescribedBy` — never to `href`, which
+// isn't in its clobber list. Net effect: a footnote's `id` ends up doubled
+// (`user-content-user-content-fn-1`) while the `href` referencing it stays
+// single-prefixed (`#user-content-fn-1`), so the browser has no element
+// matching the anchor — clicking a footnote reference, or its back-arrow,
+// silently does nothing. Fixed by stripping exactly one duplicate prefix off
+// any `id`/`aria-describedby`/`aria-labelledby` value that carries it
+// twice, post-sanitize. Deliberately narrow: an id sanitize prefixed only
+// ONCE — every id from a document author's own raw HTML, or the footnote
+// label's own bare pair above — never matches the doubled pattern and is
+// left untouched, so this does not weaken DOM-clobbering protection for
+// anything else sanitize() already guards.
+function undoDoubleClobberPrefix(value: unknown): unknown {
+  if (typeof value === 'string' && value.startsWith(DOUBLED_CLOBBER_PREFIX)) {
+    return value.slice(CLOBBER_PREFIX.length)
+  }
+  if (Array.isArray(value)) {
+    return value.map(undoDoubleClobberPrefix)
+  }
+  return value
+}
+
 // True only for a relative, document-local path — no leading `/` (an
 // absolute filesystem path, denied by resolveAssetPath on the main-process
 // side anyway, but never even worth routing through the __asset__ scheme)
@@ -144,6 +187,7 @@ export function markdownToHtml(
   const hastTree = unified()
     .use(remarkRehype, {
       allowDangerousHtml: true,
+      clobberPrefix: CLOBBER_PREFIX,
       handlers: { pagebreak: createPagebreakToHast(tokenClassName) }
     })
     .runSync(tree) as HastRoot
@@ -158,6 +202,7 @@ export function markdownToHtml(
   // `code`/task-list class exceptions (node_modules/hast-util-sanitize/lib/schema.js).
   const schema: Schema = {
     ...defaultSchema,
+    clobberPrefix: CLOBBER_PREFIX,
     strip: [
       ...(defaultSchema.strip ?? []),
       'style',
@@ -181,6 +226,19 @@ export function markdownToHtml(
   // requires seeing the whole document at once, not one fragment at a time.
   const rawProcessed = raw(hastTree) as HastRoot
   const sanitized = sanitize(rawProcessed, schema) as HastRoot
+
+  // See undoDoubleClobberPrefix's own comment above for the full mechanics:
+  // this repairs footnote id/href pairs that the two clobber-prefixing
+  // passes above (mdast-util-to-hast, then hast-util-sanitize) doubled up
+  // on one side but not the other.
+  visit(sanitized, 'element', (node) => {
+    const properties = node.properties as Record<string, unknown>
+    for (const key of ['id', 'ariaDescribedBy', 'ariaLabelledBy']) {
+      if (key in properties) {
+        properties[key] = undoDoubleClobberPrefix(properties[key])
+      }
+    }
+  })
 
   // Must run AFTER sanitize(), not before it, and this is load-bearing, not
   // stylistic: hast-util-sanitize's defaultSchema pins `protocols.src` to
