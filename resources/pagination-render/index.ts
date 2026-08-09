@@ -72,7 +72,7 @@ window.cancelAnimationFrame = ((handle: number): void => {
 }) as typeof window.cancelAnimationFrame
 
 import { Previewer } from 'pagedjs'
-import { renderMermaidToSvg } from '../../src/diagrams/render-mermaid'
+import { renderMermaidToSvg, MERMAID_LABEL_FONT_FAMILY } from '../../src/diagrams/render-mermaid'
 import { registerBreakHandlers } from '../../src/pagination/break-handlers'
 import { hoistInlineStyleAttributes, reattachNoncedStyles } from './nonce-style-hoisting'
 import { renderMathEquations, buildKatexFontFaceCss } from './katex-render'
@@ -285,6 +285,47 @@ function buildDocumentStylesheet(
   return `
 :root {
   --font-serif: 'Source Serif 4', serif;
+  /* KNOWN, DELIBERATE EXCEPTION to the determinism guarantee this context
+     exists to serve, recorded here so the next reader knows it was weighed
+     rather than missed. The value below is an UNBUNDLED SYSTEM STACK:
+     Menlo ships on macOS, Consolas on Windows, and Linux resolves the
+     generic monospace keyword to whatever fontconfig picks. Every fenced
+     code block therefore measures in a different face per platform, so a
+     code-heavy document's page count is host-dependent in exactly the way
+     Mermaid's label font (see ensureMermaidLabelFontRegistered below) just
+     stopped being. Editor/paginator parity hides it locally: both surfaces
+     read this same token, so on any one machine they agree, and no test in
+     this repo compares two machines.
+
+     NOT fixed in the same pass as the Mermaid font, and the asymmetry is
+     the reason. That fix pointed diagram labels at Inter Variable, which
+     was ALREADY vendored and ALREADY inlined into this bundle -- zero new
+     bytes, zero new licensing surface, one string. A real fix here is four
+     coupled changes:
+       1. Vendor a new monospace woff2 plus its OFL text. Measured, not
+          estimated (latin subset, variable weight axis, fetched and sized
+          directly): Source Code Pro is 22,044 bytes on disk / 29,392
+          base64 characters once inlined here; JetBrains Mono is 40,404 /
+          53,872. The only monospace face already in the dependency tree is
+          katex's KaTeX_Typewriter-Regular at 13,568 / 18,091, and it is
+          disqualified twice over -- single weight, roman only, while the
+          highlight.js theme further down this file sets real bold and
+          italic on code tokens; and Computer Modern Typewriter is a math
+          face, not a code face.
+       2. Change the matching token in base.css at the same time.
+          src/typography/document-typography.test.ts cross-checks the two
+          surfaces and requires identical VALUES, so changing only this
+          copy would swap a cross-machine divergence for a same-machine
+          editor-vs-paginator one and break the 0.000px parity Gate 10
+          pins. A half-fix here is strictly worse than no fix.
+       3. Gate the new face on the document actually containing code, the
+          way hasMath already gates KaTeX's font CSS -- otherwise every
+          code-free document pays an awaited decode per render, via the
+          Chunker.loadFonts behavior documented above.
+       4. Re-baseline the pinned corpus page counts in Gates 2, 4 and 6,
+          since code-block metrics would genuinely move.
+     Worth doing; it is its own small sub-project, not a rider on this
+     one. */
   --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   --font-doc-sans: 'Inter Variable', sans-serif;
   --text-12: 12px;
@@ -780,6 +821,87 @@ function ensureMermaidPageBreakStyleInjected(): void {
   mermaidPageBreakStyleInjected = true
 }
 
+let mermaidLabelFontRegistered = false
+
+// Registers the ONE @font-face Mermaid measures and paints diagram labels
+// in (src/diagrams/render-mermaid.ts's MERMAID_LABEL_FONT_FAMILY, currently
+// Inter Variable — see that module for why the pinned family used to name a
+// font that did not exist, and what that cost).
+//
+// WHY THIS IS A SEPARATE, PERMANENT <head> STYLE RATHER THAN ONE MORE
+// CONDITIONAL RULE IN buildDocumentStylesheet(), which is where every other
+// @font-face in this context lives. Purely an ORDERING constraint, not a
+// preference: buildDocumentStylesheet's output only reaches the document
+// when Paged.js's Polisher installs it, inside `previewer.preview()` — and
+// renderMermaidDiagrams runs BEFORE that call, by design (the whole point
+// of the mermaid pass is to replace code blocks with real SVG before
+// Paged.js ever lays the document out). Mermaid does all of its text
+// measurement during `mermaid.render()`, so a face that only appears at
+// preview() time appears strictly too late to affect a single label's size.
+// A font emitted there would paint correctly and measure wrongly, which is
+// the worst of both worlds: silently host-dependent geometry that LOOKS
+// right in the final output.
+//
+// It is also why this is a plain <style> element rather than something the
+// Polisher owns: `activePreviewer.polisher?.destroy()` tears the
+// per-request stylesheet down at the top of the NEXT render, so a
+// Polisher-owned face would be gone again by the time the next request's
+// mermaid pass ran.
+//
+// WHY IT IS STILL CONDITIONAL, and how that keeps the loadFonts() invariant
+// this file's own buildDocumentStylesheet comment (piece 2) documents.
+// `Chunker.flow()` awaits `loadFonts()`, which calls `.load()` on EVERY
+// FontFace registered in `document.fonts` regardless of whether anything on
+// the page uses it (node_modules/pagedjs/src/chunker/chunker.js:170,
+// :541-557) — so an unconditionally-registered face costs a real, awaited
+// decode on every render of every document. This function is called only
+// from inside renderMermaidDiagrams, AFTER its `codeBlocks.length === 0`
+// early return, so a document with no diagrams never registers it and never
+// pays for it — exactly the same shape as `hasMath` gating KaTeX's ~394KB
+// of font CSS.
+//
+// The honest residual, stated rather than glossed: the flag is per
+// RENDER-CONTEXT lifetime, not per request, so on a long-lived harness
+// (Split mode's persistent WebContentsView) a document containing a diagram
+// leaves this face registered for every LATER, diagram-free document
+// rendered in the same context. That costs nothing measurable, because
+// loadFonts() skips any face whose `status` is already `'loaded'` (read
+// from the source above, not assumed) and our own `document.fonts.load()`
+// below has already driven it to exactly that state. What it must not
+// become is an unconditional registration at module scope, which would
+// re-introduce the first-render decode for every diagram-free document.
+//
+// The `data:` URI needs no CSP change: this context's `font-src data:` was
+// already added for Source Serif 4 / Inter Variable, and this reuses the
+// same vendored .woff2 bytes esbuild already inlines for the document-font
+// case (scripts/build-pagination-render.ts's base64 loader), so it adds
+// nothing to the bundle either. For a document that itself selects
+// `fontFamily: 'inter'`, this registers a second FontFace with the same
+// family/descriptors as buildDocumentStylesheet's own — harmless and NOT a
+// new per-render cost: the Polisher-owned copy is already re-registered and
+// re-loaded on every render today, and this permanent copy is loaded once
+// ever.
+//
+// Created via `document.createElement`, so the bootstrap shim at the top of
+// this file stamps this page-load's CSP style nonce onto it automatically.
+function ensureMermaidLabelFontRegistered(): void {
+  if (mermaidLabelFontRegistered) return
+  const style = document.createElement('style')
+  // Kept declaration-for-declaration in sync with base.css's own Inter
+  // Variable rule and with buildDocumentStylesheet's copy above -- same
+  // hand-synced-pair convention, and a difference between the three reads
+  // as drift rather than intent.
+  style.textContent = `@font-face {
+  font-family: '${MERMAID_LABEL_FONT_FAMILY}';
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: block;
+  src: url(data:font/woff2;base64,${interVariableBase64}) format('woff2-variations');
+}`
+  document.head.appendChild(style)
+  mermaidLabelFontRegistered = true
+}
+
 // Mermaid's default sizing (`useMaxWidth: true`, the default for every
 // diagram type this spike's corpus exercises) bakes `width="100%"` plus a
 // `style="max-width: <natural-width>px;"` onto the SVG root — see
@@ -855,29 +977,55 @@ async function renderMermaidDiagrams(container: DocumentFragment): Promise<void>
   // Per the design doc's resource-settling-gate ordering: layout-affecting
   // resources (fonts, images, diagrams) must be settled before anything
   // measures text, or measurements silently bake in fallback-font metrics.
-  // Awaited once per render pass, before the first mermaid.render() call,
-  // per the brief — not per-diagram (document.fonts.ready reflects the
-  // whole document's font state, not a single element's).
+  // Awaited once per render pass, before the first mermaid.render() call —
+  // not per-diagram: this loads one variable font FILE covering the whole
+  // 100-900 weight range, so every label in every diagram of this pass is
+  // covered by the single load.
   //
-  // Honest limitation (Task 8 review) — this await is present per the
-  // brief's literal instruction, but it does NOT actually validate the
-  // resource-settling gate the design doc describes: `container` at this
-  // point is still the DETACHED fragment built above, not yet part of any
-  // rendered layout, and `document.fonts.ready` only reflects fonts the
-  // document has already REQUESTED via currently-laid-out content — which
-  // is exactly the unreliable-immediately-after-injecting-new-HTML case the
-  // design doc's own resource-settling-gate section warns about (it
-  // prescribes an explicit `document.fonts.load(...)` per declared face,
-  // not just an await on `.ready`, for exactly this reason). No actual
-  // `PageDownSans` font is bundled in this Phase 0 spike (see
-  // render-mermaid.ts's own comment), so there was nothing concrete to
-  // `.load()` here yet, and this await was not separately verified to do
-  // anything beyond "resolve immediately" against this corpus — it is
-  // scaffolding matching the brief's shape, not a validated gate. A real
-  // font-loading implementation, landing alongside the actual bundled font,
-  // needs to build the fuller gate the design doc describes, not assume
-  // this line already is one.
-  await document.fonts.ready
+  // THIS REPLACES A BARE `await document.fonts.ready`, which the comment it
+  // replaced already admitted was not a real gate — and it was right.
+  // `.ready` resolves once font loading is IDLE, i.e. once every face the
+  // document has already REQUESTED has settled; it does not request
+  // anything itself. At this point `container` is still the DETACHED
+  // fragment built by the caller, nothing in it is laid out, and Mermaid
+  // has not run yet, so nothing has requested the label font at all and
+  // `.ready` resolves immediately having guaranteed nothing. That is
+  // precisely the "unreliable immediately after injecting new HTML" case
+  // the design doc's resource-settling-gate section warns about, which is
+  // why it prescribes an explicit `document.fonts.load(...)` PER DECLARED
+  // FACE instead. The old note closed by saying a real implementation
+  // "needs to build the fuller gate the design doc describes, not assume
+  // this line already is one" — this is that gate.
+  //
+  // Order is load-bearing: register the face (above), force the fetch and
+  // decode (here), and only then let Mermaid measure. Reversing any two
+  // puts a fallback font's metrics into the diagram geometry, which is
+  // undetectable downstream — the SVG that comes back is well-formed and
+  // non-zero-sized either way.
+  ensureMermaidLabelFontRegistered()
+  const labelFontSpec = `16px "${MERMAID_LABEL_FONT_FAMILY}"`
+  try {
+    const loaded = await document.fonts.load(labelFontSpec)
+    // `load()` resolves with the faces it MATCHED, so an empty array is a
+    // silent no-op, not an error — the exact failure shape that let the
+    // original `fontFamily: 'PageDownSans'` bug survive. Surfaced as a
+    // console warning rather than a thrown error, matching
+    // awaitImagesSettled's own "degrade to a weaker guarantee, never a
+    // failed render" posture: a font problem should cost a document
+    // machine-dependent diagram metrics, not a blank preview and an
+    // undiagnostic export failure. Gate 3 is where this is a hard failure
+    // — it asserts document.fonts.check() and the diagrams' real resolved
+    // font in the running app, so a regression here fails CI loudly even
+    // though it degrades quietly in production.
+    if (loaded.length === 0) {
+      console.warn(
+        `Mermaid label font ${labelFontSpec} matched no registered @font-face; ` +
+          'diagram sizing will fall back to a host-installed font and stop being deterministic'
+      )
+    }
+  } catch (err) {
+    console.warn(`Mermaid label font ${labelFontSpec} failed to load:`, err)
+  }
 
   ensureMermaidPageBreakStyleInjected()
 
