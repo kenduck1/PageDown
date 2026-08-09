@@ -42,6 +42,7 @@ function EditorScreen(): React.JSX.Element {
   const setViewMode = useAppStore((state) => state.setViewMode)
   const splitLeftMode = useAppStore((state) => state.splitLeftMode)
   const splitRatio = useAppStore((state) => state.splitRatio)
+  const setSplitRatio = useAppStore((state) => state.setSplitRatio)
   const currentPage = useAppStore((state) => state.currentPage)
   const setCurrentPage = useAppStore((state) => state.setCurrentPage)
   const filePath = useDocumentStore((state) => state.filePath)
@@ -68,6 +69,7 @@ function EditorScreen(): React.JSX.Element {
   const sourceEditorRef = useRef<SourceEditorHandle>(null)
   const findQueryInputRef = useRef<HTMLInputElement>(null)
   const canvasRef = useRef<HTMLDivElement>(null)
+  const splitRowRef = useRef<HTMLDivElement>(null)
   const [zoom, setZoom] = useState(1)
   const [activeSourceOffset, setActiveSourceOffset] = useState<number | undefined>(undefined)
   // Ephemeral, EditorScreen-local UI state -- not in appStore/documentStore
@@ -893,6 +895,34 @@ function EditorScreen(): React.JSX.Element {
   // handlePageCardClick above implements the actual correct behavior
   // instead.
   //
+  // Split mode's own draggable divider. Tracks the drag on `window`, not the
+  // divider element itself -- the cursor routinely moves faster than the
+  // element under it during a fast drag, and a real `mousemove` on the
+  // divider alone would lose tracking the instant the pointer outruns a
+  // 6px-wide target. `splitRowRef` (not `canvasRef`) is the percentage base
+  // because it's the actual flex row the two panes size themselves against;
+  // `canvasRef` also wraps the sidebar-adjacent single-pane branch, whose
+  // width isn't what `splitRatio`'s percentage means. Reads `getBoundingClientRect()`
+  // fresh on every mousedown rather than once at mount -- the row's own width
+  // changes with the window, and a stale rect would compute the wrong
+  // percentage after any resize since the drag started.
+  const handleSplitDividerMouseDown = (event: React.MouseEvent): void => {
+    event.preventDefault()
+    const row = splitRowRef.current
+    if (!row) return
+    const rect = row.getBoundingClientRect()
+    const handleMouseMove = (moveEvent: MouseEvent): void => {
+      const percent = ((moveEvent.clientX - rect.left) / rect.width) * 100
+      setSplitRatio(percent)
+    }
+    const handleMouseUp = (): void => {
+      window.removeEventListener('mousemove', handleMouseMove)
+      window.removeEventListener('mouseup', handleMouseUp)
+    }
+    window.addEventListener('mousemove', handleMouseMove)
+    window.addEventListener('mouseup', handleMouseUp)
+  }
+
   // Factored into a function (Task 5, Split mode sub-project) rather than
   // left inline in the old Format-only branch, specifically so Split mode's
   // left pane (when splitLeftMode === 'format') can reuse the EXACT same
@@ -1024,14 +1054,41 @@ function EditorScreen(): React.JSX.Element {
             // (below) is where scrolling actually happens for a
             // taller-than-viewport document -- this row itself never grows
             // past the viewport and never needs to scroll.
-            <div className="flex h-full">
-              <div style={{ width: `${splitRatio}%` }} className="h-full overflow-auto">
+            <div ref={splitRowRef} className="flex h-full">
+              <div style={{ width: `calc(${splitRatio}% - 3px)` }} className="h-full overflow-auto">
                 {splitLeftMode === 'source' ? renderSourceEditor() : renderPageCard()}
+              </div>
+              {/* 6px wide, split evenly (3px) into each pane's own calc() above,
+              so the row always totals exactly 100% regardless of container
+              size -- avoids relying on flexbox's own shrink algorithm to
+              absorb the divider's width, which would fight the panes' own
+              explicit percentages. `setSplitRatio` already clamps to
+              MIN/MAX_SPLIT_RATIO (25-75), so dragging past either pane's
+              practical minimum just stops there rather than collapsing a
+              pane to zero. */}
+              <div
+                onMouseDown={handleSplitDividerMouseDown}
+                role="separator"
+                aria-orientation="vertical"
+                aria-label="Resize split view"
+                data-testid="split-divider"
+                className="group flex h-full w-1.5 shrink-0 cursor-col-resize items-stretch justify-center"
+              >
+                {/* The 6px outer div is the drag/hover HIT TARGET, kept wide
+                for a comfortable cursor grab area; this 1px inner line is
+                the only part actually painted at rest (matching
+                FindBar.tsx's own `bg-border-chrome` vertical-divider
+                precedent), so the divider reads as a real, visible seam
+                rather than invisible until the pointer happens to land on
+                it -- `group-hover`/`group-active` widen and accent-color it
+                on the outer div's own hover/active state, not this line's
+                own (a 1px target would be unusably narrow to hover). */}
+                <div className="w-px bg-border-chrome group-hover:w-1 group-hover:bg-accent/40 group-active:w-1 group-active:bg-accent" />
               </div>
               {/* Deliberately NOT overflow-auto/overflow-scroll -- see this
               branch's own comment above for why a scrolling right pane would
               silently desync the native preview from its placeholder. */}
-              <div style={{ width: `${100 - splitRatio}%` }} className="h-full">
+              <div style={{ width: `calc(${100 - splitRatio}% - 3px)` }} className="h-full">
                 <SplitPreview
                   content={content}
                   filePath={filePath}
