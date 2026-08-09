@@ -9,6 +9,7 @@ import EditorToolbar from '../components/EditorToolbar'
 import EditorSidebar from '../components/EditorSidebar'
 import EditorStatusBar from '../components/EditorStatusBar'
 import PageSetupModal from '../components/PageSetupModal'
+import ShortcutsHelpModal from '../components/ShortcutsHelpModal'
 import FindBar from '../components/FindBar'
 import Toast from '../components/Toast'
 import { extractOutline } from '../lib/extractOutline'
@@ -38,6 +39,9 @@ function EditorScreen(): React.JSX.Element {
   const goHome = useAppStore((state) => state.goHome)
   const pageSetupOpen = useAppStore((state) => state.pageSetupOpen)
   const closePageSetup = useAppStore((state) => state.closePageSetup)
+  const shortcutsHelpOpen = useAppStore((state) => state.shortcutsHelpOpen)
+  const openShortcutsHelp = useAppStore((state) => state.openShortcutsHelp)
+  const closeShortcutsHelp = useAppStore((state) => state.closeShortcutsHelp)
   const viewMode = useAppStore((state) => state.viewMode)
   const setViewMode = useAppStore((state) => state.setViewMode)
   const splitLeftMode = useAppStore((state) => state.splitLeftMode)
@@ -138,6 +142,31 @@ function EditorScreen(): React.JSX.Element {
     getSelectedText: findController.getSelectedText,
     queryInputRef: findQueryInputRef
   })
+
+  // The keyboard-shortcuts reference modal's own open shortcut -- same bare
+  // `window` keydown listener pattern useFindShortcuts.ts established (see
+  // that file's own module comment for why there's no real app Menu
+  // accelerator yet), inline here rather than factored into its own hook
+  // file: unlike Find, this has no selection-seeding/focus-management logic
+  // to justify a separate module, just "open a modal." Mod-/ (not `?`
+  // alone, which would fire on every literal `/` a user types while
+  // editing) is the common convention this mirrors (VS Code, Linear, Slack,
+  // ...). Escape-to-close is NOT handled here -- the modal composes with the
+  // SAME scrim-click-to-close pattern PageSetupModal already uses, and
+  // ProseMirror already has meaning for a global Escape (nothing currently
+  // relies on it, but Find's own Escape handling is intentionally scoped to
+  // only fire `closeFind` while Find is open, matching this same
+  // one-listener-per-surface discipline rather than one shared catch-all).
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent): void => {
+      if ((event.metaKey || event.ctrlKey) && event.key === '/') {
+        event.preventDefault()
+        openShortcutsHelp()
+      }
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [openShortcutsHelp])
 
   const handleSave = async (): Promise<void> => {
     // @milkdown/plugin-listener's onChange fires through an internal 200ms
@@ -1123,6 +1152,7 @@ function EditorScreen(): React.JSX.Element {
         onApply={handleApplyPageConfig}
         onClose={closePageSetup}
       />
+      <ShortcutsHelpModal open={shortcutsHelpOpen} onClose={closeShortcutsHelp} />
       {toast && <Toast key={toast.id} message={toast.message} onDismiss={() => setToast(null)} />}
     </div>
   )

@@ -149,6 +149,7 @@ function EditorToolbar({
   const splitLeftMode = useAppStore((state) => state.splitLeftMode)
   const setSplitLeftMode = useAppStore((state) => state.setSplitLeftMode)
   const openPageSetup = useAppStore((state) => state.openPageSetup)
+  const openShortcutsHelp = useAppStore((state) => state.openShortcutsHelp)
   // F2 (final whole-branch review): every control below bound to
   // editorRef.current?.X() no-ops in Source mode, because MilkdownEditor is
   // unmounted there and editorRef.current is null -- but before this guard
@@ -870,6 +871,19 @@ function EditorToolbar({
         exported PDF all stay pixel-identical by construction. An icon-only
         button, not a labeled one like Export PDF -- it doesn't need to
         compete for the same visual weight as the primary accent action. */}
+        {/* Keyboard shortcuts reference (ShortcutsHelpModal.tsx). Mod-/ opens
+        the same modal (EditorScreen.tsx's own keydown effect) -- this button
+        exists because that shortcut is itself undiscoverable without a
+        visible entry point, the same reasoning Find's own toolbar button
+        (further left) already established for Mod-F. */}
+        <ToolbarIconButton label="Keyboard shortcuts" onClick={openShortcutsHelp}>
+          <Icon strokeWidth={1.7}>
+            <circle cx="12" cy="12" r="8.5" />
+            <path d="M9.5 9.5a2.5 2.5 0 1 1 3.5 2.3c-.8.4-1 .9-1 1.7" />
+            <circle cx="12" cy="16.3" r="0.4" fill="currentColor" stroke="none" />
+          </Icon>
+        </ToolbarIconButton>
+
         <ToolbarIconButton
           label={isPrinting ? 'Printing…' : 'Print'}
           onClick={() => void handlePrint()}

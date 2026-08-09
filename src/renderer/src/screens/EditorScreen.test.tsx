@@ -1660,4 +1660,32 @@ describe('EditorScreen', () => {
       await waitFor(() => expect(useAppStore.getState().currentPage).toBe(1))
     })
   })
+
+  describe('shortcuts-help keyboard shortcut', () => {
+    it('Mod-/ opens ShortcutsHelpModal', () => {
+      render(<EditorScreen />)
+      expect(screen.queryByRole('dialog', { name: 'Keyboard shortcuts' })).not.toBeInTheDocument()
+
+      fireEvent.keyDown(window, { key: '/', metaKey: true })
+
+      expect(screen.getByRole('dialog', { name: 'Keyboard shortcuts' })).toBeInTheDocument()
+      expect(useAppStore.getState().shortcutsHelpOpen).toBe(true)
+    })
+
+    it('Ctrl-/ (non-Mac convention) also opens it', () => {
+      render(<EditorScreen />)
+
+      fireEvent.keyDown(window, { key: '/', ctrlKey: true })
+
+      expect(screen.getByRole('dialog', { name: 'Keyboard shortcuts' })).toBeInTheDocument()
+    })
+
+    it('a bare "/" with no modifier does not open it (must not fire while typing a literal slash)', () => {
+      render(<EditorScreen />)
+
+      fireEvent.keyDown(window, { key: '/' })
+
+      expect(screen.queryByRole('dialog', { name: 'Keyboard shortcuts' })).not.toBeInTheDocument()
+    })
+  })
 })

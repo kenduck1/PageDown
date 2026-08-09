@@ -419,6 +419,18 @@ describe('EditorToolbar', () => {
     expect(useAppStore.getState().pageSetupOpen).toBe(true)
   })
 
+  it('The keyboard-shortcuts button calls useAppStore.openShortcutsHelp', async () => {
+    const ref = createRef<MilkdownEditorHandle>()
+    const user = userEvent.setup()
+    render(<EditorToolbar editorRef={ref} />)
+
+    expect(useAppStore.getState().shortcutsHelpOpen).toBe(false)
+
+    await user.click(screen.getByRole('button', { name: 'Keyboard shortcuts' }))
+
+    expect(useAppStore.getState().shortcutsHelpOpen).toBe(true)
+  })
+
   it('Export PDF calls window.api.exportPdf with the current document content', async () => {
     useDocumentStore.setState({ content: '# Real document content', filePath: null })
     const ref = createRef<MilkdownEditorHandle>()

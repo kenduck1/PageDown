@@ -1,4 +1,5 @@
-import { $command, $prose } from '@milkdown/utils'
+import { $command, $prose, $useKeymap } from '@milkdown/utils'
+import { commandsCtx } from '@milkdown/core'
 import { history, undo, redo } from '@milkdown/prose/history'
 import { TextSelection } from '@milkdown/prose/state'
 import { pagebreakNode } from './nodes/pagebreak'
@@ -35,6 +36,45 @@ export const historyProse = $prose(() => history())
 // etc.).
 export const undoCommand = $command('Undo', () => () => undo)
 export const redoCommand = $command('Redo', () => () => redo)
+
+// Neither stock preset binds a keyboard shortcut for undo/redo either --
+// confirmed the same way the comment on historyProse above did (neither
+// preset's own composed/plugins.ts references `history` at all), and
+// prosemirror-history's own history() plugin only tracks undo/redo STATE, it
+// doesn't bind any keys on its own. Format mode's toolbar Undo/Redo buttons
+// already call undoCommand/redoCommand directly and work fine -- but before
+// this, Mod-z/Mod-Shift-z/Mod-y did nothing at all in Format mode, which is
+// a real, surprising gap for what's likely the single most reflexive
+// keyboard shortcut in any text editor. (Source mode needs no equivalent --
+// it's a plain <textarea>, which gets the browser's own native text-input
+// undo stack for free, activated by Cmd/Ctrl+Z with zero JS.) Follows the
+// exact same $useKeymap pattern @milkdown/preset-commonmark's own
+// strongKeymap/emphasisKeymap use (see node_modules/.pnpm/
+// @milkdown+preset-commonmark.../src/mark/strong.ts) -- commandsCtx.call()
+// dispatches the already-defined undoCommand/redoCommand by their own $command
+// key, the same mechanism the toolbar buttons already use, so both paths stay
+// in sync by construction rather than duplicating the undo/redo logic itself.
+// Redo binds both Mod-Shift-z (the more common convention, matches most
+// editors including this one's own toolbar tooltip) and Mod-y (the
+// Windows/Ctrl convention many editors also honor everywhere) -- both are
+// harmless to bind unconditionally since neither collides with any other
+// shortcut this project defines.
+export const historyKeymap = $useKeymap('historyKeymap', {
+  Undo: {
+    shortcuts: 'Mod-z',
+    command: (ctx) => {
+      const commands = ctx.get(commandsCtx)
+      return () => commands.call(undoCommand.key)
+    }
+  },
+  Redo: {
+    shortcuts: ['Mod-Shift-z', 'Mod-y'],
+    command: (ctx) => {
+      const commands = ctx.get(commandsCtx)
+      return () => commands.call(redoCommand.key)
+    }
+  }
+})
 
 // Neither preset ships a command to insert THIS project's own custom
 // pagebreak atom node (naturally -- pagebreakNode, from ./nodes/pagebreak.ts,
@@ -79,10 +119,19 @@ export const insertPagebreakCommand = $command(
 // hand-copied list silently drifting from the real one -- the same
 // anti-drift reasoning EDITOR_SCHEMA_PLUGINS documents for its own
 // consumers.
+// `.flat()` here (not left to each call site, unlike EDITOR_SCHEMA_PLUGINS,
+// which every consumer already flattens itself) because historyKeymap is a
+// $useKeymap() result -- confirmed by reading @milkdown/preset-commonmark's
+// own composed/keymap.ts, a $useKeymap() plugin is NOT a single plugin
+// reference the way $command/$prose results are; the preset's own equivalent
+// list literal ends in `.flat()` for exactly this reason. Flattening once
+// here, at the definition, is safer than trusting every future consumer to
+// remember it themselves.
 export const EDITOR_COMMAND_PLUGINS = [
   historyProse,
   undoCommand,
   redoCommand,
+  historyKeymap,
   insertPagebreakCommand,
   // See image-security.ts's own module comment for the real, confirmed
   // vulnerability this closes: the stock commonmark image node renders an
@@ -91,4 +140,4 @@ export const EDITOR_COMMAND_PLUGINS = [
   // untouched), so this belongs here alongside historyProse/undoCommand,
   // not in plugins.ts's EDITOR_SCHEMA_PLUGINS.
   safeImageViewProse
-]
+].flat()
