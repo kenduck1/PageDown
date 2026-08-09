@@ -20,6 +20,7 @@ import { createTestEditor } from './test-editor'
 import MilkdownEditor, { type MilkdownEditorHandle } from './MilkdownEditor'
 import { buildEditorCommands } from './editor-commands'
 import { computePageGeometry } from '../../../typography/page-geometry'
+import { DEFAULT_DOCUMENT_STYLE } from '../../../typography/document-style'
 import { DEFAULT_PAGE_CONFIG } from '../../../markdown/page-config'
 
 // MilkdownEditor's `geometry` prop (Page Geometry Wiring sub-project) sizes
@@ -336,6 +337,7 @@ describe('MilkdownEditor', () => {
     const { container } = render(
       <MilkdownEditor
         geometry={DEFAULT_GEOMETRY}
+        documentStyle={DEFAULT_DOCUMENT_STYLE}
         content="# Hello World"
         onChange={onChange}
         onError={onError}
@@ -355,6 +357,7 @@ describe('MilkdownEditor', () => {
     const { container } = render(
       <MilkdownEditor
         geometry={DEFAULT_GEOMETRY}
+        documentStyle={DEFAULT_DOCUMENT_STYLE}
         content="# Hello"
         onChange={onChange}
         onError={onError}
@@ -411,6 +414,7 @@ describe('MilkdownEditor', () => {
     const { container, rerender } = render(
       <MilkdownEditor
         geometry={DEFAULT_GEOMETRY}
+        documentStyle={DEFAULT_DOCUMENT_STYLE}
         key="a"
         content="# Doc A"
         onChange={onChange}
@@ -438,6 +442,7 @@ describe('MilkdownEditor', () => {
     rerender(
       <MilkdownEditor
         geometry={DEFAULT_GEOMETRY}
+        documentStyle={DEFAULT_DOCUMENT_STYLE}
         key="b"
         content={'---\ntitle: x\n---\n\n# Doc A edited'}
         onChange={onChange}
@@ -458,6 +463,7 @@ describe('MilkdownEditor', () => {
     const { container, rerender } = render(
       <MilkdownEditor
         geometry={DEFAULT_GEOMETRY}
+        documentStyle={DEFAULT_DOCUMENT_STYLE}
         key="a"
         content="# Doc A"
         onChange={onChange}
@@ -469,6 +475,7 @@ describe('MilkdownEditor', () => {
     rerender(
       <MilkdownEditor
         geometry={DEFAULT_GEOMETRY}
+        documentStyle={DEFAULT_DOCUMENT_STYLE}
         key="b"
         content="# Doc B"
         onChange={onChange}
@@ -504,6 +511,7 @@ describe('MilkdownEditor', () => {
     render(
       <MilkdownEditor
         geometry={DEFAULT_GEOMETRY}
+        documentStyle={DEFAULT_DOCUMENT_STYLE}
         content={{ not: 'a string' } as unknown as string}
         onChange={onChange}
         onError={onError}
@@ -523,6 +531,7 @@ describe('MilkdownEditor', () => {
     const { container } = render(
       <MilkdownEditor
         geometry={DEFAULT_GEOMETRY}
+        documentStyle={DEFAULT_DOCUMENT_STYLE}
         ref={ref}
         content="# Hello"
         onChange={onChange}
@@ -556,6 +565,7 @@ describe('MilkdownEditor', () => {
     const { container } = render(
       <MilkdownEditor
         geometry={DEFAULT_GEOMETRY}
+        documentStyle={DEFAULT_DOCUMENT_STYLE}
         ref={ref}
         content="# Hello"
         onChange={onChange}
@@ -649,6 +659,7 @@ describe('MilkdownEditor', () => {
     const { container } = render(
       <MilkdownEditor
         geometry={DEFAULT_GEOMETRY}
+        documentStyle={DEFAULT_DOCUMENT_STYLE}
         ref={ref}
         content="Hello"
         onChange={onChange}
@@ -679,6 +690,7 @@ describe('MilkdownEditor', () => {
     const { container } = render(
       <MilkdownEditor
         geometry={DEFAULT_GEOMETRY}
+        documentStyle={DEFAULT_DOCUMENT_STYLE}
         ref={ref}
         content="Hello"
         onChange={onChange}
@@ -709,6 +721,7 @@ describe('MilkdownEditor', () => {
     const { container } = render(
       <MilkdownEditor
         geometry={DEFAULT_GEOMETRY}
+        documentStyle={DEFAULT_DOCUMENT_STYLE}
         ref={ref}
         content="Hello"
         onChange={onChange}
@@ -750,6 +763,7 @@ describe('MilkdownEditor', () => {
     const { container } = render(
       <MilkdownEditor
         geometry={DEFAULT_GEOMETRY}
+        documentStyle={DEFAULT_DOCUMENT_STYLE}
         ref={ref}
         content="Some paragraph text"
         onChange={onChange}
@@ -775,6 +789,7 @@ describe('MilkdownEditor', () => {
     const { container } = render(
       <MilkdownEditor
         geometry={DEFAULT_GEOMETRY}
+        documentStyle={DEFAULT_DOCUMENT_STYLE}
         ref={ref}
         content="List target"
         onChange={onChange}
@@ -798,6 +813,7 @@ describe('MilkdownEditor', () => {
     const { container } = render(
       <MilkdownEditor
         geometry={DEFAULT_GEOMETRY}
+        documentStyle={DEFAULT_DOCUMENT_STYLE}
         ref={ref}
         content="Ordered target"
         onChange={onChange}
@@ -830,6 +846,7 @@ describe('MilkdownEditor', () => {
     const { container } = render(
       <MilkdownEditor
         geometry={DEFAULT_GEOMETRY}
+        documentStyle={DEFAULT_DOCUMENT_STYLE}
         ref={ref}
         content="1. Ordered item"
         onChange={onChange}
@@ -853,6 +870,7 @@ describe('MilkdownEditor', () => {
     const { container } = render(
       <MilkdownEditor
         geometry={DEFAULT_GEOMETRY}
+        documentStyle={DEFAULT_DOCUMENT_STYLE}
         ref={ref}
         content="- Bullet item"
         onChange={onChange}
@@ -880,6 +898,7 @@ describe('MilkdownEditor', () => {
     const { container } = render(
       <MilkdownEditor
         geometry={DEFAULT_GEOMETRY}
+        documentStyle={DEFAULT_DOCUMENT_STYLE}
         ref={ref}
         content="# Heading One"
         onChange={onChange}
@@ -901,6 +920,7 @@ describe('MilkdownEditor', () => {
     const { container } = render(
       <MilkdownEditor
         geometry={DEFAULT_GEOMETRY}
+        documentStyle={DEFAULT_DOCUMENT_STYLE}
         ref={ref}
         content="### Heading Three"
         onChange={onChange}
@@ -922,6 +942,7 @@ describe('MilkdownEditor', () => {
     const { container } = render(
       <MilkdownEditor
         geometry={DEFAULT_GEOMETRY}
+        documentStyle={DEFAULT_DOCUMENT_STYLE}
         ref={ref}
         content="Doc"
         onChange={onChange}
@@ -948,6 +969,7 @@ describe('MilkdownEditor', () => {
     const { container } = render(
       <MilkdownEditor
         geometry={DEFAULT_GEOMETRY}
+        documentStyle={DEFAULT_DOCUMENT_STYLE}
         ref={ref}
         content="Doc"
         onChange={onChange}
@@ -968,6 +990,7 @@ describe('MilkdownEditor', () => {
     const { container } = render(
       <MilkdownEditor
         geometry={DEFAULT_GEOMETRY}
+        documentStyle={DEFAULT_DOCUMENT_STYLE}
         ref={ref}
         content="# Hello"
         onChange={onChange}
@@ -1028,6 +1051,7 @@ describe('MilkdownEditor', () => {
     const { container } = render(
       <MilkdownEditor
         geometry={DEFAULT_GEOMETRY}
+        documentStyle={DEFAULT_DOCUMENT_STYLE}
         ref={ref}
         content={'First paragraph\n\nSecond paragraph\n\nThird paragraph'}
         onChange={onChange}

@@ -8,6 +8,7 @@ import { EDITOR_COMMAND_PLUGINS } from './commands'
 import { PINNED_STRINGIFY_OPTIONS } from './stringify-options'
 import { buildEditorCommands, type EditorCommands } from './editor-commands'
 import type { PageGeometry } from '../../../typography/page-geometry'
+import type { DocumentStyle } from '../../../typography/document-style'
 
 interface MilkdownEditorProps {
   content: string
@@ -17,6 +18,15 @@ interface MilkdownEditorProps {
   // this mount sits inside is sized from the very same object -- deriving it
   // twice would let the card and the text column disagree.
   geometry: PageGeometry
+  // The document's own theme/font selection (resolveDocumentStyle,
+  // src/typography/document-style.ts), passed down for the same reason
+  // `geometry` is. Only `theme` and `fontFamily` are read here: the running
+  // header/footer half of DocumentStyle has no meaning on this surface,
+  // because the Milkdown canvas is ONE continuous card with no per-page
+  // wrapper to hang a running header off. Headers/footers therefore appear
+  // in the paginated preview, thumbnails and exported PDF, but not here --
+  // a deliberate, documented asymmetry, not an oversight.
+  documentStyle: DocumentStyle
   onChange: (markdown: string) => void
   onError: (message: string) => void
 }
@@ -60,7 +70,7 @@ export interface MilkdownEditorHandle extends EditorCommands {
 }
 
 const MilkdownEditor = forwardRef<MilkdownEditorHandle, MilkdownEditorProps>(
-  function MilkdownEditor({ content, geometry, onChange, onError }, ref) {
+  function MilkdownEditor({ content, geometry, documentStyle, onChange, onError }, ref) {
     const rootRef = useRef<HTMLDivElement>(null)
     const editorRef = useRef<Editor | null>(null)
     // Set synchronously (inside a ProseMirror plugin's `apply`, not through
@@ -283,7 +293,14 @@ const MilkdownEditor = forwardRef<MilkdownEditorHandle, MilkdownEditorProps>(
     return (
       <div
         ref={rootRef}
-        className="milkdown-mount pagedown-document flow-root min-h-full mx-auto py-6"
+        // pagedown-theme-*/pagedown-font-*: this surface's half of the
+        // per-document theme/font rules in document-typography.css. The
+        // sandboxed paginator sets the SAME two classes on its own <body>
+        // (resources/pagination-render/index.ts's 'render' handler), which
+        // is what keeps the two surfaces in typographic parity -- Gate 10
+        // measures exactly that. `default`/`source-serif-4` deliberately
+        // have no rules at all, so those two classes are inert by design.
+        className={`milkdown-mount pagedown-document pagedown-theme-${documentStyle.theme} pagedown-font-${documentStyle.fontFamily} flow-root min-h-full mx-auto py-6`}
         style={{ maxWidth: geometry.contentWidthPx }}
       />
     )

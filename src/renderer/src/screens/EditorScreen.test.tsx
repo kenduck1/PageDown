@@ -1486,4 +1486,53 @@ describe('EditorScreen', () => {
       expect(mount).toHaveStyle({ maxWidth: '624px' })
     })
   })
+
+  describe('document theme and font family reach the editor canvas', () => {
+    it("the editor mount carries the document's own theme and font classes", async () => {
+      useDocumentStore.setState({
+        filePath: '/tmp/cv.md',
+        content: '---\ntheme: resume\nfontFamily: inter\n---\n\n# CV'
+      })
+      render(<EditorScreen />)
+
+      await screen.findByTestId('page-card')
+      const mount = document.querySelector('.milkdown-mount') as HTMLElement
+      expect(mount.className).toContain('pagedown-theme-resume')
+      expect(mount.className).toContain('pagedown-font-inter')
+    })
+
+    it('a document with no frontmatter gets the inert default theme and font classes', async () => {
+      // Guards the case every pinned gate measures. `default`/
+      // `source-serif-4` deliberately have NO rules in
+      // document-typography.css, so these two classes must be present (the
+      // template is unconditional) but must not change any rendering --
+      // which is what keeps Gate 10's 0.000px parity and Gate 2/6's pinned
+      // page counts from moving.
+      useDocumentStore.setState({ filePath: '/tmp/report.md', content: '# Report' })
+      render(<EditorScreen />)
+
+      await screen.findByTestId('page-card')
+      const mount = document.querySelector('.milkdown-mount') as HTMLElement
+      expect(mount.className).toContain('pagedown-theme-default')
+      expect(mount.className).toContain('pagedown-font-source-serif-4')
+    })
+
+    it('choosing a font in the toolbar writes fontFamily into the document frontmatter', async () => {
+      const user = userEvent.setup()
+      useDocumentStore.setState({ filePath: '/tmp/report.md', content: '# Report\n\nBody' })
+      render(<EditorScreen />)
+
+      const select = await screen.findByLabelText('Font family')
+      expect(select).toHaveValue('source-serif-4')
+
+      await user.selectOptions(select, 'inter')
+
+      // A real frontmatter write, not UI-only state: the font has to
+      // survive save/reopen and reach the paginator and PDF export.
+      await waitFor(() => {
+        expect(useDocumentStore.getState().content).toContain('fontFamily: inter')
+      })
+      expect(await screen.findByLabelText('Font family')).toHaveValue('inter')
+    })
+  })
 })

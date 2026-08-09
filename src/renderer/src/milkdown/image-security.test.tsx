@@ -6,6 +6,7 @@ import MilkdownEditor from './MilkdownEditor'
 import { createTestEditor } from './test-editor'
 import { EDITOR_SCHEMA_PLUGINS } from './plugins'
 import { computePageGeometry } from '../../../typography/page-geometry'
+import { DEFAULT_DOCUMENT_STYLE } from '../../../typography/document-style'
 import { DEFAULT_PAGE_CONFIG } from '../../../markdown/page-config'
 
 // MilkdownEditor's `geometry` prop (Page Geometry Wiring sub-project) sizes
@@ -52,6 +53,7 @@ describe('image node view — real editor mount', () => {
     render(
       <MilkdownEditor
         geometry={DEFAULT_GEOMETRY}
+        documentStyle={DEFAULT_DOCUMENT_STYLE}
         content={content}
         onChange={() => {}}
         onError={() => {}}
@@ -72,6 +74,7 @@ describe('image node view — real editor mount', () => {
     render(
       <MilkdownEditor
         geometry={DEFAULT_GEOMETRY}
+        documentStyle={DEFAULT_DOCUMENT_STYLE}
         content={content}
         onChange={() => {}}
         onError={() => {}}
@@ -94,6 +97,7 @@ describe('image node view — real editor mount', () => {
     render(
       <MilkdownEditor
         geometry={DEFAULT_GEOMETRY}
+        documentStyle={DEFAULT_DOCUMENT_STYLE}
         content={content}
         onChange={() => {}}
         onError={() => {}}
