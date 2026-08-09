@@ -15,6 +15,7 @@ import { isFormatEditing, isSourceEditing } from '../lib/editing-surface'
 import { usePageCount } from '../hooks/usePageCount'
 import { useAutosave } from '../hooks/useAutosave'
 import { useFindController } from '../hooks/useFindController'
+import { useFindShortcuts } from '../hooks/useFindShortcuts'
 import { extractRawFrontmatter, replaceRawFrontmatter } from '../../../markdown/frontmatter-splice'
 import { resolvePageConfig, applyPageConfig, type PageConfig } from '../../../markdown/page-config'
 import { computePageGeometry } from '../../../typography/page-geometry'
@@ -69,6 +70,15 @@ function EditorScreen(): React.JSX.Element {
     editorRef,
     sourceRef: sourceEditorRef,
     updateContentForTab
+  })
+  // Cmd/Ctrl+F -- this app's first and only keyboard shortcut (see
+  // useFindShortcuts.ts's own module comment for why it's a bare `window`
+  // listener rather than a real app-menu accelerator). getSelectedText comes
+  // from the controller above, not a locally-defined function, so seeding the
+  // query always reads from whichever editing surface is actually live.
+  useFindShortcuts({
+    getSelectedText: findController.getSelectedText,
+    queryInputRef: findQueryInputRef
   })
 
   const handleSave = async (): Promise<void> => {
