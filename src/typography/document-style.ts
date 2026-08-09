@@ -59,10 +59,26 @@ export const DEFAULT_DOCUMENT_STYLE: DocumentStyle = {
 //     (`cleanPseudoContent` exists but is used only by string-sets/target-text,
 //     never by the literal-content path). So it is closed here, at the source.
 //
+// A raw, unescaped CR or FF is just as dangerous as a raw LF, not merely
+// cosmetic whitespace: per the CSS Syntax Module Level 3 input-stream
+// preprocessing step, a lone U+000D CARRIAGE RETURN, a lone U+000C FORM FEED,
+// and a U+000D U+000A pair are EACH independently normalized to a single
+// U+000A LINE FEED before the CSS parser ever tokenizes the text -- so any of
+// the three terminates a quoted `content:` string exactly like the plain `\n`
+// case already handled here, via the same <bad-string-token> mechanism.
+// Reachable in practice, not merely theoretical: js-yaml resolves an explicit
+// double-quoted YAML escape (`headerCenter: "text\r} body { ... } @page {"`)
+// into a JS string containing a literal CR -- that's YAML's own explicit
+// escape resolution, not its plain/block-scalar line-folding normalization,
+// so the raw control character survives into this function untouched.
+//
 // Backslash must be replaced FIRST, or it would double-escape the backslashes
 // the later replacements introduce.
 export function escapeCssString(text: string): string {
-  return text.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\r?\n/g, '\\A ')
+  return text
+    .replace(/\\/g, '\\\\')
+    .replace(/"/g, '\\"')
+    .replace(/\r\n|\r|\n|\f/g, '\\A ')
 }
 
 const TOKEN_PATTERN = /(\{n\}|\{total\})/g

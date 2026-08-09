@@ -20,6 +20,27 @@ describe('escapeCssString', () => {
     expect(escapeCssString('a\nb')).toBe('a\\A b')
   })
 
+  // CSS Syntax Module Level 3's input-stream preprocessing step normalizes a
+  // lone CR, a lone FF, and a CRLF pair EACH independently to a single LF
+  // before the CSS parser ever tokenizes the text -- so all three terminate
+  // an unescaped quoted string exactly like the plain `\n` case above, via
+  // the same <bad-string-token> mechanism. Reachable in practice: js-yaml
+  // resolves an explicit double-quoted YAML escape (`"text\r..."`) into a JS
+  // string containing a literal CR, which survives into this function
+  // untouched (that's YAML's own escape *resolution*, not its plain/block-
+  // scalar line-folding normalization).
+  it('escapes a lone carriage return as a CSS newline escape', () => {
+    expect(escapeCssString('a\rb')).toBe('a\\A b')
+  })
+
+  it('escapes a lone form feed as a CSS newline escape', () => {
+    expect(escapeCssString('a\fb')).toBe('a\\A b')
+  })
+
+  it('escapes a CRLF pair as a single CSS newline escape', () => {
+    expect(escapeCssString('a\r\nb')).toBe('a\\A b')
+  })
+
   it('leaves ordinary text untouched', () => {
     expect(escapeCssString('Page 1 of 2')).toBe('Page 1 of 2')
   })
@@ -110,6 +131,46 @@ describe('buildRunningContentCss', () => {
     expect(css).toContain(
       'content: "\\"; } body { display: none } @page { @top-left { content: \\"x";'
     )
+  })
+
+  it('handles two adjacent tokens with no literal text between them', () => {
+    // Regression coverage for the `if (chunk === '') continue` guard in
+    // buildContentValue: splitting '{n}{total}' on the token pattern
+    // produces an empty-string chunk between the two matches, which must be
+    // skipped rather than emitted as a stray `""`.
+    const css = buildRunningContentCss({
+      ...DEFAULT_DOCUMENT_STYLE,
+      header: null,
+      footer: { left: '', center: '{n}{total}', right: '' }
+    })
+    expect(css).toContain('content: counter(page) counter(pages);')
+  })
+
+  it('handles a token at the very start of the text', () => {
+    const css = buildRunningContentCss({
+      ...DEFAULT_DOCUMENT_STYLE,
+      header: null,
+      footer: { left: '', center: '{n} of many', right: '' }
+    })
+    expect(css).toContain('content: counter(page) " of many";')
+  })
+
+  it('handles a token at the very end of the text', () => {
+    const css = buildRunningContentCss({
+      ...DEFAULT_DOCUMENT_STYLE,
+      header: null,
+      footer: { left: '', center: 'Page {n}', right: '' }
+    })
+    expect(css).toContain('content: "Page " counter(page);')
+  })
+
+  it('leaves an unrecognized brace pattern as inert literal text', () => {
+    const css = buildRunningContentCss({
+      ...DEFAULT_DOCUMENT_STYLE,
+      header: null,
+      footer: { left: '', center: '{x} and {n}', right: '' }
+    })
+    expect(css).toContain('content: "{x} and " counter(page);')
   })
 
   it('emits header boxes in the top band and footer boxes in the bottom band', () => {
