@@ -179,6 +179,9 @@ describe('EditorStatusBar page navigation', () => {
     renderBar({ pageCount: null })
     expect(screen.getByRole('button', { name: 'Previous page' })).toBeDisabled()
     expect(screen.getByRole('button', { name: 'Next page' })).toBeDisabled()
+    const jumpButton = screen.getByRole('button', { name: /page 3 of/i })
+    expect(jumpButton).toBeDisabled()
+    expect(jumpButton).toHaveTextContent('Page 3 of —')
   })
 
   it('jumps to a typed page on Enter', async () => {
@@ -189,6 +192,26 @@ describe('EditorStatusBar page navigation', () => {
     await user.clear(input)
     await user.type(input, '7{Enter}')
     expect(onNavigateToPage).toHaveBeenCalledWith(7)
+  })
+
+  it('clamps a jump value above pageCount down to the last page', async () => {
+    const user = userEvent.setup()
+    const { onNavigateToPage } = renderBar()
+    await user.click(screen.getByRole('button', { name: /page 3 of 12/i }))
+    const input = screen.getByRole('spinbutton', { name: /jump to page/i })
+    await user.clear(input)
+    await user.type(input, '99{Enter}')
+    expect(onNavigateToPage).toHaveBeenCalledWith(12)
+  })
+
+  it('clamps a jump value below 1 up to the first page', async () => {
+    const user = userEvent.setup()
+    const { onNavigateToPage } = renderBar()
+    await user.click(screen.getByRole('button', { name: /page 3 of 12/i }))
+    const input = screen.getByRole('spinbutton', { name: /jump to page/i })
+    await user.clear(input)
+    await user.type(input, '0{Enter}')
+    expect(onNavigateToPage).toHaveBeenCalledWith(1)
   })
 
   it('cancels the jump input on Escape without navigating', async () => {
