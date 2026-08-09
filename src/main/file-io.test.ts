@@ -7,7 +7,8 @@ import {
   utimes,
   writeFile,
   readFile,
-  realpath
+  realpath,
+  stat
 } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -31,6 +32,7 @@ vi.mock('electron', () => ({
 }))
 
 import { dialog } from 'electron'
+import type { BrowserWindow } from 'electron'
 import {
   openFileDialog,
   readFileByPath,
@@ -38,6 +40,10 @@ import {
   canonicalizeDocumentPath,
   saveDroppedImage
 } from './file-io'
+
+// saveFile's win parameter is only ever forwarded to dialog.showMessageBox,
+// which is mocked in this file -- a real BrowserWindow is never needed.
+const FAKE_WIN = {} as BrowserWindow
 
 // Builds a document reachable through TWO distinct spellings -- a real
 // directory and a symlink pointing at it -- inside the given parent. Used by
@@ -81,7 +87,8 @@ describe('readFileByPath / openFileDialog recovery-on-open', () => {
     expect(result).toEqual({
       filePath: docPath,
       content: '# On disk content',
-      recoveredFromAutosave: false
+      recoveredFromAutosave: false,
+      mtimeMs: expect.any(Number)
     })
   })
 
@@ -112,7 +119,8 @@ describe('readFileByPath / openFileDialog recovery-on-open', () => {
     expect(result).toEqual({
       filePath: docViaLink,
       content: '# Newer autosaved content',
-      recoveredFromAutosave: true
+      recoveredFromAutosave: true,
+      mtimeMs: expect.any(Number)
     })
   })
 
@@ -137,7 +145,8 @@ describe('readFileByPath / openFileDialog recovery-on-open', () => {
     expect(result).toEqual({
       filePath: docPath,
       content: '# On disk content',
-      recoveredFromAutosave: false
+      recoveredFromAutosave: false,
+      mtimeMs: expect.any(Number)
     })
   })
 
@@ -158,7 +167,8 @@ describe('readFileByPath / openFileDialog recovery-on-open', () => {
     expect(result).toEqual({
       filePath: docPath,
       content: '# Same content',
-      recoveredFromAutosave: false
+      recoveredFromAutosave: false,
+      mtimeMs: expect.any(Number)
     })
   })
 
@@ -177,7 +187,8 @@ describe('readFileByPath / openFileDialog recovery-on-open', () => {
     expect(result).toEqual({
       filePath: docPath,
       content: '# Newer on-disk content',
-      recoveredFromAutosave: false
+      recoveredFromAutosave: false,
+      mtimeMs: expect.any(Number)
     })
   })
 
@@ -194,7 +205,8 @@ describe('readFileByPath / openFileDialog recovery-on-open', () => {
       expect(result).toEqual({
         filePath: docPath,
         content: '# On disk content',
-        recoveredFromAutosave: false
+        recoveredFromAutosave: false,
+        mtimeMs: expect.any(Number)
       })
       expect(consoleErrorSpy).toHaveBeenCalled()
     } finally {
@@ -222,7 +234,8 @@ describe('readFileByPath / openFileDialog recovery-on-open', () => {
     expect(result).toEqual({
       filePath: docViaLink,
       content: '# Newer autosaved content',
-      recoveredFromAutosave: true
+      recoveredFromAutosave: true,
+      mtimeMs: expect.any(Number)
     })
   })
 
@@ -321,18 +334,136 @@ describe('canonicalizeDocumentPath', () => {
   })
 })
 
-describe('saveFile (sanity, unaffected by the recovery changes)', () => {
+describe('saveFile', () => {
   afterEach(() => {
-    vi.restoreAllMocks()
+    // clearAllMocks (not just restoreAllMocks) is required here: dialog's
+    // methods are plain vi.fn()s from the top-of-file vi.mock('electron', ...)
+    // factory, not vi.spyOn spies on a real object -- restoreAllMocks alone
+    // leaves their accumulated .mock.calls history in place across tests,
+    // which silently broke the "no dialog prompted" assertions below once a
+    // later test needed one that ran after an earlier test that triggered
+    // dialog.showMessageBox.
+    vi.clearAllMocks()
   })
 
-  it('writes the given content to the given path without prompting a dialog', async () => {
+  it('writes the given content to the given path without prompting a dialog when there is no mtime baseline', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'pagedown-file-io-save-'))
     try {
       const targetPath = join(dir, 'saved.md')
-      const result = await saveFile(targetPath, '# Saved content')
-      expect(result).toEqual({ filePath: targetPath })
+      const result = await saveFile(FAKE_WIN, targetPath, '# Saved content', null)
+      expect(result).toMatchObject({ filePath: targetPath })
+      expect(result && 'mtimeMs' in result && typeof result.mtimeMs).toBe('number')
       expect(dialog.showSaveDialog).not.toHaveBeenCalled()
+      expect(dialog.showMessageBox).not.toHaveBeenCalled()
+      expect(await readFile(targetPath, 'utf8')).toBe('# Saved content')
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('writes without prompting when the on-disk mtime still matches the given baseline', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'pagedown-file-io-save-'))
+    try {
+      const targetPath = join(dir, 'saved.md')
+      await writeFile(targetPath, '# Original')
+      const baseline = (await stat(targetPath)).mtimeMs
+
+      const result = await saveFile(FAKE_WIN, targetPath, '# Updated content', baseline)
+      expect(dialog.showMessageBox).not.toHaveBeenCalled()
+      expect(result).toMatchObject({ filePath: targetPath })
+      expect(await readFile(targetPath, 'utf8')).toBe('# Updated content')
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('recreates a file that was deleted since the baseline, without prompting', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'pagedown-file-io-save-'))
+    try {
+      const targetPath = join(dir, 'saved.md')
+      await writeFile(targetPath, '# Original')
+      const baseline = (await stat(targetPath)).mtimeMs
+      await rm(targetPath)
+
+      const result = await saveFile(FAKE_WIN, targetPath, '# Recreated', baseline)
+      expect(dialog.showMessageBox).not.toHaveBeenCalled()
+      expect(result).toMatchObject({ filePath: targetPath })
+      expect(await readFile(targetPath, 'utf8')).toBe('# Recreated')
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('detects an external change and, on Reload, writes nothing and returns on-disk content', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'pagedown-file-io-save-'))
+    try {
+      const targetPath = join(dir, 'saved.md')
+      await writeFile(targetPath, '# Original')
+      // A baseline well in the past so the file's real (current) mtime
+      // unambiguously reads as "meaningfully newer" past MTIME_TOLERANCE_MS,
+      // matching how documentStore actually uses this: the baseline comes
+      // from a real prior read/write, not from "just now".
+      const staleBaseline = Date.now() - 60_000
+      vi.mocked(dialog.showMessageBox).mockResolvedValue({ response: 0, checkboxChecked: false })
+
+      const result = await saveFile(FAKE_WIN, targetPath, '# Local edit', staleBaseline)
+      expect(dialog.showMessageBox).toHaveBeenCalledWith(
+        FAKE_WIN,
+        expect.objectContaining({ buttons: ['Reload', 'Overwrite', 'Cancel'] })
+      )
+      expect(result).toMatchObject({ reloadedContent: '# Original' })
+      // Nothing was written -- the file still holds its original content.
+      expect(await readFile(targetPath, 'utf8')).toBe('# Original')
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('detects an external change and, on Overwrite, writes the local content anyway', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'pagedown-file-io-save-'))
+    try {
+      const targetPath = join(dir, 'saved.md')
+      await writeFile(targetPath, '# Original')
+      const staleBaseline = Date.now() - 60_000
+      vi.mocked(dialog.showMessageBox).mockResolvedValue({ response: 1, checkboxChecked: false })
+
+      const result = await saveFile(FAKE_WIN, targetPath, '# Local edit', staleBaseline)
+      expect(result).toMatchObject({ filePath: targetPath })
+      expect(result && 'reloadedContent' in result).toBe(false)
+      expect(await readFile(targetPath, 'utf8')).toBe('# Local edit')
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('detects an external change and, on Cancel, writes nothing and returns null', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'pagedown-file-io-save-'))
+    try {
+      const targetPath = join(dir, 'saved.md')
+      await writeFile(targetPath, '# Original')
+      const staleBaseline = Date.now() - 60_000
+      vi.mocked(dialog.showMessageBox).mockResolvedValue({ response: 2, checkboxChecked: false })
+
+      const result = await saveFile(FAKE_WIN, targetPath, '# Local edit', staleBaseline)
+      expect(result).toBeNull()
+      expect(await readFile(targetPath, 'utf8')).toBe('# Original')
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('a Save-As target (null filePath) is never subject to the conflict check', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'pagedown-file-io-save-'))
+    try {
+      const targetPath = join(dir, 'chosen.md')
+      vi.mocked(dialog.showSaveDialog).mockResolvedValue({
+        canceled: false,
+        filePath: targetPath
+      })
+
+      const result = await saveFile(FAKE_WIN, null, '# New document', Date.now())
+      expect(dialog.showMessageBox).not.toHaveBeenCalled()
+      expect(result).toMatchObject({ filePath: targetPath })
     } finally {
       await rm(dir, { recursive: true, force: true })
     }

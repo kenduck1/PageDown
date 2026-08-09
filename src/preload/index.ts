@@ -6,8 +6,8 @@ import type { Preferences } from '../main/preferences'
 const api = {
   openFile: () => ipcRenderer.invoke('file:open'),
   openPath: (filePath: string) => ipcRenderer.invoke('file:openPath', filePath),
-  saveFile: (filePath: string | null, content: string) =>
-    ipcRenderer.invoke('file:save', filePath, content),
+  saveFile: (filePath: string | null, content: string, expectedMtimeMs: number | null = null) =>
+    ipcRenderer.invoke('file:save', filePath, content, expectedMtimeMs),
   getRecentFiles: () => ipcRenderer.invoke('file:getRecents'),
   getThumbnail: (filePath: string) => ipcRenderer.invoke('file:getThumbnail', filePath),
   getTemplateThumbnail: (content: string) => ipcRenderer.invoke('template:getThumbnail', content),

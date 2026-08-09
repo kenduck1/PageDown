@@ -67,7 +67,8 @@ describe('useDocumentStore', () => {
     vi.mocked(window.api.openFile).mockResolvedValue({
       filePath: '/a.md',
       content: '# A',
-      recoveredFromAutosave: false
+      recoveredFromAutosave: false,
+      mtimeMs: 1000
     })
     const loaded = await useDocumentStore.getState().openFile()
     expect(loaded).toBe(true)
@@ -93,7 +94,8 @@ describe('useDocumentStore', () => {
     vi.mocked(window.api.openFile).mockResolvedValue({
       filePath: '/a.md',
       content: '# Recovered content',
-      recoveredFromAutosave: true
+      recoveredFromAutosave: true,
+      mtimeMs: 1000
     })
     await useDocumentStore.getState().openFile()
     expect(useDocumentStore.getState()).toMatchObject({
@@ -106,7 +108,8 @@ describe('useDocumentStore', () => {
     vi.mocked(window.api.openFile).mockResolvedValue({
       filePath: '/a.md',
       content: '# Normal content',
-      recoveredFromAutosave: false
+      recoveredFromAutosave: false,
+      mtimeMs: 1000
     })
     await useDocumentStore.getState().openFile()
     expect(useDocumentStore.getState().isDirty).toBe(false)
@@ -116,7 +119,8 @@ describe('useDocumentStore', () => {
     vi.mocked(window.api.openPath).mockResolvedValue({
       filePath: '/b.md',
       content: '# B',
-      recoveredFromAutosave: false
+      recoveredFromAutosave: false,
+      mtimeMs: 1000
     })
     const loaded = await useDocumentStore.getState().openPath('/b.md')
     expect(loaded).toBe(true)
@@ -125,7 +129,7 @@ describe('useDocumentStore', () => {
 
   it('save updates filePath and clears isDirty on success', async () => {
     useDocumentStore.setState({ content: '# A', filePath: null, isDirty: true })
-    vi.mocked(window.api.saveFile).mockResolvedValue({ filePath: '/saved.md' })
+    vi.mocked(window.api.saveFile).mockResolvedValue({ filePath: '/saved.md', mtimeMs: 2000 })
     await useDocumentStore.getState().save()
     expect(useDocumentStore.getState()).toMatchObject({ filePath: '/saved.md', isDirty: false })
   })
@@ -139,7 +143,7 @@ describe('useDocumentStore', () => {
 
   it('save writes a version-history snapshot of the saved content after a successful save', async () => {
     useDocumentStore.setState({ content: '# Saved content', filePath: '/a.md', isDirty: true })
-    vi.mocked(window.api.saveFile).mockResolvedValue({ filePath: '/a.md' })
+    vi.mocked(window.api.saveFile).mockResolvedValue({ filePath: '/a.md', mtimeMs: 2000 })
     await useDocumentStore.getState().save()
     expect(window.api.autosaveSnapshot).toHaveBeenCalledWith('# Saved content', '/a.md')
   })
@@ -156,6 +160,66 @@ describe('useDocumentStore', () => {
     vi.mocked(window.api.saveFile).mockResolvedValue(null)
     await useDocumentStore.getState().save()
     expect(window.api.autosaveSnapshot).not.toHaveBeenCalled()
+  })
+
+  it('save sends the active tab own mtimeMs baseline to window.api.saveFile', async () => {
+    const tab = useDocumentStore.getState().tabs[0]
+    useDocumentStore.setState({
+      content: '# A',
+      filePath: '/a.md',
+      isDirty: true,
+      mtimeMs: 5000,
+      tabs: [{ ...tab, filePath: '/a.md', content: '# A', isDirty: true, mtimeMs: 5000 }]
+    })
+    vi.mocked(window.api.saveFile).mockResolvedValue({ filePath: '/a.md', mtimeMs: 6000 })
+    await useDocumentStore.getState().save()
+    expect(window.api.saveFile).toHaveBeenCalledWith('/a.md', '# A', 5000)
+    expect(useDocumentStore.getState().mtimeMs).toBe(6000)
+  })
+
+  it('a successful save records the new mtimeMs returned by window.api.saveFile', async () => {
+    useDocumentStore.setState({ content: '# A', filePath: '/a.md', isDirty: true, mtimeMs: 1000 })
+    vi.mocked(window.api.saveFile).mockResolvedValue({ filePath: '/a.md', mtimeMs: 9999 })
+    await useDocumentStore.getState().save()
+    const active = useDocumentStore.getState()
+    expect(active.mtimeMs).toBe(9999)
+    const tab = active.tabs.find((t) => t.id === active.activeTabId)
+    expect(tab?.mtimeMs).toBe(9999)
+  })
+
+  it('save adopts reloadedContent, clears isDirty, and does NOT autosave when the user chooses Reload on an external-change conflict', async () => {
+    useDocumentStore.setState({
+      content: '# My unsaved edit',
+      filePath: '/a.md',
+      isDirty: true,
+      mtimeMs: 1000
+    })
+    vi.mocked(window.api.saveFile).mockResolvedValue({
+      filePath: '/a.md',
+      mtimeMs: 7000,
+      reloadedContent: '# What is actually on disk now'
+    })
+    const revisionBefore = useDocumentStore.getState().revision
+
+    await useDocumentStore.getState().save()
+
+    const state = useDocumentStore.getState()
+    expect(state.content).toBe('# What is actually on disk now')
+    expect(state.isDirty).toBe(false)
+    expect(state.mtimeMs).toBe(7000)
+    // A Reload discards the user's own edit rather than saving it -- it must
+    // never be mistaken for a successful save of that edit.
+    expect(window.api.autosaveSnapshot).not.toHaveBeenCalled()
+    // MilkdownEditor is uncontrolled after mount, so picking up content that
+    // changed outside its own onChange path needs a fresh key -- same
+    // mechanism replaceContentForTab already relies on.
+    expect(state.revision).toBe(revisionBefore + 1)
+    const tab = state.tabs.find((t) => t.id === state.activeTabId)
+    expect(tab).toMatchObject({
+      content: '# What is actually on disk now',
+      isDirty: false,
+      mtimeMs: 7000
+    })
   })
 
   it("saveDroppedImage reads the file as base64 and calls window.api.saveDroppedImage with the active tab's filePath", async () => {
@@ -480,7 +544,7 @@ describe('useDocumentStore tabs', () => {
   it('save persists the resolved filePath into the tabs array, surviving a switch away and back', async () => {
     useDocumentStore.setState({ content: '# untitled', filePath: null, isDirty: true })
     const tabA = useDocumentStore.getState().activeTabId
-    vi.mocked(window.api.saveFile).mockResolvedValue({ filePath: '/saved.md' })
+    vi.mocked(window.api.saveFile).mockResolvedValue({ filePath: '/saved.md', mtimeMs: 2000 })
     await useDocumentStore.getState().save()
 
     useDocumentStore.getState().openTab('/b.md', '# B')
@@ -500,7 +564,7 @@ describe('useDocumentStore tabs', () => {
     // used to read state.activeTabId at RESOLVE time instead).
     useDocumentStore.setState({ content: '# A dirty', filePath: '/a.md', isDirty: true })
     const tabA = useDocumentStore.getState().activeTabId
-    let resolveSave: (value: { filePath: string } | null) => void = () => {}
+    let resolveSave: (value: { filePath: string; mtimeMs: number } | null) => void = () => {}
     vi.mocked(window.api.saveFile).mockReturnValue(
       new Promise((resolve) => {
         resolveSave = resolve
@@ -512,7 +576,7 @@ describe('useDocumentStore tabs', () => {
     const tabB = useDocumentStore.getState().activeTabId
     expect(tabB).not.toBe(tabA)
 
-    resolveSave({ filePath: '/saved-a.md' })
+    resolveSave({ filePath: '/saved-a.md', mtimeMs: 2000 })
     await savePromise
 
     const state = useDocumentStore.getState()
@@ -542,7 +606,7 @@ describe('useDocumentStore tabs', () => {
     expect(useDocumentStore.getState().isDirty).toBe(true)
 
     // save still reads flat `content`/`filePath` and writes them back flatly.
-    vi.mocked(window.api.saveFile).mockResolvedValue({ filePath: '/c.md' })
+    vi.mocked(window.api.saveFile).mockResolvedValue({ filePath: '/c.md', mtimeMs: 2000 })
     await useDocumentStore.getState().save()
     expect(useDocumentStore.getState()).toMatchObject({ filePath: '/c.md', isDirty: false })
 

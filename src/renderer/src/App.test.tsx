@@ -83,7 +83,8 @@ describe('App', () => {
       vi.mocked(window.api.openPath).mockResolvedValue({
         filePath: '/tmp/report.md',
         content: '# Report',
-        recoveredFromAutosave: false
+        recoveredFromAutosave: false,
+        mtimeMs: 1000
       })
 
       render(<App />)

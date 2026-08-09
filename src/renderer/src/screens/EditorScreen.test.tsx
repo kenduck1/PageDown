@@ -78,7 +78,7 @@ describe('EditorScreen', () => {
   })
 
   it('saves the current document through window.api when "Save" is clicked', async () => {
-    vi.mocked(window.api.saveFile).mockResolvedValue({ filePath: '/tmp/report.md' })
+    vi.mocked(window.api.saveFile).mockResolvedValue({ filePath: '/tmp/report.md', mtimeMs: 1000 })
     useDocumentStore.setState({ filePath: '/tmp/report.md', content: '# Report', isDirty: true })
     const user = userEvent.setup()
     render(<EditorScreen />)
@@ -103,7 +103,7 @@ describe('EditorScreen', () => {
     // original, unmodified content is what actually gets saved. See
     // 'does not touch the saved content when Save is clicked with zero
     // edits' below for the test written specifically to lock this in.
-    expect(window.api.saveFile).toHaveBeenCalledWith('/tmp/report.md', '# Report')
+    expect(window.api.saveFile).toHaveBeenCalledWith('/tmp/report.md', '# Report', null)
     expect(useDocumentStore.getState().isDirty).toBe(false)
   })
 
@@ -118,7 +118,7 @@ describe('EditorScreen', () => {
     // content would come back rewritten to '-' bullets / '_' emphasis /
     // '`' fences -- not byte-identical -- and this assertion would catch it.
     const ORIGINAL = '# Report\n\n* one\n* two\n\n*italic*\n\n~~~\ncode\n~~~\n'
-    vi.mocked(window.api.saveFile).mockResolvedValue({ filePath: '/tmp/report.md' })
+    vi.mocked(window.api.saveFile).mockResolvedValue({ filePath: '/tmp/report.md', mtimeMs: 1000 })
     useDocumentStore.setState({ filePath: '/tmp/report.md', content: ORIGINAL, isDirty: true })
     const user = userEvent.setup()
     render(<EditorScreen />)
@@ -138,11 +138,11 @@ describe('EditorScreen', () => {
     await waitFor(() => {
       expect(window.api.saveFile).toHaveBeenCalled()
     })
-    expect(window.api.saveFile).toHaveBeenCalledWith('/tmp/report.md', ORIGINAL)
+    expect(window.api.saveFile).toHaveBeenCalledWith('/tmp/report.md', ORIGINAL, null)
   })
 
   it('adopts the fallback path when Save-As returns a different path than requested', async () => {
-    vi.mocked(window.api.saveFile).mockResolvedValue({ filePath: '/tmp/chosen.md' })
+    vi.mocked(window.api.saveFile).mockResolvedValue({ filePath: '/tmp/chosen.md', mtimeMs: 1000 })
     useDocumentStore.setState({ filePath: '/tmp/unknown.md', content: '# Report' })
     const user = userEvent.setup()
     render(<EditorScreen />)
@@ -154,7 +154,7 @@ describe('EditorScreen', () => {
   })
 
   it('Save picks up the editor current content even if onChange has not fired yet (debounce race)', async () => {
-    vi.mocked(window.api.saveFile).mockResolvedValue({ filePath: '/tmp/report.md' })
+    vi.mocked(window.api.saveFile).mockResolvedValue({ filePath: '/tmp/report.md', mtimeMs: 1000 })
     useDocumentStore.setState({ filePath: '/tmp/report.md', content: '# Report', isDirty: true })
     const user = userEvent.setup()
     render(<EditorScreen />)
@@ -349,13 +349,15 @@ describe('EditorScreen', () => {
       id: 'tab-discarded',
       filePath: '/tmp/report.md',
       content: '# Discarded edit',
-      isDirty: true
+      isDirty: true,
+      mtimeMs: null
     }
     const other = {
       id: 'tab-other',
       filePath: '/tmp/other.md',
       content: '# Other document',
-      isDirty: false
+      isDirty: false,
+      mtimeMs: null
     }
     useAppStore.setState({ screen: 'editor' })
     useDocumentStore.setState({
@@ -428,7 +430,7 @@ describe('EditorScreen', () => {
     useAppStore.setState({ screen: 'editor' })
     useDocumentStore.setState({ filePath: '/tmp/report.md', content: '# Report', isDirty: true })
     vi.mocked(window.api.confirmDiscardChanges).mockResolvedValue('save')
-    vi.mocked(window.api.saveFile).mockResolvedValue({ filePath: '/tmp/report.md' })
+    vi.mocked(window.api.saveFile).mockResolvedValue({ filePath: '/tmp/report.md', mtimeMs: 1000 })
     const user = userEvent.setup()
     render(<EditorScreen />)
 
@@ -469,7 +471,7 @@ describe('EditorScreen', () => {
     useAppStore.setState({ screen: 'editor' })
     useDocumentStore.setState({ filePath: '/tmp/report.md', content: '# Report', isDirty: true })
     vi.mocked(window.api.confirmDiscardChanges).mockResolvedValue('save')
-    vi.mocked(window.api.saveFile).mockResolvedValue({ filePath: '/tmp/report.md' })
+    vi.mocked(window.api.saveFile).mockResolvedValue({ filePath: '/tmp/report.md', mtimeMs: 1000 })
     const user = userEvent.setup()
     render(<EditorScreen />)
 
@@ -497,7 +499,7 @@ describe('EditorScreen', () => {
           : tab
       )
     }))
-    vi.mocked(window.api.saveFile).mockResolvedValue({ filePath: '/tmp/report.md' })
+    vi.mocked(window.api.saveFile).mockResolvedValue({ filePath: '/tmp/report.md', mtimeMs: 1000 })
     vi.mocked(window.api.getVersionHistory).mockResolvedValue([
       { id: 'snap-1', timestamp: '2026-08-05T12:00:00.000Z', sizeBytes: 10 }
     ])
@@ -510,7 +512,7 @@ describe('EditorScreen', () => {
     await user.click(restoreButton)
 
     await waitFor(() => {
-      expect(window.api.saveFile).toHaveBeenCalledWith('/tmp/report.md', '# Unsaved edits')
+      expect(window.api.saveFile).toHaveBeenCalledWith('/tmp/report.md', '# Unsaved edits', null)
     })
     await waitFor(() => {
       expect(useDocumentStore.getState().content).toBe('# Restored Report')
@@ -542,7 +544,7 @@ describe('EditorScreen', () => {
           : tab
       )
     }))
-    vi.mocked(window.api.saveFile).mockResolvedValue({ filePath: '/tmp/report.md' })
+    vi.mocked(window.api.saveFile).mockResolvedValue({ filePath: '/tmp/report.md', mtimeMs: 1000 })
     vi.mocked(window.api.getVersionHistory).mockResolvedValue([
       { id: 'snap-1', timestamp: '2026-08-05T12:00:00.000Z', sizeBytes: 10 }
     ])
@@ -629,7 +631,7 @@ describe('EditorScreen', () => {
     await user.click(restoreButton)
 
     await waitFor(() => {
-      expect(window.api.saveFile).toHaveBeenCalledWith('/tmp/report.md', '# Unsaved edits')
+      expect(window.api.saveFile).toHaveBeenCalledWith('/tmp/report.md', '# Unsaved edits', null)
     })
     // Give handleRestoreVersion's async flushAndRestore every chance to
     // reach (and wrongly act past) its guard before asserting nothing
@@ -647,8 +649,20 @@ describe('EditorScreen', () => {
     // still in flight -- the always-visible EditorTabBar lets this happen
     // at any time, and it's exactly the race replaceContentForTab exists
     // to close.
-    const tabA = { id: 'tab-a', filePath: '/tmp/a.md', content: '# A dirty edit', isDirty: true }
-    const tabB = { id: 'tab-b', filePath: '/tmp/b.md', content: '# B untouched', isDirty: false }
+    const tabA = {
+      id: 'tab-a',
+      filePath: '/tmp/a.md',
+      content: '# A dirty edit',
+      isDirty: true,
+      mtimeMs: null
+    }
+    const tabB = {
+      id: 'tab-b',
+      filePath: '/tmp/b.md',
+      content: '# B untouched',
+      isDirty: false,
+      mtimeMs: null
+    }
     useDocumentStore.setState({
       tabs: [tabA, tabB],
       activeTabId: tabA.id,
@@ -657,7 +671,7 @@ describe('EditorScreen', () => {
       isDirty: tabA.isDirty
     })
 
-    let resolveSave: (value: { filePath: string } | null) => void = () => {}
+    let resolveSave: (value: { filePath: string; mtimeMs: number } | null) => void = () => {}
     vi.mocked(window.api.saveFile).mockReturnValue(
       new Promise((resolve) => {
         resolveSave = resolve
@@ -679,14 +693,14 @@ describe('EditorScreen', () => {
     // promise deliberately not yet resolved) -- switch to tab B before it
     // resolves.
     await waitFor(() => {
-      expect(window.api.saveFile).toHaveBeenCalledWith('/tmp/a.md', '# A dirty edit')
+      expect(window.api.saveFile).toHaveBeenCalledWith('/tmp/a.md', '# A dirty edit', null)
     })
     await act(async () => {
       useDocumentStore.getState().switchTab(tabB.id)
     })
     expect(useDocumentStore.getState().activeTabId).toBe(tabB.id)
 
-    resolveSave({ filePath: '/tmp/a.md' })
+    resolveSave({ filePath: '/tmp/a.md', mtimeMs: 1000 })
 
     await waitFor(() => {
       expect(useDocumentStore.getState().tabs.find((tab) => tab.id === tabA.id)?.content).toBe(
@@ -729,7 +743,10 @@ describe('EditorScreen', () => {
       setActiveTabDirty('/tmp/report.md', '# Report')
       const activeId = useDocumentStore.getState().activeTabId
       vi.mocked(window.api.confirmDiscardChanges).mockResolvedValue('save')
-      vi.mocked(window.api.saveFile).mockResolvedValue({ filePath: '/tmp/report.md' })
+      vi.mocked(window.api.saveFile).mockResolvedValue({
+        filePath: '/tmp/report.md',
+        mtimeMs: 1000
+      })
       const user = userEvent.setup()
       render(<EditorScreen />)
 
@@ -737,7 +754,7 @@ describe('EditorScreen', () => {
 
       expect(window.api.confirmDiscardChanges).toHaveBeenCalled()
       await waitFor(() => {
-        expect(window.api.saveFile).toHaveBeenCalledWith('/tmp/report.md', '# Report')
+        expect(window.api.saveFile).toHaveBeenCalledWith('/tmp/report.md', '# Report', null)
       })
       await waitFor(() => {
         expect(useDocumentStore.getState().tabs.some((tab) => tab.id === activeId)).toBe(false)
@@ -793,8 +810,20 @@ describe('EditorScreen', () => {
     // and wrongly conclude tab A's save succeeded, discarding tab A's real,
     // never-written content.
     it('does not close the tab if ITS OWN save failed, even when a different (clean) tab is active by the time save() resolves', async () => {
-      const tabA = { id: 'tab-a', filePath: '/tmp/a.md', content: '# A dirty edit', isDirty: true }
-      const tabB = { id: 'tab-b', filePath: '/tmp/b.md', content: '# B clean', isDirty: false }
+      const tabA = {
+        id: 'tab-a',
+        filePath: '/tmp/a.md',
+        content: '# A dirty edit',
+        isDirty: true,
+        mtimeMs: null
+      }
+      const tabB = {
+        id: 'tab-b',
+        filePath: '/tmp/b.md',
+        content: '# B clean',
+        isDirty: false,
+        mtimeMs: null
+      }
       useDocumentStore.setState({
         tabs: [tabA, tabB],
         activeTabId: tabA.id,
@@ -803,7 +832,7 @@ describe('EditorScreen', () => {
         isDirty: tabA.isDirty
       })
       vi.mocked(window.api.confirmDiscardChanges).mockResolvedValue('save')
-      let resolveSave: (value: { filePath: string } | null) => void = () => {}
+      let resolveSave: (value: { filePath: string; mtimeMs: number } | null) => void = () => {}
       vi.mocked(window.api.saveFile).mockReturnValue(
         new Promise((resolve) => {
           resolveSave = resolve
@@ -818,7 +847,7 @@ describe('EditorScreen', () => {
       // promise deliberately not yet resolved) -- switch to the clean tab B
       // before it resolves.
       await waitFor(() => {
-        expect(window.api.saveFile).toHaveBeenCalledWith('/tmp/a.md', '# A dirty edit')
+        expect(window.api.saveFile).toHaveBeenCalledWith('/tmp/a.md', '# A dirty edit', null)
       })
       await act(async () => {
         useDocumentStore.getState().switchTab(tabB.id)

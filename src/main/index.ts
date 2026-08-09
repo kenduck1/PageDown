@@ -373,18 +373,33 @@ app.whenReady().then(() => {
     return result
   })
 
-  ipcMain.handle('file:save', async (_event, filePath: string | null, content: string) => {
-    const userDataDir = app.getPath('userData')
-    const result = await saveFileToKnownOrChosenPath(userDataDir, filePath, content)
-    if (result) {
-      try {
-        await addRecentFile(userDataDir, result.filePath)
-      } catch (err) {
-        console.error('Failed to record recent file', err)
+  ipcMain.handle(
+    'file:save',
+    async (event, filePath: string | null, content: string, expectedMtimeMs: number | null) => {
+      const userDataDir = app.getPath('userData')
+      // `mainWindow` is declared further down in this same app.whenReady()
+      // closure -- safe to reference here (this callback only ever RUNS on a
+      // real IPC call, well after createWindow() has returned) but read
+      // CLAUDE.md's own note on this exact pattern (see the preferences:set
+      // handler below) before assuming it's an oversight in a future edit.
+      const win = BrowserWindow.fromWebContents(event.sender) ?? mainWindow
+      const result = await saveFileToKnownOrChosenPath(
+        win,
+        userDataDir,
+        filePath,
+        content,
+        expectedMtimeMs
+      )
+      if (result) {
+        try {
+          await addRecentFile(userDataDir, result.filePath)
+        } catch (err) {
+          console.error('Failed to record recent file', err)
+        }
       }
+      return result
     }
-    return result
-  })
+  )
 
   ipcMain.handle('file:getRecents', () => getRecentFiles(app.getPath('userData')))
 
