@@ -404,3 +404,130 @@
   max-width: 100%;
   height: auto;
 }
+
+/* ---------------------------------------------------------------------------
+   Document themes and font families.
+
+   Both surfaces (the Milkdown mount div and the sandboxed context's <body>)
+   already carry `.pagedown-document`; they additionally carry
+   `pagedown-theme-<theme>` and `pagedown-font-<family>`. `default` and
+   `source-serif-4` deliberately have NO rules -- everything above this comment
+   already IS the default, and adding a no-op override would risk moving
+   Gate 10's 0.000px parity for the case nothing is supposed to change.
+
+   Anything added here needs the same two-surface check as every other rule in
+   this file: name the element, or it silently diverges.
+   --------------------------------------------------------------------------- */
+
+/* Resume: dense, tuned for fitting a career onto one page. */
+.pagedown-document.pagedown-theme-resume {
+  font-size: var(--text-13);
+  line-height: 1.45;
+}
+
+.pagedown-document.pagedown-theme-resume p,
+.pagedown-document.pagedown-theme-resume li,
+.pagedown-document.pagedown-theme-resume td,
+.pagedown-document.pagedown-theme-resume blockquote {
+  font-size: var(--text-13);
+  line-height: 1.45;
+}
+
+.pagedown-document.pagedown-theme-resume p,
+.pagedown-document.pagedown-theme-resume ul,
+.pagedown-document.pagedown-theme-resume ol,
+.pagedown-document.pagedown-theme-resume blockquote {
+  margin: 0 0 0.5em 0;
+}
+
+.pagedown-document.pagedown-theme-resume li {
+  margin: 0 0 0.15em 0;
+}
+
+.pagedown-document.pagedown-theme-resume h1 {
+  font-size: var(--text-20);
+  margin-top: 0;
+  margin-bottom: 0.25em;
+}
+
+.pagedown-document.pagedown-theme-resume h2 {
+  font-size: var(--text-13);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  border-bottom: 1px solid #d0d0d4;
+  padding-bottom: 0.15em;
+  margin-top: 1.1em;
+  margin-bottom: 0.4em;
+}
+
+/* Letter: roomier body text for a page of continuous prose. */
+.pagedown-document.pagedown-theme-letter {
+  font-size: var(--text-15);
+  line-height: 1.6;
+}
+
+.pagedown-document.pagedown-theme-letter p,
+.pagedown-document.pagedown-theme-letter li,
+.pagedown-document.pagedown-theme-letter td,
+.pagedown-document.pagedown-theme-letter blockquote {
+  font-size: var(--text-15);
+  line-height: 1.6;
+}
+
+.pagedown-document.pagedown-theme-letter p {
+  margin: 0 0 1.1em 0;
+}
+
+.pagedown-document.pagedown-theme-letter h1 {
+  font-size: var(--text-20);
+  margin-bottom: 1em;
+}
+
+.pagedown-document.pagedown-theme-letter h2 {
+  font-size: var(--text-16);
+}
+
+/* Report: stronger hierarchy and more air above section headings. */
+.pagedown-document.pagedown-theme-report h1 {
+  font-size: var(--text-32);
+  margin-bottom: 0.75em;
+}
+
+.pagedown-document.pagedown-theme-report h2 {
+  font-size: var(--text-21);
+  margin-top: 2em;
+}
+
+.pagedown-document.pagedown-theme-report th {
+  border-bottom: 2px solid #d0d0d4;
+}
+
+/* Font family override.
+
+   The element list below is NOT redundant with the `.pagedown-document
+   .pagedown-font-inter` baseline rule. This file sets
+   `font-family: var(--font-serif)` on an explicit eleven-selector list at
+   specificity (0,1,1); a single-class override sits at (0,2,0) and LOSES to it
+   on every one of those elements. Restating the list at (0,2,1) is what makes
+   the override actually apply. `pre`/`code` are deliberately absent -- code
+   stays monospace under every font choice. */
+.pagedown-document.pagedown-font-inter {
+  font-family: var(--font-doc-sans);
+}
+
+.pagedown-document.pagedown-font-inter h1,
+.pagedown-document.pagedown-font-inter h2,
+.pagedown-document.pagedown-font-inter h3,
+.pagedown-document.pagedown-font-inter h4,
+.pagedown-document.pagedown-font-inter h5,
+.pagedown-document.pagedown-font-inter h6,
+.pagedown-document.pagedown-font-inter p,
+.pagedown-document.pagedown-font-inter ul,
+.pagedown-document.pagedown-font-inter ol,
+.pagedown-document.pagedown-font-inter li,
+.pagedown-document.pagedown-font-inter blockquote,
+.pagedown-document.pagedown-font-inter table,
+.pagedown-document.pagedown-font-inter th,
+.pagedown-document.pagedown-font-inter td {
+  font-family: var(--font-doc-sans);
+}

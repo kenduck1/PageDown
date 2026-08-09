@@ -17,6 +17,7 @@ import { renderMermaidToSvg } from '../../src/diagrams/render-mermaid'
 import { registerBreakHandlers } from '../../src/pagination/break-handlers'
 import documentTypographyCss from '../../src/typography/document-typography.css'
 import sourceSerif4Base64 from '../../src/renderer/src/assets/fonts/source-serif-4-variable.woff2'
+import interVariableBase64 from '../../src/renderer/src/assets/fonts/inter-variable.woff2'
 import { DPI, type PageGeometry } from '../../src/typography/page-geometry'
 import type { RenderRequestMessage } from '../../src/pagination/render-message'
 
@@ -151,12 +152,16 @@ function buildDocumentStylesheet(geometry: PageGeometry): string {
 :root {
   --font-serif: 'Source Serif 4', serif;
   --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --font-doc-sans: 'Inter Variable', sans-serif;
   --text-12: 12px;
   --text-13: 13px;
   --text-14: 14px;
+  --text-15: 15px;
   --text-16: 16px;
   --text-20: 20px;
+  --text-21: 21px;
   --text-26: 26px;
+  --text-32: 32px;
 }
 
 @font-face {
@@ -165,6 +170,14 @@ function buildDocumentStylesheet(geometry: PageGeometry): string {
   font-weight: 200 900;
   font-display: block;
   src: url(data:font/woff2;base64,${sourceSerif4Base64}) format('woff2-variations');
+}
+
+@font-face {
+  font-family: 'Inter Variable';
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: block;
+  src: url(data:font/woff2;base64,${interVariableBase64}) format('woff2-variations');
 }
 
 @page {
