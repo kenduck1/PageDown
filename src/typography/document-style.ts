@@ -12,7 +12,8 @@ import type {
   PageFontFamily,
   PageNumberFormat,
   PageRunningContent,
-  PageTheme
+  PageTheme,
+  TextDirection
 } from '../markdown/page-config'
 
 export interface DocumentStyle {
@@ -23,6 +24,7 @@ export interface DocumentStyle {
   header: PageRunningContent | null
   footer: PageRunningContent | null
   pageNumberFormat: PageNumberFormat
+  direction: TextDirection
 }
 
 export function resolveDocumentStyle(config: PageConfig): DocumentStyle {
@@ -31,7 +33,8 @@ export function resolveDocumentStyle(config: PageConfig): DocumentStyle {
     fontFamily: config.fontFamily,
     header: config.showHeader ? config.header : null,
     footer: config.showFooter ? config.footer : null,
-    pageNumberFormat: config.pageNumberFormat
+    pageNumberFormat: config.pageNumberFormat,
+    direction: config.direction
   }
 }
 
@@ -40,7 +43,8 @@ export const DEFAULT_DOCUMENT_STYLE: DocumentStyle = {
   fontFamily: 'source-serif-4',
   header: null,
   footer: { left: '', center: 'Page {n} of {total}', right: '' },
-  pageNumberFormat: 'decimal'
+  pageNumberFormat: 'decimal',
+  direction: 'ltr'
 }
 
 // Header/footer text is untrusted: it comes from hand-editable YAML

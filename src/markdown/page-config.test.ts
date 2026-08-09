@@ -20,7 +20,8 @@ const FULL_CONFIG: PageConfig = {
   customHeight: 9.25,
   fontFamily: 'inter',
   pageNumberFormat: 'roman',
-  theme: 'report'
+  theme: 'report',
+  direction: 'rtl'
 }
 
 const FULL_RAW = [
@@ -43,7 +44,8 @@ const FULL_RAW = [
   'customHeight: 9.25',
   'fontFamily: inter',
   'pageNumberFormat: roman',
-  'theme: report'
+  'theme: report',
+  'direction: rtl'
 ].join('\n')
 
 describe('extractPageConfig', () => {
@@ -74,6 +76,18 @@ describe('extractPageConfig', () => {
   it('omits a key whose value is present but not a recognized enum member', () => {
     const raw = ['page: Tabloid', 'theme: default'].join('\n')
     expect(extractPageConfig(raw)).toEqual({ theme: 'default' })
+  })
+
+  it('parses direction: rtl', () => {
+    expect(extractPageConfig('direction: rtl')).toEqual({ direction: 'rtl' })
+  })
+
+  it('parses direction: ltr', () => {
+    expect(extractPageConfig('direction: ltr')).toEqual({ direction: 'ltr' })
+  })
+
+  it('omits direction given an unrecognized value', () => {
+    expect(extractPageConfig('direction: vertical')).toEqual({})
   })
 
   it('omits a key whose value has the wrong type entirely', () => {
@@ -264,6 +278,12 @@ describe('applyPageConfig', () => {
     const raw = 'title: X'
     const result = applyPageConfig(raw, { theme: 'resume', pageSize: 'Legal' })
     expect(result).toBe(['title: X', 'page: Legal', 'theme: resume'].join('\n'))
+  })
+
+  it('writes and round-trips direction: rtl', () => {
+    const result = applyPageConfig('title: X', { direction: 'rtl' })
+    expect(result).toBe(['title: X', 'direction: rtl'].join('\n'))
+    expect(extractPageConfig(result)).toEqual({ direction: 'rtl' })
   })
 
   it('preserves a trailing newline if the input had one', () => {
