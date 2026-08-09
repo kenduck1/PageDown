@@ -4,10 +4,11 @@ import { join } from 'node:path'
 import { markdownToHtml } from '../src/markdown/pipeline'
 import { launchIsolatedApp } from './electron-launch'
 // The shared DEFAULT (no-frontmatter, Letter/portrait/1in) geometry every
-// harness-driving gate paginates at -- see gate-geometry.ts for why it's one
-// shared constant, and why it has to be threaded through app.evaluate()'s
+// harness-driving gate paginates at, plus the shared default DocumentStyle
+// sendDocument now also requires -- see gate-geometry.ts for why they're one
+// shared pair, and why they have to be threaded through app.evaluate()'s
 // own single argument rather than referenced from inside the callback.
-import { LETTER_GEOMETRY } from './gate-geometry'
+import { LETTER_GEOMETRY, DEFAULT_STYLE } from './gate-geometry'
 
 // Same mechanical deviations from a hypothetical literal brief sample as
 // every other Phase 0 gate spec (see gate1/gate2/gate5/gate7's own
@@ -109,13 +110,13 @@ test('Gate 6: render every break-quality fixture and capture per-page structure 
     const { html } = markdownToHtml(markdown)
 
     const result = (await app.evaluate(
-      async (_electronNS, { html, geometry }) => {
+      async (_electronNS, { html, geometry, documentStyle }) => {
         const harness = (
           globalThis as unknown as {
             __gate6Harness: import('../src/main/pagination-window').PaginationHarness
           }
         ).__gate6Harness
-        const sendResult = await harness.sendDocument(html, geometry)
+        const sendResult = await harness.sendDocument(html, geometry, documentStyle)
 
         const perPageHeadings = await harness.view.webContents.executeJavaScript(`
         Array.from(document.querySelectorAll('.pagedjs_page')).map((page) =>
@@ -145,7 +146,7 @@ test('Gate 6: render every break-quality fixture and capture per-page structure 
           diagramBoxes: sendResult.diagramBoxes
         }
       },
-      { html, geometry: LETTER_GEOMETRY }
+      { html, geometry: LETTER_GEOMETRY, documentStyle: DEFAULT_STYLE }
     )) as FixtureObservation
 
     observations[file] = result
@@ -222,7 +223,7 @@ test('Gate 6: KeepWithNextHandler prevents a stranded heading in mermaid-diagram
   const { html } = markdownToHtml(markdown)
 
   const result = await app.evaluate(
-    async ({ BaseWindow }, { html, geometry }) => {
+    async ({ BaseWindow }, { html, geometry, documentStyle }) => {
       const bridge = (
         globalThis as unknown as {
           __pagedownPhase0: {
@@ -232,7 +233,7 @@ test('Gate 6: KeepWithNextHandler prevents a stranded heading in mermaid-diagram
       ).__pagedownPhase0
       const win = new BaseWindow({ show: false })
       const harness = await bridge.createPaginationHarness(win)
-      await harness.sendDocument(html, geometry)
+      await harness.sendDocument(html, geometry, documentStyle)
 
       // For every H1 heading and every mermaid-diagram wrapper in the
       // paginated output (in document order), record which `.pagedjs_page`
@@ -256,7 +257,7 @@ test('Gate 6: KeepWithNextHandler prevents a stranded heading in mermaid-diagram
       })()
     `)
     },
-    { html, geometry: LETTER_GEOMETRY }
+    { html, geometry: LETTER_GEOMETRY, documentStyle: DEFAULT_STYLE }
   )
 
   console.log('Gate 6 heading/diagram page placement:', JSON.stringify(result, null, 2))
@@ -350,7 +351,7 @@ test('Gate 6: TableContinuationHandler repeats the header on a simple 2-page spl
   const html = `<h1>Synthetic Long Table</h1><table><thead><tr><th>Row</th><th>Category</th><th>Description</th><th>Amount</th></tr></thead><tbody>${rows}</tbody></table>`
 
   const result = await app.evaluate(
-    async ({ BaseWindow }, { html, geometry }) => {
+    async ({ BaseWindow }, { html, geometry, documentStyle }) => {
       const bridge = (
         globalThis as unknown as {
           __pagedownPhase0: {
@@ -360,7 +361,7 @@ test('Gate 6: TableContinuationHandler repeats the header on a simple 2-page spl
       ).__pagedownPhase0
       const win = new BaseWindow({ show: false })
       const harness = await bridge.createPaginationHarness(win)
-      const sendResult = await harness.sendDocument(html, geometry)
+      const sendResult = await harness.sendDocument(html, geometry, documentStyle)
 
       const perPage = await harness.view.webContents.executeJavaScript(`
       Array.from(document.querySelectorAll('.pagedjs_page')).map((page) => {
@@ -394,7 +395,7 @@ test('Gate 6: TableContinuationHandler repeats the header on a simple 2-page spl
     `)
       return { pageCount: sendResult.pageCount, perPage }
     },
-    { html, geometry: LETTER_GEOMETRY }
+    { html, geometry: LETTER_GEOMETRY, documentStyle: DEFAULT_STYLE }
   )
 
   console.log('Gate 6 35-row table result:', JSON.stringify(result, null, 2))
@@ -474,7 +475,7 @@ test('Gate 6: TableContinuationHandler on a 3+ page split only repeats the heade
   const html = `<h1>Synthetic Long Table</h1><table><thead><tr><th>Row</th><th>Category</th><th>Description</th><th>Amount</th></tr></thead><tbody>${rows}</tbody></table>`
 
   const result = await app.evaluate(
-    async ({ BaseWindow }, { html, geometry }) => {
+    async ({ BaseWindow }, { html, geometry, documentStyle }) => {
       const bridge = (
         globalThis as unknown as {
           __pagedownPhase0: {
@@ -484,7 +485,7 @@ test('Gate 6: TableContinuationHandler on a 3+ page split only repeats the heade
       ).__pagedownPhase0
       const win = new BaseWindow({ show: false })
       const harness = await bridge.createPaginationHarness(win)
-      const sendResult = await harness.sendDocument(html, geometry)
+      const sendResult = await harness.sendDocument(html, geometry, documentStyle)
 
       const perPage = await harness.view.webContents.executeJavaScript(`
       Array.from(document.querySelectorAll('.pagedjs_page')).map((page) => {
@@ -513,7 +514,7 @@ test('Gate 6: TableContinuationHandler on a 3+ page split only repeats the heade
     `)
       return { pageCount: sendResult.pageCount, perPage }
     },
-    { html, geometry: LETTER_GEOMETRY }
+    { html, geometry: LETTER_GEOMETRY, documentStyle: DEFAULT_STYLE }
   )
 
   console.log('Gate 6 150-row table result:', JSON.stringify(result, null, 2))
@@ -604,7 +605,7 @@ test("Gate 6: nested ordered list numbering (Paged.js's own built-in Lists handl
   const html = `<h1>Long Nested List</h1><ol>${topItems}</ol>`
 
   const result = await app.evaluate(
-    async ({ BaseWindow }, { html, geometry }) => {
+    async ({ BaseWindow }, { html, geometry, documentStyle }) => {
       const bridge = (
         globalThis as unknown as {
           __pagedownPhase0: {
@@ -614,7 +615,7 @@ test("Gate 6: nested ordered list numbering (Paged.js's own built-in Lists handl
       ).__pagedownPhase0
       const win = new BaseWindow({ show: false })
       const harness = await bridge.createPaginationHarness(win)
-      const sendResult = await harness.sendDocument(html, geometry)
+      const sendResult = await harness.sendDocument(html, geometry, documentStyle)
 
       // For every <ol> on every page: its `start`, its first child's
       // `data-item-num` (must equal `start` if Lists.afterPageLayout ran
@@ -637,7 +638,7 @@ test("Gate 6: nested ordered list numbering (Paged.js's own built-in Lists handl
     `)
       return { pageCount: sendResult.pageCount, perPageLists }
     },
-    { html, geometry: LETTER_GEOMETRY }
+    { html, geometry: LETTER_GEOMETRY, documentStyle: DEFAULT_STYLE }
   )
 
   console.log('Gate 6 nested-list result:', JSON.stringify(result, null, 2))

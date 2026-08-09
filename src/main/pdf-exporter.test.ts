@@ -66,17 +66,19 @@ describe('exportDocumentToPdf page geometry', () => {
     await rm(outputDir, { recursive: true, force: true })
   })
 
-  it('passes real A4 geometry to sendDocument, keeping the export timeout third', async () => {
+  it('passes real A4 geometry to sendDocument, keeping the export timeout fourth', async () => {
     await exportDocumentToPdf(fakeWindow, '---\npage: A4\n---\n\n# A4 report')
 
     // Argument POSITION is load-bearing here, not incidental: the export
-    // timeout used to be sendDocument's second argument and the widened
-    // signature now puts geometry there, so this pins geometry second and the
-    // 30s export allowance third rather than silently letting the timeout land
-    // in the geometry slot.
+    // timeout used to be sendDocument's second argument, then its third once
+    // geometry was widened in, and Task 5's own documentStyle parameter now
+    // sits between them -- so this pins geometry second, documentStyle
+    // third, and the 30s export allowance fourth rather than silently
+    // letting the timeout land in either preceding slot.
     expect(mocks.sendDocument).toHaveBeenCalledWith(
       expect.any(String),
       expect.objectContaining({ pageWidthPx: 794, pageHeightPx: 1123 }),
+      expect.any(Object),
       30_000
     )
   })
@@ -97,6 +99,7 @@ describe('exportDocumentToPdf page geometry', () => {
     expect(mocks.sendDocument).toHaveBeenCalledWith(
       expect.any(String),
       expect.objectContaining({ pageWidthPx: 816, pageHeightPx: 1056 }),
+      expect.any(Object),
       30_000
     )
     expect(mocks.setBounds).toHaveBeenCalledWith({ x: 0, y: 0, width: 816, height: 1056 })
@@ -108,6 +111,7 @@ describe('exportDocumentToPdf page geometry', () => {
     expect(mocks.sendDocument).toHaveBeenCalledWith(
       expect.any(String),
       expect.objectContaining({ pageWidthPx: 1123, pageHeightPx: 794 }),
+      expect.any(Object),
       30_000
     )
     expect(mocks.setBounds).toHaveBeenCalledWith({ x: 0, y: 0, width: 1123, height: 794 })

@@ -11,6 +11,7 @@ import {
 import { exportToPdf } from '../export/export-pdf'
 import { resolvePageConfig } from '../markdown/page-config'
 import { computePageGeometry, type PageGeometry } from '../typography/page-geometry'
+import { resolveDocumentStyle } from '../typography/document-style'
 
 // --- Fix-round finding (verified empirically, not theorized) --------------
 //
@@ -189,8 +190,16 @@ export async function exportDocumentToPdf(
   const documentDir = documentPath ? dirname(documentPath) : null
   // Computed BEFORE withFreshHarness so it's in scope for that helper's own
   // view-sizing setBounds as well as sendDocument below -- the two have to
-  // agree on one geometry, per the comment inside withFreshHarness.
-  const geometry = computePageGeometry(resolvePageConfig(content))
+  // agree on one geometry, per the comment inside withFreshHarness. Parsed
+  // once and reused for `documentStyle` below (Task 5) rather than
+  // re-parsing frontmatter a second time.
+  const pageConfig = resolvePageConfig(content)
+  const geometry = computePageGeometry(pageConfig)
+  // The exported PDF has to carry the document's own theme/font and running
+  // header/footer content, not just its page geometry -- this is the export
+  // parity guarantee (src/export/export-pdf.ts's own header comment) applied
+  // to the same PageConfig that already drives `geometry`.
+  const documentStyle = resolveDocumentStyle(pageConfig)
   const pdfBuffer = await enqueueExport(() =>
     withFreshHarness(geometry, async (harness) => {
       // Same registerAssetRoot/finally pattern as getThumbnail/getPageCount
@@ -201,7 +210,7 @@ export async function exportDocumentToPdf(
       const assetToken = documentDir ? registerAssetRoot(documentDir) : undefined
       try {
         const { html } = markdownToHtml(content, { assetToken })
-        await harness.sendDocument(html, geometry, EXPORT_PAGINATION_TIMEOUT_MS)
+        await harness.sendDocument(html, geometry, documentStyle, EXPORT_PAGINATION_TIMEOUT_MS)
         return exportToPdf(harness)
       } finally {
         if (assetToken) unregisterAssetRoot(assetToken)

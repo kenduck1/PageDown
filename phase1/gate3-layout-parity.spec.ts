@@ -5,12 +5,13 @@ import { build } from 'esbuild'
 import { markdownToHtml } from '../src/markdown/pipeline'
 import { launchIsolatedApp } from '../phase0/electron-launch'
 // The shared DEFAULT (no-frontmatter, Letter/portrait/1in) geometry every
-// harness-driving gate paginates at -- see phase0/gate-geometry.ts for why
-// it's one shared constant, and why it has to be threaded through
+// harness-driving gate paginates at, plus the shared default DocumentStyle
+// sendDocument now also requires -- see phase0/gate-geometry.ts for why
+// they're one shared pair, and why they have to be threaded through
 // app.evaluate()'s own single argument rather than referenced from inside
 // the callback. Imported across the phase1 -> phase0 boundary exactly like
 // launchIsolatedApp directly above it.
-import { LETTER_GEOMETRY } from '../phase0/gate-geometry'
+import { LETTER_GEOMETRY, DEFAULT_STYLE } from '../phase0/gate-geometry'
 
 // Same mechanical deviations from a hypothetical literal brief sample as
 // every other Phase 0/1 gate spec (see phase0/gate1/gate5/gate7's own
@@ -207,13 +208,13 @@ test('Gate 3: editor/paginator layout parity for mixed.md top-level blocks', asy
   const { html } = markdownToHtml(rawMarkdown)
 
   const paginationResult = (await app.evaluate(
-    async (_electronNS, { html, geometry }) => {
+    async (_electronNS, { html, geometry, documentStyle }) => {
       const harness = (
         globalThis as unknown as {
           __gate3Harness: import('../src/main/pagination-window').PaginationHarness
         }
       ).__gate3Harness
-      const sendResult = await harness.sendDocument(html, geometry)
+      const sendResult = await harness.sendDocument(html, geometry, documentStyle)
 
       // `.pagedjs_area` is the real, on-screen laid-out content box (see this
       // file's header comment for why its 624px width is what it is) --
@@ -239,7 +240,7 @@ test('Gate 3: editor/paginator layout parity for mixed.md top-level blocks', asy
 
       return { sendResult, blocks: JSON.parse(raw) as BlockMeasurement[] }
     },
-    { html, geometry: LETTER_GEOMETRY }
+    { html, geometry: LETTER_GEOMETRY, documentStyle: DEFAULT_STYLE }
   )) as { sendResult: { pageCount: number }; blocks: BlockMeasurement[] }
 
   await close()

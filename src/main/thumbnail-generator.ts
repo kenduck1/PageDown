@@ -5,6 +5,7 @@ import { BaseWindow } from 'electron'
 import { markdownToHtml } from '../markdown/pipeline'
 import { resolvePageConfig } from '../markdown/page-config'
 import { computePageGeometry } from '../typography/page-geometry'
+import { resolveDocumentStyle } from '../typography/document-style'
 import {
   createPaginationHarness,
   registerAssetRoot,
@@ -217,7 +218,14 @@ export async function getThumbnail(
       // document's thumbnail has to be that shape, not a fixed Letter one.
       // `resolvePageConfig` merges over DEFAULT_PAGE_CONFIG, so a document
       // with no frontmatter (every template) still yields a complete config.
-      const geometry = computePageGeometry(resolvePageConfig(content))
+      // Parsed once and reused for `documentStyle` below (Task 5) so both
+      // agree on the same PageConfig without re-parsing frontmatter twice.
+      const pageConfig = resolvePageConfig(content)
+      const geometry = computePageGeometry(pageConfig)
+      // The document's own theme/font/running-header-footer content -- a
+      // thumbnail has to reflect these too, not just page geometry, or a
+      // resume-themed document's thumbnail would show the default theme.
+      const documentStyle = resolveDocumentStyle(pageConfig)
       // Resize the view to the page box BEFORE laying out and capturing.
       // `capturePage()` captures the view's own bounds rectangle, and
       // `createPaginationHarness` fixes those at Letter (816x1056) at creation
@@ -246,7 +254,7 @@ export async function getThumbnail(
         width: geometry.pageWidthPx,
         height: geometry.pageHeightPx
       })
-      const result = await harness.sendDocument(html, geometry)
+      const result = await harness.sendDocument(html, geometry, documentStyle)
 
       // sendDocument resolves once the render context publishes its result,
       // immediately after Paged.js finishes mutating the DOM — nothing
