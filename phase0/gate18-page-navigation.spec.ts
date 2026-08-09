@@ -208,13 +208,26 @@ test('Gate 18: clicking "Next page" really scrolls the sandboxed paginated previ
     await win.getByRole('button', { name: 'Split', exact: true }).click()
     await expect(win.getByTestId('split-preview-placeholder')).toBeVisible()
 
-    // Wait for the real sandboxed render to actually produce pages.
+    // Wait for the real sandboxed render to actually produce pages AND
+    // settle. Paged.js chunks the document incrementally, so pageCount can
+    // legitimately pass the >=3 threshold mid-layout and keep growing
+    // afterward -- polling on the threshold alone raced here once (observed
+    // 3 -> 8 between "before" and the post-click "after" reading, with the
+    // navigation itself working correctly both times). Requiring the SAME
+    // count on two consecutive polls means "before" only ever reflects a
+    // settled layout.
     let before: PageScrollProbe | null = null
+    let previousPageCount = -1
     await expect
       .poll(
         async () => {
           before = await probePageScroll(app!)
-          return before?.pageCount ?? 0
+          const count = before?.pageCount ?? 0
+          if (count < 3 || count !== previousPageCount) {
+            previousPageCount = count
+            return -1
+          }
+          return count
         },
         { timeout: 40_000, intervals: [500] }
       )
