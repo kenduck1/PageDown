@@ -297,6 +297,23 @@ describe('SplitPreview', () => {
       )
     })
 
+    it('does NOT report a scroll result that carries the empty-harness sentinel', async () => {
+      // `{ currentPage: 1, pageCount: 0 }` is what the main process returns
+      // when no split-preview harness exists yet (a real, common state on a
+      // cold Format -> Split switch, since the handlers are deliberately
+      // non-creating). Reporting it upward clobbers the page the user just
+      // asked for with a 1 -- caught for real by EditorScreen's own
+      // navigation tests, where "next page" from Format mode landed on page
+      // 1 of the preview it had just opened at page 2.
+      const scrollSplitPreviewToPage = vi.fn().mockResolvedValue({ currentPage: 1, pageCount: 0 })
+      window.api.scrollSplitPreviewToPage = scrollSplitPreviewToPage
+      const onPageChange = vi.fn()
+      renderPreview(3, onPageChange)
+
+      await waitFor(() => expect(scrollSplitPreviewToPage).toHaveBeenCalledWith(3))
+      expect(onPageChange).not.toHaveBeenCalled()
+    })
+
     it('reports a manual scroll detected by the poll', async () => {
       vi.useFakeTimers()
       const getSplitPreviewPage = vi.fn().mockResolvedValue({ currentPage: 5, pageCount: 8 })
