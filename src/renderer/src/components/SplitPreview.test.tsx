@@ -331,6 +331,43 @@ describe('SplitPreview', () => {
       vi.useRealTimers()
     })
 
+    it('ignores a poll result carrying the empty-harness sentinel', async () => {
+      // Same sentinel as the scroll path: pageCount 0 means "no harness /
+      // nothing rendered", not "the user is on page 1". Reporting it would
+      // yank the indicator back to 1 on every tick before the first render
+      // lands.
+      vi.useFakeTimers()
+      window.api.getSplitPreviewPage = vi.fn().mockResolvedValue({ currentPage: 1, pageCount: 0 })
+      const onPageChange = vi.fn()
+      renderPreview(1, onPageChange)
+
+      await vi.advanceTimersByTimeAsync(1200)
+
+      expect(window.api.getSplitPreviewPage).toHaveBeenCalled()
+      expect(onPageChange).not.toHaveBeenCalled()
+      vi.useRealTimers()
+    })
+
+    it('stops polling once unmounted', async () => {
+      // A leaked setInterval would keep firing IPC into a torn-down harness
+      // for the rest of the session -- silently, since every call swallows
+      // its own rejection.
+      vi.useFakeTimers()
+      const getSplitPreviewPage = vi.fn().mockResolvedValue({ currentPage: 1, pageCount: 3 })
+      window.api.getSplitPreviewPage = getSplitPreviewPage
+      const { unmount } = renderPreview(1)
+
+      await vi.advanceTimersByTimeAsync(1200)
+      const callsWhileMounted = getSplitPreviewPage.mock.calls.length
+      expect(callsWhileMounted).toBeGreaterThan(0)
+
+      unmount()
+      await vi.advanceTimersByTimeAsync(2000)
+
+      expect(getSplitPreviewPage).toHaveBeenCalledTimes(callsWhileMounted)
+      vi.useRealTimers()
+    })
+
     it('reports a manual scroll detected by the poll', async () => {
       vi.useFakeTimers()
       const getSplitPreviewPage = vi.fn().mockResolvedValue({ currentPage: 5, pageCount: 8 })
