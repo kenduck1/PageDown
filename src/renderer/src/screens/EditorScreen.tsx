@@ -846,8 +846,11 @@ function EditorScreen(): React.JSX.Element {
       </div>
       <EditorStatusBar
         content={content}
-        filePath={filePath}
         isDirty={isDirty}
+        // Task 9 wires this properly
+        pageCount={null}
+        currentPage={1}
+        onNavigateToPage={() => {}}
         zoom={zoom}
         onZoomChange={setZoom}
       />
