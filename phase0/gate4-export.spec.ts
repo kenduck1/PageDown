@@ -56,6 +56,40 @@ function normalizeText(s: string): string {
   return s.replace(/\s+/g, '')
 }
 
+// Running footer text, as it appears in EXPORTED PDF TEXT but never in the
+// on-screen DOM — and why removing it here is accounting for it rather than
+// weakening this gate's comparison.
+//
+// As of the Page Setup Completeness sub-project, `DEFAULT_PAGE_CONFIG` is
+// honoured for real: it carries `showFooter: true` with a centre value of
+// `Page {n} of {total}`, so every document rendered through the default
+// style — which is what `DEFAULT_STYLE` (phase0/gate-geometry.ts) hands this
+// gate — now paints a real page-number footer into the `@bottom-center`
+// Paged.js margin box.
+//
+// That text is CSS GENERATED CONTENT (`content:` on
+// `.pagedjs_margin-content::after`), so it is structurally invisible to the
+// on-screen side of this comparison: `.textContent` of a margin box is
+// always empty. This gate's own header/footer test asserts exactly that
+// asymmetry, and Gate 17 asserts the same strings really do resolve and
+// paint. So the PDF side legitimately contains one string the DOM side
+// never can, and comparing them without accounting for it would fail on
+// every corpus file for a reason that has nothing to do with export
+// fidelity — the property this test actually exists to measure.
+//
+// Anchored to the START of the page's text, and removed at most once, on
+// purpose. Margin boxes paint before the content area, so the footer always
+// leads the text stream (confirmed by this file's own header/footer probe,
+// whose `outsideTaggedText` reads "…HeaderPage 1 of 2" ahead of any body
+// text). Anchoring means a corpus document that legitimately CONTAINS the
+// words "Page 1 of 1" in its own body is unaffected, which a global
+// replace would have silently corrupted.
+const RUNNING_FOOTER_PATTERN = /^Page\d+of\d+/
+
+function stripRunningFooter(normalized: string): string {
+  return normalized.replace(RUNNING_FOOTER_PATTERN, '')
+}
+
 // True if every character of `needle`, in order, appears somewhere (not
 // necessarily contiguously) in `haystack` — AND, alongside that boolean,
 // the actual extra characters of `haystack` that were NOT consumed by that
@@ -485,8 +519,8 @@ test('Gate 4: exported PDF page count and per-page text match the on-screen Page
     for (let i = 0; i < onscreenPageCount; i++) {
       const page = await pdfjsDoc.getPage(i + 1)
       const textContent = await page.getTextContent()
-      const pdfText = normalizeText(
-        textContent.items.map((item) => ('str' in item ? item.str : '')).join('')
+      const pdfText = stripRunningFooter(
+        normalizeText(textContent.items.map((item) => ('str' in item ? item.str : '')).join(''))
       )
       const onscreenText = normalizeText(pagesText[i])
 
