@@ -21,6 +21,17 @@ import { LETTER_GEOMETRY, DEFAULT_STYLE } from './gate-geometry'
 // import here — it runs in this file's own Node/Playwright process, not
 // inside `app.evaluate()`.
 
+// Must match src/diagrams/render-mermaid.ts's MERMAID_LABEL_FONT_FAMILY.
+// Deliberately restated as a literal here rather than imported from that
+// module, and this is the one place in this file where duplication is the
+// point: an expectation computed by the code under test moves with that
+// code's bugs, so `fontFamily: <whatever the module says>` would keep
+// passing if someone reverted the pin to a font that does not exist. Same
+// hand-derived-literal rule gate16-page-geometry.spec.ts states for its own
+// page dimensions.
+const MERMAID_LABEL_FONT_FAMILY = 'Inter Variable'
+const MERMAID_LABEL_FONT_SPEC = `16px "${MERMAID_LABEL_FONT_FAMILY}"`
+
 interface DiagramBox {
   id: string
   width: number
@@ -438,4 +449,157 @@ test('Gate 3: oversized-diagram page-break behavior is deterministic, and CSP st
   )
 
   await close()
+})
+
+// The design doc's Mermaid section requires pinning "a bundled OFL font in
+// Mermaid's fontFamily config (Mermaid's default font stack -- Trebuchet MS,
+// Verdana, Arial -- isn't bundled by Chromium, so diagram sizing would
+// otherwise depend on what's installed on the machine, undercutting the
+// determinism argument used to choose Electron over Tauri)" and an
+// "await document.fonts.load(...) for that font before calling
+// mermaid.render()". Neither existed: the pinned family was the string
+// 'PageDownSans', which named no font file anywhere in this repo, and
+// document.fonts.load was never called at all. Mermaid measured every label
+// against a host-installed fallback, so node box sizes -- and therefore the
+// page counts of any document containing a diagram -- varied by machine.
+//
+// This test is the regression gate for both halves, and it deliberately
+// checks the two things a unit test structurally cannot. Whether a font is
+// LOADED is a property of a live FontFaceSet in a real Chromium renderer,
+// and whether it is APPLIED is a property of real computed style over real
+// SVG produced by the real Mermaid build -- neither exists under jsdom, and
+// neither can be inferred from "renderMermaidToSvg returned a well-formed
+// SVG", which it does identically whether the label font resolved to Inter
+// Variable or to whatever the host had lying around. Probing via
+// app.evaluate + harness.view.webContents.executeJavaScript follows Gate
+// 19/26's own template for reaching into the sandboxed WebContentsView.
+//
+// The diagram-free negative control at the start is not padding. The face
+// must be registered CONDITIONALLY -- Paged.js's Chunker.flow() awaits
+// loadFonts(), which loads every FontFace registered in document.fonts
+// whether or not the page uses it, so an unconditionally-registered label
+// font would charge every plain-prose document an awaited decode on every
+// render. Asserting the face is genuinely ABSENT before any diagram has
+// been rendered, on the same long-lived harness, is what makes that a
+// tested invariant rather than a claim in a comment.
+test('Gate 3: the Mermaid label font is a real bundled face, loaded before render and applied to labels, and costs diagram-free documents nothing', async () => {
+  const { app, close } = await launchIsolatedApp(['.'])
+
+  try {
+    const markdown = readFileSync(join(__dirname, 'corpus', 'mermaid-diagrams.md'), 'utf8')
+    const { html } = markdownToHtml(markdown)
+
+    const result = await app.evaluate(
+      async ({ BaseWindow }, { html, geometry, documentStyle, fontFamily, fontSpec }) => {
+        const { createPaginationHarness } = (
+          globalThis as unknown as {
+            __pagedownPhase0: {
+              createPaginationHarness: (typeof import('../src/main/pagination-window'))['createPaginationHarness']
+            }
+          }
+        ).__pagedownPhase0
+        const win = new BaseWindow({ show: false })
+        const harness = await createPaginationHarness(win)
+
+        // `faceStatuses` (derived by iterating the real FontFaceSet) is the
+        // primary signal, not `check`, and the difference matters for the
+        // negative control specifically: document.fonts.check() answers
+        // "would rendering this font list have to wait for a web font",
+        // so for a family with NO registered face it reports true (nothing
+        // to wait for) -- the same true it reports for a fully loaded one.
+        // Only the face list distinguishes "loaded" from "never existed",
+        // which is exactly the distinction the original bug lived in.
+        const probeLabelFont = (): Promise<{ check: boolean; faceStatuses: string[] }> =>
+          harness.view.webContents.executeJavaScript(`
+            (() => {
+              const family = ${JSON.stringify(fontFamily)}
+              const faces = Array.from(document.fonts).filter(
+                (f) => f.family.replace(/^['"]|['"]$/g, '') === family
+              )
+              return {
+                check: document.fonts.check(${JSON.stringify(fontSpec)}),
+                faceStatuses: faces.map((f) => f.status)
+              }
+            })()
+          `)
+
+        // Negative control FIRST, on this same harness: a document with no
+        // ```mermaid block at all must leave the label font unregistered.
+        // DEFAULT_STYLE selects source-serif-4, so buildDocumentStylesheet
+        // emits only that face -- nothing else in this render can pull Inter
+        // Variable in behind the diagram path's back.
+        await harness.sendDocument(
+          '<p>A document with no diagrams at all.</p>',
+          geometry,
+          documentStyle
+        )
+        const beforeAnyDiagram = await probeLabelFont()
+
+        await harness.sendDocument(html, geometry, documentStyle)
+        const afterDiagrams = await probeLabelFont()
+
+        // Scoped to pagedown-mermaid-0 (the small flowchart) on purpose:
+        // it is the one diagram this fixture renders as exactly ONE
+        // un-split wrapper that keeps its own Mermaid <style> block. The
+        // oversized diagram is cloned across pages by Paged.js's overflow
+        // splitting and some clones lose that block entirely (already
+        // measured and documented by the styleCount assertion in the test
+        // above), so their text would resolve to the inherited document
+        // font through no fault of the font pin.
+        const appliedFont = await harness.view.webContents.executeJavaScript(`
+          (() => {
+            const texts = Array.from(
+              document.querySelectorAll('[data-mermaid-diagram-id="pagedown-mermaid-0"] svg text')
+            )
+            return {
+              textCount: texts.length,
+              resolvedFamilies: [...new Set(texts.map((t) => getComputedStyle(t).fontFamily))]
+            }
+          })()
+        `)
+
+        return { beforeAnyDiagram, afterDiagrams, appliedFont }
+      },
+      {
+        html,
+        geometry: LETTER_GEOMETRY,
+        documentStyle: DEFAULT_STYLE,
+        fontFamily: MERMAID_LABEL_FONT_FAMILY,
+        fontSpec: MERMAID_LABEL_FONT_SPEC
+      }
+    )
+
+    console.log('Gate 3 Mermaid label font:', JSON.stringify(result, null, 2))
+
+    // Conditional registration: nothing at all before the first diagram.
+    expect(
+      result.beforeAnyDiagram.faceStatuses,
+      'a diagram-free document must not register the Mermaid label font -- Chunker.loadFonts() would then decode it on every render'
+    ).toEqual([])
+
+    // Registered AND actually loaded once a diagram renders. `status` is
+    // 'loaded' only after the bytes have been fetched and decoded, which is
+    // what the explicit document.fonts.load() before mermaid.render() buys;
+    // a face left to load lazily would still read 'unloaded' here.
+    expect(result.afterDiagrams.faceStatuses.length).toBeGreaterThan(0)
+    for (const status of result.afterDiagrams.faceStatuses) {
+      expect(status).toBe('loaded')
+    }
+    expect(result.afterDiagrams.check).toBe(true)
+
+    // Loaded is not the same as used. Mermaid writes its configured
+    // fontFamily into the diagram's own <style> block as
+    // --mermaid-font-family, so this is the assertion that the pin in
+    // src/diagrams/render-mermaid.ts genuinely reaches the label glyphs
+    // rather than merely making a font available for something else.
+    expect(result.appliedFont.textCount).toBeGreaterThan(0)
+    expect(result.appliedFont.resolvedFamilies.length).toBeGreaterThan(0)
+    for (const family of result.appliedFont.resolvedFamilies) {
+      expect(family, 'Mermaid label text must resolve to the bundled label font').toContain(
+        MERMAID_LABEL_FONT_FAMILY
+      )
+    }
+  } finally {
+    await close()
+  }
 })
