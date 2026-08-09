@@ -182,9 +182,69 @@ function destroySplitPreviewHarness(): Promise<void> {
   })
 }
 
-function createWindow(): BrowserWindow {
+// Every open document window (Multi-window support) -- NOT just the first
+// one createWindow() ever makes. Used so shared, process-wide harness
+// teardown (thumbnail/page-count generators, both dedicated invisible
+// BaseWindows unrelated to any specific document window -- see
+// thumbnail-generator.ts's own module comment) only fires once the LAST
+// window closes, not every time ANY window closes. Split mode's own
+// harness is deliberately NOT covered by this set-based teardown -- see
+// destroySplitPreviewHarness's own updated comment for why it stays tied
+// to the FIRST window specifically, a disclosed, narrower scope than full
+// per-window Split mode support.
+const documentWindows = new Set<BrowserWindow>()
+
+// Builds the real native spelling-suggestion + standard edit context menu
+// for a given window's webContents -- see the original inline comment this
+// was extracted from (now attached per-window inside createWindow, not
+// registered once for a single captured mainWindow) for the full
+// rationale: this app had NO context menu at all before it, for spelling
+// suggestions AND ordinary Cut/Copy/Paste/Select All alike.
+function attachContextMenu(win: BrowserWindow): void {
+  win.webContents.on('context-menu', (_event, params) => {
+    const template: MenuItemConstructorOptions[] = []
+
+    if (params.misspelledWord) {
+      for (const suggestion of params.dictionarySuggestions) {
+        template.push({
+          label: suggestion,
+          click: () => win.webContents.replaceMisspelling(suggestion)
+        })
+      }
+      if (params.dictionarySuggestions.length > 0) {
+        template.push({ type: 'separator' })
+      }
+      template.push({
+        label: 'Add to Dictionary',
+        click: () => win.webContents.session.addWordToSpellCheckerDictionary(params.misspelledWord)
+      })
+      template.push({ type: 'separator' })
+    }
+
+    template.push(
+      { label: 'Cut', role: 'cut', enabled: params.editFlags.canCut },
+      { label: 'Copy', role: 'copy', enabled: params.editFlags.canCopy },
+      { label: 'Paste', role: 'paste', enabled: params.editFlags.canPaste },
+      { type: 'separator' },
+      { label: 'Select All', role: 'selectAll', enabled: params.editFlags.canSelectAll }
+    )
+
+    Menu.buildFromTemplate(template).popup()
+  })
+}
+
+// `openPath`, when given, is a document to load automatically once this
+// window's renderer boots -- App.tsx reads it back off its own
+// `window.location.search` (`?openPath=...`) and calls the SAME
+// `openPath()` documentStore action a user clicking a recent-file row
+// already triggers, so it goes through that action's own real
+// `file:openPath` IPC round trip and the SAME `isKnownPath` validation --
+// passing a path through here grants no NEW disk access whatsoever, it
+// only chooses which document a fresh, already-fully-privileged window
+// attempts to open via an already-validated path.
+function createWindow(openPath?: string): BrowserWindow {
   // Create the browser window.
-  const mainWindow = new BrowserWindow({
+  const win = new BrowserWindow({
     width: 900,
     height: 670,
     show: false,
@@ -196,9 +256,11 @@ function createWindow(): BrowserWindow {
     }
   })
 
-  mainWindow.on('ready-to-show', () => {
-    mainWindow.show()
+  win.on('ready-to-show', () => {
+    win.show()
   })
+
+  documentWindows.add(win)
 
   // Both the thumbnail generator's and the page-count generator's
   // pagination harnesses now live on their own dedicated, never-shown
@@ -206,26 +268,27 @@ function createWindow(): BrowserWindow {
   // destroyThumbnailHarness and page-count-generator.ts's own equivalent
   // for why: a shown-but-off-canvas WebContentsView gets Chromium's
   // rendering-throttle treatment, which starved Paged.js's rAF-driven
-  // layout loop and made large documents time out). Both windows are real
-  // to Electron's window-tracking, though — if either is never destroyed,
-  // BaseWindow.getAllWindows() never returns to zero after the user closes
-  // this real window, so `window-all-closed` below would silently never
-  // fire on Windows/Linux and the app would keep running invisibly
-  // forever. Destroying both here, on this window's own 'closed' event, is
-  // what lets the window count actually reach zero so `window-all-closed`
-  // fires normally afterward. Each is a harmless no-op if its harness was
-  // never created this session, or is already gone.
-  mainWindow.on('closed', () => {
-    destroyThumbnailHarness()
-    destroyPageCountHarness()
-    // Fire-and-forget, same rationale as every other best-effort teardown in
-    // this codebase (see destroySplitPreviewHarness's own comment above) --
-    // there's no one left to report a failure to by this point, and the
-    // function already logs internally.
-    void destroySplitPreviewHarness()
+  // layout loop and made large documents time out) -- process-wide, shared
+  // across every document window, not owned by any one of them. Both
+  // windows are real to Electron's window-tracking, though — if either is
+  // never destroyed, BaseWindow.getAllWindows() never returns to zero
+  // after the user closes every real document window, so
+  // `window-all-closed` below would silently never fire on Windows/Linux
+  // and the app would keep running invisibly forever. Torn down here only
+  // once `documentWindows` becomes empty (Multi-window support) -- NOT on
+  // every individual window's own close, which would tear down a harness a
+  // still-open SECOND window might be actively using. Each destroy call is
+  // a harmless no-op if its harness was never created this session, or is
+  // already gone.
+  win.on('closed', () => {
+    documentWindows.delete(win)
+    if (documentWindows.size === 0) {
+      destroyThumbnailHarness()
+      destroyPageCountHarness()
+    }
   })
 
-  mainWindow.webContents.setWindowOpenHandler((details) => {
+  win.webContents.setWindowOpenHandler((details) => {
     try {
       const url = new URL(details.url)
       if (url.protocol === 'http:' || url.protocol === 'https:') {
@@ -237,15 +300,29 @@ function createWindow(): BrowserWindow {
     return { action: 'deny' }
   })
 
+  // Every window gets its own real context menu (Multi-window support) --
+  // previously only ever attached to the single, first-created mainWindow,
+  // so a second window would have had NO Cut/Copy/Paste/spelling-suggestion
+  // menu at all.
+  attachContextMenu(win)
+
   // HMR for renderer base on electron-vite cli.
-  // Load the remote URL for development or the local html file for production.
+  // Load the remote URL for development or the local html file for
+  // production. `openPath`, when given, rides along as a `?openPath=...`
+  // query param -- see this function's own doc comment above for why this
+  // grants no new disk access.
   if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
-    mainWindow.loadURL(process.env['ELECTRON_RENDERER_URL'])
+    const devUrl = new URL(process.env['ELECTRON_RENDERER_URL'])
+    if (openPath) devUrl.searchParams.set('openPath', openPath)
+    win.loadURL(devUrl.toString())
   } else {
-    mainWindow.loadFile(join(__dirname, '../renderer/index.html'))
+    win.loadFile(
+      join(__dirname, '../renderer/index.html'),
+      openPath ? { search: `openPath=${encodeURIComponent(openPath)}` } : undefined
+    )
   }
 
-  return mainWindow
+  return win
 }
 
 // This method will be called when Electron has finished
@@ -349,47 +426,38 @@ app.whenReady().then(() => {
     mainWindow.webContents.session.setSpellCheckerEnabled(preferences.spellcheckEnabled)
   })
 
-  // This app had NO context menu at all before this -- right-clicking
-  // anywhere in the app-shell window did nothing, for spelling suggestions
-  // AND for ordinary Cut/Copy/Paste/Select All alike (confirmed by grep:
-  // zero `context-menu` listeners anywhere in this codebase before now).
-  // `params.misspelledWord`/`params.dictionarySuggestions` are Electron's
-  // own real spellcheck-result fields on the event, not something this app
-  // computes itself -- Chromium's built-in spellchecker (on by default,
-  // toggled live via setSpellCheckerEnabled above) already ran by the time
-  // this fires. Suggestions and "Add to Dictionary" only appear for an
-  // actually-misspelled word; the standard edit items always appear so a
-  // right-click on ordinary text isn't silently inert.
-  mainWindow.webContents.on('context-menu', (_event, params) => {
-    const template: MenuItemConstructorOptions[] = []
+  // Context menu attachment moved into createWindow() itself (Multi-window
+  // support) -- every window gets its own now, not just this first one.
+  // See attachContextMenu's own comment for the full spelling-suggestion
+  // rationale, unchanged from before this move.
 
-    if (params.misspelledWord) {
-      for (const suggestion of params.dictionarySuggestions) {
-        template.push({
-          label: suggestion,
-          click: () => mainWindow.webContents.replaceMisspelling(suggestion)
-        })
-      }
-      if (params.dictionarySuggestions.length > 0) {
-        template.push({ type: 'separator' })
-      }
-      template.push({
-        label: 'Add to Dictionary',
-        click: () =>
-          mainWindow.webContents.session.addWordToSpellCheckerDictionary(params.misspelledWord)
-      })
-      template.push({ type: 'separator' })
-    }
+  // Split mode's own harness (getOrCreateSplitPreviewHarness, below) is
+  // deliberately still tied to THIS specific window only -- its
+  // WebContentsView is a child of mainWindow's own contentView (Split
+  // mode's architecture, unchanged by Multi-window support: see this
+  // file's own split-preview section for why generalizing it to a
+  // per-window harness map is real, separate, disclosed future work, not
+  // built here). So its teardown stays keyed to mainWindow's own close,
+  // not to `documentWindows` becoming empty -- a still-open SECOND window
+  // doesn't keep this harness alive (it was never that window's harness to
+  // use), and mainWindow closing orphans it regardless of what else is
+  // open (its parent contentView is gone either way).
+  mainWindow.on('closed', () => {
+    void destroySplitPreviewHarness()
+  })
 
-    template.push(
-      { label: 'Cut', role: 'cut', enabled: params.editFlags.canCut },
-      { label: 'Copy', role: 'copy', enabled: params.editFlags.canCopy },
-      { label: 'Paste', role: 'paste', enabled: params.editFlags.canPaste },
-      { type: 'separator' },
-      { label: 'Select All', role: 'selectAll', enabled: params.editFlags.canSelectAll }
-    )
-
-    Menu.buildFromTemplate(template).popup()
+  // "Open in New Window" (Multi-window support) -- a genuinely new,
+  // independent BrowserWindow with its own separate renderer process and
+  // Zustand store state (Electron gives every window a fresh renderer by
+  // construction; no explicit "reset state" step is needed). `filePath`
+  // is renderer-supplied and forwarded WITHOUT its own isKnownPath check
+  // here -- see createWindow's own doc comment for why that's safe: the
+  // new window's own App.tsx independently re-validates it through the
+  // exact same file:openPath handler and isKnownPath check a user
+  // clicking a recent-file row already goes through. `null`/omitted opens
+  // a plain new window at Home, same as the app's own first launch.
+  ipcMain.handle('window:openInNew', (_event, filePath: string | null) => {
+    createWindow(filePath ?? undefined)
   })
 
   ipcMain.handle('file:getThumbnail', async (_event, filePath: string) => {
@@ -693,7 +761,16 @@ app.whenReady().then(() => {
     }
   })
 
-  ipcMain.handle('dialog:confirmDiscard', () => confirmDiscardChanges(mainWindow))
+  // event.sender-derived, not the captured mainWindow (Multi-window
+  // support) -- this dialog must anchor as a native sheet to whichever
+  // window actually asked, not always the first one. Falls back to
+  // mainWindow only in the unreachable case BrowserWindow.fromWebContents
+  // finds nothing (a request from an already-destroyed window), so this
+  // never throws where the old unconditional mainWindow reference never
+  // could either.
+  ipcMain.handle('dialog:confirmDiscard', (event) =>
+    confirmDiscardChanges(BrowserWindow.fromWebContents(event.sender) ?? mainWindow)
+  )
 
   // Real Export PDF plumbing (see src/main/pdf-exporter.ts): no isKnownPath
   // check needed for the SAVE DESTINATION, unlike file:save/file:openPath --
@@ -708,11 +785,16 @@ app.whenReady().then(() => {
   // in the exported PDF resolve to nothing rather than a failed export.
   ipcMain.handle(
     'file:exportPdf',
-    async (_event, content: string, filePath: string | null = null) => {
+    async (event, content: string, filePath: string | null = null) => {
       const userDataDir = app.getPath('userData')
       const documentPath =
         filePath && (await isKnownPath(userDataDir, filePath)) ? filePath : undefined
-      return exportDocumentToPdf(mainWindow, content, documentPath)
+      // event.sender-derived, not the captured mainWindow (Multi-window
+      // support) -- same reasoning as dialog:confirmDiscard just above: the
+      // real Save dialog exportDocumentToPdf opens must anchor to whichever
+      // window actually asked for the export.
+      const win = BrowserWindow.fromWebContents(event.sender) ?? mainWindow
+      return exportDocumentToPdf(win, content, documentPath)
     }
   )
 

@@ -27,7 +27,8 @@ beforeEach(() => {
     destroySplitPreview: vi.fn(),
     scrollSplitPreviewToPage: vi.fn(),
     getSplitPreviewPage: vi.fn(),
-    saveDroppedImage: vi.fn()
+    saveDroppedImage: vi.fn(),
+    openInNewWindow: vi.fn()
   }
 })
 

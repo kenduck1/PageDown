@@ -111,6 +111,7 @@ export interface FileApi {
     base64Data: string,
     suggestedFilename: string
   ) => Promise<{ relativePath: string } | { error: string }>
+  openInNewWindow: (filePath?: string | null) => Promise<void>
 }
 
 declare global {

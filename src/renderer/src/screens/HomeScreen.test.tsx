@@ -39,7 +39,8 @@ beforeEach(() => {
     destroySplitPreview: vi.fn(),
     scrollSplitPreviewToPage: vi.fn(),
     getSplitPreviewPage: vi.fn(),
-    saveDroppedImage: vi.fn()
+    saveDroppedImage: vi.fn(),
+    openInNewWindow: vi.fn()
   }
   usePreferencesStore.setState({ preferences: null, loaded: false })
 })
@@ -166,6 +167,24 @@ describe('HomeScreen', () => {
 
     expect(useDocumentStore.getState().filePath).toBe('/tmp/report.md')
     expect(useAppStore.getState().screen).toBe('editor')
+  })
+
+  it('"Open in new window" calls window.api.openInNewWindow with the file path, without navigating this window at all', async () => {
+    vi.mocked(window.api.getRecentFiles).mockResolvedValue([
+      { filePath: '/tmp/report.md', editedAt: new Date().toISOString() }
+    ])
+    const user = userEvent.setup()
+    render(<HomeScreen />)
+
+    await screen.findByText('report.md')
+    await user.click(screen.getByRole('button', { name: 'Open in new window' }))
+
+    expect(window.api.openInNewWindow).toHaveBeenCalledWith('/tmp/report.md')
+    // This window's own state is untouched -- opening a document in a new
+    // window must not navigate away from Home or load anything here.
+    expect(window.api.openPath).not.toHaveBeenCalled()
+    expect(useAppStore.getState().screen).toBe('home')
+    expect(useDocumentStore.getState().filePath).toBeNull()
   })
 
   it('filters recent documents by filename as the user types, and clearing the filter restores the full list', async () => {
