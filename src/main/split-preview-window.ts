@@ -116,9 +116,19 @@ export async function createSplitPreviewHarness(
       sandbox: true,
       contextIsolation: true,
       nodeIntegration: false,
-      session: renderSession
+      session: renderSession,
       // No `preload` -- this context has no bridge to Node/Electron APIs,
       // same as every other consumer of the render context.
+      //
+      // Defense-in-depth, mirroring createPaginationHarness's own copy of
+      // this flag (pagination-window.ts) -- see that file's comment for the
+      // real bug this is paired with (a never-shown-window rAF-starvation
+      // hang, fixed at its actual source via a requestAnimationFrame shim in
+      // resources/pagination-render/index.ts). This harness's view is
+      // genuinely visible/composited once attached, so it was never exposed
+      // to that bug, but nothing guarantees it stays visible for its entire
+      // lifetime (e.g. before its first real bounds report arrives).
+      backgroundThrottling: false
     }
   })
 

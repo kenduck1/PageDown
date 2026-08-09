@@ -12,6 +12,65 @@
 // Paged.js `Previewer`: the injected HTML is actually paginated, and
 // `pageCount` (`flow.total`) reflects real layout work rather than a
 // hardcoded `1`.
+//
+// requestAnimationFrame SHIM — must run before Paged.js's `Previewer` is
+// ever constructed (module-load time, before any import that could
+// transitively read `window.requestAnimationFrame`), and is the actual fix
+// for a real, previously-undiscovered, pre-existing bug (reproduced back to
+// before this session's "GA push" work even started — this is not a
+// regression from anything built recently): Paged.js's own internal task
+// queue (node_modules/pagedjs/src/utils/queue.js) sets `this.tick =
+// requestAnimationFrame` and drives its ENTIRE progressive-layout loop
+// through it — `Chunker.render()`'s per-step loop
+// (node_modules/pagedjs/src/chunker/chunker.js) enqueues every layout step
+// onto this queue, and the queue only ever dequeues the next step inside a
+// callback registered via `this.tick.call(window, ...)`. If rAF never
+// fires for this webContents, NOTHING inside Chunker.render() ever
+// progresses — confirmed directly by listening to the Chunker's own
+// `rendering`/`page`/`renderedPage`/`rendered` events: `rendering` fires
+// once (it's emitted synchronously, before the queue is ever touched), and
+// then silence forever, even after waiting 60+ seconds — not merely slow,
+// a genuine permanent hang. Font loading, `document.fonts`, and this
+// script's own `setInterval` heartbeats all worked fine throughout,
+// isolating the stall specifically to rAF servicing, not to any actual
+// application code, malformed CSS, or a slow underlying render.
+//
+// Root cause: `BaseWindow({ show: false })` (thumbnail-generator.ts,
+// page-count-generator.ts, pdf-exporter.ts, and the Phase 0 spike harness
+// in src/main/index.ts ALL use one) avoids Chromium's per-view COMPOSITOR
+// OCCLUSION throttle — see thumbnail-generator.ts's own `getHarness`
+// comment for that earlier, separate, already-fixed bug (a real, shown
+// window's occluded view gets rAF serviced at ~2Hz instead of ~60Hz) — but
+// a genuinely never-shown window has no structural guarantee of ever
+// producing a real compositor frame AT ALL, and `requestAnimationFrame` is
+// specified to fire "before the next repaint": no repaint, no callback,
+// not even a throttled one. `backgroundThrottling: false`
+// (pagination-window.ts/split-preview-window.ts's own `webPreferences`) was
+// tried first and confirmed, empirically, NOT sufficient on its own — that
+// flag governs Chromium's deliberate THROTTLING of an already-firing rAF,
+// not the more fundamental "never fires for a surface that's never
+// composited" case. Split mode's own harness (`split-preview-window.ts`)
+// never hit this because it's the one harness attached to a REAL, visible,
+// composited window.
+//
+// The fix: since Paged.js's layout correctness does not depend on rAF's
+// real timing semantics (it only needs its internal queue to keep
+// draining, not to be synchronized with an actual screen refresh — nothing
+// about pagination correctness is frame-rate-sensitive), overriding
+// `requestAnimationFrame`/`cancelAnimationFrame` with a `setTimeout`/
+// `clearTimeout`-based equivalent sidesteps the entire "does this
+// window/OS/compositor configuration ever produce a real paint" question
+// rather than depending on it — a well-established pattern for headless
+// rendering with rAF-driven libraries. ~16ms matches a 60fps-equivalent
+// cadence so this doesn't change perceptible timing for Split mode's own
+// genuinely-visible case either.
+window.requestAnimationFrame = ((callback: FrameRequestCallback): number => {
+  return window.setTimeout(() => callback(performance.now()), 16)
+}) as typeof window.requestAnimationFrame
+window.cancelAnimationFrame = ((handle: number): void => {
+  window.clearTimeout(handle)
+}) as typeof window.cancelAnimationFrame
+
 import { Previewer } from 'pagedjs'
 import { renderMermaidToSvg } from '../../src/diagrams/render-mermaid'
 import { registerBreakHandlers } from '../../src/pagination/break-handlers'
