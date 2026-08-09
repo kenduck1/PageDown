@@ -381,11 +381,29 @@ test('Gate 4: exported PDF page count and per-page text match the on-screen Page
         // <style> already demonstrated, just in the opposite direction (here
         // it's onscreen-only content missing from the PDF, not PDF-only
         // content missing onscreen).
+        // .katex-mathml stripped for the IDENTICAL reason as .sr-only right
+        // above -- confirmed by reading katex.min.css directly, not assumed:
+        // KaTeX's accessible MathML annotation branch (present whenever
+        // `output` isn't overridden away from its own default
+        // 'htmlAndMathml' -- see resources/pagination-render/katex-render.ts)
+        // is visually hidden via `.katex-mathml{clip-path:inset(50%);
+        // height:1px;position:absolute;...}` -- the exact same
+        // visually-hidden-but-DOM-present technique as `.sr-only`, so it
+        // trips the same on-screen-textContent-includes-it /
+        // PDF-extraction-doesn't asymmetry. Kept even though no CORPUS file
+        // exercises it: a math fixture was tried here first and pulled —
+        // see phase0/gate26-math-equations.spec.ts's own header comment for
+        // why math content interleaved with prose breaks BOTH of this
+        // gate's categories (a real Chromium PDF-text-extraction reading-
+        // order issue, not just the MathML-hiding asymmetry this strip
+        // fixes), and why that gate verifies math's PDF text a different
+        // way instead of joining this corpus sweep.
         const pagesText = await harness.view.webContents.executeJavaScript(`
         Array.from(document.querySelectorAll('.pagedjs_page')).map(p => {
           const clone = p.cloneNode(true)
           clone.querySelectorAll('style').forEach(s => s.remove())
           clone.querySelectorAll('.sr-only').forEach(s => s.remove())
+          clone.querySelectorAll('.katex-mathml').forEach(s => s.remove())
           return clone.textContent
         })
       `)
