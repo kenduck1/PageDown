@@ -110,12 +110,16 @@ describe('HomeScreen', () => {
     expect(screen.queryByText('Permission denied')).not.toBeInTheDocument()
   })
 
-  it('renders all 4 template cards', () => {
+  it('renders all 8 template cards', () => {
     render(<HomeScreen />)
     expect(screen.getByText('Blank')).toBeInTheDocument()
     expect(screen.getByText('Résumé')).toBeInTheDocument()
     expect(screen.getByText('Letter')).toBeInTheDocument()
     expect(screen.getByText('Report')).toBeInTheDocument()
+    expect(screen.getByText('Cover Letter')).toBeInTheDocument()
+    expect(screen.getByText('Meeting Notes')).toBeInTheDocument()
+    expect(screen.getByText('Invoice')).toBeInTheDocument()
+    expect(screen.getByText('Newsletter')).toBeInTheDocument()
   })
 
   it('creates a document with the résumé starter content and navigates on Résumé card click', async () => {
@@ -125,6 +129,16 @@ describe('HomeScreen', () => {
     await user.click(screen.getByText('Résumé'))
 
     expect(useDocumentStore.getState().content).toContain('Jordan Rivera')
+    expect(useAppStore.getState().screen).toBe('editor')
+  })
+
+  it('creates a document with the meeting notes starter content on Meeting Notes card click', async () => {
+    const user = userEvent.setup()
+    render(<HomeScreen />)
+
+    await user.click(screen.getByText('Meeting Notes'))
+
+    expect(useDocumentStore.getState().content).toContain('Action Items')
     expect(useAppStore.getState().screen).toBe('editor')
   })
 
@@ -151,6 +165,52 @@ describe('HomeScreen', () => {
 
     expect(useDocumentStore.getState().filePath).toBe('/tmp/report.md')
     expect(useAppStore.getState().screen).toBe('editor')
+  })
+
+  it('filters recent documents by filename as the user types, and clearing the filter restores the full list', async () => {
+    vi.mocked(window.api.getRecentFiles).mockResolvedValue([
+      { filePath: '/tmp/report.md', editedAt: new Date().toISOString() },
+      { filePath: '/tmp/letter.md', editedAt: new Date().toISOString() }
+    ])
+    const user = userEvent.setup()
+    render(<HomeScreen />)
+
+    await screen.findByText('report.md')
+    expect(screen.getByText('letter.md')).toBeInTheDocument()
+
+    await user.type(screen.getByRole('textbox', { name: 'Filter recent documents' }), 'rep')
+
+    expect(screen.getByText('report.md')).toBeInTheDocument()
+    expect(screen.queryByText('letter.md')).not.toBeInTheDocument()
+
+    await user.clear(screen.getByRole('textbox', { name: 'Filter recent documents' }))
+
+    expect(screen.getByText('report.md')).toBeInTheDocument()
+    expect(screen.getByText('letter.md')).toBeInTheDocument()
+  })
+
+  it('shows a real "no match" message when the filter matches nothing, instead of an empty list', async () => {
+    vi.mocked(window.api.getRecentFiles).mockResolvedValue([
+      { filePath: '/tmp/report.md', editedAt: new Date().toISOString() }
+    ])
+    const user = userEvent.setup()
+    render(<HomeScreen />)
+
+    await screen.findByText('report.md')
+    await user.type(screen.getByRole('textbox', { name: 'Filter recent documents' }), 'nonexistent')
+
+    expect(screen.queryByText('report.md')).not.toBeInTheDocument()
+    expect(screen.getByText(/no recent documents match/i)).toBeInTheDocument()
+  })
+
+  it('does not render a filter input when there are no recent documents', async () => {
+    vi.mocked(window.api.getRecentFiles).mockResolvedValue([])
+    render(<HomeScreen />)
+
+    await screen.findByText('No recent documents yet')
+    expect(
+      screen.queryByRole('textbox', { name: 'Filter recent documents' })
+    ).not.toBeInTheDocument()
   })
 
   it('navigates to Settings when the Settings nav item is clicked', async () => {
