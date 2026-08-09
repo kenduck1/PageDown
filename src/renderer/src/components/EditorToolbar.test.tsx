@@ -54,6 +54,7 @@ beforeEach(() => {
     getPageCount: vi.fn(),
     confirmDiscardChanges: vi.fn(),
     exportPdf: vi.fn().mockResolvedValue({ filePath: '/tmp/document.pdf' }),
+    print: vi.fn().mockResolvedValue({ cancelled: false }),
     autosaveSnapshot: vi.fn(),
     getVersionHistory: vi.fn(),
     restoreVersionContent: vi.fn(),
@@ -491,6 +492,61 @@ describe('EditorToolbar', () => {
     expect(useDocumentStore.getState().error).toBe(
       'Unrelated pre-existing error from a failed Save'
     )
+  })
+
+  it('Print calls window.api.print with the current document content and file path', async () => {
+    useDocumentStore.setState({
+      content: '# Real document content',
+      filePath: '/Users/someone/notes/report.md'
+    })
+    const ref = createRef<MilkdownEditorHandle>()
+    const user = userEvent.setup()
+    render(<EditorToolbar editorRef={ref} />)
+
+    await user.click(screen.getByRole('button', { name: 'Print' }))
+
+    await waitFor(() => {
+      expect(window.api.print).toHaveBeenCalledWith(
+        '# Real document content',
+        '/Users/someone/notes/report.md'
+      )
+    })
+  })
+
+  it('Print surfaces a failure as a friendly message, not the raw IPC error string', async () => {
+    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    vi.mocked(window.api.print).mockRejectedValue(
+      new Error("Error invoking remote method 'file:print': Error: Print job failed")
+    )
+    const ref = createRef<MilkdownEditorHandle>()
+    const user = userEvent.setup()
+    render(<EditorToolbar editorRef={ref} />)
+
+    await user.click(screen.getByRole('button', { name: 'Print' }))
+
+    await waitFor(() => {
+      expect(useDocumentStore.getState().error).toBe('Failed to print. Please try again.')
+    })
+    expect(consoleErrorSpy).toHaveBeenCalled()
+    consoleErrorSpy.mockRestore()
+  })
+
+  it('a cancelled print dialog does not surface as an error', async () => {
+    // print-exporter.ts resolves { cancelled: true } for a user-cancelled OS
+    // print dialog rather than rejecting -- cancelling is the user's own
+    // choice, not a failure.
+    vi.mocked(window.api.print).mockResolvedValue({ cancelled: true })
+    useDocumentStore.setState({ error: null })
+    const ref = createRef<MilkdownEditorHandle>()
+    const user = userEvent.setup()
+    render(<EditorToolbar editorRef={ref} />)
+
+    await user.click(screen.getByRole('button', { name: 'Print' }))
+
+    await waitFor(() => {
+      expect(window.api.print).toHaveBeenCalled()
+    })
+    expect(useDocumentStore.getState().error).toBeNull()
   })
 
   it('is safe to click every wired button when editorRef.current is null (no throw)', async () => {

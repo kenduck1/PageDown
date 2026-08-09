@@ -172,6 +172,7 @@ function EditorToolbar({
   const openFind = useFindStore((state) => state.openFind)
   const closeFind = useFindStore((state) => state.closeFind)
   const [isExporting, setIsExporting] = useState(false)
+  const [isPrinting, setIsPrinting] = useState(false)
   // The document's own current font family, for the controlled select
   // below. resolvePageConfig does a real YAML parse, so it is memoized on
   // `content` for the same reason EditorScreen memoizes its own copy.
@@ -351,6 +352,27 @@ function EditorToolbar({
       useDocumentStore.setState({ error: 'Failed to export PDF. Please try again.' })
     } finally {
       setIsExporting(false)
+    }
+  }
+
+  // Mirrors handleExportPdf's own structure exactly -- same filePath
+  // forwarding (denies local assets for an unsaved document), same
+  // don't-clear-unrelated-errors-on-success discipline, same
+  // don't-surface-a-raw-IPC-error-string handling. The one real behavioral
+  // difference: a cancelled OS print dialog resolves `{ cancelled: true }`
+  // rather than rejecting (see print-exporter.ts's own PRINT_CANCELLED_REASON
+  // handling) -- cancelling is the user's own choice, not a failure, so it
+  // must not land in the error banner either.
+  const handlePrint = async (): Promise<void> => {
+    if (isPrinting) return
+    setIsPrinting(true)
+    try {
+      await window.api.print(content, filePath)
+    } catch (err) {
+      console.error('Failed to print', err)
+      useDocumentStore.setState({ error: 'Failed to print. Please try again.' })
+    } finally {
+      setIsPrinting(false)
     }
   }
 
@@ -839,6 +861,24 @@ function EditorToolbar({
           <Icon strokeWidth={1.6}>
             <rect x="5" y="3" width="14" height="18" rx="1.5" />
             <rect x="7.5" y="6" width="9" height="12" rx="0.5" strokeDasharray="1.8 1.8" />
+          </Icon>
+        </ToolbarIconButton>
+
+        {/* Print, next to Page setup and Export PDF -- reuses the exact same
+        pagination harness architecture PDF export does (a fresh, dedicated,
+        hidden window per call), so on-screen preview / printed output /
+        exported PDF all stay pixel-identical by construction. An icon-only
+        button, not a labeled one like Export PDF -- it doesn't need to
+        compete for the same visual weight as the primary accent action. */}
+        <ToolbarIconButton
+          label={isPrinting ? 'Printing…' : 'Print'}
+          onClick={() => void handlePrint()}
+          disabled={isPrinting}
+        >
+          <Icon strokeWidth={1.7}>
+            <rect x="6" y="3" width="12" height="6" rx="0.5" />
+            <rect x="4" y="9" width="16" height="8" rx="1.5" />
+            <rect x="7" y="14" width="10" height="7" rx="0.5" />
           </Icon>
         </ToolbarIconButton>
 

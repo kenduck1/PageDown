@@ -14,6 +14,7 @@ beforeEach(() => {
     getPageCount: vi.fn().mockResolvedValue({ pageCount: 3 }),
     confirmDiscardChanges: vi.fn(),
     exportPdf: vi.fn(),
+    print: vi.fn(),
     autosaveSnapshot: vi.fn(),
     getVersionHistory: vi.fn(),
     restoreVersionContent: vi.fn(),
