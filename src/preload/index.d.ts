@@ -103,10 +103,25 @@ export interface FileApi {
   getRecentFiles: () => Promise<RecentFileEntry[]>
   getThumbnail: (filePath: string) => Promise<{ dataUrl: string; pageCount: number }>
   getTemplateThumbnail: (content: string) => Promise<{ dataUrl: string; pageCount: number }>
-  getPageCount: (content: string, filePath?: string | null) => Promise<{ pageCount: number }>
+  // allowRemoteImages mirrors the active tab's own remote-image consent
+  // decision (documentStore's remoteImagesAllowed) -- see
+  // src/markdown/pipeline.ts's stripRemoteImageSrcs for the real enforcement.
+  getPageCount: (
+    content: string,
+    filePath?: string | null,
+    allowRemoteImages?: boolean
+  ) => Promise<{ pageCount: number }>
   confirmDiscardChanges: () => Promise<'save' | 'discard' | 'cancel'>
-  exportPdf: (content: string, filePath?: string | null) => Promise<{ filePath: string } | null>
-  print: (content: string, filePath?: string | null) => Promise<{ cancelled: boolean }>
+  exportPdf: (
+    content: string,
+    filePath?: string | null,
+    allowRemoteImages?: boolean
+  ) => Promise<{ filePath: string } | null>
+  print: (
+    content: string,
+    filePath?: string | null,
+    allowRemoteImages?: boolean
+  ) => Promise<{ cancelled: boolean }>
   getPreferences: () => Promise<Preferences>
   setPreferences: (preferences: Preferences) => Promise<void>
   autosaveSnapshot: (content: string, filePath: string) => Promise<void>
@@ -116,7 +131,8 @@ export interface FileApi {
   setSplitPreviewBounds: (bounds: SplitPreviewBounds) => void
   sendSplitPreviewDocument: (
     content: string,
-    filePath: string | null
+    filePath: string | null,
+    allowRemoteImages?: boolean
   ) => Promise<SplitPreviewResult>
   destroySplitPreview: () => Promise<void>
   scrollSplitPreviewToPage: (pageIndex: number) => Promise<PageNavState>

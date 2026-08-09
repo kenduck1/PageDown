@@ -186,8 +186,15 @@ export function sniffImageContentType(buffer: Buffer): string | null {
 // off) would run under no CSP at all. Setting the identical policy as a
 // real `Content-Security-Policy` response header as well covers the whole
 // navigation from the very first byte, the way CSP is normally deployed.
+//
+// img-src permits https:/http: as a permanent, coarse backstop for the
+// remote-image-consent feature — see index.html's own longer comment on
+// this exact line for why the real per-document gate lives in
+// src/markdown/pipeline.ts's stripRemoteImageSrcs instead, not here.
+// connect-src stays 'none': this only ever permits passive `<img>` loads,
+// never script-initiated fetch/XHR/WebSocket.
 const CSP_POLICY_TEMPLATE =
-  "default-src 'self'; style-src 'self' 'nonce-%%CSP_STYLE_NONCE%%'; script-src 'self'; img-src 'self' data:; font-src data:; connect-src 'none';"
+  "default-src 'self'; style-src 'self' 'nonce-%%CSP_STYLE_NONCE%%'; script-src 'self'; img-src 'self' data: https: http:; font-src data:; connect-src 'none';"
 
 let renderSession: Session | undefined
 let schemeHandlerRegistered = false

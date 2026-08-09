@@ -170,6 +170,7 @@ function EditorToolbar({
   const isSourceMode = viewMode === 'source'
   const content = useDocumentStore((state) => state.content)
   const filePath = useDocumentStore((state) => state.filePath)
+  const remoteImagesAllowed = useDocumentStore((state) => state.remoteImagesAllowed)
   const findOpen = useFindStore((state) => state.isOpen)
   const openFind = useFindStore((state) => state.openFind)
   const closeFind = useFindStore((state) => state.closeFind)
@@ -336,7 +337,7 @@ function EditorToolbar({
       // PDF against the document's own directory (src/main/pdf-exporter.ts)
       // -- omitting it (an unsaved document) correctly denies all local
       // assets, matching usePageCount's own filePath forwarding.
-      await window.api.exportPdf(content, filePath)
+      await window.api.exportPdf(content, filePath, remoteImagesAllowed === true)
       // Deliberately does NOT touch documentStore.error on success. An
       // earlier version cleared it unconditionally here (`setState({ error:
       // null })`), which silently discarded any unrelated, pre-existing
@@ -369,7 +370,7 @@ function EditorToolbar({
     if (isPrinting) return
     setIsPrinting(true)
     try {
-      await window.api.print(content, filePath)
+      await window.api.print(content, filePath, remoteImagesAllowed === true)
     } catch (err) {
       console.error('Failed to print', err)
       useDocumentStore.setState({ error: 'Failed to print. Please try again.' })

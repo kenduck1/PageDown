@@ -35,11 +35,20 @@ const DEFAULT_DEBOUNCE_MS = 500
  * behavior. The main-process handler independently validates whatever is
  * passed here against the recent-files allowlist, so this is a hint, never a
  * grant.
+ *
+ * `allowRemoteImages` mirrors the active tab's own remote-image consent
+ * decision (`documentStore.remoteImagesAllowed`, coerced to a plain boolean
+ * by the caller since `null` there means "undecided," which this hook
+ * treats identically to "blocked"). Included in the effect's own dependency
+ * array, so toggling consent triggers a fresh (still debounced) fetch --
+ * without it, granting consent would silently show a stale, pre-consent
+ * page count until some unrelated content edit happened to invalidate it.
  */
 export function usePageCount(
   content: string,
   filePath: string | null = null,
-  debounceMs = DEFAULT_DEBOUNCE_MS
+  debounceMs = DEFAULT_DEBOUNCE_MS,
+  allowRemoteImages = false
 ): PageCountState {
   // Same "reset on key change" pattern as `useThumbnail.ts`'s own
   // `prevKey`/`setPrevKey`: adjusting state directly in the render body
@@ -83,7 +92,7 @@ export function usePageCount(
     const timer = setTimeout(() => {
       const requestId = ++latestRequestRef.current
       window.api
-        .getPageCount(content, filePath)
+        .getPageCount(content, filePath, allowRemoteImages)
         .then((result) => {
           if (latestRequestRef.current !== requestId) return
           setState({ pageCount: result.pageCount, loading: false, error: null })
@@ -99,7 +108,7 @@ export function usePageCount(
     }, debounceMs)
 
     return () => clearTimeout(timer)
-  }, [content, filePath, debounceMs])
+  }, [content, filePath, debounceMs, allowRemoteImages])
 
   return state
 }

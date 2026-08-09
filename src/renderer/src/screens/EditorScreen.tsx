@@ -13,6 +13,7 @@ import PageSetupModal from '../components/PageSetupModal'
 import ShortcutsHelpModal from '../components/ShortcutsHelpModal'
 import FindBar from '../components/FindBar'
 import CommentComposer from '../components/CommentComposer'
+import RemoteImageBanner from '../components/RemoteImageBanner'
 import Toast from '../components/Toast'
 import { extractOutline } from '../lib/extractOutline'
 import { isFormatEditing, isSourceEditing } from '../lib/editing-surface'
@@ -53,6 +54,7 @@ function EditorScreen(): React.JSX.Element {
   const setCurrentPage = useAppStore((state) => state.setCurrentPage)
   const filePath = useDocumentStore((state) => state.filePath)
   const content = useDocumentStore((state) => state.content)
+  const remoteImagesAllowed = useDocumentStore((state) => state.remoteImagesAllowed)
   const revision = useDocumentStore((state) => state.revision)
   const activeTabId = useDocumentStore((state) => state.activeTabId)
   const updateContentForTab = useDocumentStore((state) => state.updateContentForTab)
@@ -91,7 +93,7 @@ function EditorScreen(): React.JSX.Element {
     toastIdRef.current += 1
     setToast({ id: toastIdRef.current, message: UNDO_BARRIER_TOAST_MESSAGE })
   }
-  const { pageCount } = usePageCount(content, filePath)
+  const { pageCount } = usePageCount(content, filePath, undefined, remoteImagesAllowed === true)
   // undefined (not preferences?.autosaveIntervalMs ?? somethingElse) when
   // preferences haven't loaded yet -- useAutosave's own default parameter
   // already falls back to the pre-existing 45s constant in that case, so
@@ -1120,6 +1122,9 @@ function EditorScreen(): React.JSX.Element {
       {/* Same layout-row placement/reasoning as FindBar immediately above --
       see CommentComposer.tsx's own module comment. */}
       <CommentComposer onAddComment={handleAddComment} />
+      {/* Same layout-row placement/reasoning as FindBar/CommentComposer above
+      -- see RemoteImageBanner.tsx's own module comment. */}
+      <RemoteImageBanner />
       <div className="flex flex-1 overflow-hidden">
         <EditorSidebar
           content={content}
@@ -1204,6 +1209,7 @@ function EditorScreen(): React.JSX.Element {
                   pageSetupOpen={pageSetupOpen}
                   targetPage={effectiveCurrentPage}
                   onPageChange={(state) => setCurrentPage(state.currentPage)}
+                  remoteImagesAllowed={remoteImagesAllowed === true}
                 />
               </div>
             </div>

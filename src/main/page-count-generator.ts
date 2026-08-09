@@ -192,6 +192,13 @@ let lastContent: string | null = null
 // identical document in directory A. `null` for a document with no validated
 // path, which is a distinct key from any real directory.
 let lastDocumentDir: string | null = null
+// Also part of the cache key: a consent decision can change with the
+// document's content completely unchanged (the user clicks "Load" in the
+// remote-image banner after this exact content was already cached with
+// images blocked) -- without this, granting consent would silently show a
+// stale, pre-consent page count until some unrelated edit invalidated the
+// cache by changing `content`.
+let lastAllowRemoteImages = false
 let lastResult: { pageCount: number } | null = null
 
 /**
@@ -220,10 +227,16 @@ let lastResult: { pageCount: number } | null = null
  */
 export async function getPageCount(
   content: string,
-  documentPath?: string
+  documentPath?: string,
+  allowRemoteImages = false
 ): Promise<{ pageCount: number }> {
   const documentDir = documentPath ? dirname(documentPath) : null
-  if (lastContent === content && lastDocumentDir === documentDir && lastResult) {
+  if (
+    lastContent === content &&
+    lastDocumentDir === documentDir &&
+    lastAllowRemoteImages === allowRemoteImages &&
+    lastResult
+  ) {
     return lastResult
   }
   return enqueueHarnessWork(async () => {
@@ -236,7 +249,7 @@ export async function getPageCount(
     // out.
     const assetToken = documentDir ? registerAssetRoot(documentDir) : undefined
     try {
-      const { html } = markdownToHtml(content, { assetToken })
+      const { html } = markdownToHtml(content, { assetToken, allowRemoteImages })
       // The document's own page size/orientation/margins, read out of its
       // real YAML frontmatter (Page Geometry Wiring) -- the status bar's
       // count has to reflect the geometry the document is actually
@@ -257,6 +270,7 @@ export async function getPageCount(
       const pageCount = { pageCount: result.pageCount }
       lastContent = content
       lastDocumentDir = documentDir
+      lastAllowRemoteImages = allowRemoteImages
       lastResult = pageCount
       return pageCount
     } finally {

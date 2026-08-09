@@ -107,3 +107,25 @@ describe('getPageCount page geometry', () => {
     )
   })
 })
+
+describe('getPageCount cache key includes allowRemoteImages', () => {
+  beforeEach(() => {
+    mocks.sendDocument.mockClear()
+  })
+
+  it('a bare content/path cache hit is NOT reused across a change in allowRemoteImages alone', async () => {
+    const content = '# Cache key test document'
+    await getPageCount(content, undefined, false)
+    expect(mocks.sendDocument).toHaveBeenCalledTimes(1)
+
+    // Same content, same (absent) path -- a consent decision changing with
+    // nothing else different must still trigger a fresh render, not serve
+    // the pre-consent cached result.
+    await getPageCount(content, undefined, true)
+    expect(mocks.sendDocument).toHaveBeenCalledTimes(2)
+
+    // And the cache DOES still hit for a genuinely identical repeat call.
+    await getPageCount(content, undefined, true)
+    expect(mocks.sendDocument).toHaveBeenCalledTimes(2)
+  })
+})

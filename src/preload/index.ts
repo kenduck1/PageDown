@@ -15,20 +15,24 @@ const api = {
   // asset references against its own directory (the main-process handler
   // validates it with isKnownPath and drops it if unknown). Passing `null`
   // for an unsaved document is correct and denies all local assets.
-  getPageCount: (content: string, filePath: string | null = null) =>
-    ipcRenderer.invoke('file:getPageCount', content, filePath),
+  // `allowRemoteImages` mirrors the active tab's own remote-image consent
+  // decision (documentStore's remoteImagesAllowed) -- defaults to false
+  // (blocked), matching pipeline.ts's own default-closed posture.
+  getPageCount: (content: string, filePath: string | null = null, allowRemoteImages = false) =>
+    ipcRenderer.invoke('file:getPageCount', content, filePath, allowRemoteImages),
   confirmDiscardChanges: () => ipcRenderer.invoke('dialog:confirmDiscard'),
   // `filePath` is optional and used ONLY to resolve the document's local
   // asset references against its own directory (see getPageCount's own
   // comment above) -- the main-process handler validates it with
   // isKnownPath and drops it if unknown. Passing `null` for an unsaved
   // document is correct and denies all local assets in the export.
-  exportPdf: (content: string, filePath: string | null = null) =>
-    ipcRenderer.invoke('file:exportPdf', content, filePath),
+  // `allowRemoteImages` -- see getPageCount's own comment above.
+  exportPdf: (content: string, filePath: string | null = null, allowRemoteImages = false) =>
+    ipcRenderer.invoke('file:exportPdf', content, filePath, allowRemoteImages),
   // Same optional/validated filePath treatment as exportPdf immediately
   // above -- see that entry's own comment.
-  print: (content: string, filePath: string | null = null) =>
-    ipcRenderer.invoke('file:print', content, filePath),
+  print: (content: string, filePath: string | null = null, allowRemoteImages = false) =>
+    ipcRenderer.invoke('file:print', content, filePath, allowRemoteImages),
   getPreferences: () => ipcRenderer.invoke('preferences:get'),
   setPreferences: (preferences: Preferences) => ipcRenderer.invoke('preferences:set', preferences),
   autosaveSnapshot: (content: string, filePath: string) =>
@@ -52,8 +56,9 @@ const api = {
   // document, or one the caller hasn't vetted) -- same convention as
   // getPageCount/exportPdf above. The main-process handler validates a
   // non-null path with isKnownPath and drops it if unknown.
-  sendSplitPreviewDocument: (content: string, filePath: string | null) =>
-    ipcRenderer.invoke('split-preview:sendDocument', content, filePath),
+  // `allowRemoteImages` -- see getPageCount's own comment above.
+  sendSplitPreviewDocument: (content: string, filePath: string | null, allowRemoteImages = false) =>
+    ipcRenderer.invoke('split-preview:sendDocument', content, filePath, allowRemoteImages),
   destroySplitPreview: () => ipcRenderer.invoke('split-preview:destroy'),
   // Both are deliberately non-creating on the main-process side (see
   // split-preview:scrollToPage/split-preview:getPage's own comments in

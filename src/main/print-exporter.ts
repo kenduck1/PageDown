@@ -71,7 +71,8 @@ function printWebContents(harness: PaginationHarness): Promise<{ cancelled: bool
 // for hypothetical future symmetry.
 export async function printDocument(
   content: string,
-  documentPath?: string
+  documentPath?: string,
+  allowRemoteImages = false
 ): Promise<{ cancelled: boolean }> {
   const documentDir = documentPath ? dirname(documentPath) : null
   const pageConfig = resolvePageConfig(content)
@@ -82,7 +83,7 @@ export async function printDocument(
     withFreshHarness(geometry, async (harness) => {
       const assetToken = documentDir ? registerAssetRoot(documentDir) : undefined
       try {
-        const { html } = markdownToHtml(content, { assetToken })
+        const { html } = markdownToHtml(content, { assetToken, allowRemoteImages })
         await harness.sendDocument(html, geometry, documentStyle, PRINT_PAGINATION_TIMEOUT_MS)
         return printWebContents(harness)
       } finally {

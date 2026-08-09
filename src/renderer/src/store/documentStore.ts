@@ -16,6 +16,16 @@ export interface DocumentTab {
   // or another PageDown window on the same file) rather than silently
   // clobbering it -- see file-io.ts's saveFile.
   mtimeMs: number | null
+  // The user's consent decision for loading this document's remote (http/
+  // https) images -- design doc Security section: "Remote images blocked by
+  // default per document, with an explicit ... Load / Keep blocked prompt."
+  // `null` means undecided (not yet prompted, or the document has no remote
+  // images to prompt about at all); `false`/`true` are explicit decisions.
+  // Deliberately session-only, reset to `null` on every fresh open/new
+  // document -- never persisted across app restarts or even a re-open of the
+  // same path within one session, matching this feature's own "blocked by
+  // default" posture rather than remembering a prior grant indefinitely.
+  remoteImagesAllowed: boolean | null
 }
 
 interface DocumentStateValues {
@@ -30,6 +40,9 @@ interface DocumentStateValues {
   // Mirrors the active tab's own DocumentTab.mtimeMs -- see that field's own
   // doc comment.
   mtimeMs: number | null
+  // Mirrors the active tab's own DocumentTab.remoteImagesAllowed -- see that
+  // field's own doc comment.
+  remoteImagesAllowed: boolean | null
   // Deliberately global, not per-tab: nothing in this codebase surfaces a
   // per-background-tab error today (the only producers -- openFile/openPath/
   // save -- all operate on whatever tab is currently active), so scoping
@@ -165,6 +178,16 @@ interface DocumentState extends DocumentStateValues {
   // to prompt before calling this for a dirty tab.
   closeTab: (tabId: string) => void
   switchTab: (tabId: string) => void
+  // Records the user's Load/Keep-blocked decision for a specific tab's
+  // remote images -- takes an explicit tabId (not "whichever tab is active
+  // right now") for the same reason updateContentForTab/replaceContentForTab
+  // do: the banner's own click handler in EditorScreen is bound to the tab
+  // id captured at the time it was shown, which could in principle no longer
+  // be the active tab by the time the user clicks (e.g. a fast tab switch).
+  // Does NOT bump revision -- unlike a content change, this never needs
+  // MilkdownEditor to remount; it only affects what image srcs the NEXT
+  // render (Split preview / page count / export) is allowed to include.
+  setRemoteImagesAllowed: (tabId: string, allowed: boolean) => void
 }
 
 // Monotonically increasing, not crypto-random: these ids are only ever used
@@ -180,7 +203,14 @@ function generateTabId(): string {
 }
 
 function createBlankTab(): DocumentTab {
-  return { id: generateTabId(), filePath: null, content: '', isDirty: false, mtimeMs: null }
+  return {
+    id: generateTabId(),
+    filePath: null,
+    content: '',
+    isDirty: false,
+    mtimeMs: null,
+    remoteImagesAllowed: null
+  }
 }
 
 // Fields that mirror whichever tab is active -- factored out so every action
@@ -189,12 +219,13 @@ function createBlankTab(): DocumentTab {
 // drifting apart.
 function activeMirror(
   tab: DocumentTab
-): Pick<DocumentTab, 'content' | 'filePath' | 'isDirty' | 'mtimeMs'> {
+): Pick<DocumentTab, 'content' | 'filePath' | 'isDirty' | 'mtimeMs' | 'remoteImagesAllowed'> {
   return {
     content: tab.content,
     filePath: tab.filePath,
     isDirty: tab.isDirty,
-    mtimeMs: tab.mtimeMs
+    mtimeMs: tab.mtimeMs,
+    remoteImagesAllowed: tab.remoteImagesAllowed
   }
 }
 
@@ -245,7 +276,8 @@ export const useDocumentStore = create<DocumentState>()((set, get) => ({
         filePath,
         content,
         isDirty: startDirty,
-        mtimeMs
+        mtimeMs,
+        remoteImagesAllowed: null
       }
       return {
         tabs: [...state.tabs, tab],
@@ -485,5 +517,13 @@ export const useDocumentStore = create<DocumentState>()((set, get) => ({
         revision: state.revision + 1
       }
     }),
-  clearError: () => set({ error: null })
+  clearError: () => set({ error: null }),
+  setRemoteImagesAllowed: (tabId, allowed) =>
+    set((state) => {
+      const tabs = state.tabs.map((tab) =>
+        tab.id === tabId ? { ...tab, remoteImagesAllowed: allowed } : tab
+      )
+      if (tabId !== state.activeTabId) return { tabs }
+      return { tabs, remoteImagesAllowed: allowed }
+    })
 }))

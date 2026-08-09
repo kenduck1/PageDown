@@ -527,11 +527,11 @@ app.whenReady().then(() => {
   // same, already-correct treatment an unsaved document gets.
   ipcMain.handle(
     'file:getPageCount',
-    async (_event, content: string, filePath: string | null = null) => {
+    async (_event, content: string, filePath: string | null = null, allowRemoteImages = false) => {
       const userDataDir = app.getPath('userData')
       const documentPath =
         filePath && (await isKnownPath(userDataDir, filePath)) ? filePath : undefined
-      return getPageCount(content, documentPath)
+      return getPageCount(content, documentPath, allowRemoteImages)
     }
   )
 
@@ -613,12 +613,17 @@ app.whenReady().then(() => {
   // itself.
   ipcMain.handle(
     'split-preview:sendDocument',
-    async (_event, content: string, filePath: string | null) => {
+    async (
+      _event,
+      content: string,
+      filePath: string | null,
+      allowRemoteImages: boolean = false
+    ) => {
       const userDataDir = app.getPath('userData')
       const validatedPath = filePath && (await isKnownPath(userDataDir, filePath)) ? filePath : null
       return enqueueSplitPreviewWork(async () => {
         const harness = await getOrCreateSplitPreviewHarness(mainWindow)
-        return harness.sendDocument(content, validatedPath)
+        return harness.sendDocument(content, validatedPath, allowRemoteImages)
       })
     }
   )
@@ -800,7 +805,7 @@ app.whenReady().then(() => {
   // in the exported PDF resolve to nothing rather than a failed export.
   ipcMain.handle(
     'file:exportPdf',
-    async (event, content: string, filePath: string | null = null) => {
+    async (event, content: string, filePath: string | null = null, allowRemoteImages = false) => {
       const userDataDir = app.getPath('userData')
       const documentPath =
         filePath && (await isKnownPath(userDataDir, filePath)) ? filePath : undefined
@@ -809,7 +814,7 @@ app.whenReady().then(() => {
       // real Save dialog exportDocumentToPdf opens must anchor to whichever
       // window actually asked for the export.
       const win = BrowserWindow.fromWebContents(event.sender) ?? mainWindow
-      return exportDocumentToPdf(win, content, documentPath)
+      return exportDocumentToPdf(win, content, documentPath, allowRemoteImages)
     }
   )
 
@@ -817,12 +822,15 @@ app.whenReady().then(() => {
   // renderer-supplied-source-path treatment as file:exportPdf just above --
   // drop-not-throw on an unknown path, since printing never strictly needs
   // it either (only local image references would resolve to nothing).
-  ipcMain.handle('file:print', async (_event, content: string, filePath: string | null = null) => {
-    const userDataDir = app.getPath('userData')
-    const documentPath =
-      filePath && (await isKnownPath(userDataDir, filePath)) ? filePath : undefined
-    return printDocument(content, documentPath)
-  })
+  ipcMain.handle(
+    'file:print',
+    async (_event, content: string, filePath: string | null = null, allowRemoteImages = false) => {
+      const userDataDir = app.getPath('userData')
+      const documentPath =
+        filePath && (await isKnownPath(userDataDir, filePath)) ? filePath : undefined
+      return printDocument(content, documentPath, allowRemoteImages)
+    }
+  )
 
   // Phase 0 spike wiring: prove the sandboxed pagination render harness
   // (Gate 5, see src/main/pagination-window.ts) constructs successfully

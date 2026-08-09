@@ -23,6 +23,22 @@ interface SplitPreviewProps {
    */
   targetPage: number
   onPageChange: (state: PageNavState) => void
+  /**
+   * This document's own remote-image consent decision, forwarded to the
+   * render context so an allowed document's `http(s)` image references
+   * survive the pipeline. A plain boolean, NOT `boolean | null`: the store's
+   * `documentStore.remoteImagesAllowed` is tri-state (`null` = the user
+   * hasn't decided yet), and the parent coerces with `=== true` -- undecided
+   * is treated identically to explicitly blocked, exactly as
+   * `usePageCount`'s own `allowRemoteImages` parameter is fed.
+   *
+   * This value is only ever a hint about what to render, never a privilege:
+   * the real enforcement is `stripRemoteImageSrcs` in
+   * `src/markdown/pipeline.ts`, which deletes every `http://`/`https://`
+   * `img[src]` unless the `markdownToHtml` call for that specific render
+   * passed `allowRemoteImages: true`.
+   */
+  remoteImagesAllowed: boolean
 }
 
 const DEBOUNCE_MS = 500
@@ -41,27 +57,45 @@ function SplitPreview({
   filePath,
   pageSetupOpen,
   targetPage,
-  onPageChange
+  onPageChange,
+  remoteImagesAllowed
 }: SplitPreviewProps): React.JSX.Element {
   const placeholderRef = useRef<HTMLDivElement>(null)
-  // Tracks the last {content, filePath} pair the harness has CONFIRMED
-  // receiving (stamped only inside the .then() below, never before the call)
-  // so the 500ms-debounced effect can skip re-sending a value that's already
-  // been successfully delivered -- without this, a plain mount with no
-  // subsequent edit sends the SAME initial content twice (once immediately,
-  // once again when the debounce timer fires with nothing having changed),
-  // which is a wasted pagination-harness round trip for zero behavioral
-  // benefit. Stamping this BEFORE the call resolves (or on rejection) would
-  // be a real bug, not just a missed optimization: `sendDocument` genuinely
-  // rejects (a 10s timeout, a pagination error, the post-destroy guard --
-  // see src/main/split-preview-window.ts's sendDocument) and is quite
-  // plausible on cold start while the harness process is still spinning up.
-  // If a failed send were recorded as "sent" anyway, a user opening Split
-  // mode on an already-written document with no further edit would see a
-  // permanently blank preview for the rest of that mount: the debounced
-  // effect would compare content equal to the (falsely) recorded value and
-  // never retry.
-  const lastSentRef = useRef<{ content: string; filePath: string | null } | null>(null)
+  // Tracks the last {content, filePath, remoteImagesAllowed} triple the
+  // harness has CONFIRMED receiving (stamped only inside the .then() below,
+  // never before the call) so the 500ms-debounced effect can skip re-sending
+  // a value that's already been successfully delivered -- without this, a
+  // plain mount with no subsequent edit sends the SAME initial content twice
+  // (once immediately, once again when the debounce timer fires with nothing
+  // having changed), which is a wasted pagination-harness round trip for zero
+  // behavioral benefit. Stamping this BEFORE the call resolves (or on
+  // rejection) would be a real bug, not just a missed optimization:
+  // `sendDocument` genuinely rejects (a 10s timeout, a pagination error, the
+  // post-destroy guard -- see src/main/split-preview-window.ts's
+  // sendDocument) and is quite plausible on cold start while the harness
+  // process is still spinning up. If a failed send were recorded as "sent"
+  // anyway, a user opening Split mode on an already-written document with no
+  // further edit would see a permanently blank preview for the rest of that
+  // mount: the debounced effect would compare content equal to the (falsely)
+  // recorded value and never retry.
+  //
+  // `remoteImagesAllowed` is part of this tracked shape for the same reason
+  // it is part of page-count-generator.ts's own content-cache key, and it is
+  // NOT incidental bookkeeping: a consent decision changes with the
+  // document's content and path completely UNCHANGED. Clicking "Load" in the
+  // remote-image banner must re-render the preview with the remote images
+  // now present -- but that click touches neither `content` nor `filePath`,
+  // so a two-field comparison below would find the pending send equal to the
+  // last confirmed one and skip it, forever: nothing else would ever
+  // invalidate it until the user happened to make an unrelated edit. The
+  // preview would keep showing the blocked-image layout while the status-bar
+  // page count (whose own cache key already accounts for consent) moved on
+  // to the allowed one.
+  const lastSentRef = useRef<{
+    content: string
+    filePath: string | null
+    remoteImagesAllowed: boolean
+  } | null>(null)
 
   useEffect(() => {
     const el = placeholderRef.current
@@ -106,9 +140,9 @@ function SplitPreview({
 
   useEffect(() => {
     window.api
-      .sendSplitPreviewDocument(content, filePath)
+      .sendSplitPreviewDocument(content, filePath, remoteImagesAllowed)
       .then(() => {
-        lastSentRef.current = { content, filePath }
+        lastSentRef.current = { content, filePath, remoteImagesAllowed }
       })
       .catch(() => {
         // Split mode's preview is best-effort, same governing rule as the
@@ -128,11 +162,23 @@ function SplitPreview({
   useEffect(() => {
     const timer = setTimeout(() => {
       const last = lastSentRef.current
-      if (last && last.content === content && last.filePath === filePath) return
+      if (
+        last &&
+        last.content === content &&
+        last.filePath === filePath &&
+        // Consent is compared here, not just carried in the ref: this is the
+        // ONLY effect that can re-render the preview after a "Load" click,
+        // and that click changes nothing else about the document (see the
+        // ref's own comment above). Omitting this comparison makes the
+        // pending send look identical to the last confirmed one and skip
+        // forever.
+        last.remoteImagesAllowed === remoteImagesAllowed
+      )
+        return
       window.api
-        .sendSplitPreviewDocument(content, filePath)
+        .sendSplitPreviewDocument(content, filePath, remoteImagesAllowed)
         .then(() => {
-          lastSentRef.current = { content, filePath }
+          lastSentRef.current = { content, filePath, remoteImagesAllowed }
         })
         .catch(() => {
           // Same as the mount effect's catch above: swallow so this never
@@ -149,7 +195,15 @@ function SplitPreview({
     // changes again before it fires, matching usePageCount's own
     // established debounce shape (see that hook's own comment for why:
     // "a fast typing burst triggers one round trip after typing settles").
-  }, [content, filePath])
+    // `remoteImagesAllowed` belongs in these deps for the same reason it
+    // belongs in the skip comparison above -- a consent change is the one
+    // input that moves without `content`/`filePath` moving, so without it
+    // this effect wouldn't even re-run to schedule the resend, let alone
+    // decide whether to skip it. Deliberately NOT added to the mount effect's
+    // own (empty) deps above: that one is mount-only by design, and re-firing
+    // it on a consent change would send immediately, bypassing the debounce
+    // this effect exists to impose.
+  }, [content, filePath, remoteImagesAllowed])
 
   // The last page this component KNOWS the preview is on -- written by both
   // the scroll effect and the poll, before either calls onPageChange.

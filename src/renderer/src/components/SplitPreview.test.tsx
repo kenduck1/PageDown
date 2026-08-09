@@ -26,6 +26,7 @@ describe('SplitPreview', () => {
         pageSetupOpen={false}
         targetPage={1}
         onPageChange={vi.fn()}
+        remoteImagesAllowed={false}
       />
     )
     expect(getByTestId('split-preview-placeholder')).toBeInTheDocument()
@@ -39,11 +40,12 @@ describe('SplitPreview', () => {
         pageSetupOpen={false}
         targetPage={1}
         onPageChange={vi.fn()}
+        remoteImagesAllowed={false}
       />
     )
     await waitFor(() => {
       expect(window.api.setSplitPreviewBounds).toHaveBeenCalled()
-      expect(window.api.sendSplitPreviewDocument).toHaveBeenCalledWith('# Hi', null)
+      expect(window.api.sendSplitPreviewDocument).toHaveBeenCalledWith('# Hi', null, false)
     })
   })
 
@@ -55,6 +57,7 @@ describe('SplitPreview', () => {
         pageSetupOpen={false}
         targetPage={1}
         onPageChange={vi.fn()}
+        remoteImagesAllowed={false}
       />
     )
     unmount()
@@ -70,6 +73,7 @@ describe('SplitPreview', () => {
         pageSetupOpen={false}
         targetPage={1}
         onPageChange={vi.fn()}
+        remoteImagesAllowed={false}
       />
     )
     rerender(
@@ -79,6 +83,7 @@ describe('SplitPreview', () => {
         pageSetupOpen={false}
         targetPage={1}
         onPageChange={vi.fn()}
+        remoteImagesAllowed={false}
       />
     )
     rerender(
@@ -88,13 +93,64 @@ describe('SplitPreview', () => {
         pageSetupOpen={false}
         targetPage={1}
         onPageChange={vi.fn()}
+        remoteImagesAllowed={false}
       />
     )
     await vi.advanceTimersByTimeAsync(500)
     // Mount's own immediate send (content 'a') plus exactly one debounced
     // send for the settled final value -- not one call per rerender.
     expect(window.api.sendSplitPreviewDocument).toHaveBeenCalledTimes(2)
-    expect(window.api.sendSplitPreviewDocument).toHaveBeenLastCalledWith('abc', null)
+    expect(window.api.sendSplitPreviewDocument).toHaveBeenLastCalledWith('abc', null, false)
+    vi.useRealTimers()
+  })
+
+  // The whole reason `remoteImagesAllowed` is part of lastSentRef's tracked
+  // shape AND of the debounced effect's skip comparison AND of its dependency
+  // array. Granting consent (clicking "Load" in the remote-image banner) is
+  // the one input that moves with `content` and `filePath` both completely
+  // unchanged -- so a two-field dedup would find the pending send equal to the
+  // last confirmed one and skip it forever, leaving the preview showing the
+  // blocked-image layout with nothing but an unrelated future edit able to
+  // dislodge it. Asserting the THIRD argument specifically (not just that a
+  // second call happened) is what makes this a consent test rather than a
+  // generic "it resent something" one.
+  it('re-sends the document when consent changes, with content and filePath untouched', async () => {
+    vi.useFakeTimers()
+    const sendDocument = vi.fn().mockResolvedValue({ pageCount: 1 })
+    window.api.sendSplitPreviewDocument = sendDocument
+
+    const { rerender } = render(
+      <SplitPreview
+        content="# Hi"
+        filePath="/docs/a.md"
+        pageSetupOpen={false}
+        targetPage={1}
+        onPageChange={vi.fn()}
+        remoteImagesAllowed={false}
+      />
+    )
+    // Let the mount send resolve so lastSentRef is genuinely stamped (it is
+    // only written inside the .then()) -- otherwise the resend below would
+    // fire for the trivial reason that nothing was ever recorded as sent,
+    // which is a different code path from the one under test.
+    await vi.advanceTimersByTimeAsync(0)
+    expect(sendDocument).toHaveBeenCalledTimes(1)
+    expect(sendDocument).toHaveBeenLastCalledWith('# Hi', '/docs/a.md', false)
+
+    rerender(
+      <SplitPreview
+        content="# Hi"
+        filePath="/docs/a.md"
+        pageSetupOpen={false}
+        targetPage={1}
+        onPageChange={vi.fn()}
+        remoteImagesAllowed={true}
+      />
+    )
+    await vi.advanceTimersByTimeAsync(500)
+
+    expect(sendDocument).toHaveBeenCalledTimes(2)
+    expect(sendDocument).toHaveBeenLastCalledWith('# Hi', '/docs/a.md', true)
     vi.useRealTimers()
   })
 
@@ -123,6 +179,7 @@ describe('SplitPreview', () => {
         pageSetupOpen={false}
         targetPage={1}
         onPageChange={vi.fn()}
+        remoteImagesAllowed={false}
       />
     )
     // Let the mount effect's rejected promise (and its .catch()) settle
@@ -139,6 +196,7 @@ describe('SplitPreview', () => {
         pageSetupOpen={false}
         targetPage={1}
         onPageChange={vi.fn()}
+        remoteImagesAllowed={false}
       />
     )
     await vi.advanceTimersByTimeAsync(500)
@@ -147,7 +205,7 @@ describe('SplitPreview', () => {
     // which only fires because lastSentRef was never stamped for content
     // that failed to send.
     expect(sendDocument).toHaveBeenCalledTimes(2)
-    expect(sendDocument).toHaveBeenLastCalledWith('# Hi', null)
+    expect(sendDocument).toHaveBeenLastCalledWith('# Hi', null, false)
     vi.useRealTimers()
   })
 
@@ -165,6 +223,7 @@ describe('SplitPreview', () => {
         pageSetupOpen={true}
         targetPage={1}
         onPageChange={vi.fn()}
+        remoteImagesAllowed={false}
       />
     )
     await waitFor(() => {
@@ -187,6 +246,7 @@ describe('SplitPreview', () => {
         pageSetupOpen={true}
         targetPage={1}
         onPageChange={vi.fn()}
+        remoteImagesAllowed={false}
       />
     )
     await waitFor(() => {
@@ -200,6 +260,7 @@ describe('SplitPreview', () => {
         pageSetupOpen={false}
         targetPage={1}
         onPageChange={vi.fn()}
+        remoteImagesAllowed={false}
       />
     )
 
@@ -242,6 +303,7 @@ describe('SplitPreview', () => {
             pageSetupOpen={false}
             targetPage={targetPage}
             onPageChange={onPageChange}
+            remoteImagesAllowed={false}
           />
         )
       }
@@ -273,6 +335,7 @@ describe('SplitPreview', () => {
           pageSetupOpen={false}
           targetPage={3}
           onPageChange={onPageChange}
+          remoteImagesAllowed={false}
         />
       )
       await waitFor(() => expect(window.api.scrollSplitPreviewToPage).toHaveBeenCalledWith(3))
@@ -290,6 +353,7 @@ describe('SplitPreview', () => {
           pageSetupOpen={false}
           targetPage={9}
           onPageChange={onPageChange}
+          remoteImagesAllowed={false}
         />
       )
       await waitFor(() =>
@@ -397,6 +461,7 @@ describe('SplitPreview', () => {
           pageSetupOpen={false}
           targetPage={5}
           onPageChange={onPageChange}
+          remoteImagesAllowed={false}
         />
       )
       await vi.advanceTimersByTimeAsync(50)
