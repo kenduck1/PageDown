@@ -27,7 +27,8 @@ beforeEach(() => {
         orientation: 'portrait',
         theme: 'default',
         fontFamily: 'source-serif-4'
-      }
+      },
+      colorScheme: 'system'
     }),
     setPreferences: vi.fn(),
     autosaveSnapshot: vi.fn(),
@@ -68,5 +69,83 @@ describe('App', () => {
     await user.click(screen.getByRole('button', { name: '← Home' }))
     expect(screen.getByText('PageDown')).toBeInTheDocument()
     expect(screen.queryAllByText('Untitled')).toHaveLength(0)
+  })
+
+  describe('app-level color scheme', () => {
+    it('applies an explicit "dark" preference to <html data-theme>', async () => {
+      vi.mocked(window.api.getPreferences).mockResolvedValue({
+        spellcheckEnabled: true,
+        autosaveIntervalMs: 45_000,
+        defaultPageConfig: {
+          pageSize: 'Letter',
+          orientation: 'portrait',
+          theme: 'default',
+          fontFamily: 'source-serif-4'
+        },
+        colorScheme: 'dark'
+      })
+      render(<App />)
+      await screen.findByText('PageDown')
+
+      expect(document.documentElement.dataset.theme).toBe('dark')
+    })
+
+    it('applies an explicit "light" preference to <html data-theme>', async () => {
+      vi.mocked(window.api.getPreferences).mockResolvedValue({
+        spellcheckEnabled: true,
+        autosaveIntervalMs: 45_000,
+        defaultPageConfig: {
+          pageSize: 'Letter',
+          orientation: 'portrait',
+          theme: 'default',
+          fontFamily: 'source-serif-4'
+        },
+        colorScheme: 'light'
+      })
+      render(<App />)
+      await screen.findByText('PageDown')
+
+      expect(document.documentElement.dataset.theme).toBe('light')
+    })
+
+    it('resolves "system" against the current OS prefers-color-scheme', async () => {
+      const realMatchMedia = window.matchMedia
+      window.matchMedia = (query) => {
+        const mql = realMatchMedia(query)
+        Object.defineProperty(mql, 'matches', { value: true })
+        return mql
+      }
+      try {
+        // colorScheme: 'system' is already the beforeEach mock's default.
+        render(<App />)
+        await screen.findByText('PageDown')
+
+        expect(document.documentElement.dataset.theme).toBe('dark')
+      } finally {
+        window.matchMedia = realMatchMedia
+      }
+    })
+
+    it('reacts live to an OS theme change while colorScheme is "system"', async () => {
+      let capturedMql: MediaQueryList | undefined
+      const realMatchMedia = window.matchMedia
+      window.matchMedia = (query) => {
+        const mql = realMatchMedia(query)
+        capturedMql = mql
+        return mql
+      }
+      try {
+        render(<App />)
+        await screen.findByText('PageDown')
+        expect(document.documentElement.dataset.theme).toBe('light')
+
+        Object.defineProperty(capturedMql!, 'matches', { value: true })
+        capturedMql!.dispatchEvent(new Event('change'))
+
+        expect(document.documentElement.dataset.theme).toBe('dark')
+      } finally {
+        window.matchMedia = realMatchMedia
+      }
+    })
   })
 })

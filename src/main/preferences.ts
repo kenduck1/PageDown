@@ -16,10 +16,20 @@ export interface DefaultPageConfig {
   fontFamily: PageFontFamily
 }
 
+// App-shell CHROME theme -- named `colorScheme`, deliberately NOT `theme`,
+// to avoid any confusion with DefaultPageConfig's own `theme` field (which
+// picks a DOCUMENT typography theme -- default/resume/letter/report,
+// something else entirely). 'system' follows the OS's own
+// prefers-color-scheme live (see App.tsx's own matchMedia listener) rather
+// than snapshotting it once; 'light'/'dark' pin explicitly regardless of
+// the OS setting.
+export type ColorScheme = 'light' | 'dark' | 'system'
+
 export interface Preferences {
   spellcheckEnabled: boolean
   autosaveIntervalMs: number
   defaultPageConfig: DefaultPageConfig
+  colorScheme: ColorScheme
 }
 
 // 45_000 matches useAutosave.ts's own pre-existing hardcoded default exactly
@@ -33,13 +43,15 @@ export const DEFAULT_PREFERENCES: Preferences = {
     orientation: 'portrait',
     theme: 'default',
     fontFamily: 'source-serif-4'
-  }
+  },
+  colorScheme: 'system'
 }
 
 const PAGE_SIZES: readonly PageSize[] = ['Letter', 'A4', 'Legal', 'Custom']
 const ORIENTATIONS: readonly Orientation[] = ['portrait', 'landscape']
 const THEMES: readonly PageTheme[] = ['default', 'resume', 'letter', 'report']
 const FONT_FAMILIES: readonly PageFontFamily[] = ['source-serif-4', 'inter']
+const COLOR_SCHEMES: readonly ColorScheme[] = ['light', 'dark', 'system']
 
 // Same "a well-formed JSON value can still hold malformed fields" guard
 // recent-files.ts's own isRecentFileEntry documents -- degrades a corrupt or
@@ -91,10 +103,16 @@ function sanitizePreferences(value: unknown): Preferences {
       ? (rawDefaultConfig.fontFamily as PageFontFamily)
       : DEFAULT_PREFERENCES.defaultPageConfig.fontFamily
 
+  const colorScheme =
+    typeof raw.colorScheme === 'string' && (COLOR_SCHEMES as string[]).includes(raw.colorScheme)
+      ? (raw.colorScheme as ColorScheme)
+      : DEFAULT_PREFERENCES.colorScheme
+
   return {
     spellcheckEnabled,
     autosaveIntervalMs,
-    defaultPageConfig: { pageSize, orientation, theme, fontFamily }
+    defaultPageConfig: { pageSize, orientation, theme, fontFamily },
+    colorScheme
   }
 }
 

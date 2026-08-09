@@ -21,6 +21,11 @@ const FONT_FAMILIES: { value: DefaultPageConfig['fontFamily']; label: string }[]
   { value: 'source-serif-4', label: 'Source Serif 4' },
   { value: 'inter', label: 'Inter' }
 ]
+const COLOR_SCHEMES: { value: Preferences['colorScheme']; label: string }[] = [
+  { value: 'system', label: 'Match System' },
+  { value: 'light', label: 'Light' },
+  { value: 'dark', label: 'Dark' }
+]
 
 // Immediate-apply, not a modal draft-then-Apply/Cancel the way PageSetupModal
 // works -- deliberate, not an oversight: this is a full navigated SCREEN (a
@@ -98,6 +103,42 @@ function SettingsScreen(): React.JSX.Element {
       </div>
 
       <div className="mx-auto flex w-full max-w-[520px] flex-col gap-6 px-5 py-6">
+        <section className="flex flex-col gap-2.5">
+          <h2 className="text-11-5 font-semibold uppercase tracking-wide text-text-secondary">
+            Appearance
+          </h2>
+          <p className="text-11-5 text-text-tertiary">
+            Applies to the app&apos;s own chrome only -- the document page itself always renders
+            light, matching what gets printed or exported.
+          </p>
+
+          <label className="flex items-center justify-between rounded-md border border-border-subtle bg-page px-3.5 py-2.5">
+            {/* "Color scheme", not "Theme" -- "New document defaults" below
+            already has a real, distinct "Theme" combobox for
+            defaultPageConfig.theme (a DOCUMENT typography theme --
+            default/resume/letter/report). Same-string accessible names
+            would make screen.getByRole('combobox', { name: 'Theme' })
+            ambiguous the moment both sections are on screen at once, which
+            they always are here (both sit in the one Settings screen) --
+            the exact collision EditorToolbar.tsx's own Split-left-pane
+            toggle already documents hitting for the identical reason. */}
+            <span className="text-12-5 text-text-primary">Color scheme</span>
+            <select
+              value={preferences.colorScheme}
+              onChange={(e) =>
+                applyChange({ colorScheme: e.target.value as Preferences['colorScheme'] })
+              }
+              className="rounded-sm border border-border-chrome bg-page px-2 py-1 text-12-5"
+            >
+              {COLOR_SCHEMES.map((c) => (
+                <option key={c.value} value={c.value}>
+                  {c.label}
+                </option>
+              ))}
+            </select>
+          </label>
+        </section>
+
         <section className="flex flex-col gap-2.5">
           <h2 className="text-11-5 font-semibold uppercase tracking-wide text-text-secondary">
             Editing

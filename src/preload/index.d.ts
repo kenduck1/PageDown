@@ -23,10 +23,13 @@ export interface DefaultPageConfig {
   fontFamily: 'source-serif-4' | 'inter'
 }
 
+export type ColorScheme = 'light' | 'dark' | 'system'
+
 export interface Preferences {
   spellcheckEnabled: boolean
   autosaveIntervalMs: number
   defaultPageConfig: DefaultPageConfig
+  colorScheme: ColorScheme
 }
 
 // A CSS-pixel rectangle (getBoundingClientRect()'s own shape) for the Split
