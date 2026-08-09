@@ -2,9 +2,9 @@ import { useState } from 'react'
 import type {
   Orientation,
   PageConfig,
-  PageFooter,
   PageMargins,
   PageNumberFormat,
+  PageRunningContent,
   PageSize,
   PageTheme
 } from '../../../markdown/page-config'
@@ -76,10 +76,28 @@ const MARGIN_FIELDS: { key: keyof PageMargins; label: string }[] = [
   { key: 'right', label: 'Right' }
 ]
 
-const FOOTER_FIELDS: { key: keyof PageFooter; label: string }[] = [
-  { key: 'left', label: 'Left' },
-  { key: 'center', label: 'Center' },
-  { key: 'right', label: 'Right' }
+// Header and footer take the same three sides. The labels are prefixed
+// ("Header left", not "Left") because both groups are on screen at once and
+// a bare "Left" would be ambiguous to a screen reader and to getByLabelText
+// in tests -- the <span> inside each <label> IS the accessible name here.
+const HEADER_FIELDS: { key: keyof PageRunningContent; label: string }[] = [
+  { key: 'left', label: 'Header left' },
+  { key: 'center', label: 'Header center' },
+  { key: 'right', label: 'Header right' }
+]
+
+const FOOTER_FIELDS: { key: keyof PageRunningContent; label: string }[] = [
+  { key: 'left', label: 'Footer left' },
+  { key: 'center', label: 'Footer center' },
+  { key: 'right', label: 'Footer right' }
+]
+
+// Only rendered when pageSize is 'Custom'. Keyed on the PageConfig field
+// name itself so the onChange below can write straight through with no
+// key-to-field mapping table.
+const CUSTOM_SIZE_FIELDS: { key: 'customWidth' | 'customHeight'; label: string }[] = [
+  { key: 'customWidth', label: 'Width (in)' },
+  { key: 'customHeight', label: 'Height (in)' }
 ]
 
 const DYNAMIC_TOKEN_PATTERN = /\{n\}|\{total\}/
@@ -260,7 +278,22 @@ function PreviewColumn({ config }: { config: PageConfig }): React.JSX.Element {
           }}
         >
           {config.showHeader && (
-            <div className="truncate text-[6px] text-text-tertiary">Header</div>
+            // Mirrors the footer row below: real content, resolved through
+            // the same {n}/{total} preview substitution, rather than the
+            // literal word "Header" it used to show -- now that header
+            // content is a real, editable, rendered thing, a placeholder
+            // would misrepresent what the page will actually look like.
+            <div className="flex justify-between text-[6px] text-text-tertiary">
+              <span className="truncate">
+                {resolveFooterPreviewText(config.header.left, config.pageNumberFormat)}
+              </span>
+              <span className="truncate">
+                {resolveFooterPreviewText(config.header.center, config.pageNumberFormat)}
+              </span>
+              <span className="truncate">
+                {resolveFooterPreviewText(config.header.right, config.pageNumberFormat)}
+              </span>
+            </div>
           )}
         </div>
         {config.showFooter && (
@@ -319,8 +352,12 @@ function PageSetupModal({
     setDraft((prev) => ({ ...prev, margins: { ...prev.margins, [key]: value } }))
   }
 
-  const updateFooter = (key: keyof PageFooter, value: string): void => {
+  const updateFooter = (key: keyof PageRunningContent, value: string): void => {
     setDraft((prev) => ({ ...prev, footer: { ...prev.footer, [key]: value } }))
+  }
+
+  const updateHeader = (key: keyof PageRunningContent, value: string): void => {
+    setDraft((prev) => ({ ...prev, header: { ...prev.header, [key]: value } }))
   }
 
   return (
@@ -348,16 +385,17 @@ function PageSetupModal({
           </button>
         </div>
 
-        {/* Real, user-visible restatement of the file-level LIMITATION note
-            above -- fix-wave item: this used to exist only in code comments
-            and the track report, which a real user never sees. Placed
-            outside the scrollable settings column (not inside it) so it
-            stays visible regardless of scroll position. */}
-        <div className="border-b border-border-subtle bg-accent/6 px-5 py-2 text-11-5 text-text-secondary">
-          These settings are saved to the document, but don&apos;t change the page layout in the
-          preview or exported PDF yet.
-        </div>
-
+        {/* The "these settings don't change the page layout yet" notice that
+            used to sit here is GONE, and deliberately not replaced with a
+            softer version. It was already half-false after the Page Geometry
+            Wiring sub-project (page size, orientation and margins became
+            real there) and is now false in every particular: as of the Page
+            Setup Completeness sub-project, every control in this dialog --
+            size, custom dimensions, orientation, margins, header/footer
+            content, page-number format, theme, and the toolbar's font
+            family -- reaches the paginated preview, Home-screen thumbnails,
+            and exported PDF. A stale disclaimer is worse than none: it
+            teaches the user to distrust controls that now work. */}
         <div className="flex flex-1 overflow-hidden">
           <div className="flex-1 overflow-y-auto p-5">
             <section className="mb-6">
@@ -373,6 +411,32 @@ function PageSetupModal({
                   </PillButton>
                 ))}
               </div>
+              {/* Only meaningful for 'Custom', and only rendered then --
+                  a width/height box sitting inert next to a selected
+                  "Letter" pill would read as broken. computePageGeometry's
+                  own 2in-200in clamp is the real guard (it also covers a
+                  value hand-typed straight into a .md file, which no input
+                  attribute can reach); min/max here is just an affordance. */}
+              {draft.pageSize === 'Custom' && (
+                <div className="mb-3 grid grid-cols-2 gap-3">
+                  {CUSTOM_SIZE_FIELDS.map(({ key, label }) => (
+                    <label key={key} className="flex flex-col gap-1">
+                      <span className="text-11-5 text-text-secondary">{label}</span>
+                      <input
+                        type="number"
+                        step="0.25"
+                        min="2"
+                        max="200"
+                        value={draft[key]}
+                        onChange={(e) =>
+                          setDraft((prev) => ({ ...prev, [key]: parseFloat(e.target.value) || 0 }))
+                        }
+                        className="rounded-sm border border-border-subtle px-2 py-1 text-12-5 text-text-primary"
+                      />
+                    </label>
+                  ))}
+                </div>
+              )}
               <div className="flex gap-2">
                 {ORIENTATIONS.map(({ value, label }) => (
                   <PillButton
@@ -416,6 +480,26 @@ function PageSetupModal({
                 checked={draft.showFooter}
                 onChange={(value) => setDraft((prev) => ({ ...prev, showFooter: value }))}
               />
+
+              <div className="mt-3 grid grid-cols-3 gap-3">
+                {HEADER_FIELDS.map(({ key, label }) => {
+                  const value = draft.header[key]
+                  const isDynamic = DYNAMIC_TOKEN_PATTERN.test(value)
+                  return (
+                    <label key={key} className="flex flex-col gap-1">
+                      <span className="text-11-5 text-text-secondary">{label}</span>
+                      <input
+                        type="text"
+                        value={value}
+                        onChange={(e) => updateHeader(key, e.target.value)}
+                        className={`rounded-sm border border-border-subtle px-2 py-1 text-12-5 ${
+                          isDynamic ? 'text-accent' : 'text-text-primary'
+                        }`}
+                      />
+                    </label>
+                  )
+                })}
+              </div>
 
               <div className="mt-3 grid grid-cols-3 gap-3">
                 {FOOTER_FIELDS.map(({ key, label }) => {

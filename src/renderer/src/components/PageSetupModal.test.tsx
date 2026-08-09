@@ -29,13 +29,16 @@ describe('PageSetupModal', () => {
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
   })
 
-  it('shows a visible, persistent notice that these settings do not yet affect rendering', () => {
+  it('no longer claims these settings do not affect the rendered output', () => {
+    // The inverse of the assertion this test used to make. Every control in
+    // this dialog now reaches the paginated preview, thumbnails and exported
+    // PDF (Page Geometry Wiring made size/orientation/margins real; Page
+    // Setup Completeness did header/footer content, custom size, theme and
+    // font), so the old notice would now actively mislead.
     render(
       <PageSetupModal open={true} initialConfig={CONFIG} onApply={vi.fn()} onClose={vi.fn()} />
     )
-    expect(
-      screen.getByText(/don.t change the page layout in the preview or exported PDF yet/i)
-    ).toBeInTheDocument()
+    expect(screen.queryByText(/don.t change the page layout/i)).not.toBeInTheDocument()
   })
 
   it("renders with initialConfig's values pre-filled", () => {
@@ -68,9 +71,9 @@ describe('PageSetupModal', () => {
     )
 
     // Footer text fields.
-    expect(screen.getByLabelText('Left')).toHaveValue('Confidential')
-    expect(screen.getByLabelText('Center')).toHaveValue('Page {n} of {total}')
-    expect(screen.getByLabelText('Right')).toHaveValue('Acme Corp')
+    expect(screen.getByLabelText('Footer left')).toHaveValue('Confidential')
+    expect(screen.getByLabelText('Footer center')).toHaveValue('Page {n} of {total}')
+    expect(screen.getByLabelText('Footer right')).toHaveValue('Acme Corp')
 
     // Page-number format + theme.
     expect(screen.getByRole('button', { name: 'i, ii, iii' })).toHaveAttribute(
@@ -108,7 +111,7 @@ describe('PageSetupModal', () => {
     await user.click(screen.getByRole('button', { name: 'Portrait' }))
     await user.click(screen.getByRole('switch', { name: 'Show header' }))
 
-    const centerField = screen.getByLabelText('Center')
+    const centerField = screen.getByLabelText('Footer center')
     await user.clear(centerField)
     await user.type(centerField, 'Custom footer text')
 
@@ -196,5 +199,82 @@ describe('PageSetupModal', () => {
     )
 
     expect(screen.getByRole('button', { name: 'A4' })).toHaveAttribute('aria-pressed', 'true')
+  })
+
+  describe('header content fields', () => {
+    it('renders a Left/Center/Right row for the header, pre-filled from initialConfig', () => {
+      render(
+        <PageSetupModal
+          open={true}
+          initialConfig={{ ...CONFIG, header: { left: 'Acme', center: '', right: 'Draft' } }}
+          onApply={vi.fn()}
+          onClose={vi.fn()}
+        />
+      )
+      expect(screen.getByLabelText('Header left')).toHaveValue('Acme')
+      expect(screen.getByLabelText('Header center')).toHaveValue('')
+      expect(screen.getByLabelText('Header right')).toHaveValue('Draft')
+    })
+
+    it('applies an edited header value through onApply', async () => {
+      const onApply = vi.fn()
+      const user = userEvent.setup()
+      render(
+        <PageSetupModal open={true} initialConfig={CONFIG} onApply={onApply} onClose={vi.fn()} />
+      )
+
+      await user.type(screen.getByLabelText('Header center'), 'Quarterly Report')
+      await user.click(screen.getByRole('button', { name: 'Apply' }))
+
+      expect(onApply).toHaveBeenCalledWith(
+        expect.objectContaining({
+          header: expect.objectContaining({ center: 'Quarterly Report' })
+        })
+      )
+    })
+  })
+
+  describe('custom page size fields', () => {
+    it('hides the width/height inputs unless the Custom page size is selected', async () => {
+      const user = userEvent.setup()
+      render(
+        <PageSetupModal
+          open={true}
+          initialConfig={{ ...CONFIG, pageSize: 'Letter' }}
+          onApply={vi.fn()}
+          onClose={vi.fn()}
+        />
+      )
+
+      expect(screen.queryByLabelText('Width (in)')).not.toBeInTheDocument()
+      expect(screen.queryByLabelText('Height (in)')).not.toBeInTheDocument()
+
+      await user.click(screen.getByRole('button', { name: 'Custom' }))
+
+      expect(screen.getByLabelText('Width (in)')).toBeInTheDocument()
+      expect(screen.getByLabelText('Height (in)')).toBeInTheDocument()
+    })
+
+    it('applies edited custom dimensions through onApply', async () => {
+      const onApply = vi.fn()
+      const user = userEvent.setup()
+      render(
+        <PageSetupModal
+          open={true}
+          initialConfig={{ ...CONFIG, pageSize: 'Custom' }}
+          onApply={onApply}
+          onClose={vi.fn()}
+        />
+      )
+
+      const width = screen.getByLabelText('Width (in)')
+      await user.clear(width)
+      await user.type(width, '5.5')
+      await user.click(screen.getByRole('button', { name: 'Apply' }))
+
+      expect(onApply).toHaveBeenCalledWith(
+        expect.objectContaining({ pageSize: 'Custom', customWidth: 5.5 })
+      )
+    })
   })
 })
