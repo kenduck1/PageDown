@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type ReactElement, type RefObject } from 'react'
 import { useAppStore, type ViewMode } from '../store/appStore'
 import { useDocumentStore } from '../store/documentStore'
+import { useFindStore } from '../store/findStore'
 import type { MilkdownEditorHandle } from '../milkdown/MilkdownEditor'
 
 // The formatting toolbar described in docs/design-handoff/README.md's
@@ -149,6 +150,9 @@ function EditorToolbar({ editorRef, onSetViewMode }: EditorToolbarProps): ReactE
   const isSourceMode = viewMode === 'source'
   const content = useDocumentStore((state) => state.content)
   const filePath = useDocumentStore((state) => state.filePath)
+  const findOpen = useFindStore((state) => state.isOpen)
+  const openFind = useFindStore((state) => state.openFind)
+  const closeFind = useFindStore((state) => state.closeFind)
   const [isExporting, setIsExporting] = useState(false)
   // Forces the paragraph-style <select> below to remount (fresh DOM node,
   // back to its uncontrolled default) after every use -- see
@@ -649,11 +653,19 @@ function EditorToolbar({ editorRef, onSetViewMode }: EditorToolbarProps): ReactE
             </ToolbarIconButton>
           </div>
 
-          {/* Find -- per docs/design-handoff/README.md's own "Not yet designed"
-          list: "a search icon exists in the toolbar as a placeholder
-          trigger only" (no find/replace panel exists to open). Deliberately
-          unwired, matching the design handoff's own explicit call-out. */}
-          <ToolbarIconButton label="Find">
+          {/* Wired as of the Find & Replace sub-project
+          (docs/superpowers/specs/2026-08-08-find-replace-design.md) -- this
+          was a placeholder trigger with no onClick since the design handoff.
+          It takes `active` (and therefore renders aria-pressed) because it now
+          genuinely toggles a panel, unlike the one-shot action buttons above:
+          see ToolbarIconButtonProps' own comment on when that prop belongs.
+          Not disabled in Source mode -- Find works on BOTH editing surfaces,
+          unlike the editorRef-bound cluster. */}
+          <ToolbarIconButton
+            label="Find"
+            active={findOpen}
+            onClick={() => (findOpen ? closeFind() : openFind())}
+          >
             <Icon strokeWidth={1.8}>
               <circle cx="10.5" cy="10.5" r="6" />
               <path d="M19 19l-4.3-4.3" />
