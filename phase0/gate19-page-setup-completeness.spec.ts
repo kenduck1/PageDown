@@ -87,6 +87,11 @@ interface PreviewProbe {
   // paginated content box -- the theme/font half of this gate.
   bodyFontSize: string
   bodyFontFamily: string
+  // Computed CSS `direction` of the body <html>/<body> -- the direction
+  // half of this gate. Read from the root, not a paragraph: `direction` is
+  // inherited, so the root is where a `dir` attribute (rather than some
+  // other element merely inheriting one) is actually provable.
+  bodyDirection: string
   text: string
 }
 
@@ -151,6 +156,7 @@ async function probePreview(app: ElectronApplication): Promise<PreviewProbe | nu
           bottomRight: marginContent('bottom-right'),
           bodyFontSize: pStyle ? pStyle.fontSize : '',
           bodyFontFamily: pStyle ? pStyle.fontFamily : '',
+          bodyDirection: window.getComputedStyle(document.body).direction,
           text: root ? root.innerText : ''
         })
       })()
@@ -535,6 +541,33 @@ test.describe('Gate 19: Page Setup completeness', () => {
       editorFont,
       'the editor canvas must resolve the same font family as the paginator'
     ).toContain('Inter Variable')
+  })
+
+  test('a document with direction: rtl renders real RTL layout on both surfaces', async () => {
+    const { marker } = await openInSplitMode(
+      ['---', 'direction: rtl', '---'].join('\n'),
+      'direction'
+    )
+    const probe = await pollPreview(marker)
+
+    expect(
+      probe.bodyDirection,
+      'the paginated preview must resolve to a real CSS direction: rtl, not the ltr default'
+    ).toBe('rtl')
+
+    const editorDirection = await win.evaluate(async () => {
+      await new Promise<void>((resolve) =>
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve()))
+      )
+      const mount = document.querySelector('.milkdown-mount')
+      return mount ? window.getComputedStyle(mount).direction : ''
+    })
+    console.log(`Gate 19 direction: preview=${probe.bodyDirection}, editor=${editorDirection}`)
+
+    expect(
+      editorDirection,
+      'the editor canvas must apply the same resolved direction as the paginator'
+    ).toBe(probe.bodyDirection)
   })
 
   test('running content resolves to real page numbers in a real exported PDF', async () => {

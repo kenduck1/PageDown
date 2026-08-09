@@ -170,6 +170,7 @@ export type Orientation = 'portrait' | 'landscape'
 export type PageNumberFormat = 'decimal' | 'roman'
 export type PageTheme = 'default' | 'resume' | 'letter' | 'report'
 export type PageFontFamily = 'source-serif-4' | 'inter'
+export type TextDirection = 'ltr' | 'rtl'
 
 export interface PageMargins {
   top: number
@@ -201,6 +202,15 @@ export interface PageConfig {
   fontFamily: PageFontFamily
   pageNumberFormat: PageNumberFormat
   theme: PageTheme
+  // Basic RTL support, per the master design doc's own non-goals section:
+  // "a document-level `direction:` frontmatter key is supported for basic
+  // RTL, but full CJK justification/vertical writing is not." Deliberately
+  // frontmatter-only -- no PageSetupModal UI toggle -- matching that exact
+  // framing rather than the theme/font pickers' own "UI control with a
+  // frontmatter mirror" pattern; round-trips through applyPageConfig like
+  // every other key regardless, so a document that sets it by hand is never
+  // silently stripped by an unrelated Page Setup save.
+  direction: TextDirection
 }
 
 // Sensible defaults for a brand-new document / any owned key missing or
@@ -222,7 +232,8 @@ export const DEFAULT_PAGE_CONFIG: PageConfig = {
   customHeight: 11,
   fontFamily: 'source-serif-4',
   pageNumberFormat: 'decimal',
-  theme: 'default'
+  theme: 'default',
+  direction: 'ltr'
 }
 
 const PAGE_SIZES: readonly PageSize[] = ['Letter', 'A4', 'Legal', 'Custom']
@@ -230,6 +241,7 @@ const ORIENTATIONS: readonly Orientation[] = ['portrait', 'landscape']
 const PAGE_NUMBER_FORMATS: readonly PageNumberFormat[] = ['decimal', 'roman']
 const THEMES: readonly PageTheme[] = ['default', 'resume', 'letter', 'report']
 const FONT_FAMILIES: readonly PageFontFamily[] = ['source-serif-4', 'inter']
+const TEXT_DIRECTIONS: readonly TextDirection[] = ['ltr', 'rtl']
 
 function isFiniteNumber(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value)
@@ -350,6 +362,12 @@ export function extractPageConfig(rawFrontmatterYaml: string): Partial<PageConfi
   }
   if (typeof parsed.theme === 'string' && (THEMES as string[]).includes(parsed.theme)) {
     result.theme = parsed.theme as PageTheme
+  }
+  if (
+    typeof parsed.direction === 'string' &&
+    (TEXT_DIRECTIONS as string[]).includes(parsed.direction)
+  ) {
+    result.direction = parsed.direction as TextDirection
   }
 
   return result
@@ -499,6 +517,9 @@ function buildOwnedLines(updates: Partial<PageConfig>): OwnedLine[] {
   }
   if (updates.theme !== undefined) {
     lines.push({ key: 'theme', text: `theme: ${updates.theme}` })
+  }
+  if (updates.direction !== undefined) {
+    lines.push({ key: 'direction', text: `direction: ${updates.direction}` })
   }
 
   return lines

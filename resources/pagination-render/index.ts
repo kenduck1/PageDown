@@ -1137,6 +1137,12 @@ window.addEventListener('message', async (event: MessageEvent<IncomingMessage>) 
     `pagedown-theme-${documentStyle.theme}`,
     `pagedown-font-${documentStyle.fontFamily}`
   ].join(' ')
+  // Native `dir` attribute (mirrors MilkdownEditor.tsx's own mount div),
+  // not a CSS `direction` override -- it drives the browser's bidi text-run
+  // resolution and list/table mirroring during Paged.js's own layout pass,
+  // not just final paint. Reassigned unconditionally per request for the
+  // same reason as className above: this harness can be long-lived.
+  document.body.dir = documentStyle.direction
 
   // Everything below is inside one try/catch, deliberately, so that no path
   // through this handler — including Polisher cleanup and the DOM lookup

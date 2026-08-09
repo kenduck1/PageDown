@@ -68,6 +68,11 @@ describe('resolveDocumentStyle', () => {
   it('matches DEFAULT_DOCUMENT_STYLE for the default config', () => {
     expect(resolveDocumentStyle(DEFAULT_PAGE_CONFIG)).toEqual(DEFAULT_DOCUMENT_STYLE)
   })
+
+  it('passes direction through unchanged', () => {
+    const style = resolveDocumentStyle({ ...DEFAULT_PAGE_CONFIG, direction: 'rtl' })
+    expect(style.direction).toBe('rtl')
+  })
 })
 
 describe('buildRunningContentCss', () => {

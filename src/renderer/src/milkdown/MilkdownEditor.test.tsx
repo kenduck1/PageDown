@@ -409,6 +409,25 @@ describe('MilkdownEditor', () => {
     expect(onError).not.toHaveBeenCalled()
   })
 
+  it('sets dir="rtl" on the mount div when the document style requests it', async () => {
+    const onChange = vi.fn()
+    const onError = vi.fn()
+    const { container } = render(
+      <MilkdownEditor
+        geometry={DEFAULT_GEOMETRY}
+        documentStyle={{ ...DEFAULT_DOCUMENT_STYLE, direction: 'rtl' }}
+        content="# Hello"
+        onChange={onChange}
+        onError={onError}
+      />
+    )
+
+    await waitFor(() => {
+      expect(container.querySelector('.ProseMirror')).toBeInTheDocument()
+    })
+    expect(container.querySelector('.milkdown-mount')).toHaveAttribute('dir', 'rtl')
+  })
+
   it('calls onChange with serialized markdown after a real edit', async () => {
     const onChange = vi.fn()
     const onError = vi.fn()
