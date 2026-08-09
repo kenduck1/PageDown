@@ -171,9 +171,17 @@ function SplitPreview({
   // mode would open Split mode still showing page 1.
   const lastAppliedPageRef = useRef(1)
   // Latest-ref so the poll effect can call the current callback without
-  // re-subscribing its interval on every parent render.
+  // re-subscribing its interval on every parent render. Assigned inside an
+  // effect (not inline during render) per eslint-plugin-react-hooks'
+  // react-hooks/refs rule -- mutating ref.current during render is flagged
+  // even for this "latest ref" pattern. Matches MilkdownEditor.tsx's
+  // onChangeRef/onErrorRef treatment: a plain effect with no dependency
+  // array, so it reassigns after every render rather than only when the
+  // callback's identity changes.
   const onPageChangeRef = useRef(onPageChange)
-  onPageChangeRef.current = onPageChange
+  useEffect(() => {
+    onPageChangeRef.current = onPageChange
+  })
 
   useEffect(() => {
     if (targetPage === lastAppliedPageRef.current) return
