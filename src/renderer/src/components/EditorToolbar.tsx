@@ -1,6 +1,7 @@
-import { useEffect, useRef, useState, type ReactElement, type RefObject } from 'react'
+import { useEffect, useMemo, useRef, useState, type ReactElement, type RefObject } from 'react'
 import { useAppStore, type ViewMode } from '../store/appStore'
 import { useDocumentStore } from '../store/documentStore'
+import { resolvePageConfig, type PageFontFamily } from '../../../markdown/page-config'
 import type { MilkdownEditorHandle } from '../milkdown/MilkdownEditor'
 
 // The formatting toolbar described in docs/design-handoff/README.md's
@@ -30,6 +31,16 @@ export interface EditorToolbarProps {
   // component's existing standalone tests (rendered with only `editorRef`)
   // keep passing unchanged.
   onSetViewMode?: (mode: ViewMode) => void
+  // Optional, same pattern as onSetViewMode above: when provided, the
+  // font-family select reports the user's choice through this instead of
+  // touching the document itself. EditorScreen wires it to a real
+  // frontmatter write (handleSetFontFamily), because the font is a property
+  // OF THE DOCUMENT -- it has to survive save/reopen and reach the
+  // paginator and PDF export, so UI-only state would be wrong. Omitted in
+  // this component's own standalone tests, which render it with only
+  // `editorRef`; the select still shows the document's real current family
+  // either way, it just can't change it.
+  onSetFontFamily?: (fontFamily: PageFontFamily) => void
 }
 
 // All icon paths below are adapted from docs/design-handoff/PageDown.dc.html's
@@ -127,7 +138,11 @@ function ToolbarIconButton({
   )
 }
 
-function EditorToolbar({ editorRef, onSetViewMode }: EditorToolbarProps): ReactElement {
+function EditorToolbar({
+  editorRef,
+  onSetViewMode,
+  onSetFontFamily
+}: EditorToolbarProps): ReactElement {
   const viewMode = useAppStore((state) => state.viewMode)
   const setViewMode = useAppStore((state) => state.setViewMode)
   const splitLeftMode = useAppStore((state) => state.splitLeftMode)
@@ -150,6 +165,10 @@ function EditorToolbar({ editorRef, onSetViewMode }: EditorToolbarProps): ReactE
   const content = useDocumentStore((state) => state.content)
   const filePath = useDocumentStore((state) => state.filePath)
   const [isExporting, setIsExporting] = useState(false)
+  // The document's own current font family, for the controlled select
+  // below. resolvePageConfig does a real YAML parse, so it is memoized on
+  // `content` for the same reason EditorScreen memoizes its own copy.
+  const fontFamily = useMemo(() => resolvePageConfig(content).fontFamily, [content])
   // Forces the paragraph-style <select> below to remount (fresh DOM node,
   // back to its uncontrolled default) after every use -- see
   // handleHeadingChange's own comment for why. Not a value store; only
@@ -463,13 +482,21 @@ function EditorToolbar({ editorRef, onSetViewMode }: EditorToolbarProps): ReactE
                 </span>
               </div>
               <div className="relative flex h-[30px] items-center">
+                {/* Controlled off the document's own frontmatter, not local
+                    state: reopening a document must show the family it
+                    actually uses. The `font-serif` class the closed control
+                    used to carry is deliberately gone -- it rendered the
+                    selection in Source Serif regardless of what was
+                    selected, which read as the control being broken the
+                    moment a second family existed. */}
                 <select
                   aria-label="Font family"
-                  className="h-full appearance-none rounded-sm bg-transparent pl-2.5 pr-6 font-serif text-12-5 text-text-primary hover:bg-chrome-light"
-                  defaultValue="Source Serif 4"
+                  className="h-full appearance-none rounded-sm bg-transparent pl-2.5 pr-6 text-12-5 text-text-primary hover:bg-chrome-light"
+                  value={fontFamily}
+                  onChange={(e) => onSetFontFamily?.(e.target.value as PageFontFamily)}
                 >
-                  <option value="Source Serif 4">Source Serif 4</option>
-                  <option value="Sans">Sans</option>
+                  <option value="source-serif-4">Source Serif 4</option>
+                  <option value="inter">Inter</option>
                 </select>
                 <span className="pointer-events-none absolute right-2 text-text-tertiary">
                   <ChevronDownIcon />

@@ -14,8 +14,14 @@ import { extractOutline } from '../lib/extractOutline'
 import { usePageCount } from '../hooks/usePageCount'
 import { useAutosave } from '../hooks/useAutosave'
 import { extractRawFrontmatter, replaceRawFrontmatter } from '../../../markdown/frontmatter-splice'
-import { resolvePageConfig, applyPageConfig, type PageConfig } from '../../../markdown/page-config'
+import {
+  resolvePageConfig,
+  applyPageConfig,
+  type PageConfig,
+  type PageFontFamily
+} from '../../../markdown/page-config'
 import { computePageGeometry } from '../../../typography/page-geometry'
+import { resolveDocumentStyle } from '../../../typography/document-style'
 
 // Exact copy pinned in docs/superpowers/specs/2026-08-08-undo-barrier-notice-design.md
 // -- a single, direction-agnostic sentence (not "Switched to Source"/"Switched
@@ -561,6 +567,13 @@ function EditorScreen(): React.JSX.Element {
   // every key a document's frontmatter happens to omit).
   const pageGeometry = useMemo(() => computePageGeometry(pageConfig), [pageConfig])
 
+  // The non-geometric half of the same story: theme, font family, and the
+  // running header/footer content. Derived from the very same pageConfig
+  // the geometry above comes from, and handed to the same two surfaces, so
+  // the editor canvas and the sandboxed paginator cannot disagree about a
+  // document's typography any more than they can about its page box.
+  const documentStyle = useMemo(() => resolveDocumentStyle(pageConfig), [pageConfig])
+
   const handleApplyPageConfig = (config: PageConfig): void => {
     const newRawYaml = applyPageConfig(extractRawFrontmatter(content), config)
     // replaceContent (not updateContent): this edit originates outside the
@@ -569,6 +582,23 @@ function EditorScreen(): React.JSX.Element {
     // documentStore.ts's replaceContent doc comment.
     replaceContent(replaceRawFrontmatter(content, newRawYaml))
     closePageSetup()
+  }
+
+  // The toolbar's font-family control. Deliberately routed through the same
+  // frontmatter write path as Page Setup rather than held as UI-only state:
+  // the font is a property OF THE DOCUMENT (it has to survive save/reopen
+  // and reach the paginator and PDF export), so the document's own YAML is
+  // the only correct home for it. Consequence worth knowing: like any
+  // frontmatter change this bumps `revision` and therefore remounts the
+  // editor, which costs the cursor position -- the same tradeoff Page
+  // Setup's Apply already makes, and the reason this is a toolbar control
+  // rather than something wired to every keystroke.
+  const handleSetFontFamily = (fontFamily: PageFontFamily): void => {
+    const newRawYaml = applyPageConfig(extractRawFrontmatter(content), {
+      ...pageConfig,
+      fontFamily
+    })
+    replaceContent(replaceRawFrontmatter(content, newRawYaml))
   }
 
   // Returns the underlying flush+Save+replace promise (rather than
@@ -777,6 +807,7 @@ function EditorScreen(): React.JSX.Element {
         key={revision}
         content={content}
         geometry={pageGeometry}
+        documentStyle={documentStyle}
         // Bound to THIS render's activeTabId, not the bare updateContent
         // store action -- see documentStore.ts's updateContentForTab doc
         // comment for the tab-switch race this closes: any change to
@@ -815,7 +846,11 @@ function EditorScreen(): React.JSX.Element {
         </div>
       )}
       <EditorTabBar onCloseDirtyActiveTab={handleCloseDirtyActiveTab} />
-      <EditorToolbar editorRef={editorRef} onSetViewMode={handleSetViewMode} />
+      <EditorToolbar
+        editorRef={editorRef}
+        onSetViewMode={handleSetViewMode}
+        onSetFontFamily={handleSetFontFamily}
+      />
       <div className="flex flex-1 overflow-hidden">
         <EditorSidebar
           content={content}
