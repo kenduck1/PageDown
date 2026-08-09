@@ -209,6 +209,35 @@ describe('SplitPreview', () => {
     vi.useRealTimers()
   })
 
+  it('logs a failed render instead of swallowing it entirely', async () => {
+    // Both catches here used to be bare `.catch(() => {})`, so a preview
+    // render that genuinely failed -- the sandbox publishing a real error,
+    // sendDocument rejecting with it -- left no trace anywhere at all: no
+    // UI, no console, nothing. The user-facing behavior (the preview keeps
+    // its last known-good pages, see the render context's own commit-point
+    // fix) is right, which is exactly why the failure itself has to surface
+    // somewhere a developer can find it.
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const error = new Error('Pagination harness timed out waiting for a result')
+    window.api.sendSplitPreviewDocument = vi.fn().mockRejectedValue(error)
+
+    render(
+      <SplitPreview
+        content="# Hi"
+        filePath={null}
+        overlayOpen={false}
+        targetPage={1}
+        onPageChange={vi.fn()}
+        remoteImagesAllowed={false}
+      />
+    )
+
+    await waitFor(() => {
+      expect(consoleError).toHaveBeenCalledWith('Split preview render failed', error)
+    })
+    consoleError.mockRestore()
+  })
+
   // Final whole-branch review finding, I2 (Important): a WebContentsView
   // composites above ALL DOM, so the native preview was painting over Page
   // Setup's modal, including its own Apply/Cancel buttons. No setVisible

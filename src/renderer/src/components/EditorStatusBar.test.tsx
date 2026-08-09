@@ -44,6 +44,7 @@ describe('EditorStatusBar', () => {
         zoom={1}
         onZoomChange={vi.fn()}
         pageCount={3}
+        pageCountPending={false}
         currentPage={1}
         onNavigateToPage={vi.fn()}
       />
@@ -60,6 +61,7 @@ describe('EditorStatusBar', () => {
         zoom={1}
         onZoomChange={vi.fn()}
         pageCount={3}
+        pageCountPending={false}
         currentPage={1}
         onNavigateToPage={vi.fn()}
       />
@@ -75,6 +77,7 @@ describe('EditorStatusBar', () => {
         zoom={1}
         onZoomChange={vi.fn()}
         pageCount={3}
+        pageCountPending={false}
         currentPage={1}
         onNavigateToPage={vi.fn()}
       />
@@ -91,6 +94,7 @@ describe('EditorStatusBar', () => {
         zoom={1}
         onZoomChange={vi.fn()}
         pageCount={3}
+        pageCountPending={false}
         currentPage={1}
         onNavigateToPage={vi.fn()}
       />
@@ -109,6 +113,7 @@ describe('EditorStatusBar', () => {
         zoom={1}
         onZoomChange={onZoomChange}
         pageCount={3}
+        pageCountPending={false}
         currentPage={1}
         onNavigateToPage={vi.fn()}
       />
@@ -127,6 +132,7 @@ describe('EditorStatusBar', () => {
         zoom={0.75}
         onZoomChange={vi.fn()}
         pageCount={3}
+        pageCountPending={false}
         currentPage={1}
         onNavigateToPage={vi.fn()}
       />
@@ -146,6 +152,7 @@ function renderBar(overrides: Partial<React.ComponentProps<typeof EditorStatusBa
       zoom={1}
       onZoomChange={vi.fn()}
       pageCount={12}
+      pageCountPending={false}
       currentPage={3}
       onNavigateToPage={onNavigateToPage}
       {...overrides}
@@ -244,5 +251,28 @@ describe('EditorStatusBar page navigation', () => {
   it('still shows the word count', () => {
     renderBar()
     expect(screen.getByText('3 words')).toBeInTheDocument()
+  })
+})
+
+describe('EditorStatusBar page-count in-progress indicator', () => {
+  it('shows no indicator when no count is in flight', () => {
+    renderBar({ pageCountPending: false })
+    expect(screen.queryByTestId('page-count-pending')).not.toBeInTheDocument()
+  })
+
+  it('shows a subtle indicator while a fresh count is in flight', () => {
+    renderBar({ pageCountPending: true })
+    expect(screen.getByTestId('page-count-pending')).toBeInTheDocument()
+  })
+
+  it('keeps showing the last known-good count, and keeps navigation live, while pending', () => {
+    // The whole point of design:189's "last known-good value with a subtle
+    // in-progress indicator, never blank or flickering": the reading must
+    // NOT fall back to the em-dash and the chevrons must NOT flicker
+    // disabled just because a refresh is in flight.
+    renderBar({ pageCountPending: true })
+    expect(screen.getByRole('button', { name: /page 3 of 12/i })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Next page' })).toBeEnabled()
+    expect(screen.getByRole('button', { name: 'Previous page' })).toBeEnabled()
   })
 })

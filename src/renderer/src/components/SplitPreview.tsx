@@ -169,7 +169,7 @@ function SplitPreview({
       .then(() => {
         lastSentRef.current = { content, filePath, remoteImagesAllowed }
       })
-      .catch(() => {
+      .catch((err: unknown) => {
         // Split mode's preview is best-effort, same governing rule as the
         // rest of this app's fire-and-forget IPC calls (see
         // EditorHistory.tsx's own .catch() for the precedent this matches):
@@ -178,6 +178,18 @@ function SplitPreview({
         // stamp lastSentRef on failure -- see that ref's own comment above
         // for why leaving it unset here is what lets the debounced effect
         // retry instead of believing this content was already delivered.
+        //
+        // LOGGED, though, rather than discarded entirely (matching
+        // EditorToolbar.tsx's own console.error precedent for a failed
+        // export/print). A bare `.catch(() => {})` here meant a failed
+        // render was completely invisible: the sandbox published a real,
+        // specific error, sendDocument rejected with it, and nothing
+        // anywhere -- no UI, no console -- recorded that it happened. The
+        // preview keeping its last known-good content (the sandbox's own
+        // commit-point fix, resources/pagination-render/index.ts) is the
+        // right USER-facing behavior and is precisely why the failure needs
+        // to be visible somewhere else.
+        console.error('Split preview render failed', err)
       })
     // Mount-only: sends the initial content immediately rather than waiting
     // out the debounce below for the very first paint.
@@ -205,12 +217,13 @@ function SplitPreview({
         .then(() => {
           lastSentRef.current = { content, filePath, remoteImagesAllowed }
         })
-        .catch(() => {
-          // Same as the mount effect's catch above: swallow so this never
-          // becomes an unhandled rejection, and leave lastSentRef unset for
-          // this value so a later edit (or the next unrelated debounce
-          // cycle) retries rather than getting stuck believing a failed
-          // send succeeded.
+        .catch((err: unknown) => {
+          // Same as the mount effect's catch above: log so a failed render
+          // is not completely invisible, never rethrow, and leave
+          // lastSentRef unset for this value so a later edit (or the next
+          // unrelated debounce cycle) retries rather than getting stuck
+          // believing a failed send succeeded.
+          console.error('Split preview render failed', err)
         })
     }, DEBOUNCE_MS)
     return () => clearTimeout(timer)

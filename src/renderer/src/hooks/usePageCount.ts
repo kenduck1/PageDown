@@ -99,11 +99,27 @@ export function usePageCount(
         })
         .catch((err: unknown) => {
           if (latestRequestRef.current !== requestId) return
-          setState({
-            pageCount: null,
+          // KEEPS the last known-good count rather than resetting it to
+          // `null`, for the same reason the content-change branch above
+          // keeps it -- and for a stronger one. A failed count is not new
+          // information about the document's length: the pagination harness
+          // timing out (its 10s deadline), or one render throwing, says
+          // nothing about how many pages the document had a moment ago. The
+          // design doc's own requirement is that this reading "shows the
+          // last known-good value with a subtle in-progress indicator --
+          // never blank or flickering" (design:189), and nulling here made
+          // the status bar drop to a literal em-dash on a transient harness
+          // failure that the very next debounce cycle usually recovers from.
+          //
+          // `null` therefore keeps its ONE meaning: never successfully
+          // computed at all (a document whose first count failed still shows
+          // the em-dash, correctly -- there is no known-good value to show).
+          // It never means "we had a number and lost it."
+          setState((prev) => ({
+            pageCount: prev.pageCount,
             loading: false,
             error: err instanceof Error ? err.message : String(err)
-          })
+          }))
         })
     }, debounceMs)
 

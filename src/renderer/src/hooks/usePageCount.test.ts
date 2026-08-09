@@ -51,8 +51,60 @@ describe('usePageCount', () => {
     const { result } = renderHook(() => usePageCount('# Doc', null, 0))
 
     await waitFor(() => expect(result.current.loading).toBe(false))
+    // Null HERE is correct and is the one meaning `null` carries: this
+    // document's count was never successfully computed at all, so there is
+    // no last known-good value to fall back to. Contrast the retention test
+    // below, where there is one.
     expect(result.current.pageCount).toBeNull()
     expect(result.current.error).toBe('harness timed out')
+  })
+
+  it('retains the last known-good page count when a later fetch fails', async () => {
+    // design:189 -- the page count "shows the last known-good value with a
+    // subtle in-progress indicator, never blank or flickering." Before this,
+    // the catch below set `pageCount: null`, so a single transient harness
+    // failure (its 10s timeout, or one render throwing) dropped the status
+    // bar to a literal em-dash for a document whose length had not changed
+    // and was already known.
+    vi.mocked(window.api.getPageCount)
+      .mockResolvedValueOnce({ pageCount: 12 })
+      .mockRejectedValueOnce(new Error('Pagination harness timed out waiting for a result'))
+
+    const { result, rerender } = renderHook(({ content }) => usePageCount(content, null, 0), {
+      initialProps: { content: 'first' }
+    })
+    await waitFor(() => expect(result.current.pageCount).toBe(12))
+
+    rerender({ content: 'second' })
+    await waitFor(() =>
+      expect(result.current.error).toBe('Pagination harness timed out waiting for a result')
+    )
+
+    expect(result.current.pageCount).toBe(12)
+    expect(result.current.loading).toBe(false)
+  })
+
+  it('recovers to the fresh count once a fetch succeeds again after a failure', async () => {
+    // The other half of retention: holding the stale value must not be
+    // sticky. A retained count that never updated again would be a worse bug
+    // than the blank it replaced.
+    vi.mocked(window.api.getPageCount)
+      .mockResolvedValueOnce({ pageCount: 12 })
+      .mockRejectedValueOnce(new Error('transient'))
+      .mockResolvedValueOnce({ pageCount: 3 })
+
+    const { result, rerender } = renderHook(({ content }) => usePageCount(content, null, 0), {
+      initialProps: { content: 'first' }
+    })
+    await waitFor(() => expect(result.current.pageCount).toBe(12))
+
+    rerender({ content: 'second' })
+    await waitFor(() => expect(result.current.error).toBe('transient'))
+    expect(result.current.pageCount).toBe(12)
+
+    rerender({ content: 'third' })
+    await waitFor(() => expect(result.current.pageCount).toBe(3))
+    expect(result.current.error).toBeNull()
   })
 
   it('debounces: does not call getPageCount before the debounce window elapses', () => {

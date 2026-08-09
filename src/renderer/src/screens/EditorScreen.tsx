@@ -94,7 +94,17 @@ function EditorScreen(): React.JSX.Element {
     toastIdRef.current += 1
     setToast({ id: toastIdRef.current, message: UNDO_BARRIER_TOAST_MESSAGE })
   }
-  const { pageCount } = usePageCount(content, filePath, undefined, remoteImagesAllowed === true)
+  // `loading` is consumed, not discarded: it is the status bar's in-progress
+  // indicator (see EditorStatusBar's own `pageCountPending` doc comment and
+  // design:189). It was computed and thrown away here for as long as this
+  // hook has existed, which is why the "never blank or flickering"
+  // requirement had only its blank half solved.
+  const { pageCount, loading: pageCountPending } = usePageCount(
+    content,
+    filePath,
+    undefined,
+    remoteImagesAllowed === true
+  )
   // undefined (not preferences?.autosaveIntervalMs ?? somethingElse) when
   // preferences haven't loaded yet -- useAutosave's own default parameter
   // already falls back to the pre-existing 45s constant in that case, so
@@ -1252,6 +1262,7 @@ function EditorScreen(): React.JSX.Element {
         content={content}
         isDirty={isDirty}
         pageCount={pageCount}
+        pageCountPending={pageCountPending}
         currentPage={effectiveCurrentPage}
         onNavigateToPage={handleNavigateToPage}
         zoom={zoom}
