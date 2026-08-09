@@ -144,9 +144,12 @@ function EditorToolbar({ editorRef, onSetViewMode }: EditorToolbarProps): ReactE
   // Undo/Redo in particular: a plain <textarea> has real browser-native
   // undo/redo of its own, so disabling THIS toolbar's Undo/Redo buttons
   // doesn't remove undo capability in Source mode, just the redundant/dead
-  // duplicate control. Everything else (view-mode switcher, Export PDF,
-  // and every still-unwired placeholder button like Underline/Find/Insert
-  // image) is independent of the Milkdown instance and stays enabled.
+  // duplicate control. Everything else (view-mode switcher, Export PDF, the
+  // now-wired Find button, and the still-unwired placeholder buttons like
+  // Underline/Insert image) is independent of the Milkdown instance and stays
+  // enabled. Find in particular MUST stay enabled in Source mode -- it works
+  // on both editing surfaces (see useFindController.ts), so disabling it here
+  // would remove a real capability rather than a dead control.
   const isSourceMode = viewMode === 'source'
   const content = useDocumentStore((state) => state.content)
   const filePath = useDocumentStore((state) => state.filePath)
