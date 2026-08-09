@@ -5,6 +5,7 @@ import { markdownToHtml } from '../markdown/pipeline'
 import { resolvePageConfig } from '../markdown/page-config'
 import { computePageGeometry } from '../typography/page-geometry'
 import { resolveDocumentStyle } from '../typography/document-style'
+import { clampPageIndex, type PageNavState } from '../pagination/page-nav'
 import type { RenderRequestMessage } from '../pagination/render-message'
 import {
   ensureRenderInfraRegistered,
@@ -55,6 +56,15 @@ export interface SplitPreviewHarness {
   // answer (mainWindow.webContents.getZoomFactor() alone, no
   // devicePixelRatio multiply) and the empirical evidence behind it.
   setBounds(cssBounds: CssRect, scaleFactor: number): void
+  /**
+   * Scrolls the sandboxed preview so `requestedPage` (1-based) is at the top
+   * of the pane, and reports where it actually landed. The sandbox clamps, so
+   * an out-of-range request is not an error -- it returns the real page it
+   * settled on, which is what the renderer reconciles its own state to.
+   */
+  scrollToPage(requestedPage: number): Promise<PageNavState>
+  /** Reports the preview's current page without scrolling it. */
+  getPage(): Promise<PageNavState>
   // Tears the view down and detaches it from mainWindow.contentView. Safe
   // to call more than once -- the second call is a deliberate no-op, never
   // a throw, matching this codebase's general "never throw from teardown"
@@ -233,6 +243,43 @@ export async function createSplitPreviewHarness(
     view.setBounds(toViewBounds(cssBounds, scaleFactor))
   }
 
+  const EMPTY_PAGE_STATE: PageNavState = { currentPage: 1, pageCount: 0 }
+
+  // Validates whatever came back across the executeJavaScript boundary before
+  // trusting it. That boundary is untyped at runtime -- an override, a bundle
+  // that failed to evaluate, or a page navigated out from under us can all
+  // return something that is not this shape, and a NaN reaching the renderer
+  // would surface as "Page NaN of 12" in the status bar.
+  function coercePageNavState(value: unknown): PageNavState {
+    if (typeof value !== 'object' || value === null) return EMPTY_PAGE_STATE
+    const candidate = value as Partial<PageNavState>
+    if (!Number.isFinite(candidate.currentPage) || !Number.isFinite(candidate.pageCount)) {
+      return EMPTY_PAGE_STATE
+    }
+    const pageCount = Math.max(0, Math.floor(candidate.pageCount as number))
+    return { currentPage: clampPageIndex(candidate.currentPage as number, pageCount), pageCount }
+  }
+
+  async function scrollToPage(requestedPage: number): Promise<PageNavState> {
+    if (destroyed) return EMPTY_PAGE_STATE
+    // Only ever interpolate a validated integer into injected JS. The logic
+    // itself lives in the bundled sandbox module, not in this string.
+    if (!Number.isFinite(requestedPage)) return EMPTY_PAGE_STATE
+    const safePage = Math.max(1, Math.floor(requestedPage))
+    const raw = await view.webContents.executeJavaScript(
+      `window.__pagedownPageNav ? window.__pagedownPageNav.scrollToPage(${JSON.stringify(safePage)}) : null`
+    )
+    return coercePageNavState(raw)
+  }
+
+  async function getPage(): Promise<PageNavState> {
+    if (destroyed) return EMPTY_PAGE_STATE
+    const raw = await view.webContents.executeJavaScript(
+      `window.__pagedownPageNav ? window.__pagedownPageNav.getPage() : null`
+    )
+    return coercePageNavState(raw)
+  }
+
   function destroy(): void {
     if (destroyed) return
     destroyed = true
@@ -258,5 +305,5 @@ export async function createSplitPreviewHarness(
     }
   }
 
-  return { view, sendDocument, setBounds, destroy }
+  return { view, sendDocument, setBounds, scrollToPage, getPage, destroy }
 }

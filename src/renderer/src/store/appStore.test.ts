@@ -89,4 +89,26 @@ describe('useAppStore', () => {
     useAppStore.getState().goSettings()
     expect(useAppStore.getState().screen).toBe('settings')
   })
+
+  it('starts on page 1', () => {
+    expect(useAppStore.getState().currentPage).toBe(1)
+  })
+
+  it('setCurrentPage sets the current page', () => {
+    useAppStore.getState().setCurrentPage(4)
+    expect(useAppStore.getState().currentPage).toBe(4)
+  })
+
+  it('setCurrentPage floors below 1', () => {
+    useAppStore.getState().setCurrentPage(0)
+    expect(useAppStore.getState().currentPage).toBe(1)
+    useAppStore.getState().setCurrentPage(-3)
+    expect(useAppStore.getState().currentPage).toBe(1)
+  })
+
+  it('setCurrentPage ignores a non-finite page', () => {
+    useAppStore.getState().setCurrentPage(6)
+    useAppStore.getState().setCurrentPage(Number.NaN)
+    expect(useAppStore.getState().currentPage).toBe(6)
+  })
 })

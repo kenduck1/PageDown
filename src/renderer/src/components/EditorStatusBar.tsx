@@ -1,19 +1,26 @@
-import { useMemo } from 'react'
+import { useMemo, useState } from 'react'
 import { countWords } from '../lib/wordCount'
-import { usePageCount } from '../hooks/usePageCount'
 
 export interface EditorStatusBarProps {
   content: string
-  /**
-   * The document's own on-disk path (`documentStore.filePath`), or `null` for
-   * an unsaved one. Passed straight through to `usePageCount` so the
-   * pagination harness can resolve the document's local image references
-   * against its own directory — see that hook's doc comment. A prop rather
-   * than a direct store read, matching this component's existing
-   * store-independent design (`content`/`isDirty` arrive the same way).
-   */
-  filePath: string | null
   isDirty: boolean
+  /**
+   * Total pages, or null while the count is still being computed. The count
+   * is owned by EditorScreen (one usePageCount for the whole editor) rather
+   * than fetched here -- navigation needs ONE authoritative total to clamp
+   * against, and this component used to run a second, independent
+   * usePageCount with its own debounce timer.
+   */
+  pageCount: number | null
+  /** 1-based page currently shown by the paginated preview. */
+  currentPage: number
+  /**
+   * Asks the app to show `page`. In Split mode this scrolls the preview; in
+   * Format/Source mode EditorScreen switches to Split first -- which is why
+   * the tooltips below say so before the click, rather than surprising the
+   * user with a mode change after it.
+   */
+  onNavigateToPage: (page: number) => void
   /**
    * A CSS scale multiplier (1 = 100%, 0.5 = 50%, 2 = 200%), NOT a raw
    * percentage number. A future integration step is expected to apply this
@@ -38,15 +45,6 @@ const ZOOM_OPTIONS: ReadonlyArray<{ label: string; value: number }> = [
   { label: '150%', value: 1.5 },
   { label: '200%', value: 2 }
 ]
-
-// Inert: real chevron-click page navigation needs a live, incrementally-
-// repaginated preview to actually scroll/jump to -- this codebase's own
-// Phase 0 Gate 7 findings (docs/superpowers/plans/2026-07-25-phase0-
-// findings.md) are why that's a separate, larger, deferred sub-project
-// rather than something this status bar can wire up on its own. Clicking
-// either chevron currently does nothing.
-// eslint-disable-next-line @typescript-eslint/no-empty-function
-function noop(): void {}
 
 function ChevronLeftIcon(): React.JSX.Element {
   return (
@@ -107,25 +105,20 @@ function CheckIcon(): React.JSX.Element {
  * chrome" item 5): page navigation, a zoom control, word count, and a
  * right-aligned autosave indicator.
  *
- * Built as a standalone, isolated component (not wired into EditorScreen —
- * that integration is a separate, later step owned by whichever track
- * merges this in). Two pieces are deliberately real and two are
- * deliberately inert, per this sub-project's own scoping decision:
- *
  * - Word count (real): computed from `content` via `countWords`
  *   (`../lib/wordCount`), memoized on `content`.
- * - Page count (real): fetched via `usePageCount`, which debounces and
- *   round-trips through a dedicated main-process pagination harness
- *   (`file:getPageCount` IPC -> `src/main/page-count-generator.ts`) — a
- *   real, correct count from real Paged.js layout, not a placeholder.
- * - Page navigation (INERT): the chevrons and the "Page X of Y" jump-to-page
- *   control are visibly present but do nothing when clicked. Real chevron
- *   navigation and a real jump-to-page popover both require a live,
- *   incrementally-repaginated preview to navigate within — a separate,
- *   larger, deferred sub-project (see Phase 0 Gate 7's findings on why
- *   incremental re-layout is its own body of work). "Page 1" is a static
- *   placeholder for the same reason: there is no live current-page state to
- *   read yet, only a real total page count.
+ * - Page count (real): supplied by `pageCount`, owned by `EditorScreen`
+ *   (one `usePageCount` for the whole editor) rather than fetched here —
+ *   see that prop's own doc comment.
+ * - Page navigation (real): the chevrons step `currentPage` by one page and
+ *   the "Page X of Y" control swaps to a focused number input for jumping
+ *   directly to a page (see `docs/superpowers/specs/2026-08-08-page-
+ *   navigation-design.md`). Navigation targets the Split-mode preview —
+ *   the only surface in this app with real page boundaries, since the
+ *   Format-mode editor canvas is one continuous card with no page
+ *   divisions — so navigating while in Format/Source mode switches to
+ *   Split first. The tooltips name that consequence before the click
+ *   rather than surprising the user with a mode change after it.
  * - Zoom (real): a genuine CSS scale value, driven entirely by this
  *   component's own dropdown via the `onZoomChange` prop. This component
  *   has no access to the editor's mount container (it's built in isolation
@@ -135,40 +128,81 @@ function CheckIcon(): React.JSX.Element {
  */
 function EditorStatusBar({
   content,
-  filePath,
   isDirty,
+  pageCount,
+  currentPage,
+  onNavigateToPage,
   zoom,
   onZoomChange
 }: EditorStatusBarProps): React.JSX.Element {
   const wordCount = useMemo(() => countWords(content), [content])
-  const { pageCount } = usePageCount(content, filePath)
+  const [jumpDraft, setJumpDraft] = useState<string | null>(null)
+  const hasPages = typeof pageCount === 'number' && pageCount > 0
+  const canGoPrevious = hasPages && currentPage > 1
+  const canGoNext = hasPages && currentPage < (pageCount as number)
+
+  const commitJump = (): void => {
+    const draft = jumpDraft ?? ''
+    const parsed = Number(draft)
+    setJumpDraft(null)
+    // An emptied input is a cancel, not a jump to page 1. `Number('')` is 0,
+    // which is finite, so without this check clearing the field and pressing
+    // Enter silently navigated to page 1 -- the one thing the user plainly
+    // did not ask for. (A `type="number"` input also reports '' for any
+    // value the browser considers invalid, so this covers that too.)
+    if (draft.trim() === '') return
+    if (!Number.isFinite(parsed) || !hasPages) return
+    const clamped = Math.min(Math.max(Math.floor(parsed), 1), pageCount as number)
+    onNavigateToPage(clamped)
+  }
 
   return (
     <div className="flex h-8 flex-shrink-0 items-center gap-4 border-t border-border-chrome bg-chrome-dark px-3 text-11-5 text-text-secondary">
       <div className="flex items-center gap-1">
         <button
           type="button"
-          onClick={noop}
+          onClick={() => onNavigateToPage(currentPage - 1)}
+          disabled={!canGoPrevious}
           aria-label="Previous page"
-          title="Page navigation is not available yet"
-          className="flex h-5 w-5 items-center justify-center rounded-sm"
+          title="Previous page (shown in Split view)"
+          className="flex h-5 w-5 items-center justify-center rounded-sm disabled:opacity-40"
         >
           <ChevronLeftIcon />
         </button>
+        {jumpDraft === null ? (
+          <button
+            type="button"
+            onClick={() => setJumpDraft(String(currentPage))}
+            disabled={!hasPages}
+            title="Jump to page (shown in Split view)"
+            className="px-0.5 disabled:opacity-40"
+          >
+            Page {currentPage} of {pageCount ?? '—'}
+          </button>
+        ) : (
+          <input
+            type="number"
+            autoFocus
+            aria-label="Jump to page"
+            value={jumpDraft}
+            min={1}
+            max={pageCount ?? 1}
+            onChange={(event) => setJumpDraft(event.target.value)}
+            onBlur={() => setJumpDraft(null)}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter') commitJump()
+              if (event.key === 'Escape') setJumpDraft(null)
+            }}
+            className="w-14 rounded-sm bg-transparent px-1 text-11-5 text-text-primary"
+          />
+        )}
         <button
           type="button"
-          onClick={noop}
-          title="Jump to page is not available yet"
-          className="px-0.5"
-        >
-          Page 1 of {pageCount ?? '—'}
-        </button>
-        <button
-          type="button"
-          onClick={noop}
+          onClick={() => onNavigateToPage(currentPage + 1)}
+          disabled={!canGoNext}
           aria-label="Next page"
-          title="Page navigation is not available yet"
-          className="flex h-5 w-5 items-center justify-center rounded-sm"
+          title="Next page (shown in Split view)"
+          className="flex h-5 w-5 items-center justify-center rounded-sm disabled:opacity-40"
         >
           <ChevronRightIcon />
         </button>

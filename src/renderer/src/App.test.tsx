@@ -24,7 +24,9 @@ beforeEach(() => {
     clearPendingAutosave: vi.fn(),
     setSplitPreviewBounds: vi.fn(),
     sendSplitPreviewDocument: vi.fn(),
-    destroySplitPreview: vi.fn()
+    destroySplitPreview: vi.fn(),
+    scrollSplitPreviewToPage: vi.fn(),
+    getSplitPreviewPage: vi.fn()
   }
 })
 

@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import { launchIsolatedApp } from './electron-launch'
 import { mergeRecentFiles, readRecentFiles, writeRecentFiles } from '../src/main/recent-files'
 
-// Gate 18 -- the Page Setup Completeness sub-project's real end-to-end proof.
+// Gate 19 -- the Page Setup Completeness sub-project's real end-to-end proof.
 //
 // WHY THIS GATE EXISTS. Four PageConfig fields that already round-tripped
 // through YAML frontmatter and already had real Page Setup UI reached no
@@ -226,7 +226,7 @@ test.beforeAll(async () => {
   userDataDir = launched.userDataDir
   win = await getMainWindow(app)
   await win.waitForFunction(() => (window as unknown as { api?: unknown }).api !== undefined)
-  fixtureDir = await mkdtemp(join(tmpdir(), 'pagedown-gate18-'))
+  fixtureDir = await mkdtemp(join(tmpdir(), 'pagedown-gate19-'))
 })
 
 test.afterAll(async () => {
@@ -243,8 +243,8 @@ test.afterAll(async () => {
 // document on screen. Returns once the preview genuinely contains this
 // document's own unique marker, not merely once "some render happened".
 async function openInSplitMode(frontmatter: string, label: string): Promise<Fixture> {
-  const marker = `Gate18 ${label} ${Date.now()}`
-  const filename = `gate18-${label}-${Date.now()}.md`
+  const marker = `Gate19 ${label} ${Date.now()}`
+  const filename = `gate19-${label}-${Date.now()}.md`
   const path = join(fixtureDir, filename)
   await writeFile(path, [frontmatter, '', `# ${marker}`, '', BODY_TEXT, ''].join('\n'), 'utf8')
 
@@ -305,7 +305,7 @@ async function pollPreview(marker: string): Promise<PreviewProbe> {
   return last as unknown as PreviewProbe
 }
 
-test.describe('Gate 18: Page Setup completeness', () => {
+test.describe('Gate 19: Page Setup completeness', () => {
   test('header and footer content really render into the Paged.js margin boxes', async () => {
     const { marker } = await openInSplitMode(
       [
@@ -321,7 +321,7 @@ test.describe('Gate 18: Page Setup completeness', () => {
       'headerfooter'
     )
     const probe = await pollPreview(marker)
-    console.log('Gate 18 header/footer probe:', JSON.stringify(probe, null, 2))
+    console.log('Gate 19 header/footer probe:', JSON.stringify(probe, null, 2))
 
     // Literal strings reach the top band.
     expect(probe.topLeft, 'headerLeft must render in the @top-left margin box').toContain(
@@ -399,7 +399,7 @@ test.describe('Gate 18: Page Setup completeness', () => {
     const onProbe = await pollPreview(on.marker)
 
     console.log(
-      `Gate 18 page counts: running content off=${offProbe.pageCount}, on=${onProbe.pageCount}`
+      `Gate 19 page counts: running content off=${offProbe.pageCount}, on=${onProbe.pageCount}`
     )
 
     expect(offProbe.pageCount, 'the no-running-content fixture must be multi-page').toBeGreaterThan(
@@ -437,7 +437,7 @@ test.describe('Gate 18: Page Setup completeness', () => {
       'roman'
     )
     const probe = await pollPreview(marker)
-    console.log('Gate 18 roman footer:', probe.bottomCenter)
+    console.log('Gate 19 roman footer:', probe.bottomCenter)
 
     // Same measurement limit as above: the computed value is the
     // unevaluated counter call, so what is checkable here is that the
@@ -457,7 +457,7 @@ test.describe('Gate 18: Page Setup completeness', () => {
       'custom'
     )
     const customProbe = await pollPreview(custom.marker)
-    console.log('Gate 18 custom sheet:', JSON.stringify(customProbe.sheet))
+    console.log('Gate 19 custom sheet:', JSON.stringify(customProbe.sheet))
 
     expect(customProbe.sheet, 'expected a rendered .pagedjs_sheet page box').not.toBeNull()
     expect(
@@ -473,7 +473,7 @@ test.describe('Gate 18: Page Setup completeness', () => {
     // pass.)
     const letter = await openInSplitMode(['---', 'page: Letter', '---'].join('\n'), 'lettercontrol')
     const letterProbe = await pollPreview(letter.marker)
-    console.log('Gate 18 Letter control sheet:', JSON.stringify(letterProbe.sheet))
+    console.log('Gate 19 Letter control sheet:', JSON.stringify(letterProbe.sheet))
 
     expect(letterProbe.sheet!.width).toBeCloseTo(LETTER_PAGE_WIDTH_PX, 0)
     expect(letterProbe.sheet!.height).toBeCloseTo(LETTER_PAGE_HEIGHT_PX, 0)
@@ -505,7 +505,7 @@ test.describe('Gate 18: Page Setup completeness', () => {
       const p = document.querySelector('.milkdown-mount .ProseMirror p')
       return p ? window.getComputedStyle(p).fontSize : ''
     })
-    console.log(`Gate 18 theme body size: preview=${probe.bodyFontSize}, editor=${editorBody}`)
+    console.log(`Gate 19 theme body size: preview=${probe.bodyFontSize}, editor=${editorBody}`)
 
     expect(
       editorBody,
@@ -529,7 +529,7 @@ test.describe('Gate 18: Page Setup completeness', () => {
       const p = document.querySelector('.milkdown-mount .ProseMirror p')
       return p ? window.getComputedStyle(p).fontFamily : ''
     })
-    console.log(`Gate 18 font: preview=${probe.bodyFontFamily}, editor=${editorFont}`)
+    console.log(`Gate 19 font: preview=${probe.bodyFontFamily}, editor=${editorFont}`)
 
     expect(
       editorFont,
@@ -549,7 +549,7 @@ test.describe('Gate 18: Page Setup completeness', () => {
     const content = [
       '---',
       'header: true',
-      'headerCenter: Gate 18 Running Header',
+      'headerCenter: Gate 19 Running Header',
       'footer: true',
       'footerCenter: Page {n} of {total}',
       '---',
@@ -560,7 +560,7 @@ test.describe('Gate 18: Page Setup completeness', () => {
       ''
     ].join('\n')
 
-    const targetPath = join(fixtureDir, 'gate18-running-content.pdf')
+    const targetPath = join(fixtureDir, 'gate19-running-content.pdf')
 
     // Real `dialog` module, real `showSaveDialog` override -- the one piece
     // that has to be faked, since a native Save dialog cannot be driven
@@ -590,11 +590,11 @@ test.describe('Gate 18: Page Setup completeness', () => {
         .join('')
         .concat('\n')
     }
-    console.log('Gate 18 exported-PDF running content sample:', allText.slice(0, 400))
+    console.log('Gate 19 exported-PDF running content sample:', allText.slice(0, 400))
 
     // The running header, painted on a real page.
     expect(allText, 'the running header must appear in the exported PDF').toContain(
-      'Gate 18 Running Header'
+      'Gate 19 Running Header'
     )
     // THE RESOLUTION CLAIM: real digits, from counter(page)/counter(pages),
     // with the total matching the PDF's own real page count. A literal

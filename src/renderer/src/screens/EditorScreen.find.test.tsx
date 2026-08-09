@@ -102,7 +102,9 @@ beforeEach(() => {
     clearPendingAutosave: vi.fn(),
     setSplitPreviewBounds: vi.fn(),
     sendSplitPreviewDocument: vi.fn().mockResolvedValue({ pageCount: 1 }),
-    destroySplitPreview: vi.fn()
+    destroySplitPreview: vi.fn(),
+    scrollSplitPreviewToPage: vi.fn().mockResolvedValue({ currentPage: 1, pageCount: 0 }),
+    getSplitPreviewPage: vi.fn().mockResolvedValue({ currentPage: 1, pageCount: 0 })
   }
 })
 
