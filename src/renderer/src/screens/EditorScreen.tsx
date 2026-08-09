@@ -10,6 +10,7 @@ import EditorSidebar from '../components/EditorSidebar'
 import EditorStatusBar from '../components/EditorStatusBar'
 import PageSetupModal from '../components/PageSetupModal'
 import FindBar from '../components/FindBar'
+import Toast from '../components/Toast'
 import { extractOutline } from '../lib/extractOutline'
 import { isFormatEditing, isSourceEditing } from '../lib/editing-surface'
 import { usePageCount } from '../hooks/usePageCount'
@@ -19,6 +20,13 @@ import { useFindShortcuts } from '../hooks/useFindShortcuts'
 import { extractRawFrontmatter, replaceRawFrontmatter } from '../../../markdown/frontmatter-splice'
 import { resolvePageConfig, applyPageConfig, type PageConfig } from '../../../markdown/page-config'
 import { computePageGeometry } from '../../../typography/page-geometry'
+
+// Exact copy pinned in docs/superpowers/specs/2026-08-08-undo-barrier-notice-design.md
+// -- a single, direction-agnostic sentence (not "Switched to Source"/"Switched
+// to Format") because Split mode's left pane makes "which surface" ambiguous
+// to name briefly and accurately; this one sentence covers all four real
+// transition pairs that destroy undo history.
+const UNDO_BARRIER_TOAST_MESSAGE = 'Undo history resets when switching between Format and Source.'
 
 function EditorScreen(): React.JSX.Element {
   const goHome = useAppStore((state) => state.goHome)
@@ -54,6 +62,18 @@ function EditorScreen(): React.JSX.Element {
   const canvasRef = useRef<HTMLDivElement>(null)
   const [zoom, setZoom] = useState(1)
   const [activeSourceOffset, setActiveSourceOffset] = useState<number | undefined>(undefined)
+  // Ephemeral, EditorScreen-local UI state -- not in appStore/documentStore
+  // because nothing else in the app needs it (see design doc's "kept local"
+  // rationale). `id` is a monotonically increasing nonce (via the ref below),
+  // not the message text, so `key={toast.id}` forces a genuinely fresh Toast
+  // mount -- and therefore a freshly-restarted auto-dismiss timer -- even
+  // when two triggers in a row produce byte-identical message text.
+  const [toast, setToast] = useState<{ id: number; message: string } | null>(null)
+  const toastIdRef = useRef(0)
+  const showUndoBarrierToast = (): void => {
+    toastIdRef.current += 1
+    setToast({ id: toastIdRef.current, message: UNDO_BARRIER_TOAST_MESSAGE })
+  }
   const { pageCount } = usePageCount(content, filePath)
   useAutosave({ content, filePath, isDirty })
 
@@ -342,6 +362,25 @@ function EditorScreen(): React.JSX.Element {
       // this function and here), so this isn't a narrower fix for the new
       // case at the expense of the old one.
       replaceContentForTab(currentActiveTabId, useDocumentStore.getState().content)
+    }
+    // Exactly the OR of the three conditions above -- i.e. every case that
+    // already gates a real flush()/replaceContentForTab() call, which are
+    // themselves the two places this function forces a genuine MilkdownEditor
+    // remount (destroying its prosemirror-history state). Deliberately NOT a
+    // parallel/simplified condition: reusing the same booleans means this
+    // can't silently drift out of sync with what this function actually
+    // remounts. See the design doc's "Investigation finding" section for why
+    // formatEditingPositionChanges is included here even though it's neither
+    // "entering" nor "leaving" Format/Source editing by this function's own
+    // four-boolean model -- it's still a real remount via the JSX ternary's
+    // structural-position swap (confirmed by EditorScreen.viewMode.test.tsx's
+    // own 'Format -> Split(format) DOES call flush()' test).
+    const undoHistoryResets =
+      (enteringSourceEditing && leavingFormatEditing) ||
+      (leavingSourceEditing && enteringFormatEditing) ||
+      formatEditingPositionChanges
+    if (undoHistoryResets) {
+      showUndoBarrierToast()
     }
     setViewMode(mode)
   }
@@ -924,6 +963,7 @@ function EditorScreen(): React.JSX.Element {
         onApply={handleApplyPageConfig}
         onClose={closePageSetup}
       />
+      {toast && <Toast key={toast.id} message={toast.message} onDismiss={() => setToast(null)} />}
     </div>
   )
 }
