@@ -25,7 +25,8 @@ import {
   addRecentFile,
   isKnownPath,
   confirmDiscardChanges,
-  canonicalizeDocumentPath
+  canonicalizeDocumentPath,
+  saveDroppedImage
 } from './file-io'
 import {
   writeSnapshot,
@@ -309,6 +310,16 @@ app.whenReady().then(() => {
   })
 
   ipcMain.handle('file:getRecents', () => getRecentFiles(app.getPath('userData')))
+
+  // filePath is renderer-supplied (documentStore's own active-tab mirror) --
+  // saveDroppedImage re-validates it via isKnownPath itself (same rule as
+  // every other renderer-supplied path this app touches), so an unknown or
+  // unsaved-document path is refused with a real error rather than trusted.
+  ipcMain.handle(
+    'file:saveDroppedImage',
+    (_event, filePath: string | null, base64Data: string, suggestedFilename: string) =>
+      saveDroppedImage(app.getPath('userData'), filePath, base64Data, suggestedFilename)
+  )
 
   ipcMain.handle('preferences:get', () => readPreferences(app.getPath('userData')))
 

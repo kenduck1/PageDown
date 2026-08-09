@@ -1,9 +1,19 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { mkdtemp, mkdir, rm, symlink, utimes, writeFile, realpath } from 'node:fs/promises'
+import {
+  mkdtemp,
+  mkdir,
+  rm,
+  symlink,
+  utimes,
+  writeFile,
+  readFile,
+  realpath
+} from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import * as versionHistory from './version-history'
 import { writeSnapshot, getLatestSnapshot } from './version-history'
+import { mergeRecentFiles, writeRecentFiles } from './recent-files'
 
 // file-io.ts imports `dialog` (and the `BrowserWindow` type, unused at
 // runtime) from 'electron', which doesn't resolve to a real API object
@@ -21,7 +31,13 @@ vi.mock('electron', () => ({
 }))
 
 import { dialog } from 'electron'
-import { openFileDialog, readFileByPath, saveFile, canonicalizeDocumentPath } from './file-io'
+import {
+  openFileDialog,
+  readFileByPath,
+  saveFile,
+  canonicalizeDocumentPath,
+  saveDroppedImage
+} from './file-io'
 
 // Builds a document reachable through TWO distinct spellings -- a real
 // directory and a symlink pointing at it -- inside the given parent. Used by
@@ -320,5 +336,76 @@ describe('saveFile (sanity, unaffected by the recovery changes)', () => {
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
+  })
+})
+
+describe('saveDroppedImage', () => {
+  // Real 8-byte PNG magic-byte signature followed by a few arbitrary bytes
+  // -- enough for sniffImageContentType (pagination-window.ts) to classify
+  // it as image/png; this test never needs a decodable image, only real
+  // magic bytes.
+  const PNG_BASE64 = Buffer.from([
+    0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x01, 0x02, 0x03
+  ]).toString('base64')
+  const NOT_AN_IMAGE_BASE64 = Buffer.from('just plain text, not an image').toString('base64')
+
+  let userDataDir: string
+  let docDir: string
+  let docPath: string
+
+  beforeEach(async () => {
+    userDataDir = await mkdtemp(join(tmpdir(), 'pagedown-file-io-userdata-'))
+    docDir = await mkdtemp(join(tmpdir(), 'pagedown-file-io-dropdocs-'))
+    docPath = join(docDir, 'doc.md')
+    await writeFile(docPath, '# Doc')
+  })
+
+  afterEach(async () => {
+    await rm(userDataDir, { recursive: true, force: true })
+    await rm(docDir, { recursive: true, force: true })
+  })
+
+  it('refuses with a real, actionable error when the document has never been saved', async () => {
+    const result = await saveDroppedImage(userDataDir, null, PNG_BASE64, 'photo.png')
+    expect(result).toEqual({ error: 'Save the document before adding images.' })
+  })
+
+  it('refuses when the path is not in the known-paths allowlist', async () => {
+    const result = await saveDroppedImage(userDataDir, docPath, PNG_BASE64, 'photo.png')
+    expect(result).toEqual({ error: 'Save the document before adding images.' })
+  })
+
+  it('refuses data that does not sniff as a real image, even with an image-like filename', async () => {
+    await writeRecentFiles(userDataDir, mergeRecentFiles([], docPath, new Date().toISOString()))
+    const result = await saveDroppedImage(userDataDir, docPath, NOT_AN_IMAGE_BASE64, 'photo.png')
+    expect(result).toEqual({ error: 'That file does not look like a real image.' })
+  })
+
+  it('writes a real file into the document directory and returns its relative path', async () => {
+    await writeRecentFiles(userDataDir, mergeRecentFiles([], docPath, new Date().toISOString()))
+    const result = await saveDroppedImage(userDataDir, docPath, PNG_BASE64, 'photo.png')
+    expect(result).toEqual({ relativePath: 'photo.png' })
+
+    const written = await readFile(join(docDir, 'photo.png'))
+    expect(written).toEqual(Buffer.from(PNG_BASE64, 'base64'))
+  })
+
+  it('strips a path-traversal filename down to its basename before writing', async () => {
+    await writeRecentFiles(userDataDir, mergeRecentFiles([], docPath, new Date().toISOString()))
+    const result = await saveDroppedImage(userDataDir, docPath, PNG_BASE64, '../../etc/photo.png')
+    expect(result).toEqual({ relativePath: 'photo.png' })
+  })
+
+  it('never overwrites an existing file, giving a colliding name a numbered sibling instead', async () => {
+    await writeRecentFiles(userDataDir, mergeRecentFiles([], docPath, new Date().toISOString()))
+    await writeFile(join(docDir, 'photo.png'), 'pre-existing content, must survive untouched')
+
+    const result = await saveDroppedImage(userDataDir, docPath, PNG_BASE64, 'photo.png')
+    expect(result).toEqual({ relativePath: 'photo-2.png' })
+
+    const original = await readFile(join(docDir, 'photo.png'), 'utf8')
+    expect(original).toBe('pre-existing content, must survive untouched')
+    const written = await readFile(join(docDir, 'photo-2.png'))
+    expect(written).toEqual(Buffer.from(PNG_BASE64, 'base64'))
   })
 })

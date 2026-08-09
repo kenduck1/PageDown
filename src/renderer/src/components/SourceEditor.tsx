@@ -1,8 +1,14 @@
-import { forwardRef, useImperativeHandle, useRef } from 'react'
+import { forwardRef, useEffect, useImperativeHandle, useRef } from 'react'
 
 interface SourceEditorProps {
   content: string
   onChange: (value: string) => void
+  // Same contract as MilkdownEditor's own onDropImage prop -- called once
+  // per real image file found in a native OS drop, in drop order. Optional
+  // (SourceEditor is also usable without it) so every existing render site
+  // that predates this feature keeps compiling unchanged.
+  onDropImage?: (file: File) => Promise<{ relativePath: string } | { error: string }>
+  onError?: (message: string) => void
 }
 
 // Find & Replace drives this surface through the real DOM node rather than
@@ -53,10 +59,25 @@ export interface SourceEditorHandle {
 // binding above, which remains the only way content flows INTO this
 // component.
 const SourceEditor = forwardRef<SourceEditorHandle, SourceEditorProps>(function SourceEditor(
-  { content, onChange },
+  { content, onChange, onDropImage, onError },
   ref
 ) {
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+
+  // Read by handleDrop's own async continuation, which fires after a real
+  // IPC round trip -- by the time it resolves, `content`/`onChange` from the
+  // render that started the drop may already be stale (another edit landed,
+  // or the document itself changed). Refs, updated every render, keep the
+  // eventual splice targeting the CURRENT content rather than a stale
+  // snapshot. Assigned in an effect (not inline during render), matching
+  // MilkdownEditor.tsx's own latest-ref convention and the same
+  // react-hooks/refs rule it documents.
+  const contentRef = useRef(content)
+  const onChangeRef = useRef(onChange)
+  useEffect(() => {
+    contentRef.current = content
+    onChangeRef.current = onChange
+  })
 
   useImperativeHandle(ref, () => ({
     getTextarea: () => textareaRef.current,
@@ -67,11 +88,63 @@ const SourceEditor = forwardRef<SourceEditorHandle, SourceEditorProps>(function 
     }
   }))
 
+  // A real native OS file drop -- same feature MilkdownEditor.tsx's own
+  // drop-image.ts plugin provides for Format mode, adapted to plain-text
+  // insertion since a textarea has no node model to insert into. Only
+  // intercepts (preventDefault) a drop that carries at least one real image
+  // file; an ordinary text drag (selecting text elsewhere and dropping it
+  // here) is left to the browser's own default textarea drop handling.
+  //
+  // Inserted at the CURRENT SELECTION/CURSOR position, not the drop
+  // coordinates -- unlike MilkdownEditor's ProseMirror view, a <textarea>
+  // exposes no coordinate-to-character-offset API (no equivalent of
+  // `posAtCoords`), so there is no reliable way to compute "the character
+  // offset under the cursor" for a plain textarea. A documented, honest
+  // limitation, not a bug: the browser's own NATIVE drop-to-caret behavior
+  // only exists for drops this handler does NOT intercept (plain text
+  // drags), which is why those are deliberately left alone above.
+  const handleDrop = (event: React.DragEvent<HTMLTextAreaElement>): void => {
+    if (!onDropImage) return
+    const files = Array.from(event.dataTransfer.files).filter((file) =>
+      file.type.startsWith('image/')
+    )
+    if (files.length === 0) return
+
+    event.preventDefault()
+    const insertAt = textareaRef.current?.selectionStart ?? contentRef.current.length
+    void insertDroppedImages(files, insertAt)
+  }
+
+  const insertDroppedImages = async (files: File[], insertAt: number): Promise<void> => {
+    let insertText = ''
+    for (const file of files) {
+      const result = await onDropImage!(file)
+      if ('error' in result) {
+        onError?.(result.error)
+        continue
+      }
+      // CommonMark requires wrapping a link/image destination containing
+      // whitespace or `(`/`)`/`<`/`>` in angle brackets -- a bare
+      // `![x](my file.png)` doesn't parse as a single destination.
+      // pipeline.test.ts's own `<Screen Shot 2026.png>` fixture already
+      // exercises the PARSING half of this convention; this is its
+      // insertion-side counterpart.
+      const needsAngleBrackets = /[\s()<>]/.test(result.relativePath)
+      const destination = needsAngleBrackets ? `<${result.relativePath}>` : result.relativePath
+      insertText += `![${file.name}](${destination})\n`
+    }
+    if (!insertText) return
+
+    const current = contentRef.current
+    onChangeRef.current(current.slice(0, insertAt) + insertText + current.slice(insertAt))
+  }
+
   return (
     <textarea
       ref={textareaRef}
       value={content}
       onChange={(event) => onChange(event.target.value)}
+      onDrop={handleDrop}
       spellCheck={false}
       aria-label="Markdown source"
       className="pagedown-source-editor h-full w-full resize-none bg-canvas p-8 font-mono text-13 text-text-primary outline-none"
