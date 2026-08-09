@@ -1,6 +1,7 @@
 import { useAppStore } from '../store/appStore'
 import EditorOutline from './EditorOutline'
 import EditorHistory from './EditorHistory'
+import EditorPages from './EditorPages'
 
 export interface EditorSidebarProps {
   // Forwarded straight through to EditorOutline -- this component has no
@@ -10,12 +11,14 @@ export interface EditorSidebarProps {
   content: string
   onSelectHeading: (sourceOffset: number) => void
   activeSourceOffset?: number
-  // Real per-page thumbnails need the pagination engine -- a separate,
-  // larger, deferred piece of work (see this component's Pages-tab render
-  // below). Optional and un-guessed: nothing supplies a real page count to
-  // this component yet, so omitting it renders an honest "not available"
-  // note rather than a fabricated number.
+  // Forwarded straight through to EditorPages -- the real page count once
+  // the document has been laid out. Optional and un-guessed: omitting it
+  // renders an honest "not available" note rather than a fabricated number.
   pageCount?: number
+  // Forwarded straight through to EditorPages -- the 1-based page currently
+  // shown by the paginated preview.
+  currentPage: number
+  onSelectPage: (page: number) => void
   // Forwarded straight through to EditorHistory -- null for a document that
   // has never been saved (no history is possible yet), matching the
   // documentStore mirror field's own type.
@@ -60,34 +63,19 @@ function TabButton({
   )
 }
 
-function PagesPlaceholder({ pageCount }: { pageCount?: number }): React.JSX.Element {
-  return (
-    <div className="flex flex-1 flex-col items-center gap-2 px-4 py-6 text-center">
-      {typeof pageCount === 'number' && (
-        <p className="text-12-5 font-semibold text-text-primary">
-          {pageCount} {pageCount === 1 ? 'page' : 'pages'}
-        </p>
-      )}
-      <p className="text-11 text-text-tertiary">
-        {typeof pageCount === 'number'
-          ? 'Page thumbnails are not built yet.'
-          : 'Page count is not available yet, and page thumbnails are not built yet.'}
-      </p>
-    </div>
-  )
-}
-
-// The shared left rail: a Pages/Outline pill switcher over either a real
-// Outline (EditorOutline) or an honest Pages placeholder (real per-page
-// thumbnails need the pagination engine -- deferred). Reads/writes
-// useAppStore's existing sidebarTab/setSidebarTab directly; document content
-// and heading-selection/active-section state are plain props, since this
-// component has no store of its own for document content.
+// The shared left rail: a Pages/Outline/History pill switcher over either a
+// real page list (EditorPages), a real Outline (EditorOutline), or the
+// version History tab. Reads/writes useAppStore's existing
+// sidebarTab/setSidebarTab directly; document content and heading-selection/
+// active-section state are plain props, since this component has no store of
+// its own for document content.
 function EditorSidebar({
   content,
   onSelectHeading,
   activeSourceOffset,
   pageCount,
+  currentPage,
+  onSelectPage,
   filePath,
   onRestoreVersion
 }: EditorSidebarProps): React.JSX.Element {
@@ -123,7 +111,11 @@ function EditorSidebar({
         ) : sidebarTab === 'history' ? (
           <EditorHistory filePath={filePath} onRestore={onRestoreVersion} />
         ) : (
-          <PagesPlaceholder pageCount={pageCount} />
+          <EditorPages
+            pageCount={pageCount}
+            currentPage={currentPage}
+            onSelectPage={onSelectPage}
+          />
         )}
       </div>
     </div>
