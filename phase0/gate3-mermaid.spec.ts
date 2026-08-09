@@ -4,10 +4,11 @@ import { join } from 'node:path'
 import { markdownToHtml } from '../src/markdown/pipeline'
 import { launchIsolatedApp } from './electron-launch'
 // The shared DEFAULT (no-frontmatter, Letter/portrait/1in) geometry every
-// harness-driving gate paginates at -- see gate-geometry.ts for why it's one
-// shared constant, and why it has to be threaded through app.evaluate()'s
+// harness-driving gate paginates at, plus the shared default DocumentStyle
+// sendDocument now also requires -- see gate-geometry.ts for why they're one
+// shared pair, and why they have to be threaded through app.evaluate()'s
 // own single argument rather than referenced from inside the callback.
-import { LETTER_GEOMETRY } from './gate-geometry'
+import { LETTER_GEOMETRY, DEFAULT_STYLE } from './gate-geometry'
 
 // Same two mechanical deviations from the brief's literal sample as every
 // other Phase 0 gate spec (see gate1/gate5/gate7's own comments for the
@@ -40,7 +41,7 @@ test('Gate 3: Mermaid diagrams render with non-zero, deterministic size in the W
   const { html } = markdownToHtml(markdown)
 
   const result = (await app.evaluate(
-    async ({ BaseWindow }, { html, geometry }) => {
+    async ({ BaseWindow }, { html, geometry, documentStyle }) => {
       const { createPaginationHarness } = (
         globalThis as unknown as {
           __pagedownPhase0: {
@@ -50,9 +51,9 @@ test('Gate 3: Mermaid diagrams render with non-zero, deterministic size in the W
       ).__pagedownPhase0
       const win = new BaseWindow({ show: false })
       const harness = await createPaginationHarness(win)
-      return harness.sendDocument(html, geometry)
+      return harness.sendDocument(html, geometry, documentStyle)
     },
-    { html, geometry: LETTER_GEOMETRY }
+    { html, geometry: LETTER_GEOMETRY, documentStyle: DEFAULT_STYLE }
   )) as SendDocumentResult
 
   console.log(
@@ -140,7 +141,7 @@ test('Gate 3: oversized-diagram page-break behavior is deterministic, and CSP st
   const { html } = markdownToHtml(markdown)
 
   const result = await app.evaluate(
-    async ({ BaseWindow }, { html, geometry }) => {
+    async ({ BaseWindow }, { html, geometry, documentStyle }) => {
       const { createPaginationHarness } = (
         globalThis as unknown as {
           __pagedownPhase0: {
@@ -156,7 +157,7 @@ test('Gate 3: oversized-diagram page-break behavior is deterministic, and CSP st
         consoleMessages.push(event.message)
       })
 
-      const sendResult = await harness.sendDocument(html, geometry)
+      const sendResult = await harness.sendDocument(html, geometry, documentStyle)
 
       // Structural "did it split across pages" check: counts how many
       // elements carry the oversized diagram's data-mermaid-diagram-id in the
@@ -259,7 +260,8 @@ test('Gate 3: oversized-diagram page-break behavior is deterministic, and CSP st
       const consoleMessagesBeforeInjection = consoleMessages.length
       await harness.sendDocument(
         '<img src="this-file-does-not-exist.png" onerror="window.__pwned = true">',
-        geometry
+        geometry,
+        documentStyle
       )
       await new Promise((resolve) => setTimeout(resolve, 500))
       const pwned = await harness.view.webContents.executeJavaScript(`typeof (window).__pwned`)
@@ -277,7 +279,7 @@ test('Gate 3: oversized-diagram page-break behavior is deterministic, and CSP st
         injectionViolationCount
       }
     },
-    { html, geometry: LETTER_GEOMETRY }
+    { html, geometry: LETTER_GEOMETRY, documentStyle: DEFAULT_STYLE }
   )
 
   console.log('Gate 3 page metrics:', JSON.stringify(result.pageMetrics))

@@ -19,6 +19,7 @@ import documentTypographyCss from '../../src/typography/document-typography.css'
 import sourceSerif4Base64 from '../../src/renderer/src/assets/fonts/source-serif-4-variable.woff2'
 import interVariableBase64 from '../../src/renderer/src/assets/fonts/inter-variable.woff2'
 import { DPI, type PageGeometry } from '../../src/typography/page-geometry'
+import { buildRunningContentCss, type DocumentStyle } from '../../src/typography/document-style'
 import type { RenderRequestMessage } from '../../src/pagination/render-message'
 
 // Task 10 / Gate 6: register the first-party keep-with-next/table-
@@ -92,24 +93,23 @@ registerBreakHandlers()
 //      and an unexplained declaration difference between a pair reads as
 //      drift.
 //
-//      Both faces are emitted UNCONDITIONALLY on every request, regardless
-//      of whether the document's theme actually selects Inter -- and this
-//      is a real, non-free cost, not a harmless default. Confirmed by
-//      reading Paged.js's own source, not assumed: `Chunker.flow()` awaits
+//      Only the face `documentStyle.fontFamily` actually selects is
+//      emitted (Task 5) -- NOT both unconditionally, which is what an
+//      earlier version of this comment (and of `buildDocumentStylesheet`)
+//      shipped as a disclosed, temporary cost. Confirmed by reading
+//      Paged.js's own source, not assumed: `Chunker.flow()` awaits
 //      `this.loadFonts()` (node_modules/pagedjs/src/chunker/chunker.js:170),
 //      and `loadFonts()` iterates EVERY entry already registered in
 //      `document.fonts`, calls `.load()` on each one not yet loaded, and
 //      awaits all of them (same file, ~541-557) -- it has no concept of
 //      "only load faces something on the page actually uses." Registering
-//      Inter Variable here therefore forces a real, awaited ~48KB base64
-//      decode on every single render, even for a document whose theme
-//      never resolves to it. `buildDocumentStylesheet` doesn't yet receive
-//      the document's own style/theme -- Task 4's scope is only the CSS
-//      itself, not wiring a theme parameter through -- so there is nothing
-//      here to conditionally branch on yet. Task 5, which adds that
-//      parameter, is expected to make this conditional once it exists;
-//      until then, ship the disclosed cost rather than a false
-//      "buys nothing to select" justification.
+//      BOTH faces unconditionally therefore forced a real, awaited ~48KB
+//      base64 decode on every single render, even for a document whose
+//      theme never resolved to the unused one. Now that
+//      `buildDocumentStylesheet` receives the document's own
+//      `DocumentStyle`, it emits exactly one `@font-face` rule -- whichever
+//      `documentStyle.fontFamily` ('source-serif-4' | 'inter') actually
+//      names -- and pays that decode cost for that one face only.
 //   3. An explicit @page rule matching src/typography/page-geometry.ts's
 //      constants (in inches, @page's native unit, matching
 //      DEFAULT_PAGE_CONFIG's own inch-denominated margins).
@@ -170,8 +170,45 @@ registerBreakHandlers()
 // shorthand accepts up to four space-separated values in top/right/
 // bottom/left order (standard CSS box-model order, matching `padding`/
 // `border-width`), so an asymmetric PageConfig produces a real asymmetric
-// @page rule, not a uniform approximation.
-function buildDocumentStylesheet(geometry: PageGeometry): string {
+// @page rule, not a uniform approximation. Do NOT disturb this order --
+// gate16-page-geometry.spec.ts pins it directly (see that gate's own
+// header comment), asserting the content box's OFFSET within the sheet,
+// not just its size, specifically because a size alone can't distinguish a
+// top<->bottom or left<->right transposition from the correct order.
+//
+// `style` (Task 5) supplies the NON-geometric per-document inputs --
+// theme/font (applied as <body> classes by the 'render' handler below, not
+// here) and the running header/footer content spliced into this SAME
+// `@page` block via `buildRunningContentCss(style)`. Those margin-box
+// rules (`@top-center`, `@bottom-left`, etc.) are only ever meaningful
+// NESTED inside an existing `@page { ... }` block -- see
+// src/typography/document-style.ts's own comment on `buildRunningContentCss`
+// -- so they're spliced directly into the same template literal below,
+// never emitted as a second, standalone `@page` rule.
+function buildDocumentStylesheet(geometry: PageGeometry, style: DocumentStyle): string {
+  // Exactly one @font-face rule is emitted -- whichever family
+  // `style.fontFamily` actually selects -- not both unconditionally. See
+  // this file's own top-of-file comment (piece 2) for why an unconditional
+  // second face is a real, non-free cost: Paged.js's Chunker.loadFonts()
+  // awaits every registered FontFace regardless of whether the document
+  // uses it.
+  const fontFace =
+    style.fontFamily === 'inter'
+      ? `@font-face {
+  font-family: 'Inter Variable';
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: block;
+  src: url(data:font/woff2;base64,${interVariableBase64}) format('woff2-variations');
+}`
+      : `@font-face {
+  font-family: 'Source Serif 4';
+  font-style: normal;
+  font-weight: 200 900;
+  font-display: block;
+  src: url(data:font/woff2;base64,${sourceSerif4Base64}) format('woff2-variations');
+}`
+
   return `
 :root {
   --font-serif: 'Source Serif 4', serif;
@@ -188,25 +225,12 @@ function buildDocumentStylesheet(geometry: PageGeometry): string {
   --text-32: 32px;
 }
 
-@font-face {
-  font-family: 'Source Serif 4';
-  font-style: normal;
-  font-weight: 200 900;
-  font-display: block;
-  src: url(data:font/woff2;base64,${sourceSerif4Base64}) format('woff2-variations');
-}
-
-@font-face {
-  font-family: 'Inter Variable';
-  font-style: normal;
-  font-weight: 100 900;
-  font-display: block;
-  src: url(data:font/woff2;base64,${interVariableBase64}) format('woff2-variations');
-}
+${fontFace}
 
 @page {
   size: ${geometry.pageWidthPx / DPI}in ${geometry.pageHeightPx / DPI}in;
   margin: ${geometry.marginTopPx / DPI}in ${geometry.marginRightPx / DPI}in ${geometry.marginBottomPx / DPI}in ${geometry.marginLeftPx / DPI}in;
+${buildRunningContentCss(style)}
 }
 
 ${documentTypographyCss}
@@ -454,14 +478,15 @@ type Gate7Result = Gate7Phase1Success | Gate7Phase2Success | Gate7Error
 // header/footer/page-number CONTENT. Traced directly (not assumed):
 // `node_modules/pagedjs/src/chunker/page.js` never creates the per-page
 // margin-box DOM elements; that template lives in `chunker.js`'s page
-// template (14 `.pagedjs_margin-*` divs, always present, always empty absent
-// a matching MARGIN-BOX rule) and is populated only by
+// template (16 `.pagedjs_margin-*` divs — 4 corners + 3 top + 3 bottom + 3
+// left + 3 right, always present, always empty absent a matching
+// MARGIN-BOX rule) and is populated only by
 // `src/modules/paged-media/atpage.js`'s `@page`-rule handler, from
-// `@top-center`/`@bottom-center`-style nested rules. The `@page` rule
-// buildDocumentStylesheet(geometry) builds declares only `size` and `margin`
-// (from the request's own geometry) and contains no margin-box
-// rules at all, so those 14 divs are still always empty for every real
-// document: this harness's on-screen render and PDF export still contain NO
+// `@top-center`/`@bottom-center`-style nested rules. At the time this
+// comment was written, the `@page` rule buildDocumentStylesheet(geometry)
+// built declared only `size` and `margin` and contained no margin-box
+// rules at all, so those 16 divs were still always empty for every real
+// document: this harness's on-screen render and PDF export contained NO
 // running header/footer/page-number content for ANY corpus document (a real,
 // separate gap from this task's own scope — Gate 2's findings doc already
 // flagged that frontmatter page/margin metadata isn't wired into an `@page`
@@ -484,6 +509,25 @@ type Gate7Result = Gate7Phase1Success | Gate7Phase2Success | Gate7Error
 // still apply — this is still just a `previewer.preview()` call under the
 // hood), but skips the Mermaid preprocessing pass and the empty-content
 // short-circuit, neither of which this probe's own callers need.
+//
+// SECOND CORRECTION (Task 5 / Page Setup Completeness): the paragraph above
+// is now stale in one more way, worth recording rather than silently
+// re-editing out. `buildDocumentStylesheet` has grown a second parameter
+// (`buildDocumentStylesheet(geometry, style)`, `style: DocumentStyle`) that
+// splices `buildRunningContentCss(style)`'s own `@top-*`/`@bottom-*` rules
+// directly into the SAME `@page` block the regular 'render' path already
+// builds — so that path now DOES populate real margin-box content whenever
+// the document's own style configures a header or footer.
+// `DEFAULT_DOCUMENT_STYLE` itself sets a non-null footer
+// (`{ center: 'Page {n} of {total}' }`), so this fires for every
+// default-styled document, including every gate below that passes
+// `DEFAULT_DOCUMENT_STYLE` — this harness's regular output is no longer
+// running-header/footer-content-free. This probe is therefore no longer the
+// ONLY source of margin-box content in this harness, but it remains the
+// only one whose stylesheet is CALLER-SUPPLIED, which is what lets
+// `phase0/gate4-export.spec.ts` pin an exact, hand-authored
+// `@top-center`/`@bottom-center` shape rather than whatever a fixture's own
+// `DocumentStyle` happens to produce.
 interface Gate4ProbeMessage {
   type: 'gate4-header-footer-probe'
   requestId: string
@@ -1025,8 +1069,24 @@ window.addEventListener('message', async (event: MessageEvent<IncomingMessage>) 
   // result against and no caller waiting on one.
   if (event.data?.type !== 'render') return
 
-  const { requestId, html, geometry } = event.data
+  const { requestId, html, geometry, documentStyle } = event.data
   currentRequestId = requestId
+
+  // The sandbox's <body> carries `.pagedown-document` statically
+  // (index.html); theme and font are per-document, so they're set per
+  // request, here, BEFORE previewer.preview() runs (document-typography.css's
+  // theme/font rules key off these classes, and Paged.js clones content
+  // that's already in the DOM at preview() time). Replaces `className`
+  // WHOLESALE rather than appending -- this harness can be long-lived
+  // (Split mode's own persistent WebContentsView, see
+  // src/main/split-preview-window.ts), so a second render against the same
+  // <body> must not accumulate a stale `pagedown-theme-*`/`pagedown-font-*`
+  // class from a PREVIOUS request alongside the current one.
+  document.body.className = [
+    'pagedown-document',
+    `pagedown-theme-${documentStyle.theme}`,
+    `pagedown-font-${documentStyle.fontFamily}`
+  ].join(' ')
 
   // Everything below is inside one try/catch, deliberately, so that no path
   // through this handler — including Polisher cleanup and the DOM lookup
@@ -1156,7 +1216,7 @@ window.addEventListener('message', async (event: MessageEvent<IncomingMessage>) 
     const t0 = performance.now()
     const previewer = new Previewer()
     activePreviewer = previewer
-    // Document Typography sub-project: buildDocumentStylesheet(geometry)
+    // Document Typography sub-project: buildDocumentStylesheet(geometry, style)
     // (called inline below) is now a real, non-empty stylesheet --
     // markdownToHtml's own sanitize schema still strips any <style>/<link> a
     // document's own Markdown source might contain (src/markdown/pipeline.ts),
@@ -1166,8 +1226,11 @@ window.addEventListener('message', async (event: MessageEvent<IncomingMessage>) 
     // `geometry` (see buildDocumentStylesheet's own comment above) rather
     // than a module-level constant, so a document with non-default page
     // size/orientation/margins produces a genuinely different `@page` rule.
+    // Task 5 added the second `style` parameter for the same reason: a
+    // document's font-face selection and running header/footer content are
+    // just as per-document as its geometry.
     //
-    // Passed as `[{ 'document-typography': buildDocumentStylesheet(geometry) }]`,
+    // Passed as `[{ 'document-typography': buildDocumentStylesheet(geometry, documentStyle) }]`,
     // not the bare string: Previewer.preview() spreads its stylesheets array
     // into Polisher.add(...) (node_modules/pagedjs/src/polyfill/previewer.js),
     // and Polisher.add treats any non-object array entry as a URL to fetch
@@ -1180,7 +1243,7 @@ window.addEventListener('message', async (event: MessageEvent<IncomingMessage>) 
     // below already does exactly this (`{ 'gate4-probe-stylesheet': css }`).
     const flow = await previewer.preview(
       container,
-      [{ 'document-typography': buildDocumentStylesheet(geometry) }],
+      [{ 'document-typography': buildDocumentStylesheet(geometry, documentStyle) }],
       root
     )
     const t1 = performance.now()

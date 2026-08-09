@@ -2,6 +2,7 @@ import { markdownToHtml } from '../markdown/pipeline'
 import type { PaginationHarness } from '../main/pagination-window'
 import { computePageGeometry } from '../typography/page-geometry'
 import { DEFAULT_PAGE_CONFIG } from '../markdown/page-config'
+import { DEFAULT_DOCUMENT_STYLE } from '../typography/document-style'
 
 // Times the two stages of a full re-pagination pass: the Markdown->HTML
 // pipeline (in-process, synchronous) and the round trip into the sandboxed
@@ -39,8 +40,14 @@ export async function paginateAndTime(
   // are now wired; this spike deliberately stays on the default geometry.
   // See src/main/pagination-window.ts's own
   // `PaginationHarness.sendDocument` doc comment for the same distinction.
+  // `DEFAULT_DOCUMENT_STYLE` (Task 5) for the same reason -- no validated
+  // document to resolve a real DocumentStyle from at this layer either.
   t = performance.now()
-  const result = await harness.sendDocument(html, computePageGeometry(DEFAULT_PAGE_CONFIG))
+  const result = await harness.sendDocument(
+    html,
+    computePageGeometry(DEFAULT_PAGE_CONFIG),
+    DEFAULT_DOCUMENT_STYLE
+  )
   stages.sendAndPaginate = performance.now() - t
 
   return { stages, pageCount: result.pageCount, layoutMs: result.layoutMs }

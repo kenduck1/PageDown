@@ -1,5 +1,6 @@
 import { computePageGeometry } from '../src/typography/page-geometry'
 import { DEFAULT_PAGE_CONFIG } from '../src/markdown/page-config'
+import { DEFAULT_DOCUMENT_STYLE } from '../src/typography/document-style'
 
 // Page Geometry Wiring: harness.sendDocument now requires a real geometry
 // argument. Every gate that drives a pagination harness directly therefore
@@ -30,3 +31,17 @@ import { DEFAULT_PAGE_CONFIG } from '../src/markdown/page-config'
 // __pagedownPhase0 bridge exist -- see CLAUDE.md's "Known pre-existing
 // issues".)
 export const LETTER_GEOMETRY = computePageGeometry(DEFAULT_PAGE_CONFIG)
+
+// Same rationale as LETTER_GEOMETRY above, for sendDocument's now-required
+// `documentStyle` parameter (Page Setup Completeness sub-project, Task 5):
+// every gate that drives a pagination harness directly needs one, and they
+// all want the SAME default (no theme override, no font override, the
+// default footer's own "Page {n} of {total}" running content) since none of
+// their fixtures carry page-config frontmatter either. Re-exported here
+// (rather than each gate importing it directly from
+// src/typography/document-style.ts) purely so LETTER_GEOMETRY and this stay
+// a single pair threaded through app.evaluate()'s args together -- not a
+// hard requirement, just consistent with why LETTER_GEOMETRY itself is a
+// shared module rather than six copy-pasted `computePageGeometry(...)`
+// calls (see the module comment above).
+export const DEFAULT_STYLE = DEFAULT_DOCUMENT_STYLE

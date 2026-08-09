@@ -16,11 +16,19 @@
 // pagination-window.ts builds its outgoing payload through a local typed as
 // this interface before stringifying it -- so a forgotten field is a real
 // compile error on whichever side drops it, not a silent runtime NaN.
+//
+// `documentStyle` (Page Setup Completeness sub-project) is covered by the
+// exact same guarantee as `geometry`: a forgotten field here is a compile
+// error at whichever sender drops it, not a silent runtime surprise (a
+// missing theme/font body class, or an absent header/footer margin box)
+// inside the sandbox.
 import type { PageGeometry } from '../typography/page-geometry'
+import type { DocumentStyle } from '../typography/document-style'
 
 export interface RenderRequestMessage {
   type: 'render'
   html: string
   requestId: string
   geometry: PageGeometry
+  documentStyle: DocumentStyle
 }

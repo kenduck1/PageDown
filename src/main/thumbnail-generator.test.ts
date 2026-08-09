@@ -122,7 +122,8 @@ describe('getThumbnail page geometry', () => {
 
     expect(mocks.sendDocument).toHaveBeenCalledWith(
       expect.any(String),
-      expect.objectContaining({ pageWidthPx: 794, pageHeightPx: 1123 })
+      expect.objectContaining({ pageWidthPx: 794, pageHeightPx: 1123 }),
+      expect.any(Object)
     )
   })
 
@@ -131,7 +132,8 @@ describe('getThumbnail page geometry', () => {
 
     expect(mocks.sendDocument).toHaveBeenCalledWith(
       expect.any(String),
-      expect.objectContaining({ pageWidthPx: 816, pageHeightPx: 1056 })
+      expect.objectContaining({ pageWidthPx: 816, pageHeightPx: 1056 }),
+      expect.any(Object)
     )
   })
 

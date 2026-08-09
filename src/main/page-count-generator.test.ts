@@ -59,7 +59,8 @@ describe('getPageCount page geometry', () => {
 
     expect(mocks.sendDocument).toHaveBeenCalledWith(
       expect.any(String),
-      expect.objectContaining({ pageWidthPx: 794, pageHeightPx: 1123 })
+      expect.objectContaining({ pageWidthPx: 794, pageHeightPx: 1123 }),
+      expect.any(Object)
     )
   })
 
@@ -68,7 +69,8 @@ describe('getPageCount page geometry', () => {
 
     expect(mocks.sendDocument).toHaveBeenCalledWith(
       expect.any(String),
-      expect.objectContaining({ pageWidthPx: 816, pageHeightPx: 1056 })
+      expect.objectContaining({ pageWidthPx: 816, pageHeightPx: 1056 }),
+      expect.any(Object)
     )
   })
 
@@ -100,7 +102,8 @@ describe('getPageCount page geometry', () => {
 
     expect(mocks.sendDocument).toHaveBeenCalledWith(
       expect.any(String),
-      expect.objectContaining({ pageWidthPx: 1123, pageHeightPx: 794 })
+      expect.objectContaining({ pageWidthPx: 1123, pageHeightPx: 794 }),
+      expect.any(Object)
     )
   })
 })

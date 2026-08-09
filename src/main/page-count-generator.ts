@@ -3,6 +3,7 @@ import { BaseWindow } from 'electron'
 import { markdownToHtml } from '../markdown/pipeline'
 import { resolvePageConfig } from '../markdown/page-config'
 import { computePageGeometry } from '../typography/page-geometry'
+import { resolveDocumentStyle } from '../typography/document-style'
 import {
   createPaginationHarness,
   registerAssetRoot,
@@ -241,9 +242,18 @@ export async function getPageCount(
       // count has to reflect the geometry the document is actually
       // configured for, not a fixed Letter/1in assumption. `resolvePageConfig`
       // merges over DEFAULT_PAGE_CONFIG, so a document with no frontmatter
-      // (or partial frontmatter) still yields a complete config here.
-      const geometry = computePageGeometry(resolvePageConfig(content))
-      const result = await harness.sendDocument(html, geometry)
+      // (or partial frontmatter) still yields a complete config here. Parsed
+      // once and reused for `documentStyle` below (Task 5) rather than
+      // re-parsing frontmatter a second time.
+      const pageConfig = resolvePageConfig(content)
+      const geometry = computePageGeometry(pageConfig)
+      // sendDocument now requires a DocumentStyle on every request (Task 5)
+      // -- theme/font and running header/footer content live in margin
+      // boxes outside the content box, so they don't change the page count
+      // itself, but the harness still needs the document's real style to
+      // paginate it correctly (e.g. the selected font's own metrics).
+      const documentStyle = resolveDocumentStyle(pageConfig)
+      const result = await harness.sendDocument(html, geometry, documentStyle)
       const pageCount = { pageCount: result.pageCount }
       lastContent = content
       lastDocumentDir = documentDir

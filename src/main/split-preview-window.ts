@@ -4,6 +4,7 @@ import { dirname } from 'node:path'
 import { markdownToHtml } from '../markdown/pipeline'
 import { resolvePageConfig } from '../markdown/page-config'
 import { computePageGeometry } from '../typography/page-geometry'
+import { resolveDocumentStyle } from '../typography/document-style'
 import type { RenderRequestMessage } from '../pagination/render-message'
 import {
   ensureRenderInfraRegistered,
@@ -37,7 +38,12 @@ export interface SplitPreviewHarness {
   // caller. `filePath: null` means "no validated on-disk path" (an unsaved
   // document, or one Task 3's caller hasn't vetted with isKnownPath) and
   // denies all local assets for that render, same as every other consumer
-  // of registerAssetRoot in this codebase.
+  // of registerAssetRoot in this codebase. This public signature does NOT
+  // grow a `documentStyle` parameter the way `PaginationHarness.sendDocument`
+  // does (Task 5) -- exactly like `geometry`, it's derived from `content`
+  // internally (`resolveDocumentStyle`, see this function's own body) rather
+  // than taken from the caller, since this harness's whole point is that its
+  // caller only ever has raw Markdown, never an already-resolved PageConfig.
   sendDocument(content: string, filePath: string | null): Promise<PaginationResult>
   // Converts `cssBounds` (the renderer's own getBoundingClientRect()-shaped
   // rectangle for the right-hand preview pane) via toViewBounds (Task 1,
@@ -165,17 +171,34 @@ export async function createSplitPreviewHarness(
       // Letter/1in assumption here would be immediately visible as wrong.
       // Computed from `content` directly, since unlike pagination-window.ts's
       // harness this sendDocument takes raw Markdown rather than pre-rendered
-      // HTML.
-      const geometry = computePageGeometry(resolvePageConfig(content))
+      // HTML. Parsed ONCE and reused for both `geometry` and `documentStyle`
+      // below (Task 5) -- resolvePageConfig() re-parses frontmatter on every
+      // call, so calling it twice per sendDocument would double that cost for
+      // no benefit; both derived values must agree on which PageConfig they
+      // came from anyway.
+      const pageConfig = resolvePageConfig(content)
+      const geometry = computePageGeometry(pageConfig)
+      // Same live-document rationale as `geometry` above, for the
+      // NON-geometric per-document inputs (theme, font, running
+      // header/footer content) -- Split mode is the one surface where the
+      // user watches THESE change live too, not just page size/margins.
+      const documentStyle = resolveDocumentStyle(pageConfig)
 
       const requestId = randomUUID()
       // Built through an explicitly-typed local, not an inline object
       // literal, exactly as pagination-window.ts's own sendDocument does --
       // this is the whole reason src/pagination/render-message.ts exists: an
-      // untyped literal here would let a forgotten field (e.g. `geometry`)
-      // pass tsc silently and surface only as a NaN-valued `@page` rule in
-      // the render context. See that module's header comment.
-      const message: RenderRequestMessage = { type: 'render', html, requestId, geometry }
+      // untyped literal here would let a forgotten field (e.g. `geometry` or
+      // `documentStyle`) pass tsc silently and surface only as a NaN-valued
+      // `@page` rule / missing theme class in the render context. See that
+      // module's header comment.
+      const message: RenderRequestMessage = {
+        type: 'render',
+        html,
+        requestId,
+        geometry,
+        documentStyle
+      }
       await view.webContents.executeJavaScript(
         `window.postMessage(${JSON.stringify(message)}, '*')`
       )
