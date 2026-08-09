@@ -10,7 +10,7 @@
       "textMatch": true,
       "firstMismatchDetail": null,
       "textDeltaSample": "1.1.2.1.",
-      "exportMs": 78,
+      "exportMs": 59,
       "imgInfo": []
     },
     {
@@ -23,7 +23,7 @@
       "textMatch": true,
       "firstMismatchDetail": null,
       "textDeltaSample": "",
-      "exportMs": 68,
+      "exportMs": 66,
       "imgInfo": []
     },
     {
@@ -36,7 +36,7 @@
       "textMatch": true,
       "firstMismatchDetail": null,
       "textDeltaSample": "",
-      "exportMs": 58,
+      "exportMs": 56,
       "imgInfo": []
     },
     {
@@ -49,7 +49,7 @@
       "textMatch": true,
       "firstMismatchDetail": null,
       "textDeltaSample": "",
-      "exportMs": 59,
+      "exportMs": 56,
       "imgInfo": []
     },
     {
@@ -62,7 +62,7 @@
       "textMatch": true,
       "firstMismatchDetail": null,
       "textDeltaSample": "Diagramoftheproposedsitelayout,showingthemainentranceonthenorthsideandparkingtotheeast.",
-      "exportMs": 60,
+      "exportMs": 54,
       "imgInfo": [
         {
           "src": "pagedown-render://render/assets/diagram-placeholder.png",
@@ -83,7 +83,7 @@
       "textMatch": true,
       "firstMismatchDetail": null,
       "textDeltaSample": "",
-      "exportMs": 251,
+      "exportMs": 242,
       "imgInfo": []
     },
     {
@@ -96,7 +96,7 @@
       "textMatch": true,
       "firstMismatchDetail": null,
       "textDeltaSample": "",
-      "exportMs": 66,
+      "exportMs": 63,
       "imgInfo": []
     },
     {
@@ -109,7 +109,7 @@
       "textMatch": true,
       "firstMismatchDetail": null,
       "textDeltaSample": "Siteplan1.2.",
-      "exportMs": 84,
+      "exportMs": 61,
       "imgInfo": [
         {
           "src": "pagedown-render://render/assets/diagram-placeholder.png",
@@ -130,7 +130,7 @@
       "textMatch": true,
       "firstMismatchDetail": null,
       "textDeltaSample": "1.1.2.2.1.2.3.1.2.",
-      "exportMs": 59,
+      "exportMs": 57,
       "imgInfo": []
     },
     {
@@ -143,7 +143,7 @@
       "textMatch": true,
       "firstMismatchDetail": null,
       "textDeltaSample": "",
-      "exportMs": 75,
+      "exportMs": 57,
       "imgInfo": []
     },
     {
@@ -156,7 +156,7 @@
       "textMatch": true,
       "firstMismatchDetail": null,
       "textDeltaSample": "1.",
-      "exportMs": 62,
+      "exportMs": 58,
       "imgInfo": []
     },
     {
@@ -169,7 +169,7 @@
       "textMatch": true,
       "firstMismatchDetail": null,
       "textDeltaSample": "",
-      "exportMs": 59,
+      "exportMs": 58,
       "imgInfo": []
     },
     {
@@ -182,7 +182,7 @@
       "textMatch": true,
       "firstMismatchDetail": null,
       "textDeltaSample": "",
-      "exportMs": 63,
+      "exportMs": 62,
       "imgInfo": []
     },
     {
@@ -195,7 +195,7 @@
       "textMatch": true,
       "firstMismatchDetail": null,
       "textDeltaSample": "",
-      "exportMs": 699,
+      "exportMs": 671,
       "imgInfo": []
     }
   ],
