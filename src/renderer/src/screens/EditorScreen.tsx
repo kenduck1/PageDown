@@ -62,6 +62,7 @@ function EditorScreen(): React.JSX.Element {
   const error = useDocumentStore((state) => state.error)
   const clearError = useDocumentStore((state) => state.clearError)
   const save = useDocumentStore((state) => state.save)
+  const saveDroppedImage = useDocumentStore((state) => state.saveDroppedImage)
   const editorRef = useRef<MilkdownEditorHandle>(null)
   // One ref is correct even though renderSourceEditor() (below) has two call
   // sites (plain Source mode, and Split mode's left pane) -- the same
@@ -844,6 +845,8 @@ function EditorScreen(): React.JSX.Element {
       ref={sourceEditorRef}
       content={content}
       onChange={(value) => updateContentForTab(activeTabId, value)}
+      onDropImage={saveDroppedImage}
+      onError={(message) => useDocumentStore.setState({ error: message })}
     />
   )
 
@@ -1000,6 +1003,7 @@ function EditorScreen(): React.JSX.Element {
         onChange={(markdown) => updateContentForTab(activeTabId, markdown)}
         onError={(message) => useDocumentStore.setState({ error: message })}
         onFindMatchesChanged={findController.handleFormatMatches}
+        onDropImage={saveDroppedImage}
       />
     </div>
   )

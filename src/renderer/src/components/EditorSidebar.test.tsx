@@ -190,7 +190,8 @@ describe('EditorSidebar', () => {
       sendSplitPreviewDocument: vi.fn(),
       destroySplitPreview: vi.fn(),
       scrollSplitPreviewToPage: vi.fn(),
-      getSplitPreviewPage: vi.fn()
+      getSplitPreviewPage: vi.fn(),
+      saveDroppedImage: vi.fn()
     }
     const user = userEvent.setup()
     render(
@@ -232,7 +233,8 @@ describe('EditorSidebar', () => {
       sendSplitPreviewDocument: vi.fn(),
       destroySplitPreview: vi.fn(),
       scrollSplitPreviewToPage: vi.fn(),
-      getSplitPreviewPage: vi.fn()
+      getSplitPreviewPage: vi.fn(),
+      saveDroppedImage: vi.fn()
     }
     useAppStore.setState({ sidebarTab: 'history' })
     render(

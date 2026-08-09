@@ -1,9 +1,16 @@
 import { dialog, type BrowserWindow } from 'electron'
 import { readFile, writeFile, stat, realpath } from 'node:fs/promises'
-import { dirname, basename, join } from 'node:path'
+import { dirname, basename, extname, join } from 'node:path'
 import { mergeRecentFiles, readRecentFiles, writeRecentFiles, isKnownPath } from './recent-files'
 import type { RecentFileEntry } from './recent-files'
 import { getLatestSnapshot, MTIME_TOLERANCE_MS } from './version-history'
+// Reused rather than re-implemented -- pagination-window.ts already imports
+// `electron` at module scope (for WebContentsView/BaseWindow/session), but
+// only inside function bodies never evaluated here, so pulling in just this
+// one pure, already-exported, already-unit-tested function doesn't add any
+// new runtime dependency this module doesn't already have (file-io.ts
+// already imports `dialog` from 'electron').
+import { sniffImageContentType } from './pagination-window'
 
 // Re-exported so src/main/index.ts imports every file-I/O primitive from one
 // place, matching its existing single-import pattern.
@@ -175,6 +182,68 @@ export async function saveFileToKnownOrChosenPath(
     return saveFile(null, content)
   }
   return saveFile(filePath, content)
+}
+
+export type SaveDroppedImageResult = { relativePath: string } | { error: string }
+
+// A file's own real byte content, sniffed the same way the local-asset
+// protocol handler already sniffs a served asset -- no content-type
+// allowlist is skipped just because this write originates from a genuine
+// drag gesture rather than a document reference. `documentDir` is derived
+// from `filePath`, never a renderer-supplied directory -- consistent with
+// "Any future registerAssetRoot caller must pass an isKnownPath-validated
+// absolute path" (CLAUDE.md's File I/O security invariant): this function
+// is that same shape of caller, one level removed (it writes INTO the
+// directory local assets already resolve against, rather than registering
+// the directory itself).
+export async function saveDroppedImage(
+  userDataDir: string,
+  filePath: string | null,
+  base64Data: string,
+  suggestedFilename: string
+): Promise<SaveDroppedImageResult> {
+  // No saved document yet -- there is no directory to copy into, and (per
+  // the same reasoning registerAssetRoot's own "no validated path" branch
+  // already documents) inventing a placeholder would be worse than a clear,
+  // real error. The caller surfaces this through the existing
+  // documentStore.error/error-banner pattern, not a new UI.
+  if (filePath === null || !(await isKnownPath(userDataDir, filePath))) {
+    return { error: 'Save the document before adding images.' }
+  }
+
+  const buffer = Buffer.from(base64Data, 'base64')
+  if (!sniffImageContentType(buffer)) {
+    return { error: 'That file does not look like a real image.' }
+  }
+
+  const documentDir = dirname(filePath)
+  // basename() strips any path/traversal component a hostile or malformed
+  // suggestedFilename might carry -- same defensive posture as every other
+  // renderer-supplied string this codebase writes to disk, even though this
+  // one originates from a real OS drag gesture's own File#name, not
+  // document content.
+  const cleanName = basename(suggestedFilename) || 'image'
+  const ext = extname(cleanName)
+  const stem = ext ? cleanName.slice(0, -ext.length) : cleanName
+
+  let candidate = cleanName
+  let suffix = 1
+  // Never overwrites an existing file -- a same-named image dropped twice
+  // (or colliding with an unrelated existing file) gets its own numbered
+  // sibling instead of silently clobbering something already referenced
+  // elsewhere in the document.
+  for (;;) {
+    try {
+      await stat(join(documentDir, candidate))
+    } catch {
+      break
+    }
+    suffix += 1
+    candidate = `${stem}-${suffix}${ext}`
+  }
+
+  await writeFile(join(documentDir, candidate), buffer)
+  return { relativePath: candidate }
 }
 
 export type DiscardChangesChoice = 'save' | 'discard' | 'cancel'

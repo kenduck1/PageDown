@@ -46,6 +46,16 @@ interface DocumentState extends DocumentStateValues {
   openFile: () => Promise<boolean>
   openPath: (filePath: string) => Promise<boolean>
   save: () => Promise<void>
+  // Reads the ACTIVE tab's own filePath internally (same rationale as
+  // save() capturing it before its own await -- see that action's comment)
+  // rather than requiring the caller to look it up, since callers here are
+  // MilkdownEditor's/SourceEditor's own drop handlers, not a screen
+  // component with easy store access via a hook. Returns the result rather
+  // than mutating store state -- the actual document-content change (a real
+  // ![alt](relativePath) reference) is applied by the CALLER inserting it
+  // into the editor at the drop position, which this action has no way to
+  // do generically for both Format and Source mode.
+  saveDroppedImage: (file: File) => Promise<{ relativePath: string } | { error: string }>
   updateContent: (content: string) => void
   // Same update as updateContent, but targets an EXPLICIT tab id rather
   // than "whichever tab is active right now" -- needed because
@@ -170,6 +180,30 @@ export const initialDocumentState: DocumentStateValues = {
 
 function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err)
+}
+
+// FileReader.readAsDataURL, not a hand-rolled ArrayBuffer->base64 loop --
+// the standard, browser-native way to get a base64 encoding of a File's
+// bytes without touching Node's Buffer (unavailable here: this renderer
+// runs with contextIsolation on and nodeIntegration off, per this app's
+// security model). Strips the `data:<mime>;base64,` prefix so the IPC call
+// carries pure base64, matching what Buffer.from(data, 'base64') on the
+// main-process side expects.
+function readFileAsBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => {
+      const result = reader.result
+      if (typeof result !== 'string') {
+        reject(new Error('Failed to read dropped file'))
+        return
+      }
+      const commaIndex = result.indexOf(',')
+      resolve(commaIndex === -1 ? result : result.slice(commaIndex + 1))
+    }
+    reader.onerror = () => reject(reader.error ?? new Error('Failed to read dropped file'))
+    reader.readAsDataURL(file)
+  })
 }
 
 export const useDocumentStore = create<DocumentState>()((set, get) => ({
@@ -308,6 +342,15 @@ export const useDocumentStore = create<DocumentState>()((set, get) => ({
       }
     } catch (err) {
       set({ error: errorMessage(err) })
+    }
+  },
+  saveDroppedImage: async (file) => {
+    const { filePath } = get()
+    try {
+      const base64Data = await readFileAsBase64(file)
+      return await window.api.saveDroppedImage(filePath, base64Data, file.name)
+    } catch (err) {
+      return { error: errorMessage(err) }
     }
   },
   updateContent: (content) => get().updateContentForTab(get().activeTabId, content),

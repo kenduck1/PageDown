@@ -1,8 +1,12 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, render, screen } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { createRef, useState } from 'react'
 import SourceEditor, { type SourceEditorHandle } from './SourceEditor'
+
+function dropWithFiles(files: File[]): { dataTransfer: { files: File[] } } {
+  return { dataTransfer: { files } }
+}
 
 afterEach(() => {
   cleanup()
@@ -75,5 +79,93 @@ describe('SourceEditor', () => {
     const { rerender } = render(<SourceEditor ref={ref} content="before" onChange={() => {}} />)
     rerender(<SourceEditor ref={ref} content="after" onChange={() => {}} />)
     expect(ref.current?.getTextarea()?.value).toBe('after')
+  })
+
+  describe('image drag-and-drop', () => {
+    it('inserts a real markdown image reference at the cursor for a dropped image file', async () => {
+      const onChange = vi.fn()
+      const onDropImage = vi.fn().mockResolvedValue({ relativePath: 'photo.png' })
+      const ref = createRef<SourceEditorHandle>()
+      render(
+        <SourceEditor
+          ref={ref}
+          content="beforeafter"
+          onChange={onChange}
+          onDropImage={onDropImage}
+        />
+      )
+      const textarea = ref.current!.getTextarea()!
+      textarea.setSelectionRange(6, 6)
+
+      const file = new File(['fake-bytes'], 'photo.png', { type: 'image/png' })
+      fireEvent.drop(textarea, dropWithFiles([file]))
+
+      await waitFor(() => expect(onDropImage).toHaveBeenCalledWith(file))
+      await waitFor(() =>
+        expect(onChange).toHaveBeenCalledWith('before![photo.png](photo.png)\nafter')
+      )
+    })
+
+    it('wraps the destination in angle brackets when the saved relative path contains a space', async () => {
+      const onChange = vi.fn()
+      const onDropImage = vi.fn().mockResolvedValue({ relativePath: 'my photo.png' })
+      const ref = createRef<SourceEditorHandle>()
+      render(<SourceEditor ref={ref} content="" onChange={onChange} onDropImage={onDropImage} />)
+      const textarea = ref.current!.getTextarea()!
+      textarea.setSelectionRange(0, 0)
+
+      const file = new File(['fake-bytes'], 'my photo.png', { type: 'image/png' })
+      fireEvent.drop(textarea, dropWithFiles([file]))
+
+      await waitFor(() =>
+        expect(onChange).toHaveBeenCalledWith('![my photo.png](<my photo.png>)\n')
+      )
+    })
+
+    it('surfaces a save failure via onError and does not insert anything', async () => {
+      const onChange = vi.fn()
+      const onError = vi.fn()
+      const onDropImage = vi.fn().mockResolvedValue({ error: 'Save the document first.' })
+      const ref = createRef<SourceEditorHandle>()
+      render(
+        <SourceEditor
+          ref={ref}
+          content="x"
+          onChange={onChange}
+          onDropImage={onDropImage}
+          onError={onError}
+        />
+      )
+      const textarea = ref.current!.getTextarea()!
+
+      const file = new File(['fake-bytes'], 'photo.png', { type: 'image/png' })
+      fireEvent.drop(textarea, dropWithFiles([file]))
+
+      await waitFor(() => expect(onError).toHaveBeenCalledWith('Save the document first.'))
+      expect(onChange).not.toHaveBeenCalled()
+    })
+
+    it('ignores a drop carrying no image files, leaving onDropImage/onChange untouched', () => {
+      const onChange = vi.fn()
+      const onDropImage = vi.fn()
+      const ref = createRef<SourceEditorHandle>()
+      render(<SourceEditor ref={ref} content="x" onChange={onChange} onDropImage={onDropImage} />)
+      const textarea = ref.current!.getTextarea()!
+
+      const file = new File(['plain text'], 'notes.txt', { type: 'text/plain' })
+      fireEvent.drop(textarea, dropWithFiles([file]))
+
+      expect(onDropImage).not.toHaveBeenCalled()
+      expect(onChange).not.toHaveBeenCalled()
+    })
+
+    it('does nothing (no throw) when no onDropImage prop is provided', () => {
+      const ref = createRef<SourceEditorHandle>()
+      render(<SourceEditor ref={ref} content="x" onChange={vi.fn()} />)
+      const textarea = ref.current!.getTextarea()!
+
+      const file = new File(['fake-bytes'], 'photo.png', { type: 'image/png' })
+      expect(() => fireEvent.drop(textarea, dropWithFiles([file]))).not.toThrow()
+    })
   })
 })

@@ -103,6 +103,11 @@ export interface FileApi {
   destroySplitPreview: () => Promise<void>
   scrollSplitPreviewToPage: (pageIndex: number) => Promise<PageNavState>
   getSplitPreviewPage: () => Promise<PageNavState>
+  saveDroppedImage: (
+    filePath: string | null,
+    base64Data: string,
+    suggestedFilename: string
+  ) => Promise<{ relativePath: string } | { error: string }>
 }
 
 declare global {

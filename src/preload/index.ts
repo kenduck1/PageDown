@@ -61,7 +61,14 @@ const api = {
   // while Split mode is open, so this must never spin up a harness.
   scrollSplitPreviewToPage: (pageIndex: number) =>
     ipcRenderer.invoke('split-preview:scrollToPage', pageIndex),
-  getSplitPreviewPage: () => ipcRenderer.invoke('split-preview:getPage')
+  getSplitPreviewPage: () => ipcRenderer.invoke('split-preview:getPage'),
+  // `filePath: null` (an unsaved document) is refused with a real error by
+  // the main-process handler, not silently degraded -- unlike
+  // getPageCount/exportPdf/sendSplitPreviewDocument above, there's no
+  // reasonable "denied but still proceeds" behavior for a feature whose
+  // entire purpose is writing a new file next to the document.
+  saveDroppedImage: (filePath: string | null, base64Data: string, suggestedFilename: string) =>
+    ipcRenderer.invoke('file:saveDroppedImage', filePath, base64Data, suggestedFilename)
 }
 
 // Use `contextBridge` APIs to expose Electron APIs to

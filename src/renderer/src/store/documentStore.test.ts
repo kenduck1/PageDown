@@ -24,7 +24,8 @@ beforeEach(() => {
     sendSplitPreviewDocument: vi.fn(),
     destroySplitPreview: vi.fn(),
     scrollSplitPreviewToPage: vi.fn(),
-    getSplitPreviewPage: vi.fn()
+    getSplitPreviewPage: vi.fn(),
+    saveDroppedImage: vi.fn()
   }
 })
 
@@ -154,6 +155,50 @@ describe('useDocumentStore', () => {
     vi.mocked(window.api.saveFile).mockResolvedValue(null)
     await useDocumentStore.getState().save()
     expect(window.api.autosaveSnapshot).not.toHaveBeenCalled()
+  })
+
+  it("saveDroppedImage reads the file as base64 and calls window.api.saveDroppedImage with the active tab's filePath", async () => {
+    useDocumentStore.setState({ filePath: '/doc.md' })
+    vi.mocked(window.api.saveDroppedImage).mockResolvedValue({ relativePath: 'photo.png' })
+    const file = new File(['fake-bytes'], 'photo.png', { type: 'image/png' })
+
+    const result = await useDocumentStore.getState().saveDroppedImage(file)
+
+    expect(result).toEqual({ relativePath: 'photo.png' })
+    expect(window.api.saveDroppedImage).toHaveBeenCalledWith(
+      '/doc.md',
+      expect.any(String),
+      'photo.png'
+    )
+    // The base64 payload must be the pure encoding (no `data:...;base64,`
+    // prefix) -- Buffer.from(data, 'base64') on the main-process side
+    // expects exactly that.
+    const [, base64Arg] = vi.mocked(window.api.saveDroppedImage).mock.calls[0]
+    expect(base64Arg).not.toContain('data:')
+    expect(base64Arg).not.toContain(',')
+  })
+
+  it('saveDroppedImage passes null filePath through for an unsaved document, letting the main process refuse it', async () => {
+    useDocumentStore.setState({ filePath: null })
+    vi.mocked(window.api.saveDroppedImage).mockResolvedValue({
+      error: 'Save the document before adding images.'
+    })
+    const file = new File(['fake-bytes'], 'photo.png', { type: 'image/png' })
+
+    const result = await useDocumentStore.getState().saveDroppedImage(file)
+
+    expect(result).toEqual({ error: 'Save the document before adding images.' })
+    expect(window.api.saveDroppedImage).toHaveBeenCalledWith(null, expect.any(String), 'photo.png')
+  })
+
+  it('saveDroppedImage returns an error object (not a throw) when the IPC call itself rejects', async () => {
+    useDocumentStore.setState({ filePath: '/doc.md' })
+    vi.mocked(window.api.saveDroppedImage).mockRejectedValue(new Error('IPC failed'))
+    const file = new File(['fake-bytes'], 'photo.png', { type: 'image/png' })
+
+    const result = await useDocumentStore.getState().saveDroppedImage(file)
+
+    expect(result).toEqual({ error: 'IPC failed' })
   })
 
   it('clearError resets error to null', () => {

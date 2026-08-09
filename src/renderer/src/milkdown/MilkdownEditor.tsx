@@ -8,6 +8,7 @@ import { EDITOR_COMMAND_PLUGINS } from './commands'
 import { PINNED_STRINGIFY_OPTIONS } from './stringify-options'
 import { buildEditorCommands, type EditorCommands } from './editor-commands'
 import { createFindPlugin } from './find-plugin'
+import { createDropImagePlugin } from './drop-image'
 import type { PageGeometry } from '../../../typography/page-geometry'
 import type { DocumentStyle } from '../../../typography/document-style'
 
@@ -36,6 +37,13 @@ interface MilkdownEditorProps {
   // value on setFindState. Latest-ref captured below, exactly like
   // onChange/onError.
   onFindMatchesChanged?: (count: number, activeIndex: number) => void
+  // Called once per real image file found in a native OS drop, in drop
+  // order. Owned by the caller (EditorScreen wires it to
+  // documentStore.saveDroppedImage) rather than this component reaching
+  // into the store directly -- MilkdownEditor takes no window.api/store
+  // dependency anywhere else, and this stays consistent with that. Latest-
+  // ref captured below, same as onChange/onError/onFindMatchesChanged.
+  onDropImage?: (file: File) => Promise<{ relativePath: string } | { error: string }>
 }
 
 // Extends EditorCommands (editor-commands.ts) with flush() -- the one
@@ -78,7 +86,7 @@ export interface MilkdownEditorHandle extends EditorCommands {
 
 const MilkdownEditor = forwardRef<MilkdownEditorHandle, MilkdownEditorProps>(
   function MilkdownEditor(
-    { content, geometry, documentStyle, onChange, onError, onFindMatchesChanged },
+    { content, geometry, documentStyle, onChange, onError, onFindMatchesChanged, onDropImage },
     ref
   ) {
     const rootRef = useRef<HTMLDivElement>(null)
@@ -130,10 +138,15 @@ const MilkdownEditor = forwardRef<MilkdownEditorHandle, MilkdownEditorProps>(
     // it needs the same "always call the current prop" indirection as
     // onChange/onError rather than being rebuilt on every render.
     const onFindMatchesChangedRef = useRef(onFindMatchesChanged)
+    // Same latest-ref treatment, for the drop-image plugin -- constructed
+    // once inside the mount effect below (see dropImageProse), same
+    // reasoning as onFindMatchesChangedRef above.
+    const onDropImageRef = useRef(onDropImage)
     useEffect(() => {
       onChangeRef.current = onChange
       onErrorRef.current = onError
       onFindMatchesChangedRef.current = onFindMatchesChanged
+      onDropImageRef.current = onDropImage
     })
 
     // Set once the editor has finished constructing (inside the mount
@@ -207,6 +220,21 @@ const MilkdownEditor = forwardRef<MilkdownEditorHandle, MilkdownEditorProps>(
         })
       )
 
+      // Same per-mount construction as findProse above, for the same
+      // reason -- closes over this mount's own latest-ref callbacks. Needs
+      // `ctx` (unlike editedTrackerProse/findProse) to construct a real
+      // image node via imageSchema.type(ctx), so this uses $prose's other
+      // signature, (ctx) => Plugin, rather than the no-arg one.
+      const dropImageProse = $prose((ctx) =>
+        createDropImagePlugin(ctx, {
+          onDropImage: (file) =>
+            onDropImageRef.current
+              ? onDropImageRef.current(file)
+              : Promise.resolve({ error: 'Image drop is not available here.' }),
+          onError: (message) => onErrorRef.current(message)
+        })
+      )
+
       Editor.make()
         .config((ctx) => {
           ctx.set(rootCtx, root)
@@ -249,6 +277,7 @@ const MilkdownEditor = forwardRef<MilkdownEditorHandle, MilkdownEditorProps>(
         .use(listener)
         .use(editedTrackerProse)
         .use(findProse)
+        .use(dropImageProse)
         .create()
         .then((created) => {
           if (cancelled) {

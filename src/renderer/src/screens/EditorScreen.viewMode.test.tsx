@@ -118,7 +118,8 @@ beforeEach(() => {
     // Same rationale as sendSplitPreviewDocument above -- SplitPreview.tsx's
     // own effects call .then()/.catch() on these unconditionally too.
     scrollSplitPreviewToPage: vi.fn().mockResolvedValue({ currentPage: 1, pageCount: 0 }),
-    getSplitPreviewPage: vi.fn().mockResolvedValue({ currentPage: 1, pageCount: 0 })
+    getSplitPreviewPage: vi.fn().mockResolvedValue({ currentPage: 1, pageCount: 0 }),
+    saveDroppedImage: vi.fn()
   }
 })
 

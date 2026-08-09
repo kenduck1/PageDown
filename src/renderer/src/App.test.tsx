@@ -38,7 +38,8 @@ beforeEach(() => {
     sendSplitPreviewDocument: vi.fn(),
     destroySplitPreview: vi.fn(),
     scrollSplitPreviewToPage: vi.fn(),
-    getSplitPreviewPage: vi.fn()
+    getSplitPreviewPage: vi.fn(),
+    saveDroppedImage: vi.fn()
   }
 })
 
