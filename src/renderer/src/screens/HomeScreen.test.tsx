@@ -4,6 +4,7 @@ import userEvent from '@testing-library/user-event'
 import HomeScreen from './HomeScreen'
 import { useAppStore } from '../store/appStore'
 import { useDocumentStore, initialDocumentState } from '../store/documentStore'
+import { usePreferencesStore } from '../store/preferencesStore'
 
 beforeEach(() => {
   useAppStore.setState({ screen: 'home' })
@@ -21,6 +22,14 @@ beforeEach(() => {
     confirmDiscardChanges: vi.fn(),
     exportPdf: vi.fn(),
     print: vi.fn(),
+    // HomeScreen.tsx never calls these directly -- App.tsx's own
+    // getPreferences() call feeds usePreferencesStore, which HomeScreen only
+    // READS from. Bare mocks here satisfy FileApi's completeness, nothing
+    // more; tests that need a real preferences value for the
+    // default-page-config-on-new-document behavior set
+    // usePreferencesStore.setState(...) directly instead.
+    getPreferences: vi.fn(),
+    setPreferences: vi.fn(),
     autosaveSnapshot: vi.fn(),
     getVersionHistory: vi.fn(),
     restoreVersionContent: vi.fn(),
@@ -31,6 +40,7 @@ beforeEach(() => {
     scrollSplitPreviewToPage: vi.fn(),
     getSplitPreviewPage: vi.fn()
   }
+  usePreferencesStore.setState({ preferences: null, loaded: false })
 })
 
 afterEach(() => {

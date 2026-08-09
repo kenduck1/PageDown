@@ -11,6 +11,24 @@ export interface SnapshotMeta {
   sizeBytes: number
 }
 
+// Structurally identical to src/main/preferences.ts's own DefaultPageConfig/
+// Preferences -- deliberately NOT imported from there, matching this file's
+// existing RecentFileEntry/SnapshotMeta precedent (see SplitPreviewBounds's
+// own comment just below for the full reasoning: src/main/**/* sits outside
+// tsconfig.web.json's `include`, which is what this file is checked under).
+export interface DefaultPageConfig {
+  pageSize: 'Letter' | 'A4' | 'Legal' | 'Custom'
+  orientation: 'portrait' | 'landscape'
+  theme: 'default' | 'resume' | 'letter' | 'report'
+  fontFamily: 'source-serif-4' | 'inter'
+}
+
+export interface Preferences {
+  spellcheckEnabled: boolean
+  autosaveIntervalMs: number
+  defaultPageConfig: DefaultPageConfig
+}
+
 // A CSS-pixel rectangle (getBoundingClientRect()'s own shape) for the Split
 // mode preview pane. Deliberately a local, structurally-shaped interface
 // rather than an import from src/main/split-preview-window.ts's own
@@ -71,6 +89,8 @@ export interface FileApi {
   confirmDiscardChanges: () => Promise<'save' | 'discard' | 'cancel'>
   exportPdf: (content: string, filePath?: string | null) => Promise<{ filePath: string } | null>
   print: (content: string, filePath?: string | null) => Promise<{ cancelled: boolean }>
+  getPreferences: () => Promise<Preferences>
+  setPreferences: (preferences: Preferences) => Promise<void>
   autosaveSnapshot: (content: string, filePath: string) => Promise<void>
   getVersionHistory: (filePath: string) => Promise<SnapshotMeta[]>
   restoreVersionContent: (filePath: string, snapshotId: string) => Promise<string | null>

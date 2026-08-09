@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useAppStore, type ViewMode } from '../store/appStore'
 import { useDocumentStore } from '../store/documentStore'
+import { usePreferencesStore } from '../store/preferencesStore'
 import MilkdownEditor, { type MilkdownEditorHandle } from '../milkdown/MilkdownEditor'
 import SourceEditor, { type SourceEditorHandle } from '../components/SourceEditor'
 import SplitPreview from '../components/SplitPreview'
@@ -89,7 +90,12 @@ function EditorScreen(): React.JSX.Element {
     setToast({ id: toastIdRef.current, message: UNDO_BARRIER_TOAST_MESSAGE })
   }
   const { pageCount } = usePageCount(content, filePath)
-  useAutosave({ content, filePath, isDirty })
+  // undefined (not preferences?.autosaveIntervalMs ?? somethingElse) when
+  // preferences haven't loaded yet -- useAutosave's own default parameter
+  // already falls back to the pre-existing 45s constant in that case, so
+  // there's no need to duplicate that fallback value here too.
+  const autosaveIntervalMs = usePreferencesStore((state) => state.preferences?.autosaveIntervalMs)
+  useAutosave({ content, filePath, isDirty, intervalMs: autosaveIntervalMs })
 
   // A different document -- or a different tab -- is a different set of
   // pages, so the current page must not carry over. Without this, opening a

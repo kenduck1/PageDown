@@ -1,4 +1,4 @@
-import { app, shell, BrowserWindow, ipcMain } from 'electron'
+import { app, shell, BrowserWindow, ipcMain, Menu, type MenuItemConstructorOptions } from 'electron'
 import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
@@ -16,6 +16,7 @@ import { getPageCount, destroyPageCountHarness } from './page-count-generator'
 import { createSplitPreviewHarness, type SplitPreviewHarness } from './split-preview-window'
 import { exportDocumentToPdf } from './pdf-exporter'
 import { printDocument } from './print-exporter'
+import { readPreferences, writePreferences, type Preferences } from './preferences'
 import {
   openFileDialog,
   readFileByPath,
@@ -309,7 +310,76 @@ app.whenReady().then(() => {
 
   ipcMain.handle('file:getRecents', () => getRecentFiles(app.getPath('userData')))
 
+  ipcMain.handle('preferences:get', () => readPreferences(app.getPath('userData')))
+
   const mainWindow = createWindow()
+
+  // Applies the spellcheck half of a preferences change LIVE, on the same
+  // session document-editing windows already use, not just on the next app
+  // launch -- session.setSpellCheckerEnabled is a real runtime toggle (does
+  // NOT require recreating the BrowserWindow the way changing
+  // `webPreferences.spellcheck` at construction time would). Registered
+  // after `mainWindow` exists (not before, alongside `preferences:get`
+  // above) purely for readability -- the closure below only ever RUNS once
+  // a real IPC call arrives, well after this window is constructed, so
+  // ordering relative to `createWindow()` has no correctness effect, but
+  // referencing a `const` before its own declaration line reads as a bug
+  // even when it safely isn't one.
+  ipcMain.handle('preferences:set', async (_event, preferences: Preferences) => {
+    await writePreferences(app.getPath('userData'), preferences)
+    mainWindow.webContents.session.setSpellCheckerEnabled(preferences.spellcheckEnabled)
+  })
+
+  // Applies the PERSISTED spellcheck preference from the moment this window
+  // exists, not just after the user next opens Settings -- Electron
+  // defaults spellcheck to enabled, so without this, a user who previously
+  // disabled it would see it silently re-enabled every fresh launch.
+  readPreferences(app.getPath('userData')).then((preferences) => {
+    mainWindow.webContents.session.setSpellCheckerEnabled(preferences.spellcheckEnabled)
+  })
+
+  // This app had NO context menu at all before this -- right-clicking
+  // anywhere in the app-shell window did nothing, for spelling suggestions
+  // AND for ordinary Cut/Copy/Paste/Select All alike (confirmed by grep:
+  // zero `context-menu` listeners anywhere in this codebase before now).
+  // `params.misspelledWord`/`params.dictionarySuggestions` are Electron's
+  // own real spellcheck-result fields on the event, not something this app
+  // computes itself -- Chromium's built-in spellchecker (on by default,
+  // toggled live via setSpellCheckerEnabled above) already ran by the time
+  // this fires. Suggestions and "Add to Dictionary" only appear for an
+  // actually-misspelled word; the standard edit items always appear so a
+  // right-click on ordinary text isn't silently inert.
+  mainWindow.webContents.on('context-menu', (_event, params) => {
+    const template: MenuItemConstructorOptions[] = []
+
+    if (params.misspelledWord) {
+      for (const suggestion of params.dictionarySuggestions) {
+        template.push({
+          label: suggestion,
+          click: () => mainWindow.webContents.replaceMisspelling(suggestion)
+        })
+      }
+      if (params.dictionarySuggestions.length > 0) {
+        template.push({ type: 'separator' })
+      }
+      template.push({
+        label: 'Add to Dictionary',
+        click: () =>
+          mainWindow.webContents.session.addWordToSpellCheckerDictionary(params.misspelledWord)
+      })
+      template.push({ type: 'separator' })
+    }
+
+    template.push(
+      { label: 'Cut', role: 'cut', enabled: params.editFlags.canCut },
+      { label: 'Copy', role: 'copy', enabled: params.editFlags.canCopy },
+      { label: 'Paste', role: 'paste', enabled: params.editFlags.canPaste },
+      { type: 'separator' },
+      { label: 'Select All', role: 'selectAll', enabled: params.editFlags.canSelectAll }
+    )
+
+    Menu.buildFromTemplate(template).popup()
+  })
 
   ipcMain.handle('file:getThumbnail', async (_event, filePath: string) => {
     const userDataDir = app.getPath('userData')

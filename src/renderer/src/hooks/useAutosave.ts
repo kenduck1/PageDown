@@ -1,11 +1,17 @@
 import { useEffect, useRef } from 'react'
 
+// Kept as the DEFAULT (not removed) even now that Settings can override
+// it (see intervalMs below) -- it's still what every test and every caller
+// that doesn't have a real preferences value yet (App.tsx's own
+// getPreferences() call may not have resolved by the time EditorScreen
+// first mounts) falls back to, matching the pre-existing behavior exactly.
 const AUTOSAVE_INTERVAL_MS = 45_000
 
 interface UseAutosaveArgs {
   content: string
   filePath: string | null
   isDirty: boolean
+  intervalMs?: number
 }
 
 /**
@@ -32,9 +38,17 @@ interface UseAutosaveArgs {
  * countdown on every clean->dirty transition rules this out structurally: a
  * Save always clears `isDirty`, so the next countdown only ever starts on
  * the user's next real edit -- a tick can never land inside the post-Save
- * tolerance window. This still ticks repeatedly on a 45s cadence for as long
- * as the document stays continuously dirty (a single `setInterval` handles
- * that; the effect only re-runs on an `isDirty` transition, not per-tick).
+ * tolerance window. This still ticks repeatedly on a fixed cadence for as
+ * long as the document stays continuously dirty (a single `setInterval`
+ * handles that; the effect only re-runs on an `isDirty`/`intervalMs`
+ * transition, not per-tick). `intervalMs` (Settings, once real) also
+ * restarting the countdown does NOT reopen the post-Save race the paragraph
+ * above rules out -- that guarantee is specifically about a tick never
+ * landing inside a window right after a SAVE, which a user changing their
+ * autosave-interval PREFERENCE mid-edit has no relationship to; it is a
+ * genuinely separate kind of transition, and applying a changed interval
+ * immediately (rather than only at the next clean->dirty transition) is the
+ * correct, expected behavior.
  *
  * Known, accepted limitation: `documentStore` is multi-tab, but this hook
  * only ever sees whichever tab is ACTIVE -- `EditorScreen` feeds it the
@@ -43,7 +57,12 @@ interface UseAutosaveArgs {
  * the user switches back to it. This matches the hook's own signature (no
  * per-tab argument) and is out of scope for this task, not an oversight.
  */
-export function useAutosave({ content, filePath, isDirty }: UseAutosaveArgs): void {
+export function useAutosave({
+  content,
+  filePath,
+  isDirty,
+  intervalMs = AUTOSAVE_INTERVAL_MS
+}: UseAutosaveArgs): void {
   // Tick-time reads go through this ref rather than the closed-over
   // content/filePath/isDirty, so a stale closure inside a long-lived
   // setInterval never fires a snapshot of outdated content.
@@ -63,7 +82,7 @@ export function useAutosave({ content, filePath, isDirty }: UseAutosaveArgs): vo
       if (currentIsDirty && currentFilePath) {
         void window.api.autosaveSnapshot(currentContent, currentFilePath)
       }
-    }, AUTOSAVE_INTERVAL_MS)
+    }, intervalMs)
     return () => clearInterval(interval)
-  }, [isDirty])
+  }, [isDirty, intervalMs])
 }

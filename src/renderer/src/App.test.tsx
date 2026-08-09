@@ -19,6 +19,17 @@ beforeEach(() => {
     confirmDiscardChanges: vi.fn(),
     exportPdf: vi.fn(),
     print: vi.fn(),
+    getPreferences: vi.fn().mockResolvedValue({
+      spellcheckEnabled: true,
+      autosaveIntervalMs: 45_000,
+      defaultPageConfig: {
+        pageSize: 'Letter',
+        orientation: 'portrait',
+        theme: 'default',
+        fontFamily: 'source-serif-4'
+      }
+    }),
+    setPreferences: vi.fn(),
     autosaveSnapshot: vi.fn(),
     getVersionHistory: vi.fn(),
     restoreVersionContent: vi.fn(),
