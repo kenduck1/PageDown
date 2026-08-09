@@ -147,4 +147,15 @@
   .milkdown-mount .ProseMirror .pagedown-find-match-active {
     background: var(--color-find-match-active);
   }
+
+  /* The current match in Source mode is shown with the browser's own
+     selection, and while the user is typing in the find bar this textarea does
+     NOT have focus -- Chromium paints an unfocused selection in a muted grey
+     that reads as "nothing is highlighted". An explicit ::selection keeps the
+     match clearly visible, using the same tokens the Format-mode highlight
+     uses so a match reads identically on both surfaces. */
+  .pagedown-source-editor::selection {
+    background: var(--color-find-match-active);
+    color: var(--color-text-primary);
+  }
 }
