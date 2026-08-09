@@ -26,6 +26,8 @@
   --color-on-accent: #ffffff;
   --color-success: #2f7d46;
   --color-scrim: rgba(20, 20, 22, 0.4);
+  --color-find-match: #fdf0b4;
+  --color-find-match-active: #f7c948;
 
   /* Font families */
   --font-sans: -apple-system, 'Segoe UI', system-ui, sans-serif;
@@ -123,5 +125,37 @@
 
   .scrollbar-hide::-webkit-scrollbar {
     display: none;
+  }
+
+  /* Search highlighting is an EDITOR-ONLY affordance and must never appear in
+     the paginated preview or an exported PDF -- which is exactly why these
+     rules live here, scoped to the Milkdown mount, rather than in
+     src/typography/document-typography.css (shared with the sandboxed
+     pagination render context, where every var(--..) also has to be
+     hand-synced into that context's own :root block).
+
+     Yellow rather than an accent tint on purpose: --color-accent (#2461c0) is
+     within a hue of Chromium's native selection blue, so an accent-tinted
+     match sitting under a text selection would be nearly indistinguishable
+     from it. Yellow is the universal find convention precisely because it
+     doesn't collide with selection. */
+  .milkdown-mount .ProseMirror .pagedown-find-match {
+    background: var(--color-find-match);
+    border-radius: 2px;
+  }
+
+  .milkdown-mount .ProseMirror .pagedown-find-match-active {
+    background: var(--color-find-match-active);
+  }
+
+  /* The current match in Source mode is shown with the browser's own
+     selection, and while the user is typing in the find bar this textarea does
+     NOT have focus -- Chromium paints an unfocused selection in a muted grey
+     that reads as "nothing is highlighted". An explicit ::selection keeps the
+     match clearly visible, using the same tokens the Format-mode highlight
+     uses so a match reads identically on both surfaces. */
+  .pagedown-source-editor::selection {
+    background: var(--color-find-match-active);
+    color: var(--color-text-primary);
   }
 }

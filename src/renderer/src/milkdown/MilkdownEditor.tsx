@@ -7,6 +7,7 @@ import { EDITOR_SCHEMA_PLUGINS } from './plugins'
 import { EDITOR_COMMAND_PLUGINS } from './commands'
 import { PINNED_STRINGIFY_OPTIONS } from './stringify-options'
 import { buildEditorCommands, type EditorCommands } from './editor-commands'
+import { createFindPlugin } from './find-plugin'
 import type { PageGeometry } from '../../../typography/page-geometry'
 
 interface MilkdownEditorProps {
@@ -19,6 +20,12 @@ interface MilkdownEditorProps {
   geometry: PageGeometry
   onChange: (markdown: string) => void
   onError: (message: string) => void
+  // Fired by the find plugin whenever its match count or active index
+  // actually changes -- including changes caused by a DOCUMENT edit rather
+  // than by a new query, which is why this is a callback rather than a return
+  // value on setFindState. Latest-ref captured below, exactly like
+  // onChange/onError.
+  onFindMatchesChanged?: (count: number, activeIndex: number) => void
 }
 
 // Extends EditorCommands (editor-commands.ts) with flush() -- the one
@@ -60,7 +67,7 @@ export interface MilkdownEditorHandle extends EditorCommands {
 }
 
 const MilkdownEditor = forwardRef<MilkdownEditorHandle, MilkdownEditorProps>(
-  function MilkdownEditor({ content, geometry, onChange, onError }, ref) {
+  function MilkdownEditor({ content, geometry, onChange, onError, onFindMatchesChanged }, ref) {
     const rootRef = useRef<HTMLDivElement>(null)
     const editorRef = useRef<Editor | null>(null)
     // Set synchronously (inside a ProseMirror plugin's `apply`, not through
@@ -105,9 +112,15 @@ const MilkdownEditor = forwardRef<MilkdownEditorHandle, MilkdownEditorProps>(
     // passes a referentially-stable onError, but there's no reason for the
     // two callback props to be handled inconsistently.
     const onErrorRef = useRef(onError)
+    // Same latest-ref treatment, for the find plugin's match-count callback
+    // -- constructed once inside the mount effect below (see findProse), so
+    // it needs the same "always call the current prop" indirection as
+    // onChange/onError rather than being rebuilt on every render.
+    const onFindMatchesChangedRef = useRef(onFindMatchesChanged)
     useEffect(() => {
       onChangeRef.current = onChange
       onErrorRef.current = onError
+      onFindMatchesChangedRef.current = onFindMatchesChanged
     })
 
     // Set once the editor has finished constructing (inside the mount
@@ -135,7 +148,11 @@ const MilkdownEditor = forwardRef<MilkdownEditorHandle, MilkdownEditorProps>(
       insertPageBreak: () => commandsRef.current?.insertPageBreak(),
       undo: () => commandsRef.current?.undo(),
       redo: () => commandsRef.current?.redo(),
-      focusEnd: () => commandsRef.current?.focusEnd()
+      focusEnd: () => commandsRef.current?.focusEnd(),
+      setFindState: (next) => commandsRef.current?.setFindState(next),
+      replaceActiveMatch: (replacement) => commandsRef.current?.replaceActiveMatch(replacement),
+      replaceAllMatches: (replacement) => commandsRef.current?.replaceAllMatches(replacement),
+      getSelectedText: () => commandsRef.current?.getSelectedText() ?? ''
     }))
 
     useEffect(() => {
@@ -166,6 +183,15 @@ const MilkdownEditor = forwardRef<MilkdownEditorHandle, MilkdownEditorProps>(
               }
             }
           })
+      )
+
+      // Constructed per-mount (not in the static EDITOR_COMMAND_PLUGINS list)
+      // because it closes over this mount's own latest-ref callback -- the
+      // same reason editedTrackerProse above is built here.
+      const findProse = $prose(() =>
+        createFindPlugin((count, activeIndex) => {
+          onFindMatchesChangedRef.current?.(count, activeIndex)
+        })
       )
 
       Editor.make()
@@ -209,6 +235,7 @@ const MilkdownEditor = forwardRef<MilkdownEditorHandle, MilkdownEditorProps>(
         .use(EDITOR_COMMAND_PLUGINS)
         .use(listener)
         .use(editedTrackerProse)
+        .use(findProse)
         .create()
         .then((created) => {
           if (cancelled) {

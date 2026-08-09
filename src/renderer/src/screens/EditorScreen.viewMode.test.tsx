@@ -55,7 +55,11 @@ const { mockEditorHandle } = vi.hoisted(() => ({
     insertPageBreak: vi.fn(),
     undo: vi.fn(),
     redo: vi.fn(),
-    focusEnd: vi.fn()
+    focusEnd: vi.fn(),
+    setFindState: vi.fn(),
+    replaceActiveMatch: vi.fn(),
+    replaceAllMatches: vi.fn(),
+    getSelectedText: vi.fn(() => '')
   }
 }))
 

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type ReactElement, type RefObject } from 'react'
 import { useAppStore, type ViewMode } from '../store/appStore'
 import { useDocumentStore } from '../store/documentStore'
+import { useFindStore } from '../store/findStore'
 import type { MilkdownEditorHandle } from '../milkdown/MilkdownEditor'
 
 // The formatting toolbar described in docs/design-handoff/README.md's
@@ -143,12 +144,18 @@ function EditorToolbar({ editorRef, onSetViewMode }: EditorToolbarProps): ReactE
   // Undo/Redo in particular: a plain <textarea> has real browser-native
   // undo/redo of its own, so disabling THIS toolbar's Undo/Redo buttons
   // doesn't remove undo capability in Source mode, just the redundant/dead
-  // duplicate control. Everything else (view-mode switcher, Export PDF,
-  // and every still-unwired placeholder button like Underline/Find/Insert
-  // image) is independent of the Milkdown instance and stays enabled.
+  // duplicate control. Everything else (view-mode switcher, Export PDF, the
+  // now-wired Find button, and the still-unwired placeholder buttons like
+  // Underline/Insert image) is independent of the Milkdown instance and stays
+  // enabled. Find in particular MUST stay enabled in Source mode -- it works
+  // on both editing surfaces (see useFindController.ts), so disabling it here
+  // would remove a real capability rather than a dead control.
   const isSourceMode = viewMode === 'source'
   const content = useDocumentStore((state) => state.content)
   const filePath = useDocumentStore((state) => state.filePath)
+  const findOpen = useFindStore((state) => state.isOpen)
+  const openFind = useFindStore((state) => state.openFind)
+  const closeFind = useFindStore((state) => state.closeFind)
   const [isExporting, setIsExporting] = useState(false)
   // Forces the paragraph-style <select> below to remount (fresh DOM node,
   // back to its uncontrolled default) after every use -- see
@@ -649,11 +656,19 @@ function EditorToolbar({ editorRef, onSetViewMode }: EditorToolbarProps): ReactE
             </ToolbarIconButton>
           </div>
 
-          {/* Find -- per docs/design-handoff/README.md's own "Not yet designed"
-          list: "a search icon exists in the toolbar as a placeholder
-          trigger only" (no find/replace panel exists to open). Deliberately
-          unwired, matching the design handoff's own explicit call-out. */}
-          <ToolbarIconButton label="Find">
+          {/* Wired as of the Find & Replace sub-project
+          (docs/superpowers/specs/2026-08-08-find-replace-design.md) -- this
+          was a placeholder trigger with no onClick since the design handoff.
+          It takes `active` (and therefore renders aria-pressed) because it now
+          genuinely toggles a panel, unlike the one-shot action buttons above:
+          see ToolbarIconButtonProps' own comment on when that prop belongs.
+          Not disabled in Source mode -- Find works on BOTH editing surfaces,
+          unlike the editorRef-bound cluster. */}
+          <ToolbarIconButton
+            label="Find"
+            active={findOpen}
+            onClick={() => (findOpen ? closeFind() : openFind())}
+          >
             <Icon strokeWidth={1.8}>
               <circle cx="10.5" cy="10.5" r="6" />
               <path d="M19 19l-4.3-4.3" />
