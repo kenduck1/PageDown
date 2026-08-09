@@ -146,6 +146,58 @@ describe('markdownToHtml', () => {
   })
 })
 
+describe('markdownToHtml — footnotes', () => {
+  it('renders a footnote reference and its definition into a real footnotes section', () => {
+    const { html } = markdownToHtml(
+      'Here is a footnote reference[^1].\n\n[^1]: Here is the footnote.'
+    )
+    expect(html).toContain('data-footnote-ref')
+    expect(html).toContain('Here is the footnote.')
+    expect(html).toContain('class="footnotes"')
+  })
+
+  // Regression test for a real bug: mdast-util-to-hast pre-prefixes footnote
+  // id/href pairs with 'user-content-' to prevent DOM clobbering, and
+  // hast-util-sanitize's OWN separate clobber-prefixing then doubled that
+  // prefix on the `id` side only (never on `href`, which isn't in its
+  // clobber list) -- so the forward reference link, and the footnote's own
+  // back-reference link, both pointed at ids that no longer existed. See
+  // undoDoubleClobberPrefix's own comment in pipeline.ts for the full
+  // mechanics.
+  it('the footnote reference link points at an id that genuinely exists in the output (no doubled clobber prefix)', () => {
+    const { html } = markdownToHtml(
+      'Here is a footnote reference[^1].\n\n[^1]: Here is the footnote.'
+    )
+
+    const hrefMatch = html.match(/<sup>[\s\S]*?<a href="#([^"]+)"/)
+    expect(hrefMatch, 'expected a real footnote reference link').not.toBeNull()
+    const targetId = hrefMatch![1]
+
+    expect(html).not.toContain('user-content-user-content-')
+    expect(html).toContain(`id="${targetId}"`)
+  })
+
+  it('the footnote back-reference link points at an id that genuinely exists in the output', () => {
+    const { html } = markdownToHtml(
+      'Here is a footnote reference[^1].\n\n[^1]: Here is the footnote.'
+    )
+
+    // The backref anchor's attribute order (href before data-footnote-backref)
+    // is fixed by mdast-util-to-hast's own footer.js.
+    const backrefMatch = html.match(/<a href="#([^"]+)" data-footnote-backref/)
+    expect(backrefMatch, 'expected a real footnote back-reference link').not.toBeNull()
+    const targetId = backrefMatch![1]
+
+    expect(html).toContain(`id="${targetId}"`)
+  })
+
+  it('a raw-HTML-authored id is still clobber-prefixed exactly once (no protection regression)', () => {
+    const { html } = markdownToHtml('<div id="config">hostile</div>')
+    expect(html).toContain('id="user-content-config"')
+    expect(html).not.toContain('id="user-content-user-content-config"')
+  })
+})
+
 describe('markdownToHtml — local asset src rewriting', () => {
   it('rewrites a relative local image src into the __asset__ URL scheme when assetToken is provided', () => {
     const { html } = markdownToHtml('![chart](./figures/chart.png)', { assetToken: 'abc123' })

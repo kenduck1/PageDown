@@ -368,10 +368,24 @@ test('Gate 4: exported PDF page count and per-page text match the on-screen Page
         // exported PDF's real text meaningless for that file. Stripping
         // <style> first is a no-op for every other corpus file (none of them
         // contain a <style> element at all).
+        // Stripping .sr-only descendants alongside <style> for the identical
+        // reason: reference-links-and-footnotes.md's footnote section carries
+        // a real, correctly visually-hidden "Footnotes" <h2 class="sr-only">
+        // label (see src/typography/document-typography.css's own .sr-only
+        // rule) -- present in the DOM and therefore in .textContent, but
+        // never painted, so pdfjs's real extracted PDF text never contains
+        // it. Without stripping it here, this comparison would fail not
+        // because export lost content, but because .textContent counts
+        // content that was NEVER meant to be visible in the first place --
+        // the same class of "textContent measures the wrong thing" gap
+        // <style> already demonstrated, just in the opposite direction (here
+        // it's onscreen-only content missing from the PDF, not PDF-only
+        // content missing onscreen).
         const pagesText = await harness.view.webContents.executeJavaScript(`
         Array.from(document.querySelectorAll('.pagedjs_page')).map(p => {
           const clone = p.cloneNode(true)
           clone.querySelectorAll('style').forEach(s => s.remove())
+          clone.querySelectorAll('.sr-only').forEach(s => s.remove())
           return clone.textContent
         })
       `)

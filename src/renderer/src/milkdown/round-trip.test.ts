@@ -70,4 +70,18 @@ describe('Full node-set round trip (frontmatter + pagebreak + commonmark + gfm t
     expect(output).toContain('Before.')
     expect(output).toContain('After.')
   })
+
+  // @milkdown/preset-gfm's `gfm` export (part of EDITOR_SCHEMA_PLUGINS via
+  // plugins.ts) includes real footnoteReferenceSchema/footnoteDefinitionSchema
+  // nodes -- confirmed by reading the installed package -- so footnotes were
+  // already a genuinely editable node type in the mounted editor before this
+  // test existed; this is the first test proving it round-trips rather than
+  // just parsing without throwing.
+  it('round-trips a footnote reference and its definition as real markdown syntax, not inert text', async () => {
+    const source = 'Here is a footnote reference[^1].\n\n[^1]: Here is the footnote.\n'
+    const output = await roundTrip(source)
+
+    expect(output).toContain('[^1]')
+    expect(output).toContain('Here is the footnote.')
+  })
 })

@@ -417,6 +417,61 @@
   height: auto;
 }
 
+/* Footnote reference numeral (remark-gfm wraps it in a real <sup>, see
+   src/markdown/pipeline.ts's footnote handling). Previously unnamed here --
+   the Milkdown mount inherits Tailwind Preflight's own `sub, sup` reset
+   (font-size: 75%, line-height: 0, position: relative, vertical-align:
+   baseline, sup's own top: -0.5em), while the sandboxed context has no
+   Preflight and falls back to the UA default (font-size: smaller,
+   vertical-align: super, no repositioning) -- a differently sized,
+   differently positioned footnote marker on each surface for the same
+   document. Deliberately NOT restating Preflight's own version verbatim,
+   unlike this file's usual practice: `position: relative` + `top: -0.5em`
+   takes the glyph out of normal text flow, which genuinely changes the
+   ORDER Chromium's own print/PDF text extraction reports it in relative to
+   surrounding body text (confirmed with phase0/gate4-export.spec.ts's real
+   exported-PDF text-subsequence check against the
+   reference-links-and-footnotes.md corpus fixture -- Preflight's exact
+   rule broke it, this simpler one doesn't). `vertical-align: super`
+   achieves the same visual intent (a raised, smaller numeral) without
+   leaving normal flow, so both surfaces render comparably AND the exported
+   PDF's text stays extractable in document order. This is this file's one
+   deliberate exception to "restate the editor's Preflight value verbatim"
+   -- justified because Preflight's own version has a real, gate-caught
+   correctness cost here that its usual sizing/spacing rules don't carry. */
+.pagedown-document sup {
+  font-size: 75%;
+  vertical-align: super;
+}
+
+/* mdast-util-to-hast's own footnote-section handler hardcodes the visually-
+   hidden "Footnotes" label's class to exactly `sr-only` (see
+   node_modules/mdast-util-to-hast/lib/footer.js's `footnoteLabelProperties`
+   default) -- expecting a consumer to already have that utility class
+   defined, the way GitHub's own rendering does. The Milkdown mount does,
+   via Tailwind (a real `.sr-only` utility, picked up because some OTHER
+   component in this app's source literally uses the className, which is
+   what makes Tailwind's content scanner emit it at all -- see this file's
+   own header comment on `@theme static` for the same "unused = never
+   emitted" class of gotcha). The sandboxed pagination context has no
+   Tailwind at all, so without restating the rule here, the "Footnotes"
+   heading rendered as ordinary visible text in the paginated preview and
+   the exported PDF, right above the footnote list, while staying correctly
+   invisible-but-accessible in the editor -- the exact class of two-surface
+   divergence this file exists to close. Values copied verbatim from
+   Tailwind v4's own generated `.sr-only` (out/renderer/assets/*.css). */
+.pagedown-document .sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border-width: 0;
+}
+
 /* ---------------------------------------------------------------------------
    Document themes and font families.
 
