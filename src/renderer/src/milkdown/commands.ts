@@ -1,8 +1,17 @@
 import { $command, $prose, $useKeymap } from '@milkdown/utils'
 import { commandsCtx } from '@milkdown/core'
 import { history, undo, redo } from '@milkdown/prose/history'
+import { wrapIn, setBlockType } from '@milkdown/prose/commands'
 import { TextSelection } from '@milkdown/prose/state'
+import type { Transaction } from '@milkdown/prose/state'
+import { Fragment } from '@milkdown/prose/model'
 import type { Mark } from '@milkdown/prose/model'
+import {
+  bulletListSchema,
+  listItemSchema,
+  codeBlockSchema,
+  hardbreakSchema
+} from '@milkdown/preset-commonmark'
 import { pagebreakNode } from './nodes/pagebreak'
 import { commentSchema } from './nodes/comment'
 import { safeImageViewProse } from './image-security'
@@ -182,6 +191,247 @@ export const resolveCommentCommand = $command(
   }
 )
 
+// This project's slash-command menu (built in a later task) needs three
+// block insertions neither stock preset ships as a command: a task-list
+// item, a $$-fenced math placeholder, and a Mermaid code-fence placeholder.
+// All three below share one shape, deliberately: build (or capture) a
+// SINGLE Transaction covering the whole operation, and only ever call the
+// real `dispatch` once, at the very end, iff it was actually provided --
+// exactly the dry-run-safe Command convention insertPagebreakCommand/
+// addCommentCommand/resolveCommentCommand above already follow (a command
+// invoked with no `dispatch` arg -- the standard ProseMirror "is this
+// applicable right now" check -- must never mutate anything). That
+// discipline ruled out the tempting alternative for the first two of these:
+// dispatching a stock preset command (wrapInBulletListCommand,
+// createCodeBlockCommand) via `ctx.get(commandsCtx).call(...)` and then
+// dispatching a SECOND, separate transaction for the follow-up attribute/
+// content change -- editor-commands.ts's own toggleBulletList already does
+// exactly that chained-real-dispatch pattern, and it's fine there because
+// that function is a direct UI entry point, never itself wrapped in
+// $command's own (state, dispatch) contract. Here, going through
+// commandsCtx.call() would dispatch for real UNCONDITIONALLY, even when
+// THIS command was itself only being asked "are you applicable" with no
+// dispatch -- and it would also split one logical user action into two
+// separate undo steps. Capturing the wrapping/type-change transaction via a
+// fake, non-dispatching callback and continuing to build on that SAME
+// Transaction object (Transform methods mutate and return `this`, so
+// further `.setNodeMarkup`/`.replaceWith` calls compose naturally) keeps
+// each of these one atomic operation and one undo step, while still
+// literally reusing the stock command's own underlying logic
+// (wrapIn/setBlockType, the exact functions wrapInBulletListCommand/
+// createCodeBlockCommand themselves call) rather than reimplementing it.
+
+// No command in @milkdown/preset-gfm turns the current block into a task
+// list item -- confirmed by reading its installed source
+// (composed/inputrules.ts): the ONLY task-list-aware piece is
+// wrapInTaskListInputRule, an $inputRule that fires on typing `[ ] `/`[x] `
+// at the start of an ALREADY-EXISTING list_item, which sets `checked` via
+// `tr.setNodeMarkup` on that item. There is no equivalent $command a
+// keyboard shortcut, toolbar button, or (this project's) slash menu could
+// call directly. This defines one, following that input rule's own
+// verified recipe (re-read directly from the installed package, not
+// recalled from memory): wrap the current block in a bullet list exactly
+// like wrapInBulletListCommand does (`wrapIn(bulletListSchema.type(ctx))`),
+// then flip the newly-created list_item's `checked` attr from `null`
+// (a plain bullet) to `false` (an unchecked task) -- `extendListItemSchemaForTask`'s
+// own toMarkdown runner (preset-gfm, read directly) only emits `- [ ] `/
+// `- [x] ` syntax when `checked` is non-null, so `false` is what actually
+// produces `- [ ] `, not merely "not checked."
+export const insertTaskListCommand = $command(
+  'InsertTaskList',
+  (ctx) => () => (state, dispatch) => {
+    const listType = bulletListSchema.type(ctx)
+    const itemType = listItemSchema.type(ctx)
+
+    // Fake dispatch: wrapIn's own dispatch branch does exactly
+    // `dispatch(state.tr.wrap(range, wrapping).scrollIntoView())` (read
+    // directly from prosemirror-commands) -- passing a callback that only
+    // ASSIGNS its argument, rather than the real view dispatch, gets us the
+    // real, already-built Transaction object without applying it to any
+    // EditorState. `applicable` mirrors what wrapIn would have returned to
+    // a real caller (false when the current selection can't be wrapped in
+    // a bullet list at all -- e.g. it already spans incompatible block
+    // structure), so this command refuses under the exact same conditions
+    // wrapInBulletListCommand itself would.
+    let captured: Transaction | undefined
+    const applicable = wrapIn(listType)(state, (tr) => {
+      captured = tr
+    })
+    if (!applicable || !captured) return false
+
+    // Transaction.step (which .wrap() calls internally) auto-maps
+    // `tr.selection` through every step added so far, unless a step
+    // explicitly sets it -- so `captured.selection` already points at the
+    // same logical cursor position, now living inside the freshly-wrapped
+    // bullet_list > list_item > paragraph structure. Walking UP from there
+    // (rather than assuming a fixed depth offset like "-1" from the
+    // original block) finds the list_item regardless of how deep the
+    // original selection's block itself was nested (e.g. wrapping a block
+    // that was already inside another list).
+    const $pos = captured.selection.$from
+    let itemPos: number | null = null
+    for (let depth = $pos.depth; depth >= 0; depth--) {
+      if ($pos.node(depth).type === itemType) {
+        itemPos = $pos.before(depth)
+        break
+      }
+    }
+    if (itemPos == null) return false
+
+    const itemNode = captured.doc.nodeAt(itemPos)
+    if (!itemNode) return false
+
+    captured.setNodeMarkup(itemPos, undefined, { ...itemNode.attrs, checked: false })
+    dispatch?.(captured)
+    return true
+  }
+)
+
+// Milkdown has no math node at all -- `$$...$$` is parsed and rendered
+// ONLY by the sandboxed pagination context's own remark-math pipeline (see
+// CLAUDE.md's math-equations section); Milkdown's internal parse pipeline
+// treats a `$$`-fenced block as inert plain text, confirmed directly by
+// round-trip.test.ts's own "round-trips inline and block math markers as
+// inert plain text" case. So there is no schema node to insert here either
+// -- instead this builds the exact plain-text/hardbreak node sequence that
+// was verified (via a throwaway probe against a real test editor, deleted
+// after use -- see task-2-report.md) to round-trip byte-identically back
+// to a real `$$\n...\n$$\n` fenced block: a textblock containing
+// text("$$"), an INLINE hardbreak, the placeholder text, another inline
+// hardbreak, then text("$$"). `isInline: true` on the hardbreak matters --
+// hardbreakSchema's own toMarkdown runner (read directly) serializes an
+// inline hardbreak as a literal `\n` text character, and a BLOCK hardbreak
+// (the default, `isInline: false`) as a hard line break (two trailing
+// spaces, per this project's pinned remark-stringify options) instead --
+// which would NOT reparse as a `$$`-fenced block at all.
+//
+// REPLACES the current textblock's entire content, rather than inserting
+// at the cursor -- verified necessary, not a style choice: an
+// insert-at-cursor version was tried first (probed against a non-empty
+// "Before text." paragraph) and produced
+// `$$\nx^2\n$$Before text.\n` -- the closing `$$` fuses directly onto
+// whatever followed the cursor with no separator, because inline content
+// (text + inline hardbreaks) never forces ProseMirror to split the
+// surrounding block the way a block-level atom (insertPagebreakCommand's
+// own pagebreak node) does. A `$$`-fenced block only parses as block math
+// when it's the sole content of its own paragraph (mirroring this
+// codebase's own pagebreak-marker convention of requiring "sole content of
+// its paragraph" -- see pagebreak-plugin.ts), so replacing the whole
+// current block's content is what actually guarantees that shape, matching
+// how insertMermaidBlockCommand below also replaces its target block's
+// content wholesale rather than inserting into it. Refuses (returns
+// false) via `validContent` when the current block's schema can't actually
+// hold this node sequence -- e.g. a code_block, whose content is
+// `text*` only, no hardbreak permitted -- rather than throwing or silently
+// corrupting the document.
+export const insertMathBlockCommand = $command(
+  'InsertMathBlock',
+  (ctx) => () => (state, dispatch) => {
+    const hardbreakType = hardbreakSchema.type(ctx)
+    const $from = state.selection.$from
+    const blockNode = $from.parent
+    if (!blockNode.isTextblock) return false
+
+    const placeholder = 'x^2'
+    const nodes = [
+      state.schema.text('$$'),
+      hardbreakType.create({ isInline: true }),
+      state.schema.text(placeholder),
+      hardbreakType.create({ isInline: true }),
+      state.schema.text('$$')
+    ]
+    // Can the current block's own schema actually hold this exact node
+    // sequence? (Answers no for e.g. a code_block, whose content is
+    // `text*` only -- no hardbreak permitted.) `Fragment.from` + `validContent`
+    // is a pure, read-only check -- nothing is mutated by asking it.
+    if (!blockNode.type.validContent(Fragment.from(nodes))) return false
+
+    const blockStart = $from.before($from.depth)
+    const contentStart = blockStart + 1
+    const contentEnd = blockStart + blockNode.nodeSize - 1
+    const tr = state.tr.replaceWith(contentStart, contentEnd, nodes)
+
+    // Select the placeholder text (not the surrounding "$$"/hardbreaks) so
+    // the very next keystroke types over it, per this task's own
+    // requirement. Computed from fixed offsets rather than searched for,
+    // since the sequence we just inserted is fully known: contentStart,
+    // then text("$$") (2 chars), then one hardbreak (a leaf node, nodeSize
+    // 1) -- verified against the probe's own dumped doc JSON, not assumed.
+    const placeholderStart = contentStart + '$$'.length + hardbreakType.create().nodeSize
+    const placeholderEnd = placeholderStart + placeholder.length
+    dispatch?.(tr.setSelection(TextSelection.create(tr.doc, placeholderStart, placeholderEnd)))
+    return true
+  }
+)
+
+// createCodeBlockCommand (@milkdown/preset-commonmark) already does exactly
+// what a "insert a Mermaid diagram" slash-menu entry needs for the STRUCTURAL
+// half -- `setBlockType(codeBlockSchema.type(ctx), { language })` turns the
+// current block into a fenced code block carrying that language, and
+// codeBlockSchema's own toMarkdown runner (read directly) already emits
+// ```mermaid fences for it with zero extra work. What's missing is placeholder
+// CONTENT: calling createCodeBlockCommand alone converts the block but leaves
+// whatever text (or nothing) was already there, producing an empty
+// ```mermaid``` fence a user has to know to fill in themselves.
+//
+// Same "capture the stock command's transaction, keep building on it, dispatch
+// once" shape as insertTaskListCommand above, and the same "REPLACE the whole
+// target block's content" shape as insertMathBlockCommand above -- verified
+// necessary here too, for a related but distinct reason: this command's very
+// first probe (inserting the placeholder at `selection.from` after conversion,
+// rather than replacing the block's content) prepended the placeholder before
+// whatever text the block already held (`graph TD;\n  A-->B;Hello world.`,
+// all one code_block, since a code_block's `text*` content has no block
+// boundary to split on the way a table/paragraph split would) -- replacing
+// the block's content outright, the same fix insertMathBlockCommand needed,
+// avoids that regardless of what the block contained before conversion.
+export const insertMermaidBlockCommand = $command(
+  'InsertMermaidBlock',
+  (ctx) => () => (state, dispatch) => {
+    const codeBlockType = codeBlockSchema.type(ctx)
+
+    // Fake dispatch, same technique as insertTaskListCommand's wrapIn
+    // capture above: setBlockType's own dispatch branch is
+    // `dispatch(tr)` where `tr` already has every per-range
+    // `tr.setBlockType(...)` step applied (read directly from
+    // prosemirror-commands) -- capturing it here gets the real Transaction
+    // without applying it to any EditorState, so a dry-run (no `dispatch`
+    // passed to THIS command) still does nothing.
+    let captured: Transaction | undefined
+    const applicable = setBlockType(codeBlockType, { language: 'mermaid' })(state, (tr) => {
+      captured = tr
+    })
+    if (!applicable || !captured) return false
+
+    // setBlockType changes a textblock's own type in place -- it doesn't
+    // change nesting depth or wrap anything -- so the just-converted node is
+    // simply `$from.parent` at the (auto-mapped) selection, unlike
+    // insertTaskListCommand's list_item, which is a NEW ancestor wrapIn just
+    // introduced and has to be searched for. The type check is a defensive
+    // backstop matching insertTaskListCommand's own `itemPos == null` guard,
+    // not an expected-to-fire branch.
+    const $from = captured.selection.$from
+    const blockNode = $from.parent
+    if (blockNode.type !== codeBlockType) return false
+
+    const blockStart = $from.before($from.depth)
+    const contentStart = blockStart + 1
+    const contentEnd = blockStart + blockNode.nodeSize - 1
+    const placeholder = 'graph TD;\n  A-->B;'
+    captured.replaceWith(contentStart, contentEnd, state.schema.text(placeholder))
+
+    // Land the cursor at the end of the placeholder (not selecting it) --
+    // unlike the math placeholder, this text is a real, runnable diagram
+    // example on its own, not a "type over me" stand-in the task brief asked
+    // to keep selected, so a plain "continue editing from here" cursor
+    // position (the same place typing the placeholder by hand would have
+    // left it) is the more useful default.
+    const cursorPos = contentStart + placeholder.length
+    dispatch?.(captured.setSelection(TextSelection.create(captured.doc, cursorPos)))
+    return true
+  }
+)
+
 // The full set of non-schema editing-BEHAVIOR plugins MilkdownEditor.tsx
 // mounts alongside EDITOR_SCHEMA_PLUGINS (plugins.ts) -- deliberately a
 // separate list, for the same reason plugins.ts's own comment gives for
@@ -210,6 +460,14 @@ export const EDITOR_COMMAND_PLUGINS = [
   insertPagebreakCommand,
   addCommentCommand,
   resolveCommentCommand,
+  // The three new block-insertion commands this task adds -- see each of
+  // their own doc comments above. Behavior plugins, not schema (same
+  // reasoning as insertPagebreakCommand immediately above): none of them
+  // introduces a new node/mark type, so none belongs in plugins.ts's
+  // EDITOR_SCHEMA_PLUGINS or round-trip.test.ts's coverage of it.
+  insertTaskListCommand,
+  insertMathBlockCommand,
+  insertMermaidBlockCommand,
   // See image-security.ts's own module comment for the real, confirmed
   // vulnerability this closes: the stock commonmark image node renders an
   // unrestricted <img src> directly in this privileged renderer. Rendering
