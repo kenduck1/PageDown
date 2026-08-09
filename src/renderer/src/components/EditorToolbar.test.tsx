@@ -5,6 +5,7 @@ import userEvent from '@testing-library/user-event'
 import EditorToolbar from './EditorToolbar'
 import { useAppStore, initialAppState } from '../store/appStore'
 import { useDocumentStore, initialDocumentState } from '../store/documentStore'
+import { useFindStore, initialFindState } from '../store/findStore'
 import type { MilkdownEditorHandle } from '../milkdown/MilkdownEditor'
 
 // A fake ref standing in for the real mounted MilkdownEditor -- per this
@@ -27,13 +28,22 @@ function createFakeEditorHandle(): MilkdownEditorHandle {
     insertPageBreak: vi.fn(),
     undo: vi.fn(),
     redo: vi.fn(),
-    focusEnd: vi.fn()
+    focusEnd: vi.fn(),
+    setFindState: vi.fn(),
+    replaceActiveMatch: vi.fn(),
+    replaceAllMatches: vi.fn(),
+    getSelectedText: vi.fn(() => '')
   }
 }
 
 beforeEach(() => {
   useAppStore.setState(initialAppState)
   useDocumentStore.setState(initialDocumentState)
+  // NOT `useFindStore.setState(initialFindState, true)` -- see
+  // useFindShortcuts.test.ts's own comment on this exact footgun: zustand's
+  // `replace: true` wipes the store's action methods (openFind/closeFind/...)
+  // off the store, not just its plain values.
+  useFindStore.setState(initialFindState)
   window.api = {
     openFile: vi.fn(),
     openPath: vi.fn(),
@@ -507,7 +517,6 @@ describe('EditorToolbar', () => {
     expect(screen.getByRole('button', { name: 'Insert page break' })).not.toHaveAttribute(
       'aria-pressed'
     )
-    expect(screen.getByRole('button', { name: 'Find' })).not.toHaveAttribute('aria-pressed')
 
     expect(screen.getByRole('button', { name: 'Bold' })).toHaveAttribute('aria-pressed', 'false')
     expect(screen.getByRole('button', { name: 'Italic' })).toHaveAttribute('aria-pressed', 'false')
@@ -519,5 +528,44 @@ describe('EditorToolbar', () => {
       'aria-pressed',
       'false'
     )
+    // Find moved OUT of the one-shot group as of the Find & Replace
+    // sub-project (Task 8) -- it now genuinely toggles a panel (see its own
+    // wiring comment in EditorToolbar.tsx), so it belongs with Bold/Italic/
+    // the list buttons above, not with Undo/Insert table.
+    expect(screen.getByRole('button', { name: 'Find' })).toHaveAttribute('aria-pressed', 'false')
+  })
+
+  // Task 8 of the Find & Replace sub-project: the Find button was previously
+  // a design-handoff placeholder with no onClick (see the file's own comment
+  // at its call site). It's now a real toggle over findStore's own isOpen.
+  describe('Find button', () => {
+    it('the Find button opens and closes the find bar', async () => {
+      const user = userEvent.setup()
+      const ref = createRef<MilkdownEditorHandle>()
+      render(<EditorToolbar editorRef={ref} />)
+
+      await user.click(screen.getByLabelText('Find'))
+      expect(useFindStore.getState().isOpen).toBe(true)
+      await user.click(screen.getByLabelText('Find'))
+      expect(useFindStore.getState().isOpen).toBe(false)
+    })
+
+    it('the Find button reports its pressed state', async () => {
+      const user = userEvent.setup()
+      const ref = createRef<MilkdownEditorHandle>()
+      render(<EditorToolbar editorRef={ref} />)
+
+      expect(screen.getByLabelText('Find')).toHaveAttribute('aria-pressed', 'false')
+      await user.click(screen.getByLabelText('Find'))
+      expect(screen.getByLabelText('Find')).toHaveAttribute('aria-pressed', 'true')
+    })
+
+    it('the Find button stays enabled in Source mode', () => {
+      useAppStore.setState({ viewMode: 'source' })
+      const ref = createRef<MilkdownEditorHandle>()
+      render(<EditorToolbar editorRef={ref} />)
+
+      expect(screen.getByLabelText('Find')).toBeEnabled()
+    })
   })
 })

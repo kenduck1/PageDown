@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { useState } from 'react'
-import SourceEditor from './SourceEditor'
+import { createRef, useState } from 'react'
+import SourceEditor, { type SourceEditorHandle } from './SourceEditor'
 
 afterEach(() => {
   cleanup()
@@ -50,5 +50,30 @@ describe('SourceEditor', () => {
   it('has no page-card chrome -- renders a bare textarea, not wrapped in [data-testid="page-card"]', () => {
     render(<SourceEditor content="x" onChange={vi.fn()} />)
     expect(screen.queryByTestId('page-card')).not.toBeInTheDocument()
+  })
+
+  it('exposes its textarea through the ref handle', () => {
+    const ref = createRef<SourceEditorHandle>()
+    render(<SourceEditor ref={ref} content="alpha beta" onChange={() => {}} />)
+    const textarea = ref.current?.getTextarea()
+    expect(textarea).toBeInstanceOf(HTMLTextAreaElement)
+    expect(textarea?.value).toBe('alpha beta')
+  })
+
+  it('reports the selected text, and an empty string when nothing is selected', () => {
+    const ref = createRef<SourceEditorHandle>()
+    render(<SourceEditor ref={ref} content="alpha beta" onChange={() => {}} />)
+    expect(ref.current?.getSelectedText()).toBe('')
+    ref.current?.getTextarea()?.setSelectionRange(6, 10)
+    expect(ref.current?.getSelectedText()).toBe('beta')
+  })
+
+  it('still forces the DOM value to match the content prop after an external change', () => {
+    // Guards the documented controlled-binding invariant: swapping value= for
+    // defaultValue= must not pass. See this component's own doc comment.
+    const ref = createRef<SourceEditorHandle>()
+    const { rerender } = render(<SourceEditor ref={ref} content="before" onChange={() => {}} />)
+    rerender(<SourceEditor ref={ref} content="after" onChange={() => {}} />)
+    expect(ref.current?.getTextarea()?.value).toBe('after')
   })
 })

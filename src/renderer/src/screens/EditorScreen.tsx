@@ -2,17 +2,21 @@ import { useMemo, useRef, useState } from 'react'
 import { useAppStore, type ViewMode } from '../store/appStore'
 import { useDocumentStore } from '../store/documentStore'
 import MilkdownEditor, { type MilkdownEditorHandle } from '../milkdown/MilkdownEditor'
-import SourceEditor from '../components/SourceEditor'
+import SourceEditor, { type SourceEditorHandle } from '../components/SourceEditor'
 import SplitPreview from '../components/SplitPreview'
 import EditorTabBar from '../components/EditorTabBar'
 import EditorToolbar from '../components/EditorToolbar'
 import EditorSidebar from '../components/EditorSidebar'
 import EditorStatusBar from '../components/EditorStatusBar'
 import PageSetupModal from '../components/PageSetupModal'
+import FindBar from '../components/FindBar'
 import Toast from '../components/Toast'
 import { extractOutline } from '../lib/extractOutline'
+import { isFormatEditing, isSourceEditing } from '../lib/editing-surface'
 import { usePageCount } from '../hooks/usePageCount'
 import { useAutosave } from '../hooks/useAutosave'
+import { useFindController } from '../hooks/useFindController'
+import { useFindShortcuts } from '../hooks/useFindShortcuts'
 import { extractRawFrontmatter, replaceRawFrontmatter } from '../../../markdown/frontmatter-splice'
 import {
   resolvePageConfig,
@@ -51,6 +55,16 @@ function EditorScreen(): React.JSX.Element {
   const clearError = useDocumentStore((state) => state.clearError)
   const save = useDocumentStore((state) => state.save)
   const editorRef = useRef<MilkdownEditorHandle>(null)
+  // One ref is correct even though renderSourceEditor() (below) has two call
+  // sites (plain Source mode, and Split mode's left pane) -- the same
+  // reasoning editorRef above already relies on for renderPageCard's two
+  // call sites: only one of the two SourceEditor instances is ever actually
+  // mounted at a time (Split's left-pane ternary and the top-level viewMode
+  // ternary are mutually exclusive), so there's never a moment where a
+  // second live instance would silently steal this ref out from under the
+  // first.
+  const sourceEditorRef = useRef<SourceEditorHandle>(null)
+  const findQueryInputRef = useRef<HTMLInputElement>(null)
   const canvasRef = useRef<HTMLDivElement>(null)
   const [zoom, setZoom] = useState(1)
   const [activeSourceOffset, setActiveSourceOffset] = useState<number | undefined>(undefined)
@@ -68,6 +82,30 @@ function EditorScreen(): React.JSX.Element {
   }
   const { pageCount } = usePageCount(content, filePath)
   useAutosave({ content, filePath, isDirty })
+
+  // Which editing surface Find should search -- see lib/editing-surface.ts's
+  // own comment for why this can't be answered from viewMode alone (Split
+  // mode's left pane is itself Format or Source editing, just laid out
+  // differently).
+  const sourceEditing = isSourceEditing(viewMode, splitLeftMode)
+  const findController = useFindController({
+    content,
+    activeTabId,
+    revision,
+    sourceEditing,
+    editorRef,
+    sourceRef: sourceEditorRef,
+    updateContentForTab
+  })
+  // Cmd/Ctrl+F -- this app's first and only keyboard shortcut (see
+  // useFindShortcuts.ts's own module comment for why it's a bare `window`
+  // listener rather than a real app-menu accelerator). getSelectedText comes
+  // from the controller above, not a locally-defined function, so seeding the
+  // query always reads from whichever editing surface is actually live.
+  useFindShortcuts({
+    getSelectedText: findController.getSelectedText,
+    queryInputRef: findQueryInputRef
+  })
 
   const handleSave = async (): Promise<void> => {
     // @milkdown/plugin-listener's onChange fires through an internal 200ms
@@ -257,15 +295,30 @@ function EditorScreen(): React.JSX.Element {
       useAppStore.getState()
     const { activeTabId: currentActiveTabId } = useDocumentStore.getState()
 
-    const isFormatEditing = (m: ViewMode): boolean =>
-      m === 'format' || (m === 'split' && currentSplitLeftMode === 'format')
-    const isSourceEditing = (m: ViewMode): boolean =>
-      m === 'source' || (m === 'split' && currentSplitLeftMode === 'source')
-
-    const enteringFormatEditing = isFormatEditing(mode) && !isFormatEditing(currentViewMode)
-    const leavingFormatEditing = isFormatEditing(currentViewMode) && !isFormatEditing(mode)
-    const enteringSourceEditing = isSourceEditing(mode) && !isSourceEditing(currentViewMode)
-    const leavingSourceEditing = isSourceEditing(currentViewMode) && !isSourceEditing(mode)
+    // isFormatEditing/isSourceEditing now come from lib/editing-surface.ts --
+    // useFindController (Find & Replace sub-project) needs the identical
+    // predicate to decide what Find searches, and duplicating the
+    // format/split(format) OR source/split(source) logic in two places would
+    // let them silently drift. The shared versions take TWO arguments
+    // (viewMode, splitLeftMode) where these old local closures took one
+    // (closing over currentSplitLeftMode) -- called below as
+    // `isFormatEditing(mode, currentSplitLeftMode)`/
+    // `isSourceEditing(mode, currentSplitLeftMode)`/etc, which is exactly
+    // equivalent to the old closures for every call site here, since
+    // currentSplitLeftMode itself never changes as part of this transition
+    // (see the surrounding comment block above for why that still holds).
+    const enteringFormatEditing =
+      isFormatEditing(mode, currentSplitLeftMode) &&
+      !isFormatEditing(currentViewMode, currentSplitLeftMode)
+    const leavingFormatEditing =
+      isFormatEditing(currentViewMode, currentSplitLeftMode) &&
+      !isFormatEditing(mode, currentSplitLeftMode)
+    const enteringSourceEditing =
+      isSourceEditing(mode, currentSplitLeftMode) &&
+      !isSourceEditing(currentViewMode, currentSplitLeftMode)
+    const leavingSourceEditing =
+      isSourceEditing(currentViewMode, currentSplitLeftMode) &&
+      !isSourceEditing(mode, currentSplitLeftMode)
 
     // Fix-round finding (Split mode final whole-branch review, C1 -- a real,
     // reproduced data-loss bug, not theoretical): format<->split(format) is
@@ -292,8 +345,8 @@ function EditorScreen(): React.JSX.Element {
     // after one, regardless of whether the transition also changes which
     // conceptual "editing surface" (Format vs Source) is active.
     const formatEditingPositionChanges =
-      isFormatEditing(currentViewMode) &&
-      isFormatEditing(mode) &&
+      isFormatEditing(currentViewMode, currentSplitLeftMode) &&
+      isFormatEditing(mode, currentSplitLeftMode) &&
       (currentViewMode === 'split') !== (mode === 'split')
 
     if ((enteringSourceEditing && leavingFormatEditing) || formatEditingPositionChanges) {
@@ -692,7 +745,11 @@ function EditorScreen(): React.JSX.Element {
   // when splitLeftMode === 'source') -- same reasoning, and the same
   // "don't duplicate" rule, as renderPageCard just below.
   const renderSourceEditor = (): React.JSX.Element => (
-    <SourceEditor content={content} onChange={(value) => updateContentForTab(activeTabId, value)} />
+    <SourceEditor
+      ref={sourceEditorRef}
+      content={content}
+      onChange={(value) => updateContentForTab(activeTabId, value)}
+    />
   )
 
   // The "page" card -- per the design handoff (PageDown.dc.html, Format-mode
@@ -819,6 +876,7 @@ function EditorScreen(): React.JSX.Element {
         // activeTabId has moved on.
         onChange={(markdown) => updateContentForTab(activeTabId, markdown)}
         onError={(message) => useDocumentStore.setState({ error: message })}
+        onFindMatchesChanged={findController.handleFormatMatches}
       />
     </div>
   )
@@ -850,6 +908,22 @@ function EditorScreen(): React.JSX.Element {
         editorRef={editorRef}
         onSetViewMode={handleSetViewMode}
         onSetFontFamily={handleSetFontFamily}
+      />
+      {/* Position is load-bearing, not cosmetic (see FindBar.tsx's own module
+      comment) -- rendering FindBar here, as a LAYOUT ROW between the toolbar
+      and the content row below, is what makes opening it shrink the content
+      area rather than float over it. Split mode's right pane hosts a real
+      native WebContentsView, which composites above ALL DOM unconditionally
+      (the same property PageSetupModal had to work around with a zero-size-
+      rectangle trick) -- shrinking the content area moves SplitPreview's own
+      placeholder div, which fires its existing ResizeObserver, which
+      re-reports bounds over the existing IPC, so the preview simply moves
+      down with no new occlusion handling required. A floating panel over the
+      canvas would need that same special-casing all over again. */}
+      <FindBar
+        onReplace={findController.replaceActive}
+        onReplaceAll={findController.replaceAll}
+        queryInputRef={findQueryInputRef}
       />
       <div className="flex flex-1 overflow-hidden">
         <EditorSidebar

@@ -1,6 +1,19 @@
+import { forwardRef, useImperativeHandle, useRef } from 'react'
+
 interface SourceEditorProps {
   content: string
   onChange: (value: string) => void
+}
+
+// Find & Replace drives this surface through the real DOM node rather than
+// through React state: a textarea cannot render per-range decorations at all,
+// so the CURRENT match is shown using the browser's own selection
+// (setSelectionRange), which is exactly how Chromium's in-page find treats a
+// textarea. getSelectedText backs Cmd/Ctrl+F seeding its query from whatever
+// the user had selected.
+export interface SourceEditorHandle {
+  getTextarea: () => HTMLTextAreaElement | null
+  getSelectedText: () => string
 }
 
 // The raw-Markdown editing surface for viewMode: 'source' -- see
@@ -33,16 +46,37 @@ interface SourceEditorProps {
 // value, silently clobbering the restore. `value={content}` is what
 // makes that structurally impossible: React forces the DOM node's value to
 // match the prop on every render.
-function SourceEditor({ content, onChange }: SourceEditorProps): React.JSX.Element {
+//
+// Now a forwardRef exposing SourceEditorHandle (Find & Replace) -- the ref
+// only ever reaches into the real DOM node (see SourceEditorHandle's own
+// comment above); it doesn't change anything about the controlled `value`
+// binding above, which remains the only way content flows INTO this
+// component.
+const SourceEditor = forwardRef<SourceEditorHandle, SourceEditorProps>(function SourceEditor(
+  { content, onChange },
+  ref
+) {
+  const textareaRef = useRef<HTMLTextAreaElement>(null)
+
+  useImperativeHandle(ref, () => ({
+    getTextarea: () => textareaRef.current,
+    getSelectedText: () => {
+      const textarea = textareaRef.current
+      if (!textarea) return ''
+      return textarea.value.slice(textarea.selectionStart, textarea.selectionEnd)
+    }
+  }))
+
   return (
     <textarea
+      ref={textareaRef}
       value={content}
       onChange={(event) => onChange(event.target.value)}
       spellCheck={false}
       aria-label="Markdown source"
-      className="h-full w-full resize-none bg-canvas p-8 font-mono text-13 text-text-primary outline-none"
+      className="pagedown-source-editor h-full w-full resize-none bg-canvas p-8 font-mono text-13 text-text-primary outline-none"
     />
   )
-}
+})
 
 export default SourceEditor
