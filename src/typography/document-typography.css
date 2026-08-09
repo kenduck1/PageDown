@@ -327,6 +327,14 @@
   border-collapse: collapse;
   width: 100%;
   margin: 0 0 1em 0;
+  /* Outer frame -- without this, `border-collapse: collapse` still merges
+     every cell's own border into a full interior grid (see th/td below),
+     but the table's own outermost edge has no cell to contribute a border
+     on its far side, so the table reads as unbounded/unfinished (a real,
+     reported gap: cells had row dividers only, no column dividers, no
+     outer frame at all, before this rule and the th/td border change
+     below). */
+  border: 1px solid #d0d0d4;
 }
 
 .pagedown-document th,
@@ -346,7 +354,11 @@
   box-sizing: border-box;
   text-align: left;
   padding: 0.4em 0.6em;
-  border-bottom: 1px solid #d0d0d4;
+  /* All four sides, not border-bottom alone -- `border-collapse: collapse`
+     merges each cell's own full border with its neighbors' into a single
+     shared line, producing real column dividers between adjacent cells
+     (not just row dividers) without doubling the interior lines. */
+  border: 1px solid #d0d0d4;
 }
 
 .pagedown-document th {
