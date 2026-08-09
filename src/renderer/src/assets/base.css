@@ -9,6 +9,14 @@
   src: url('./fonts/source-serif-4-variable.woff2') format('woff2-variations');
 }
 
+@font-face {
+  font-family: 'Inter Variable';
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: block;
+  src: url('./fonts/inter-variable.woff2') format('woff2-variations');
+}
+
 @theme static {
   /* Colors -- docs/superpowers/specs/2026-07-28-token-foundation-app-shell-design.md */
   --color-chrome-dark: #ececee;
@@ -31,6 +39,13 @@
   --font-sans: -apple-system, 'Segoe UI', system-ui, sans-serif;
   --font-serif: 'Source Serif 4', serif;
   --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  /* This is deliberately a separate token from font-sans above, which is the
+     app chrome's own unbundled system stack and cannot be reused for
+     document text without breaking cross-machine determinism and
+     editor/paginator metric parity. This one is a document-theme font
+     choice (see src/typography/document-typography.css's pagedown-font-inter
+     rules), bundled the same way font-serif is. */
+  --font-doc-sans: 'Inter Variable', sans-serif;
 
   /* Font sizes -- named by exact value, not a t-shirt scale (see plan's Global Constraints) */
   --text-11: 11px;
@@ -45,6 +60,7 @@
   --text-20: 20px;
   --text-21: 21px;
   --text-26: 26px;
+  --text-32: 32px;
 
   /* Radius scale */
   --radius-sm: 6px;
