@@ -14,6 +14,8 @@ beforeEach(() => {
     confirmDiscardChanges: vi.fn(),
     exportPdf: vi.fn(),
     print: vi.fn(),
+    getPreferences: vi.fn(),
+    setPreferences: vi.fn(),
     autosaveSnapshot: vi.fn(),
     getVersionHistory: vi.fn(),
     restoreVersionContent: vi.fn(),

@@ -1,5 +1,6 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import { electronAPI } from '@electron-toolkit/preload'
+import type { Preferences } from '../main/preferences'
 
 // Custom APIs for renderer
 const api = {
@@ -28,6 +29,8 @@ const api = {
   // above -- see that entry's own comment.
   print: (content: string, filePath: string | null = null) =>
     ipcRenderer.invoke('file:print', content, filePath),
+  getPreferences: () => ipcRenderer.invoke('preferences:get'),
+  setPreferences: (preferences: Preferences) => ipcRenderer.invoke('preferences:set', preferences),
   autosaveSnapshot: (content: string, filePath: string) =>
     ipcRenderer.invoke('file:autosaveSnapshot', content, filePath),
   getVersionHistory: (filePath: string) => ipcRenderer.invoke('file:getVersionHistory', filePath),
