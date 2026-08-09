@@ -3,6 +3,7 @@ import { unified } from 'unified'
 import remarkParse from 'remark-parse'
 import remarkGfm from 'remark-gfm'
 import remarkFrontmatter from 'remark-frontmatter'
+import remarkMath from 'remark-math'
 import remarkRehype from 'remark-rehype'
 import rehypeHighlight from 'rehype-highlight'
 import rehypeStringify from 'rehype-stringify'
@@ -15,6 +16,7 @@ import { visit } from 'unist-util-visit'
 import { annotateSourceOffsets, type SourceMap } from './source-map'
 import { remarkPagebreak, PAGEBREAK_CLASS } from './pagebreak-plugin'
 import { createPagebreakToHast } from './pagebreak-to-hast'
+import { createMathBlockToHast, createMathInlineToHast } from './math-to-hast'
 
 export type { SourceMap }
 
@@ -154,10 +156,31 @@ export function markdownToHtml(
   // tree after the fact — but remarkPagebreak IS a post-parse tree mutation,
   // so it needs an explicit `.runSync()` on the same processor instance
   // (same instance matters: that's what carries the attached transformer).
+  // singleDollarTextMath: false is a deliberate deviation from remark-math's
+  // own default (true). With the default on, `$...$` alone is enough to open
+  // inline math -- and micromark-extension-math's mathText tokenizer (read
+  // directly, not assumed) has NO Pandoc-style "closing $ must not be
+  // followed by a digit" guard the way Pandoc's own tex_math_dollars
+  // convention does: it only requires a LATER, matching single `$` anywhere
+  // ahead on the same run of lines. Concretely, "grew from $50K to $120K"
+  // parses as inline math spanning "50K to " (opening `$` before "50K",
+  // closing `$` right before "120K"), silently swallowing a real, extremely
+  // common construct in THIS app's own stated primary use case -- reports,
+  // résumés, letters routinely quote dollar figures in running prose. That
+  // is a much higher base-rate collision than the already-accepted
+  // \newpage/\pagebreak prose-mention edge case documented elsewhere in this
+  // file, so unlike that one, this is prevented rather than accepted.
+  // Requiring a DOUBLED delimiter for inline math (`$$x^2$$` inline, on one
+  // line, distinct from a `$$` block fence alone on its own line -- the two
+  // are different tokenizer constructs and don't collide) costs a little
+  // typing friction but makes an accidental match require two consecutive,
+  // adjacent, unescaped `$$` on both sides -- not a pattern that occurs by
+  // accident in ordinary currency prose.
   const parseProcessor = unified()
     .use(remarkParse)
     .use(remarkGfm)
     .use(remarkFrontmatter, ['yaml'])
+    .use(remarkMath, { singleDollarTextMath: false })
     .use(remarkPagebreak)
 
   const parsedTree = parseProcessor.parse(source) as Root
@@ -189,7 +212,11 @@ export function markdownToHtml(
     .use(remarkRehype, {
       allowDangerousHtml: true,
       clobberPrefix: CLOBBER_PREFIX,
-      handlers: { pagebreak: createPagebreakToHast(tokenClassName) }
+      handlers: {
+        pagebreak: createPagebreakToHast(tokenClassName),
+        math: createMathBlockToHast(),
+        inlineMath: createMathInlineToHast()
+      }
     })
     .runSync(tree) as HastRoot
 

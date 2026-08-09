@@ -56,6 +56,7 @@ export default defineConfig({
           'remark-parse',
           'remark-gfm',
           'remark-frontmatter',
+          'remark-math',
           'remark-rehype',
           'remark-stringify',
           'rehype-stringify',
@@ -64,7 +65,26 @@ export default defineConfig({
           'hast-util-raw',
           'unist-util-visit',
           'decode-named-character-reference',
-          'micromark-util-decode-numeric-character-reference'
+          'micromark-util-decode-numeric-character-reference',
+          // Task 101 / math equations: remark-math pulls in this whole
+          // ESM-only sub-chain. Left externalized, Node's require(esm)
+          // interop wouldn't just misbehave the way it does for the other
+          // packages on this list -- micromark-extension-math's own index.js
+          // re-exports BOTH its tokenizer (`math`, the only export
+          // remark-math actually imports) AND `mathHtml` from `./lib/html.js`,
+          // which imports the real `katex` package. A raw CJS require()
+          // fully evaluates every re-export a module declares, including
+          // unused ones, so an externalized require('micromark-extension-math')
+          // would drag the real KaTeX renderer into the PRIVILEGED main
+          // process -- exactly the architecture split CLAUDE.md's Mermaid
+          // section (and this feature's own design) exists to prevent, not
+          // just a bundle-size concern. Bundling it here instead lets
+          // Rollup's tree-shaking prove the unused `mathHtml` re-export (and
+          // therefore `katex`) is dead and drop it -- confirmed against the
+          // real compiled bundle, see the katex-render.ts / gate for this
+          // feature's own verification, not assumed from this comment alone.
+          'mdast-util-math',
+          'micromark-extension-math'
         ]
       }
     }

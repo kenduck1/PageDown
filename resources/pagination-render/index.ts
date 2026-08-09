@@ -74,6 +74,8 @@ window.cancelAnimationFrame = ((handle: number): void => {
 import { Previewer } from 'pagedjs'
 import { renderMermaidToSvg } from '../../src/diagrams/render-mermaid'
 import { registerBreakHandlers } from '../../src/pagination/break-handlers'
+import { hoistInlineStyleAttributes, reattachNoncedStyles } from './nonce-style-hoisting'
+import { renderMathEquations, buildKatexFontFaceCss } from './katex-render'
 import documentTypographyCss from '../../src/typography/document-typography.css'
 import sourceSerif4Base64 from '../../src/renderer/src/assets/fonts/source-serif-4-variable.woff2'
 import interVariableBase64 from '../../src/renderer/src/assets/fonts/inter-variable.woff2'
@@ -245,7 +247,18 @@ registerBreakHandlers()
 // src/typography/document-style.ts's own comment on `buildRunningContentCss`
 // -- so they're spliced directly into the same template literal below,
 // never emitted as a second, standalone `@page` rule.
-function buildDocumentStylesheet(geometry: PageGeometry, style: DocumentStyle): string {
+// `hasMath` (Task 101 / math equations) gates whether buildKatexFontFaceCss's
+// ~394KB of embedded font data is included at all -- see that function's own
+// comment for why this mirrors the fontFace gating immediately below it, not
+// a new pattern. The caller (the 'render' handler further down) only ever
+// passes `true` once renderMathEquations has ALREADY found and replaced at
+// least one math placeholder in this request's own content, so this is a
+// real per-request decision, not a static default.
+function buildDocumentStylesheet(
+  geometry: PageGeometry,
+  style: DocumentStyle,
+  hasMath: boolean
+): string {
   // Exactly one @font-face rule is emitted -- whichever family
   // `style.fontFamily` actually selects -- not both unconditionally. See
   // this file's own top-of-file comment (piece 2) for why an unconditional
@@ -287,6 +300,8 @@ function buildDocumentStylesheet(geometry: PageGeometry, style: DocumentStyle): 
 
 ${fontFace}
 
+${hasMath ? buildKatexFontFaceCss() : ''}
+
 @page {
   size: ${geometry.pageWidthPx / DPI}in ${geometry.pageHeightPx / DPI}in;
   margin: ${geometry.marginTopPx / DPI}in ${geometry.marginRightPx / DPI}in ${geometry.marginBottomPx / DPI}in ${geometry.marginLeftPx / DPI}in;
@@ -294,6 +309,14 @@ ${buildRunningContentCss(style)}
 }
 
 ${documentTypographyCss}
+
+.pagedown-math-block {
+  break-inside: avoid-page;
+  page-break-inside: avoid;
+  margin: 1em 0;
+  text-align: center;
+  overflow-x: auto;
+}
 `
 }
 
@@ -795,143 +818,15 @@ function fitSvgToNaturalSize(svgElement: SVGElement): void {
   svgElement.removeAttribute('style')
 }
 
-// Strips `@import` and external `url(...)` references from a Mermaid-
-// generated <style> block's CSS text. Per the design doc's third-review
-// correction (the SiYuan reference): Mermaid's rendered SVG carries an
-// inline <style> block whose content is reachable, indirectly, from the
-// diagram author (Mermaid `classDef` syntax accepts arbitrary CSS
-// declarations on node classes), and can carry `@import`/external `url()`
-// references that would fire a real outbound network request from this
-// sandboxed context the moment the style is applied — the same class of
-// leak `connect-src 'none'` and the remote-image-blocking policy exist to
-// close everywhere else. Neutralized here as plain string surgery (not a
-// full CSS parse) — adequate for this spike's corpus (none of which uses
-// classDef at all, so this path is exercised defensively, not against a
-// real adversarial fixture — see this task's findings-doc entry and report
-// for why a dedicated adversarial-classDef corpus fixture was judged
-// out of scope here).
-function stripExternalCssRefs(css: string): string {
-  return css
-    .replace(/@import\s+[^;]+;/gi, '')
-    .replace(/url\(\s*(['"]?)(?:https?:)?\/\/[^)'"]*\1\s*\)/gi, 'url()')
-}
-
-// Mermaid's render() (see node_modules/mermaid/dist/mermaid.core.mjs)
-// creates its own internal <style> element via `document.createElement`
-// too — meaning the SAME bootstrap shim that nonces Paged.js's own
-// dynamically-created styles nonces this one too, automatically, at
-// creation time, with no Mermaid-specific code required for that part.
-// But with `securityLevel: 'strict'` (never 'loose'/'sandbox'), Mermaid
-// pipes its fully-serialized SVG string through `DOMPurify.sanitize()`
-// before returning it from renderMermaidToSvg — confirmed by reading
-// mermaid.core.mjs's render() directly — and DOMPurify's default allowlist
-// does not include the `nonce` attribute, so the nonce this shim attached
-// survives on the live element for only as long as Mermaid keeps that
-// element in the DOM, and is gone from the STRING renderMermaidToSvg
-// actually returns. A <style> re-parsed from that string (e.g. via
-// `element.innerHTML = svgMarkup`, exactly what this function does to turn
-// the string back into a real SVG element) is nonce-less and would be
-// silently blocked by this context's own CSP the instant it takes effect —
-// this is the "sanitized-SVG handoff has its own CSP problem" the design
-// doc's third review flags. Fixed the same way Paged.js's own styles are
-// handled: never trust a nonce that arrived via markup parsing — discard the
-// stale, sanitizer-stripped <style> entirely and re-create a fresh one via
-// `document.createElement` (so the bootstrap shim nonces THIS one, for
-// real, at creation time) carrying the same (now-scrubbed) CSS text.
-function reattachNoncedStyles(svgElement: SVGElement, extraCss = ''): void {
-  const staleStyles = Array.from(svgElement.querySelectorAll('style'))
-  for (const stale of staleStyles) {
-    const fresh = document.createElement('style')
-    fresh.textContent = [stripExternalCssRefs(stale.textContent ?? ''), extraCss]
-      .filter(Boolean)
-      .join('\n')
-    stale.replaceWith(fresh)
-  }
-  // Mermaid's render() always creates its own <style> (see the comment
-  // above), so `staleStyles` is never actually empty in practice — this
-  // branch only exists so `extraCss` (from hoistInlineStyleAttributes
-  // below) is never silently dropped if that assumption ever stops holding.
-  if (staleStyles.length === 0 && extraCss.trim()) {
-    const fresh = document.createElement('style')
-    fresh.textContent = extraCss
-    svgElement.insertBefore(fresh, svgElement.firstChild)
-  }
-}
-
-let hoistedStyleCounter = 0
-
-// A SECOND, initially-unanticipated CSP problem, found only by actually
-// running Gate 3 against real diagrams (not by reading the design doc, which
-// only discusses the <style> BLOCK case above): Mermaid's SVG output also
-// carries many individual, non-empty inline `style="..."` ATTRIBUTES —
-// confirmed by dumping real rendered markup, e.g.
-// `style="stroke-width: 1; stroke-dasharray: 1, 0;"` on arrow-marker
-// `<path>`/`<circle>` elements, `style="stroke: none"` on node background
-// `<rect>`s, and (despite `htmlLabels: false`, which does not fully
-// eliminate `foreignObject` usage for flowchart EDGE labels specifically —
-// itself a secondary finding worth flagging) HTML layout styles on a `<div>`
-// inside a `foreignObject`. Unlike the <style> BLOCK case, there is no
-// nonce-based fix for these at all: CSP nonces apply only to elements that
-// carry a `nonce` content attribute (`<style>`/`<script>`), never to a
-// `style=""` attribute on an arbitrary element — confirmed empirically here
-// too, not just from the spec, by first observing ~130 real "Applying
-// inline style violates..." console violations with only the <style>-block
-// fix in place. The only CSP-compatible fix is to stop using inline style
-// ATTRIBUTES entirely: this hoists every element's inline style declarations
-// into a synthetic class selector and returns the equivalent CSS text, for
-// the caller to fold into the SAME nonced <style> element reattachNoncedStyles
-// creates — reusing that one mechanism rather than adding a second one.
-// Deliberately generic (moves ANY property:value declarations, not a
-// Mermaid-specific property allowlist) so this isn't reverse-engineering
-// Mermaid's current internals, and works uniformly for both SVG presentation
-// properties and the foreignObject HTML div's CSS layout properties, which a
-// presentation-attribute conversion (the alternative fix for the SVG-only
-// case) would not have covered.
-//
-// Untested risk, flagged on review rather than chased down here: this
-// changes CSS SPECIFICITY, not just mechanism — an inline `style=""`
-// attribute always wins the cascade unbeatable by any selector-based rule
-// short of `!important`; a `.pd-hoisted-style-N { ... }` class rule does
-// not. For THIS corpus (no diagram uses Mermaid's `classDef` syntax, which
-// is how a diagram author would apply their OWN class-selector-based CSS to
-// a node) this is inert — there is nothing else competing for specificity
-// on these elements. A diagram that DOES use `classDef` could, in
-// principle, have its own class-based styling interact differently with a
-// hoisted rule than it would have with the original inline attribute
-// (equal-specificity class-vs-class rules resolve by SOURCE ORDER, not by
-// "inline always wins," once the inline attribute is gone) — not verified
-// either way here. Worth an explicit classDef fixture in Task 9's
-// pixel-identical (editor/preview/export) comparison, not assumed safe by
-// extension from this corpus's result.
-//
-// Includes `svgElement` ITSELF, not just its descendants (Task 8 review
-// fix) — `svgElement.querySelectorAll('[style]')` only matches descendants
-// by definition, but Mermaid's own `configureSvgSize`/`calculateSvgSizeAttrs`
-// (see fitSvgToNaturalSize's comment above) sets a `style="max-width:...px"`
-// attribute directly on the SVG ROOT, which was being silently missed by
-// this scan entirely. On this app's own happy path that root style
-// attribute gets removed anyway, as a side effect of
-// fitSvgToNaturalSize()'s own `removeAttribute('style')` call — but every
-// EARLY-RETURN path through that function (missing/malformed viewBox,
-// non-positive dimensions) previously left that un-hoisted, un-nonced
-// `style=""` attribute sitting in the final output, uncovered by CSP,
-// entirely by omission, not by any deliberate exception. Scanning the root
-// here means the root's style is ALWAYS hoisted into the same nonced
-// mechanism as every other element's, regardless of which path
-// fitSvgToNaturalSize takes afterward.
-function hoistInlineStyleAttributes(svgElement: SVGElement): string {
-  const styledElements: Element[] = [svgElement, ...svgElement.querySelectorAll('[style]')]
-  const rules: string[] = []
-  for (const el of styledElements) {
-    const declarations = el.getAttribute('style') ?? ''
-    el.removeAttribute('style')
-    if (!declarations.trim()) continue // e.g. Mermaid's own `style=""` no-op attributes — nothing to hoist
-    const marker = `pd-hoisted-style-${hoistedStyleCounter++}`
-    el.classList.add(marker)
-    rules.push(`.${marker} { ${stripExternalCssRefs(declarations)} }`)
-  }
-  return rules.join('\n')
-}
+// hoistInlineStyleAttributes/reattachNoncedStyles used to live here as
+// Mermaid-specific, SVGElement-typed functions. The math-equations
+// sub-project generalized and extracted them to nonce-style-hoisting.ts
+// (Element-typed, no Mermaid-specific logic ever existed in either
+// function's BODY — only in their comments) so katex-render.ts can reuse
+// the exact same CSP-nonce mechanism for KaTeX's own inline `style="..."`
+// output, which depends on it for correct positioning even more directly
+// than Mermaid's own (mostly decorative) inline styles do. See that file
+// for the full mechanism writeup.
 
 // Finds every `<pre><code class="language-mermaid">` block inside
 // `container` and replaces it in place with a `.pagedown-mermaid-diagram`
@@ -1319,6 +1214,11 @@ window.addEventListener('message', async (event: MessageEvent<IncomingMessage>) 
     // through a string would silently break them.
     const container = document.createRange().createContextualFragment(html)
     await renderMermaidDiagrams(container)
+    // Synchronous (unlike renderMermaidDiagrams) -- katex.renderToString does
+    // no async work, so this needs no `await`. Must still run before
+    // buildDocumentStylesheet below, since its return value decides whether
+    // that call includes KaTeX's own font-face CSS at all.
+    const hasMath = renderMathEquations(container)
 
     // Settle images BEFORE Paged.js measures anything -- a
     // Range.createContextualFragment fragment is deliberately NON-inert (see
@@ -1358,7 +1258,7 @@ window.addEventListener('message', async (event: MessageEvent<IncomingMessage>) 
     // below already does exactly this (`{ 'gate4-probe-stylesheet': css }`).
     const flow = await previewer.preview(
       container,
-      [{ 'document-typography': buildDocumentStylesheet(geometry, documentStyle) }],
+      [{ 'document-typography': buildDocumentStylesheet(geometry, documentStyle, hasMath) }],
       root
     )
     const t1 = performance.now()

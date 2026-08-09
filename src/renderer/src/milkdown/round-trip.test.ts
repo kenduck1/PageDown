@@ -84,4 +84,23 @@ describe('Full node-set round trip (frontmatter + pagebreak + commonmark + gfm t
     expect(output).toContain('[^1]')
     expect(output).toContain('Here is the footnote.')
   })
+
+  // EDITOR_SCHEMA_PLUGINS (plugins.ts) deliberately does NOT include
+  // remark-math -- math is rendered ONLY inside the sandboxed pagination
+  // context (see katex-render.ts / CLAUDE.md's math-equations section), and
+  // Milkdown's own separate parse pipeline has no awareness of `$$...$$`
+  // syntax at all. This is expected to be SAFE, not merely untested: with no
+  // remark-math plugin registered, `$$x^2$$` and a `$$`-fenced block are
+  // just ordinary characters to CommonMark, parsed as plain paragraph text
+  // (dollar signs are not CommonMark control characters), so there is no
+  // custom node to lose fidelity on serialization -- this test proves that
+  // round trip stays byte-for-byte inert rather than assuming it.
+  it('round-trips inline and block math markers as inert plain text (no math node in the editor schema)', async () => {
+    const source =
+      'Inline math stays literal: $$x^2 + y^2 = z^2$$ right here.\n\n$$\nE = mc^2\n$$\n'
+    const output = await roundTrip(source)
+
+    expect(output).toContain('$$x^2 + y^2 = z^2$$')
+    expect(output).toContain('E = mc^2')
+  })
 })

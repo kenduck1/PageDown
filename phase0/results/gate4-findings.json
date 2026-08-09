@@ -10,7 +10,7 @@
       "textMatch": true,
       "firstMismatchDetail": null,
       "textDeltaSample": "1.1.2.1.",
-      "exportMs": 59,
+      "exportMs": 64,
       "imgInfo": []
     },
     {
@@ -23,7 +23,7 @@
       "textMatch": true,
       "firstMismatchDetail": null,
       "textDeltaSample": "",
-      "exportMs": 66,
+      "exportMs": 67,
       "imgInfo": []
     },
     {
@@ -36,7 +36,7 @@
       "textMatch": true,
       "firstMismatchDetail": null,
       "textDeltaSample": "",
-      "exportMs": 56,
+      "exportMs": 58,
       "imgInfo": []
     },
     {
@@ -49,7 +49,7 @@
       "textMatch": true,
       "firstMismatchDetail": null,
       "textDeltaSample": "",
-      "exportMs": 56,
+      "exportMs": 64,
       "imgInfo": []
     },
     {
@@ -62,7 +62,7 @@
       "textMatch": true,
       "firstMismatchDetail": null,
       "textDeltaSample": "Diagramoftheproposedsitelayout,showingthemainentranceonthenorthsideandparkingtotheeast.",
-      "exportMs": 54,
+      "exportMs": 55,
       "imgInfo": [
         {
           "src": "pagedown-render://render/assets/diagram-placeholder.png",
@@ -83,7 +83,7 @@
       "textMatch": true,
       "firstMismatchDetail": null,
       "textDeltaSample": "",
-      "exportMs": 242,
+      "exportMs": 247,
       "imgInfo": []
     },
     {
@@ -96,7 +96,7 @@
       "textMatch": true,
       "firstMismatchDetail": null,
       "textDeltaSample": "",
-      "exportMs": 63,
+      "exportMs": 65,
       "imgInfo": []
     },
     {
@@ -109,7 +109,7 @@
       "textMatch": true,
       "firstMismatchDetail": null,
       "textDeltaSample": "Siteplan1.2.",
-      "exportMs": 61,
+      "exportMs": 60,
       "imgInfo": [
         {
           "src": "pagedown-render://render/assets/diagram-placeholder.png",
@@ -130,7 +130,7 @@
       "textMatch": true,
       "firstMismatchDetail": null,
       "textDeltaSample": "1.1.2.2.1.2.3.1.2.",
-      "exportMs": 57,
+      "exportMs": 63,
       "imgInfo": []
     },
     {
@@ -156,7 +156,7 @@
       "textMatch": true,
       "firstMismatchDetail": null,
       "textDeltaSample": "1.",
-      "exportMs": 58,
+      "exportMs": 60,
       "imgInfo": []
     },
     {
@@ -182,7 +182,7 @@
       "textMatch": true,
       "firstMismatchDetail": null,
       "textDeltaSample": "",
-      "exportMs": 62,
+      "exportMs": 73,
       "imgInfo": []
     },
     {
@@ -195,7 +195,7 @@
       "textMatch": true,
       "firstMismatchDetail": null,
       "textDeltaSample": "",
-      "exportMs": 671,
+      "exportMs": 657,
       "imgInfo": []
     }
   ],

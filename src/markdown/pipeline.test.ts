@@ -177,6 +177,36 @@ describe('markdownToHtml — code block syntax highlighting', () => {
   })
 })
 
+describe('markdownToHtml — math equations', () => {
+  it('preserves block math ($$ on its own lines) as an inert language-math-block placeholder', () => {
+    const { html } = markdownToHtml('Before.\n\n$$\nx^2 + y^2 = z^2\n$$\n\nAfter.')
+    expect(html).toContain('<div><code class="language-math-block">x^2 + y^2 = z^2</code></div>')
+    // A div-wrapped code element is structurally invisible to rehype-highlight
+    // (it only ever touches `pre > code` — see math-to-hast.ts's own comment).
+    expect(html).not.toContain('hljs')
+  })
+
+  it('preserves double-dollar inline math ($$...$$ on one line) as a language-math-inline placeholder', () => {
+    const { html } = markdownToHtml('The formula $$x^2$$ appears here.')
+    expect(html).toContain('<code class="language-math-inline">x^2</code>')
+  })
+
+  it('does NOT treat a single dollar sign as math (avoids currency false positives)', () => {
+    // singleDollarTextMath: false — see pipeline.ts's own comment on why a
+    // single $ is deliberately not enough to open inline math in this app.
+    const { html } = markdownToHtml('It costs $5 and $10 today.')
+    expect(html).not.toContain('language-math-inline')
+    expect(html).toContain('$5')
+    expect(html).toContain('$10')
+  })
+
+  it('renders neither block nor inline math in the privileged pipeline — only the raw source survives', () => {
+    const { html } = markdownToHtml('$$\n\\frac{1}{2}\n$$')
+    expect(html).toContain('\\frac{1}{2}')
+    expect(html).not.toContain('katex')
+  })
+})
+
 describe('markdownToHtml — footnotes', () => {
   it('renders a footnote reference and its definition into a real footnotes section', () => {
     const { html } = markdownToHtml(
