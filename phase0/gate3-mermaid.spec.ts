@@ -633,16 +633,19 @@ test('Gate 3: the Mermaid label font is a real bundled face, loaded before rende
 //                    don't thrash while the user types), and Mermaid's own
 //                    leaked error-diagram container must be cleaned up
 //   3. all-valid  -- the diagram recovers, AND its geometry is byte-identical
-//                    to step 1. That last comparison is the regression test
-//                    for the commit-point change in the 'render' handler:
-//                    deferring the Polisher destroy means a previous run's
-//                    stylesheet is now in <head> while Mermaid measures, so
-//                    without the pinned measurement environment (see
-//                    MERMAID_MEASUREMENT_ENVIRONMENT_CSS) run 3 would measure
-//                    labels at document-typography's 14px while run 1
-//                    measured at the UA default, and the same document would
-//                    paginate differently depending on how many documents the
-//                    harness had rendered before it.
+//                    to step 1.
+//
+// That last comparison is worth more than it looks, and it is here because it
+// caught something real. Nothing else in this suite compares two renders on
+// ONE harness against each other, so nothing else could see that Mermaid's
+// own internal text measurement is sensitive to whatever stylesheet happens
+// to be in <head> when it runs. A version of the render handler that deferred
+// the Polisher destroy (to stop a failed render blanking the preview, per
+// design:212) measured these same diagrams at 369.945px on run 3 against
+// 370.148px on run 1 -- same document, same harness, different answer
+// depending on how many documents had been rendered before it. That change
+// was backed out; this assertion is what stops it, or anything else with the
+// same effect, coming back unnoticed.
 const VALID_DIAGRAM = `flowchart TD
   A[Start] --> B{Approved?}
   B -->|Yes| C[Ship]
@@ -731,32 +734,11 @@ test('Gate 3: one malformed diagram degrades to a placeholder instead of abortin
         const secondValid = await harness.sendDocument(validHtml, geometry, documentStyle)
         const secondProbe = await probe()
 
-        const envProbe = await harness.view.webContents.executeJavaScript(`
-          (() => {
-            const d = document.createElement('div')
-            d.id = 'dpagedown-mermaid-envprobe'
-            document.body.appendChild(d)
-            const cs = getComputedStyle(d)
-            const out = {
-              fontFamily: cs.fontFamily,
-              fontSize: cs.fontSize,
-              lineHeight: cs.lineHeight,
-              fontWeight: cs.fontWeight,
-              letterSpacing: cs.letterSpacing,
-              headStyleCount: document.head.querySelectorAll('style').length,
-              fontFaces: Array.from(document.fonts).map((f) => f.family + ':' + f.status)
-            }
-            d.remove()
-            return out
-          })()
-        `)
-
-        return { firstValid, firstProbe, broken, brokenProbe, secondValid, secondProbe, envProbe }
+        return { firstValid, firstProbe, broken, brokenProbe, secondValid, secondProbe }
       },
       { validHtml, brokenHtml, geometry: LETTER_GEOMETRY, documentStyle: DEFAULT_STYLE }
     )
 
-    console.log('Gate 3 ENV PROBE:', JSON.stringify(result.envProbe))
     console.log(
       'Gate 3 malformed-diagram run:',
       JSON.stringify(

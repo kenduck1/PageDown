@@ -12,6 +12,22 @@ export interface EditorStatusBarProps {
    * usePageCount with its own debounce timer.
    */
   pageCount: number | null
+  /**
+   * True while a fresh page count is in flight (`usePageCount`'s own
+   * `loading`). Drives a small in-progress dot next to the reading -- the
+   * "subtle in-progress indicator" half of the design doc's requirement that
+   * this control "shows the last known-good value with a subtle in-progress
+   * indicator -- never blank or flickering" (design:189). The other half is
+   * `usePageCount` retaining the previous count across both a content change
+   * and a failed fetch, so `pageCount` genuinely stays populated while this
+   * is true.
+   *
+   * Deliberately does NOT disable or grey out anything: the retained count is
+   * a real page count the user can still navigate against, and a control that
+   * flickered between enabled and disabled on every debounce cycle would be
+   * exactly the "flickering" the requirement rules out.
+   */
+  pageCountPending: boolean
   /** 1-based page currently shown by the paginated preview. */
   currentPage: number
   /**
@@ -130,6 +146,7 @@ function EditorStatusBar({
   content,
   isDirty,
   pageCount,
+  pageCountPending,
   currentPage,
   onNavigateToPage,
   zoom,
@@ -206,6 +223,25 @@ function EditorStatusBar({
         >
           <ChevronRightIcon />
         </button>
+        {/* AFTER the Next chevron, not beside the reading it describes, and
+        that placement is deliberate: this element appears and disappears on
+        every debounce cycle while the user types, and anything it precedes in
+        this flex row shifts by its width each time. Sitting last means the
+        three navigation controls -- the ones a user (and every gate spec)
+        actually clicks -- never move.
+
+        aria-hidden with a `title` rather than a live region: role="status"
+        here would make a screen reader announce a re-count on every one of
+        those cycles. The number to its left is the actual information, and
+        the whole point of this feature is that the number stays put. */}
+        {pageCountPending && (
+          <span
+            data-testid="page-count-pending"
+            aria-hidden="true"
+            title="Updating page count…"
+            className="h-1 w-1 rounded-full bg-text-tertiary motion-safe:animate-pulse"
+          />
+        )}
       </div>
 
       <label className="flex items-center gap-1">

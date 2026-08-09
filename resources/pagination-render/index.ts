@@ -800,26 +800,84 @@ let currentRequestId: string | undefined
 // explicitly out of scope here — see the class-level comment above).
 const MERMAID_DIAGRAM_CLASS = 'pagedown-mermaid-diagram'
 
-let mermaidPageBreakStyleInjected = false
+// Carried by the per-diagram error placeholder ALONGSIDE
+// MERMAID_DIAGRAM_CLASS (never instead of it): an unrenderable diagram is
+// still a single figure occupying a diagram's slot, so it wants the same
+// `break-inside: avoid-page` policy and the same measureDiagramBoxes
+// reporting as a real one. See renderMermaidDiagrams's per-diagram
+// try/catch for why this exists at all.
+const MERMAID_ERROR_CLASS = 'pagedown-mermaid-error'
+
+let mermaidStylesInjected = false
 
 // Injected exactly once per render-context lifetime (not once per
-// sendDocument() call — the rule is content-independent, so re-adding it on
-// every run would just be another unbounded <head> leak of the kind the
+// sendDocument() call — the rules are content-independent, so re-adding them
+// on every run would just be another unbounded <head> leak of the kind the
 // activePreviewer/Polisher cleanup above already exists to prevent).
 // Created via `document.createElement`, so the bootstrap shim at the top of
 // this file stamps this run's CSP style nonce onto it automatically — the
 // same mechanism Paged.js's own Polisher-created <style> elements rely on,
 // reused here rather than reinvented.
-function ensureMermaidPageBreakStyleInjected(): void {
-  if (mermaidPageBreakStyleInjected) return
+//
+// Every selector below is deliberately class-only and every ELEMENT the
+// error placeholder builds is a plain <div> — never a <p>/<pre> — because
+// document-typography.css styles those tags at `.pagedown-document p`
+// (0,1,1), which outranks a bare `.pagedown-mermaid-error-message` (0,1,0)
+// and would silently take back the margins/padding/size set here. Divs have
+// no such tag rule to lose to.
+function ensureMermaidStylesInjected(): void {
+  if (mermaidStylesInjected) return
   const style = document.createElement('style')
   style.textContent = `
     .${MERMAID_DIAGRAM_CLASS} { break-inside: avoid-page; page-break-inside: avoid; }
     .${MERMAID_DIAGRAM_CLASS} svg { display: block; max-width: 100%; height: auto; }
+    .${MERMAID_ERROR_CLASS} {
+      box-sizing: border-box;
+      border: 1px dashed #b3261e;
+      border-radius: 4px;
+      padding: 0.6em 0.8em;
+      color: #b3261e;
+    }
+    .${MERMAID_ERROR_CLASS}-message { font-weight: 600; margin-bottom: 0.35em; }
+    .${MERMAID_ERROR_CLASS}-detail { margin-bottom: 0.35em; }
+    .${MERMAID_ERROR_CLASS}-source {
+      white-space: pre-wrap;
+      font-family: monospace;
+      color: #5f6368;
+      max-height: 6em;
+      overflow: hidden;
+    }
   `
   document.head.appendChild(style)
-  mermaidPageBreakStyleInjected = true
+  mermaidStylesInjected = true
 }
+
+// The last SUCCESSFULLY RENDERED, really-laid-out size of each diagram,
+// keyed by its positional element id and surviving across render passes for
+// this render context's lifetime. Written only by rememberGoodDiagramSizes
+// (post-pagination, from real boxes — not from the SVG's own viewBox, which
+// is its UNCLAMPED natural size and therefore wrong for any diagram wide
+// enough to hit the `max-width: 100%` clamp), read only by the error
+// placeholder below.
+//
+// This is the design doc's "render an error placeholder that retains the
+// last known-good diagram's dimensions rather than collapsing to a different
+// size, to avoid pagination thrashing while the user is mid-edit"
+// (design:107). Position is the right identity for exactly that case: a
+// diagram being edited into temporary invalidity is the same block, at the
+// same index, as the one that rendered a moment ago.
+//
+// Two honest limitations, neither of which this is worth building the design
+// doc's full content-hash render cache (design:97, still unbuilt) to fix:
+// position is NOT a document-independent identity, so on a long-lived
+// harness (Split mode's persistent WebContentsView, shared across tab
+// switches) a broken diagram can inherit the height of a DIFFERENT
+// document's diagram that happened to sit at the same index; and only the
+// height is retained (as a min-height), since the wrapper is a full-width
+// block either way and height is the only axis pagination depends on. The
+// cost of both is bounded to the size of an error placeholder — never to
+// real content.
+const lastGoodDiagramSizes = new Map<string, { width: number; height: number }>()
 
 let mermaidLabelFontRegistered = false
 
@@ -945,6 +1003,134 @@ function fitSvgToNaturalSize(svgElement: SVGElement): void {
   svgElement.removeAttribute('style')
 }
 
+// The ONE <head> <style> element carrying this pass's retained-size rules for
+// error placeholders, reused and rewritten wholesale on every pass.
+//
+// A single reused element rather than one per pass for the reason the
+// activePreviewer/Polisher cleanup above already documents: <style> elements
+// appended to <head> per sendDocument() call leak without bound against a
+// long-lived harness. Rewriting `textContent` also makes the previous pass's
+// rules disappear by construction, which is required and not incidental —
+// a diagram that renders correctly again must stop being pinned to the
+// height it had while broken.
+//
+// Created lazily via `document.createElement` (nonce shim) and only once
+// there is something to say; a document that never had a diagram fail never
+// creates it at all.
+let mermaidErrorSizeStyle: HTMLStyleElement | undefined
+
+function applyMermaidErrorSizes(rules: string[]): void {
+  if (rules.length === 0 && !mermaidErrorSizeStyle) return
+  if (!mermaidErrorSizeStyle) {
+    mermaidErrorSizeStyle = document.createElement('style')
+    document.head.appendChild(mermaidErrorSizeStyle)
+  }
+  mermaidErrorSizeStyle.textContent = rules.join('\n')
+}
+
+// Records the real, laid-out size of every diagram that genuinely rendered in
+// THIS pass, for a later pass's error placeholder to fall back to. Called
+// after previewer.preview() resolves, from the same paginated `root`
+// measureDiagramBoxes reads — that timing is the point: this is the only
+// moment a diagram's size reflects the CSS clamp (`max-width: 100%`) that
+// applies to anything wider than the page content box, which the SVG's own
+// viewBox (its unclamped natural size) does not.
+//
+// Skips error placeholders explicitly: their box IS the retained size (or the
+// size of an error message), so recording it would let one failure's own
+// dimensions masquerade as a known-good measurement forever after.
+function rememberGoodDiagramSizes(root: HTMLElement): void {
+  const wrappers = Array.from(
+    root.querySelectorAll(`.${MERMAID_DIAGRAM_CLASS}:not(.${MERMAID_ERROR_CLASS})`)
+  ) as HTMLElement[]
+  for (const wrapper of wrappers) {
+    const id = wrapper.getAttribute('data-mermaid-diagram-id')
+    const svg = wrapper.querySelector('svg')
+    if (!id || !svg) continue
+    const rect = svg.getBoundingClientRect()
+    if (rect.width > 0 && rect.height > 0) {
+      lastGoodDiagramSizes.set(id, { width: rect.width, height: rect.height })
+    }
+  }
+}
+
+// Mermaid leaks its own internal measurement container when a diagram fails
+// to PARSE, and this cleanup is required, not defensive padding — read
+// directly out of node_modules/mermaid/dist/mermaid.core.mjs's `render()`
+// rather than assumed. On the parse-error path it stashes the exception
+// (`parseEncounteredException`), renders its own built-in "Syntax error in
+// text" bomb graphic into the temp container instead, and then does
+// `if (parseEncounteredException) throw parseEncounteredException` on the
+// line ABOVE its own `removeTempElements()` call — so the throw skips the
+// cleanup entirely.
+//
+// The consequence is not a silent memory nibble: that container is a direct
+// child of `document.body`, i.e. a SIBLING of #content-root, so a leaked one
+// paints the syntax-error bomb loose in the Split-mode preview, above the
+// real pages, for the rest of the harness's life. Mermaid does clear a
+// same-id container at the start of its next render (removeExistingElements),
+// so this self-heals on the next pass — but "next pass" can be a user
+// keystroke away, and a diagram that stays broken never gets one.
+//
+// Removes both ids Mermaid's own removeExistingElements targets for the
+// non-sandboxed security levels this app uses: the enclosing div (`"d" + id`)
+// and the svg itself (`id`).
+function removeMermaidTempElements(elementId: string): void {
+  document.getElementById(`d${elementId}`)?.remove()
+  document.getElementById(elementId)?.remove()
+}
+
+// Builds the visible per-diagram failure placeholder that replaces one
+// unrenderable ```mermaid block, so a single syntax error degrades to one
+// bad figure instead of aborting the whole document's pagination (design:107
+// — invalid diagram syntax "happens constantly mid-typing", which is exactly
+// when Split mode re-renders).
+//
+// Carries MERMAID_DIAGRAM_CLASS as well as MERMAID_ERROR_CLASS, and the same
+// `data-mermaid-diagram-id` a successful render would: it occupies that
+// diagram's slot for break policy, for measureDiagramBoxes, and for anything
+// downstream keying off diagram ids, so the ids reported for a document stay
+// positionally complete whether or not every diagram rendered.
+//
+// Every child is a <div> (see ensureMermaidStylesInjected for why not
+// <p>/<pre>) and every string reaching the DOM goes through `textContent`,
+// never innerHTML — `diagramSource` is untrusted document content and the
+// error text is Mermaid's own, neither of which is markup here.
+function buildMermaidErrorPlaceholder(
+  elementId: string,
+  diagramSource: string,
+  err: unknown
+): HTMLElement {
+  const wrapper = document.createElement('div')
+  wrapper.className = `${MERMAID_DIAGRAM_CLASS} ${MERMAID_ERROR_CLASS}`
+  wrapper.setAttribute('data-mermaid-diagram-id', elementId)
+  wrapper.setAttribute('data-mermaid-error', 'true')
+
+  const message = document.createElement('div')
+  message.className = `${MERMAID_ERROR_CLASS}-message`
+  message.textContent = 'Diagram could not be rendered'
+  wrapper.appendChild(message)
+
+  // Mermaid's parse errors name the offending line and token, which is the
+  // single most useful thing to put in front of someone whose diagram just
+  // stopped rendering. Only the first line: the rest is a multi-line
+  // token-expectation dump that would dominate the placeholder.
+  const detailText = (err instanceof Error ? err.message : String(err)).split('\n')[0].trim()
+  if (detailText) {
+    const detail = document.createElement('div')
+    detail.className = `${MERMAID_ERROR_CLASS}-detail`
+    detail.textContent = detailText
+    wrapper.appendChild(detail)
+  }
+
+  const source = document.createElement('div')
+  source.className = `${MERMAID_ERROR_CLASS}-source`
+  source.textContent = diagramSource
+  wrapper.appendChild(source)
+
+  return wrapper
+}
+
 // hoistInlineStyleAttributes/reattachNoncedStyles used to live here as
 // Mermaid-specific, SVGElement-typed functions. The math-equations
 // sub-project generalized and extracted them to nonce-style-hoisting.ts
@@ -1027,7 +1213,13 @@ async function renderMermaidDiagrams(container: DocumentFragment): Promise<void>
     console.warn(`Mermaid label font ${labelFontSpec} failed to load:`, err)
   }
 
-  ensureMermaidPageBreakStyleInjected()
+  ensureMermaidStylesInjected()
+
+  // Per-diagram retained-size rules for this pass only (see
+  // lastGoodDiagramSizes and applyMermaidErrorSizes below). Collected here
+  // rather than written straight to the DOM so the whole set replaces the
+  // previous pass's wholesale, with no accumulation.
+  const errorSizeRules: string[] = []
 
   for (let i = 0; i < codeBlocks.length; i++) {
     const code = codeBlocks[i]
@@ -1037,80 +1229,119 @@ async function renderMermaidDiagrams(container: DocumentFragment): Promise<void>
     const diagramSource = code.textContent ?? ''
     const elementId = `pagedown-mermaid-${i}`
 
-    const svgMarkup = await renderMermaidToSvg(diagramSource, elementId)
+    // ONE diagram's render, guarded on its own. Before this try/catch the
+    // await below (and the missing-<svg> throw further down) propagated
+    // straight out of this function to the 'render' handler's whole-pass
+    // catch, so a single mistyped arrow published an error result for the
+    // ENTIRE document and the preview went blank — for content the design
+    // doc itself says is invalid "constantly mid-typing" (design:107).
+    // Mirrors the per-equation guard renderMathPlaceholder already has in
+    // katex-render.ts, for the identical reason.
+    try {
+      const svgMarkup = await renderMermaidToSvg(diagramSource, elementId)
 
-    // Parsed via a SEPARATE DOMParser document, not `element.innerHTML =`
-    // on a node already living in THIS page. Investigated, not assumed: a
-    // real Gate 3 run against this app's 3-diagram corpus logs 972 real
-    // "Applying inline style violates..." console violations — an exact,
-    // reproducible count across repeated runs, NOT a random/flaky number —
-    // regardless of whether this parsing step uses a live-document element
-    // or a DOMParser scratch document (measured both ways, identical counts
-    // either way) — meaning essentially ALL of
-    // them come from EARLIER, inside `renderMermaidToSvg` itself: Mermaid's
-    // own internal rendering (see mermaidAPI.render() in
-    // node_modules/mermaid/dist/mermaid.core.mjs) draws the diagram using
-    // real d3 selections, appended live to this page's actual
-    // `document.body` (`appendDivSvgG(select("body"), ...)`), and d3's
-    // `.style(...)` calls set inline style properties directly — CSP
-    // evaluates and blocks each one, on the spot, as an unavoidable
-    // byproduct of Mermaid's implementation running under this app's strict,
-    // no-`unsafe-inline` `style-src`. No post-processing of the STRING
-    // `renderMermaidToSvg` eventually returns can prevent violations that
-    // already fired before that string existed — see this task's
-    // report/findings-doc entry for the fuller writeup and why this doesn't
-    // change Gate 3's sizing verdict (geometry comes from SVG attributes and
-    // the properly-nonced <style> block's font metrics, not from these
-    // blocked, paint-only per-element declarations).
-    //
-    // What THIS parsing choice actually still buys: Mermaid's OUTPUT STRING
-    // (even after its own DOMPurify.sanitize() pass under
-    // `securityLevel: 'strict'`) legitimately keeps plain `style="..."`
-    // attributes on individual shape elements (DOMPurify's default allowlist
-    // permits `style`, unlike `nonce` — confirmed by dumping the raw
-    // returned string). Parsing that string directly into a node owned by
-    // THIS page's live document, then removing those attributes a moment
-    // later (hoistInlineStyleAttributes below), still risks re-triggering
-    // the same class of violation for THIS app's own parsing step, on top of
-    // Mermaid's already-unavoidable internal ones. A `DOMParser` result
-    // document is a genuinely separate Document with no CSP of its own — the
-    // same mechanism DOMPurify itself relies on internally to sanitize
-    // untrusted markup without tripping the host page's policy — so doing
-    // the parse and all style-attribute stripping/hoisting there, and only
-    // importing the result into this page's live document via
-    // `document.importNode()` once it no longer carries any `style=""`
-    // attribute at all, keeps this app's OWN contribution to the violation
-    // count at zero, whatever Mermaid's internals do on their own.
-    const scratchDoc = new DOMParser().parseFromString(svgMarkup, 'text/html')
-    const scratchSvgElement = scratchDoc.body.firstElementChild as SVGElement | null
-    if (!scratchSvgElement) {
-      throw new Error(`Mermaid render for diagram "${elementId}" did not produce an <svg> element`)
+      // Parsed via a SEPARATE DOMParser document, not `element.innerHTML =`
+      // on a node already living in THIS page. Investigated, not assumed: a
+      // real Gate 3 run against this app's 3-diagram corpus logs 972 real
+      // "Applying inline style violates..." console violations — an exact,
+      // reproducible count across repeated runs, NOT a random/flaky number —
+      // regardless of whether this parsing step uses a live-document element
+      // or a DOMParser scratch document (measured both ways, identical counts
+      // either way) — meaning essentially ALL of
+      // them come from EARLIER, inside `renderMermaidToSvg` itself: Mermaid's
+      // own internal rendering (see mermaidAPI.render() in
+      // node_modules/mermaid/dist/mermaid.core.mjs) draws the diagram using
+      // real d3 selections, appended live to this page's actual
+      // `document.body` (`appendDivSvgG(select("body"), ...)`), and d3's
+      // `.style(...)` calls set inline style properties directly — CSP
+      // evaluates and blocks each one, on the spot, as an unavoidable
+      // byproduct of Mermaid's implementation running under this app's strict,
+      // no-`unsafe-inline` `style-src`. No post-processing of the STRING
+      // `renderMermaidToSvg` eventually returns can prevent violations that
+      // already fired before that string existed — see this task's
+      // report/findings-doc entry for the fuller writeup and why this doesn't
+      // change Gate 3's sizing verdict (geometry comes from SVG attributes and
+      // the properly-nonced <style> block's font metrics, not from these
+      // blocked, paint-only per-element declarations).
+      //
+      // What THIS parsing choice actually still buys: Mermaid's OUTPUT STRING
+      // (even after its own DOMPurify.sanitize() pass under
+      // `securityLevel: 'strict'`) legitimately keeps plain `style="..."`
+      // attributes on individual shape elements (DOMPurify's default allowlist
+      // permits `style`, unlike `nonce` — confirmed by dumping the raw
+      // returned string). Parsing that string directly into a node owned by
+      // THIS page's live document, then removing those attributes a moment
+      // later (hoistInlineStyleAttributes below), still risks re-triggering
+      // the same class of violation for THIS app's own parsing step, on top of
+      // Mermaid's already-unavoidable internal ones. A `DOMParser` result
+      // document is a genuinely separate Document with no CSP of its own — the
+      // same mechanism DOMPurify itself relies on internally to sanitize
+      // untrusted markup without tripping the host page's policy — so doing
+      // the parse and all style-attribute stripping/hoisting there, and only
+      // importing the result into this page's live document via
+      // `document.importNode()` once it no longer carries any `style=""`
+      // attribute at all, keeps this app's OWN contribution to the violation
+      // count at zero, whatever Mermaid's internals do on their own.
+      const scratchDoc = new DOMParser().parseFromString(svgMarkup, 'text/html')
+      const scratchSvgElement = scratchDoc.body.firstElementChild as SVGElement | null
+      if (!scratchSvgElement) {
+        throw new Error(
+          `Mermaid render for diagram "${elementId}" did not produce an <svg> element`
+        )
+      }
+
+      // Hoisting runs here, on the scratch element, BEFORE import — order is
+      // load-bearing: it must remove every `style=""` attribute while the
+      // element is still in the CSP-free scratch document, so nothing is left
+      // to trigger a violation at the moment importNode below moves it into
+      // this page's own CSP-governed document.
+      const hoistedCss = hoistInlineStyleAttributes(scratchSvgElement)
+
+      const svgElement = document.importNode(scratchSvgElement, true) as SVGElement
+      // reattachNoncedStyles must run AFTER import, not before: it creates
+      // the replacement <style> via THIS page's own `document.createElement`
+      // (the only one the bootstrap nonce shim at the top of this file
+      // patches) so the fresh element actually receives a real, matching
+      // nonce — a <style> created via `scratchDoc.createElement` would carry
+      // no nonce at all, since the shim never touches the scratch document.
+      reattachNoncedStyles(svgElement, hoistedCss)
+      fitSvgToNaturalSize(svgElement)
+
+      const wrapper = document.createElement('div')
+      wrapper.className = MERMAID_DIAGRAM_CLASS
+      wrapper.setAttribute('data-mermaid-diagram-id', elementId)
+      wrapper.appendChild(svgElement)
+
+      pre.replaceWith(wrapper)
+    } catch (err) {
+      // One bad diagram, one bad figure — the rest of the document still
+      // paginates. Logged rather than swallowed silently (this context has no
+      // channel to the app shell at all: no IPC, no contextBridge, and
+      // `markdownToHtml` returns no warning surface either — see the gap
+      // audit's A5), so the failure is at least visible in the render
+      // context's own console alongside the placeholder the user sees.
+      console.warn(`Mermaid diagram "${elementId}" failed to render:`, err)
+      removeMermaidTempElements(elementId)
+
+      const retained = lastGoodDiagramSizes.get(elementId)
+      if (retained) {
+        // Attribute selector on an id THIS function assigned (never
+        // document-supplied), so there is nothing here for content to inject
+        // into. `min-height`, not `height`: an error message longer than the
+        // diagram it replaces must stay readable rather than be clipped —
+        // the retained size is a floor that keeps pagination stable, not a
+        // clamp.
+        errorSizeRules.push(
+          `.${MERMAID_ERROR_CLASS}[data-mermaid-diagram-id="${elementId}"] ` +
+            `{ min-height: ${retained.height}px; }`
+        )
+      }
+
+      pre.replaceWith(buildMermaidErrorPlaceholder(elementId, diagramSource, err))
     }
-
-    // Hoisting runs here, on the scratch element, BEFORE import — order is
-    // load-bearing: it must remove every `style=""` attribute while the
-    // element is still in the CSP-free scratch document, so nothing is left
-    // to trigger a violation at the moment importNode below moves it into
-    // this page's own CSP-governed document.
-    const hoistedCss = hoistInlineStyleAttributes(scratchSvgElement)
-
-    const svgElement = document.importNode(scratchSvgElement, true) as SVGElement
-    // reattachNoncedStyles must run AFTER import, not before: it creates
-    // the replacement <style> via THIS page's own `document.createElement`
-    // (the only one the bootstrap nonce shim at the top of this file
-    // patches) so the fresh element actually receives a real, matching
-    // nonce — a <style> created via `scratchDoc.createElement` would carry
-    // no nonce at all, since the shim never touches the scratch document.
-    reattachNoncedStyles(svgElement, hoistedCss)
-    fitSvgToNaturalSize(svgElement)
-
-    const wrapper = document.createElement('div')
-    wrapper.className = MERMAID_DIAGRAM_CLASS
-    wrapper.setAttribute('data-mermaid-diagram-id', elementId)
-    wrapper.appendChild(svgElement)
-
-    pre.replaceWith(wrapper)
   }
+
+  applyMermaidErrorSizes(errorSizeRules)
 }
 
 // Reads back real, on-screen bounding boxes for every mermaid diagram
@@ -1212,9 +1443,16 @@ function measureDiagramBoxes(
   const wrappers = Array.from(root.querySelectorAll(`.${MERMAID_DIAGRAM_CLASS}`)) as HTMLElement[]
   return wrappers.map((wrapper) => {
     const id = wrapper.getAttribute('data-mermaid-diagram-id') ?? ''
+    // Falls back to the WRAPPER's own box when there is no <svg> inside it,
+    // which is exactly the error-placeholder case (see
+    // buildMermaidErrorPlaceholder). Reporting 0x0 there — what this did
+    // before per-diagram error handling existed — would be actively
+    // misleading: a zero-size box is the specific getBBox()/layout failure
+    // signal Gate 3 exists to detect, and an error placeholder occupying real
+    // space is not that failure.
     const svg = wrapper.querySelector('svg')
-    const rect = svg?.getBoundingClientRect()
-    return { id, width: rect?.width ?? 0, height: rect?.height ?? 0 }
+    const rect = (svg ?? wrapper).getBoundingClientRect()
+    return { id, width: rect.width, height: rect.height }
   })
 }
 
@@ -1260,17 +1498,27 @@ window.addEventListener('message', async (event: MessageEvent<IncomingMessage>) 
   // original CSP bug expensive to diagnose in the first place; leaving any
   // other path capable of the same silent hang would have defeated the
   // point of the fix.
+  let rootForFailureNotice: HTMLElement | undefined
   try {
     // Destroy the previous run's Polisher-injected <style> elements before
-    // starting a new one. The reference is cleared FIRST, before calling
-    // destroy(): `destroy()` dereferences `this.styleEl` unconditionally
-    // (see polisher.js), which is only assigned once a previous preview()
-    // call reached its style-setup step — a previous run that threw BEFORE
-    // that point leaves a Previewer whose own destroy() call itself throws.
-    // Clearing the reference first means that failure mode is handled like
-    // any other error in this try block (caught below, published, and not
-    // retried against the same broken instance next time) instead of being
-    // a separate, uncaught throw sitting outside the try/catch.
+    // starting a new one, and clear its rendered pages.
+    //
+    // Deliberately at the TOP, and this position is now a MEASURED
+    // constraint rather than an incidental one. Deferring it to just before
+    // previewer.preview() -- so that a failure in the Mermaid/KaTeX/image
+    // passes would leave the previous, correct render on screen instead of
+    // blanking it, per design:212 -- was built, measured, and backed out:
+    // it leaves the PREVIOUS run's stylesheet in <head> while Mermaid does
+    // its own internal text measurement, and Gate 3's own
+    // render-1-vs-render-3 comparison caught the same document paginating
+    // differently depending on how many documents that harness had already
+    // rendered (369.945px vs 370.148px per diagram, identical widths). The
+    // obvious culprit -- typography inherited by Mermaid's temp measurement
+    // container -- was ruled OUT by direct probe (it computes to Times/16px/
+    // normal either way), so the perturbation is somewhere else in that
+    // stylesheet and is not something a targeted reset can be trusted to
+    // pin. See this sub-project's report; the retained-render behavior is
+    // deferred, not abandoned.
     if (activePreviewer) {
       const previous = activePreviewer
       activePreviewer = undefined
@@ -1298,6 +1546,10 @@ window.addEventListener('message', async (event: MessageEvent<IncomingMessage>) 
       // some other path in the future.
       throw new Error('content-root element is missing from the document')
     }
+    // Held for the catch below, which needs a root to write its failure
+    // notice into and cannot re-run the getElementById lookup safely (the
+    // #content-root-disappears case above is exactly when that lookup fails).
+    rootForFailureNotice = root
 
     // Clear any previous run's rendered pages before starting a fresh one —
     // Previewer.preview() appends a new `.pagedjs_pages` container into
@@ -1438,6 +1690,12 @@ window.addEventListener('message', async (event: MessageEvent<IncomingMessage>) 
     // prevent.
     if (currentRequestId !== requestId) return
 
+    // Record what every diagram that DID render actually measured, for a
+    // later pass's error placeholder to fall back to -- see
+    // rememberGoodDiagramSizes and lastGoodDiagramSizes. Here, not earlier:
+    // a diagram's real size only exists once Paged.js has laid it out.
+    rememberGoodDiagramSizes(root)
+
     const result: OutgoingSuccess = {
       type: 'result',
       requestId,
@@ -1458,6 +1716,42 @@ window.addEventListener('message', async (event: MessageEvent<IncomingMessage>) 
     // error result lets sendDocument (src/main/pagination-window.ts) detect
     // and surface the failure immediately instead of waiting it out.
     if (currentRequestId !== requestId) return // see currentRequestId comment: discard stale errors too
+
+    // Say something on screen rather than leaving a silent blank pane.
+    //
+    // This is the partial answer to design:212's "preview falls back to
+    // showing the last known-good paginated state rather than going blank."
+    // The full answer -- keeping the previous render -- is deferred (see the
+    // Polisher-destroy comment at the top of this handler for the measured
+    // reason), but "blank white rectangle, no explanation" was never the only
+    // alternative: by this point the run has genuinely failed, whatever
+    // partial page tree Paged.js managed to append is misleading rather than
+    // useful, and this is the ONE surface a user actually looks at (the
+    // headless harnesses -- thumbnails, page count, PDF export -- are never
+    // shown, and their callers reject on the error result below regardless).
+    //
+    // Strictly after the stale-request guard above: a superseded run must not
+    // paint over the render that replaced it.
+    if (rootForFailureNotice) {
+      const notice = document.createElement('div')
+      notice.setAttribute('data-pagedown-render-error', 'true')
+      notice.className = 'pagedown-render-error'
+      notice.textContent = 'This preview could not be rendered.'
+      // textContent throughout, and a `style` element created through the
+      // nonce-stamping document.createElement -- an inline style attribute
+      // would be blocked outright by this context's style-src (no
+      // 'unsafe-inline'), the same constraint every other DOM this file
+      // builds has to satisfy.
+      const noticeStyle = document.createElement('style')
+      noticeStyle.textContent = `.pagedown-render-error {
+        margin: 2rem;
+        font-family: system-ui, sans-serif;
+        font-size: 14px;
+        color: #5f6368;
+      }`
+      rootForFailureNotice.replaceChildren(noticeStyle, notice)
+    }
+
     const result: OutgoingError = {
       type: 'error',
       requestId,

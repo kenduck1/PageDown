@@ -1805,4 +1805,34 @@ describe('EditorScreen', () => {
       })
     })
   })
+  describe('page-count in-progress indicator', () => {
+    // The wiring half of design:189. `usePageCount` has always computed
+    // `loading`; EditorScreen destructured only `{ pageCount }` and threw it
+    // away, so the "subtle in-progress indicator" this requirement asks for
+    // had nothing driving it. A required `pageCountPending` prop on
+    // EditorStatusBar makes the omission a type error, and these two tests
+    // make a HARDCODED value (the other way to get it wrong) a test failure.
+    it('shows the indicator while the first count is still in flight', () => {
+      // Never resolves: the count genuinely stays pending for the whole test.
+      window.api.getPageCount = vi.fn().mockReturnValue(new Promise(() => {}))
+      useDocumentStore.setState({ filePath: '/tmp/report.md', content: '# Report' })
+      render(<EditorScreen />)
+
+      expect(screen.getByTestId('page-count-pending')).toBeInTheDocument()
+    })
+
+    it('hides the indicator once a count arrives', async () => {
+      window.api.getPageCount = vi.fn().mockResolvedValue({ pageCount: 4 })
+      useDocumentStore.setState({ filePath: '/tmp/report.md', content: '# Report' })
+      render(<EditorScreen />)
+
+      await waitFor(
+        () => {
+          expect(screen.queryByTestId('page-count-pending')).not.toBeInTheDocument()
+        },
+        { timeout: 3000 }
+      )
+      expect(screen.getByRole('button', { name: /page 1 of 4/i })).toBeInTheDocument()
+    })
+  })
 })
