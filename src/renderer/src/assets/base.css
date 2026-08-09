@@ -36,6 +36,7 @@
   --color-scrim: rgba(20, 20, 22, 0.4);
   --color-find-match: #fdf0b4;
   --color-find-match-active: #f7c948;
+  --color-comment-mark: #e3d6fb;
 
   /* Font families */
   --font-sans: -apple-system, 'Segoe UI', system-ui, sans-serif;
@@ -116,6 +117,7 @@
   --color-scrim: rgba(0, 0, 0, 0.6);
   --color-find-match: #6b5b1a;
   --color-find-match-active: #a3860f;
+  --color-comment-mark: #4a3d66;
 }
 
 @utility text-eyebrow {
@@ -212,5 +214,20 @@
   .pagedown-source-editor::selection {
     background: var(--color-find-match-active);
     color: var(--color-text-primary);
+  }
+
+  /* Comment marks are an EDITOR-ONLY affordance, same rule and same reason as
+     .pagedown-find-match right above: they must never appear in the
+     paginated preview or an exported PDF, which is exactly why the
+     comment-to-hast handler (src/markdown/comment-to-hast.ts) is a pure
+     passthrough with no wrapping element at all on that surface -- there is
+     nothing for a rule scoped to document-typography.css to even target.
+     A distinct hue (violet) from find-match's yellow, so an active search
+     highlight landing on commented text still reads as two different kinds
+     of marker rather than blending together. */
+  .milkdown-mount .ProseMirror .pagedown-comment-mark {
+    background: var(--color-comment-mark);
+    border-radius: 2px;
+    cursor: pointer;
   }
 }

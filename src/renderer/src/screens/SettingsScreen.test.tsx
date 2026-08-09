@@ -14,7 +14,8 @@ const REAL_PREFERENCES = {
     theme: 'default' as const,
     fontFamily: 'source-serif-4' as const
   },
-  colorScheme: 'system' as const
+  colorScheme: 'system' as const,
+  authorName: ''
 }
 
 beforeEach(() => {

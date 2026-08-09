@@ -17,6 +17,8 @@ import { annotateSourceOffsets, type SourceMap } from './source-map'
 import { remarkPagebreak, PAGEBREAK_CLASS } from './pagebreak-plugin'
 import { createPagebreakToHast } from './pagebreak-to-hast'
 import { createMathBlockToHast, createMathInlineToHast } from './math-to-hast'
+import { remarkComment } from './comment-plugin'
+import { createCommentToHast } from './comment-to-hast'
 
 export type { SourceMap }
 
@@ -182,6 +184,7 @@ export function markdownToHtml(
     .use(remarkFrontmatter, ['yaml'])
     .use(remarkMath, { singleDollarTextMath: false })
     .use(remarkPagebreak)
+    .use(remarkComment)
 
   const parsedTree = parseProcessor.parse(source) as Root
   const tree = parseProcessor.runSync(parsedTree) as Root
@@ -215,7 +218,8 @@ export function markdownToHtml(
       handlers: {
         pagebreak: createPagebreakToHast(tokenClassName),
         math: createMathBlockToHast(),
-        inlineMath: createMathInlineToHast()
+        inlineMath: createMathInlineToHast(),
+        comment: createCommentToHast()
       }
     })
     .runSync(tree) as HastRoot

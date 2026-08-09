@@ -28,7 +28,8 @@ beforeEach(() => {
         theme: 'default',
         fontFamily: 'source-serif-4'
       },
-      colorScheme: 'system'
+      colorScheme: 'system',
+      authorName: ''
     }),
     setPreferences: vi.fn(),
     autosaveSnapshot: vi.fn(),
@@ -125,7 +126,8 @@ describe('App', () => {
           theme: 'default',
           fontFamily: 'source-serif-4'
         },
-        colorScheme: 'dark'
+        colorScheme: 'dark',
+        authorName: ''
       })
       render(<App />)
       await screen.findByText('PageDown')
@@ -143,7 +145,8 @@ describe('App', () => {
           theme: 'default',
           fontFamily: 'source-serif-4'
         },
-        colorScheme: 'light'
+        colorScheme: 'light',
+        authorName: ''
       })
       render(<App />)
       await screen.findByText('PageDown')

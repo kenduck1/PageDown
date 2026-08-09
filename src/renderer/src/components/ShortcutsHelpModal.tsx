@@ -56,7 +56,8 @@ const CATEGORIES: ShortcutCategory[] = [
     name: 'Editing (Format mode)',
     shortcuts: [
       { keys: `${MOD}Z`, description: 'Undo' },
-      { keys: `${MOD}${SHIFT}Z`, description: 'Redo' }
+      { keys: `${MOD}${SHIFT}Z`, description: 'Redo' },
+      { keys: `${MOD}${SHIFT}M`, description: 'Add comment' }
     ]
   },
   {

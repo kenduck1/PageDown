@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, it, expect } from 'vitest'
 import { markdownToHtml } from './pipeline'
+import { encodeCommentMeta } from './comment-plugin'
 
 describe('markdownToHtml', () => {
   it('converts a simple paragraph with bold text to HTML', () => {
@@ -204,6 +205,39 @@ describe('markdownToHtml — math equations', () => {
     const { html } = markdownToHtml('$$\n\\frac{1}{2}\n$$')
     expect(html).toContain('\\frac{1}{2}')
     expect(html).not.toContain('katex')
+  })
+})
+
+describe('markdownToHtml — comments', () => {
+  it('renders a commented span as completely ordinary, unmarked text — no wrapper, no data attribute', () => {
+    const dataAttr = encodeCommentMeta({
+      author: 'Kai',
+      text: 'needs revision',
+      createdAt: '2026-08-09T06:00:00Z'
+    })
+    const source = `Before. <!--comment id="c1" data="${dataAttr}"-->the marked phrase<!--/comment id="c1"-->. After.`
+    const { html } = markdownToHtml(source)
+
+    expect(html).toContain('the marked phrase')
+    expect(html).not.toContain('comment')
+    expect(html).not.toContain('data-comment')
+    expect(html).not.toContain('<span')
+    expect(html).not.toContain('c1')
+  })
+
+  it('leaves an unmatched (unpaired) comment marker as inert literal text', () => {
+    const dataAttr = encodeCommentMeta({
+      author: 'Kai',
+      text: 'x',
+      createdAt: '2026-08-09T06:00:00Z'
+    })
+    const source = `Text with a stray marker <!--comment id="c1" data="${dataAttr}"-->and no closing tag.`
+    const { html } = markdownToHtml(source)
+
+    // Raw HTML comments are dropped from rendered output by browsers/HTML
+    // parsers regardless (they're real HTML comments), but the surrounding
+    // ordinary text must survive untouched and nothing must throw.
+    expect(html).toContain('and no closing tag')
   })
 })
 

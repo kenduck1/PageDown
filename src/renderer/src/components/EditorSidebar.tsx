@@ -2,6 +2,7 @@ import { useAppStore } from '../store/appStore'
 import EditorOutline from './EditorOutline'
 import EditorHistory from './EditorHistory'
 import EditorPages from './EditorPages'
+import EditorComments from './EditorComments'
 
 export interface EditorSidebarProps {
   // Forwarded straight through to EditorOutline -- this component has no
@@ -28,6 +29,9 @@ export interface EditorSidebarProps {
   // so EditorHistory can await this before refetching its snapshot list --
   // see EditorHistory.tsx's own comment on why that ordering matters.
   onRestoreVersion: (content: string) => void | Promise<void>
+  // Forwarded straight through to EditorComments.
+  onSelectComment: (id: string) => void
+  onResolveComment: (id: string) => void
 }
 
 // Segmented-control track/pill styling matches the real design-handoff
@@ -77,7 +81,9 @@ function EditorSidebar({
   currentPage,
   onSelectPage,
   filePath,
-  onRestoreVersion
+  onRestoreVersion,
+  onSelectComment,
+  onResolveComment
 }: EditorSidebarProps): React.JSX.Element {
   const sidebarTab = useAppStore((state) => state.sidebarTab)
   const setSidebarTab = useAppStore((state) => state.setSidebarTab)
@@ -100,6 +106,11 @@ function EditorSidebar({
           isActive={sidebarTab === 'history'}
           onClick={() => setSidebarTab('history')}
         />
+        <TabButton
+          label="Comments"
+          isActive={sidebarTab === 'comments'}
+          onClick={() => setSidebarTab('comments')}
+        />
       </div>
       <div className="flex flex-1 flex-col overflow-hidden">
         {sidebarTab === 'outline' ? (
@@ -110,6 +121,12 @@ function EditorSidebar({
           />
         ) : sidebarTab === 'history' ? (
           <EditorHistory filePath={filePath} onRestore={onRestoreVersion} />
+        ) : sidebarTab === 'comments' ? (
+          <EditorComments
+            content={content}
+            onSelectComment={onSelectComment}
+            onResolveComment={onResolveComment}
+          />
         ) : (
           <EditorPages
             pageCount={pageCount}

@@ -17,7 +17,8 @@ describe('readPreferences / writePreferences', () => {
           theme: 'resume' as const,
           fontFamily: 'inter' as const
         },
-        colorScheme: 'dark' as const
+        colorScheme: 'dark' as const,
+        authorName: 'Kai'
       }
       await writePreferences(dir, preferences)
       const result = await readPreferences(dir)
@@ -75,7 +76,8 @@ describe('readPreferences / writePreferences', () => {
           theme: 'resume',
           fontFamily: DEFAULT_PREFERENCES.defaultPageConfig.fontFamily
         },
-        colorScheme: DEFAULT_PREFERENCES.colorScheme
+        colorScheme: DEFAULT_PREFERENCES.colorScheme,
+        authorName: DEFAULT_PREFERENCES.authorName
       })
     } finally {
       await rm(dir, { recursive: true, force: true })
@@ -133,6 +135,33 @@ describe('readPreferences / writePreferences', () => {
       )
       const valid = await readPreferences(dir)
       expect(valid.colorScheme).toBe('dark')
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('defaults authorName to an empty string and sanitizes a non-string value back to it', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'pagedown-preferences-'))
+    try {
+      expect(DEFAULT_PREFERENCES.authorName).toBe('')
+      const noFile = await readPreferences(dir)
+      expect(noFile.authorName).toBe('')
+
+      await writeFile(
+        join(dir, 'preferences.json'),
+        JSON.stringify({ ...DEFAULT_PREFERENCES, authorName: 42 }),
+        'utf8'
+      )
+      const invalid = await readPreferences(dir)
+      expect(invalid.authorName).toBe('')
+
+      await writeFile(
+        join(dir, 'preferences.json'),
+        JSON.stringify({ ...DEFAULT_PREFERENCES, authorName: 'Kai' }),
+        'utf8'
+      )
+      const valid = await readPreferences(dir)
+      expect(valid.authorName).toBe('Kai')
     } finally {
       await rm(dir, { recursive: true, force: true })
     }

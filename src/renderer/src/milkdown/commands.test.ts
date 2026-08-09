@@ -1,9 +1,18 @@
 import { describe, it, expect, afterEach } from 'vitest'
 import { cleanup } from '@testing-library/react'
-import { commandsCtx } from '@milkdown/core'
+import { commandsCtx, editorViewCtx } from '@milkdown/core'
 import { getMarkdown, insert } from '@milkdown/utils'
+import { TextSelection } from '@milkdown/prose/state'
+import type { EditorView } from '@milkdown/prose/view'
 import { createTestEditor } from './test-editor'
-import { EDITOR_COMMAND_PLUGINS, undoCommand, redoCommand } from './commands'
+import {
+  EDITOR_COMMAND_PLUGINS,
+  undoCommand,
+  redoCommand,
+  addCommentCommand,
+  resolveCommentCommand
+} from './commands'
+import { EDITOR_SCHEMA_PLUGINS } from './plugins'
 
 afterEach(() => {
   cleanup()
@@ -66,5 +75,78 @@ describe('historyKeymap command wiring', () => {
 
     editor.action((ctx) => ctx.get(commandsCtx).call(redoCommand.key))
     expect(editor.action(getMarkdown())).toContain('World')
+  })
+})
+
+// addCommentCommand/resolveCommentCommand need commentSchema's mark TYPE
+// registered, which lives in EDITOR_SCHEMA_PLUGINS (plugins.ts), not
+// EDITOR_COMMAND_PLUGINS (commands.ts) -- both must be mounted together
+// here, unlike historyKeymap's own tests above, which only ever needed
+// commonmark/gfm's base schema (createTestEditor's own unconditional base).
+describe('comment mark commands', () => {
+  const PLUGINS = [...EDITOR_SCHEMA_PLUGINS.flat(), ...EDITOR_COMMAND_PLUGINS]
+
+  it('addCommentCommand marks the current selection with a real comment mark that round-trips', async () => {
+    const editor = await createTestEditor('Some plain text here.', PLUGINS)
+    const view = editor.action((ctx) => ctx.get(editorViewCtx)) as EditorView
+
+    // "plain" is characters 5-10 of "Some plain text here."; position 1 is
+    // where a single top-level paragraph's own text content begins.
+    const from = 1 + 5
+    const to = 1 + 10
+    view.dispatch(view.state.tr.setSelection(TextSelection.create(view.state.doc, from, to)))
+
+    const applied = editor.action((ctx) =>
+      ctx.get(commandsCtx).call(addCommentCommand.key, { author: 'Kai', text: 'a note' })
+    )
+    expect(applied).toBe(true)
+
+    const output = editor.action(getMarkdown())
+    expect(output).toContain('plain')
+    expect(output).toContain('<!--comment id="')
+    expect(output).toContain('<!--/comment id="')
+  })
+
+  it('addCommentCommand refuses an empty selection', async () => {
+    const editor = await createTestEditor('Some plain text here.', PLUGINS)
+    const view = editor.action((ctx) => ctx.get(editorViewCtx)) as EditorView
+    view.dispatch(view.state.tr.setSelection(TextSelection.create(view.state.doc, 3, 3)))
+
+    const applied = editor.action((ctx) =>
+      ctx.get(commandsCtx).call(addCommentCommand.key, { author: 'Kai', text: 'a note' })
+    )
+    expect(applied).toBe(false)
+    expect(editor.action(getMarkdown())).not.toContain('<!--comment')
+  })
+
+  it('resolveCommentCommand removes every mark instance for the given id, leaving the text intact', async () => {
+    const editor = await createTestEditor('Some plain text here.', PLUGINS)
+    const view = editor.action((ctx) => ctx.get(editorViewCtx)) as EditorView
+    view.dispatch(view.state.tr.setSelection(TextSelection.create(view.state.doc, 6, 11)))
+    editor.action((ctx) =>
+      ctx.get(commandsCtx).call(addCommentCommand.key, { author: 'Kai', text: 'a note' })
+    )
+
+    const withComment = editor.action(getMarkdown())
+    const idMatch = withComment.match(/<!--comment id="([^"]+)"/)
+    expect(idMatch).not.toBeNull()
+
+    const resolved = editor.action((ctx) =>
+      ctx.get(commandsCtx).call(resolveCommentCommand.key, idMatch![1])
+    )
+    expect(resolved).toBe(true)
+
+    const output = editor.action(getMarkdown())
+    expect(output).not.toContain('<!--comment')
+    expect(output).not.toContain('<!--/comment')
+    expect(output).toContain('plain')
+  })
+
+  it('resolveCommentCommand returns false for an id that is not present', async () => {
+    const editor = await createTestEditor('Some plain text here.', PLUGINS)
+    const resolved = editor.action((ctx) =>
+      ctx.get(commandsCtx).call(resolveCommentCommand.key, 'not-a-real-id')
+    )
+    expect(resolved).toBe(false)
   })
 })

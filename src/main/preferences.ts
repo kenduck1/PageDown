@@ -30,6 +30,15 @@ export interface Preferences {
   autosaveIntervalMs: number
   defaultPageConfig: DefaultPageConfig
   colorScheme: ColorScheme
+  // Attached to every new comment a user creates (Milkdown's addCommentCommand,
+  // src/renderer/src/milkdown/commands.ts). This app has no accounts/identity
+  // system at all (single local user, matching the master design doc's
+  // explicit no-CRDT/no-collaboration stance) -- this is the same
+  // best-effort, locally-persisted, no-sync posture every other preference
+  // already has, not a real identity. An empty string (the default) falls
+  // back to the literal label "You" wherever a comment's author is displayed
+  // -- see EditorComments.tsx -- rather than showing a blank author.
+  authorName: string
 }
 
 // 45_000 matches useAutosave.ts's own pre-existing hardcoded default exactly
@@ -44,7 +53,8 @@ export const DEFAULT_PREFERENCES: Preferences = {
     theme: 'default',
     fontFamily: 'source-serif-4'
   },
-  colorScheme: 'system'
+  colorScheme: 'system',
+  authorName: ''
 }
 
 const PAGE_SIZES: readonly PageSize[] = ['Letter', 'A4', 'Legal', 'Custom']
@@ -108,11 +118,15 @@ function sanitizePreferences(value: unknown): Preferences {
       ? (raw.colorScheme as ColorScheme)
       : DEFAULT_PREFERENCES.colorScheme
 
+  const authorName =
+    typeof raw.authorName === 'string' ? raw.authorName : DEFAULT_PREFERENCES.authorName
+
   return {
     spellcheckEnabled,
     autosaveIntervalMs,
     defaultPageConfig: { pageSize, orientation, theme, fontFamily },
-    colorScheme
+    colorScheme,
+    authorName
   }
 }
 
