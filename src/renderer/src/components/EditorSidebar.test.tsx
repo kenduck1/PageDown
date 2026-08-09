@@ -20,6 +20,8 @@ describe('EditorSidebar', () => {
       <EditorSidebar
         content={SOURCE}
         onSelectHeading={vi.fn()}
+        currentPage={1}
+        onSelectPage={vi.fn()}
         filePath={null}
         onRestoreVersion={vi.fn()}
       />
@@ -37,6 +39,8 @@ describe('EditorSidebar', () => {
       <EditorSidebar
         content={SOURCE}
         onSelectHeading={vi.fn()}
+        currentPage={1}
+        onSelectPage={vi.fn()}
         filePath={null}
         onRestoreVersion={vi.fn()}
       />
@@ -56,6 +60,8 @@ describe('EditorSidebar', () => {
       <EditorSidebar
         content={SOURCE}
         onSelectHeading={vi.fn()}
+        currentPage={1}
+        onSelectPage={vi.fn()}
         filePath={null}
         onRestoreVersion={vi.fn()}
       />
@@ -76,6 +82,8 @@ describe('EditorSidebar', () => {
         content={SOURCE}
         onSelectHeading={onSelectHeading}
         activeSourceOffset={0}
+        currentPage={1}
+        onSelectPage={vi.fn()}
         filePath={null}
         onRestoreVersion={vi.fn()}
       />
@@ -94,6 +102,8 @@ describe('EditorSidebar', () => {
       <EditorSidebar
         content={SOURCE}
         onSelectHeading={vi.fn()}
+        currentPage={1}
+        onSelectPage={vi.fn()}
         filePath={null}
         onRestoreVersion={vi.fn()}
       />
@@ -102,33 +112,60 @@ describe('EditorSidebar', () => {
     expect(screen.getByText(/page count is not available yet/i)).toBeInTheDocument()
   })
 
-  it('shows the real page count on the Pages tab when pageCount is supplied, without inventing a number', () => {
+  it('renders the real page list on the Pages tab when pageCount is supplied, without inventing thumbnails', () => {
     render(
       <EditorSidebar
         content={SOURCE}
         onSelectHeading={vi.fn()}
         pageCount={6}
+        currentPage={1}
+        onSelectPage={vi.fn()}
         filePath={null}
         onRestoreVersion={vi.fn()}
       />
     )
 
-    expect(screen.getByText('6 pages')).toBeInTheDocument()
-    expect(screen.getByText(/thumbnails are not built yet/i)).toBeInTheDocument()
+    expect(screen.getAllByRole('button', { name: /^Page \d+$/ })).toHaveLength(6)
+    expect(screen.getByRole('button', { name: 'Page 1' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Page 6' })).toBeInTheDocument()
   })
 
-  it('uses singular "page" for a pageCount of exactly 1', () => {
+  it('renders exactly one page row for a pageCount of exactly 1', () => {
     render(
       <EditorSidebar
         content={SOURCE}
         onSelectHeading={vi.fn()}
         pageCount={1}
+        currentPage={1}
+        onSelectPage={vi.fn()}
         filePath={null}
         onRestoreVersion={vi.fn()}
       />
     )
 
-    expect(screen.getByText('1 page')).toBeInTheDocument()
+    expect(screen.getAllByRole('button', { name: /^Page \d+$/ })).toHaveLength(1)
+    expect(screen.getByRole('button', { name: 'Page 1' })).toBeInTheDocument()
+  })
+
+  it('renders the real page list in the Pages tab', async () => {
+    const user = userEvent.setup()
+    const onSelectPage = vi.fn()
+    render(
+      <EditorSidebar
+        content={SOURCE}
+        onSelectHeading={vi.fn()}
+        pageCount={3}
+        currentPage={1}
+        onSelectPage={onSelectPage}
+        filePath={null}
+        onRestoreVersion={vi.fn()}
+      />
+    )
+
+    await user.click(screen.getByRole('button', { name: 'Pages' }))
+    await user.click(screen.getByRole('button', { name: 'Page 2' }))
+
+    expect(onSelectPage).toHaveBeenCalledWith(2)
   })
 
   it('clicking the History pill switches sidebarTab and renders the History tab', async () => {
@@ -148,13 +185,17 @@ describe('EditorSidebar', () => {
       clearPendingAutosave: vi.fn(),
       setSplitPreviewBounds: vi.fn(),
       sendSplitPreviewDocument: vi.fn(),
-      destroySplitPreview: vi.fn()
+      destroySplitPreview: vi.fn(),
+      scrollSplitPreviewToPage: vi.fn(),
+      getSplitPreviewPage: vi.fn()
     }
     const user = userEvent.setup()
     render(
       <EditorSidebar
         content={SOURCE}
         onSelectHeading={vi.fn()}
+        currentPage={1}
+        onSelectPage={vi.fn()}
         filePath="/a.md"
         onRestoreVersion={vi.fn()}
       />
@@ -183,13 +224,17 @@ describe('EditorSidebar', () => {
       clearPendingAutosave: vi.fn(),
       setSplitPreviewBounds: vi.fn(),
       sendSplitPreviewDocument: vi.fn(),
-      destroySplitPreview: vi.fn()
+      destroySplitPreview: vi.fn(),
+      scrollSplitPreviewToPage: vi.fn(),
+      getSplitPreviewPage: vi.fn()
     }
     useAppStore.setState({ sidebarTab: 'history' })
     render(
       <EditorSidebar
         content={SOURCE}
         onSelectHeading={vi.fn()}
+        currentPage={1}
+        onSelectPage={vi.fn()}
         filePath="/a.md"
         onRestoreVersion={vi.fn()}
       />

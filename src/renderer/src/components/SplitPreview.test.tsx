@@ -8,7 +8,9 @@ describe('SplitPreview', () => {
       ...window.api,
       setSplitPreviewBounds: vi.fn(),
       sendSplitPreviewDocument: vi.fn().mockResolvedValue({ pageCount: 1 }),
-      destroySplitPreview: vi.fn()
+      destroySplitPreview: vi.fn(),
+      scrollSplitPreviewToPage: vi.fn().mockResolvedValue({ currentPage: 1, pageCount: 3 }),
+      getSplitPreviewPage: vi.fn().mockResolvedValue({ currentPage: 1, pageCount: 3 })
     } as typeof window.api
   })
   afterEach(() => {
@@ -18,13 +20,27 @@ describe('SplitPreview', () => {
 
   it('renders a placeholder div for the ResizeObserver/WebContentsView to target', () => {
     const { getByTestId } = render(
-      <SplitPreview content="# Hi" filePath={null} pageSetupOpen={false} />
+      <SplitPreview
+        content="# Hi"
+        filePath={null}
+        pageSetupOpen={false}
+        targetPage={1}
+        onPageChange={vi.fn()}
+      />
     )
     expect(getByTestId('split-preview-placeholder')).toBeInTheDocument()
   })
 
   it('reports bounds and sends the document on mount', async () => {
-    render(<SplitPreview content="# Hi" filePath={null} pageSetupOpen={false} />)
+    render(
+      <SplitPreview
+        content="# Hi"
+        filePath={null}
+        pageSetupOpen={false}
+        targetPage={1}
+        onPageChange={vi.fn()}
+      />
+    )
     await waitFor(() => {
       expect(window.api.setSplitPreviewBounds).toHaveBeenCalled()
       expect(window.api.sendSplitPreviewDocument).toHaveBeenCalledWith('# Hi', null)
@@ -33,7 +49,13 @@ describe('SplitPreview', () => {
 
   it('calls destroySplitPreview on unmount', () => {
     const { unmount } = render(
-      <SplitPreview content="# Hi" filePath={null} pageSetupOpen={false} />
+      <SplitPreview
+        content="# Hi"
+        filePath={null}
+        pageSetupOpen={false}
+        targetPage={1}
+        onPageChange={vi.fn()}
+      />
     )
     unmount()
     expect(window.api.destroySplitPreview).toHaveBeenCalled()
@@ -41,9 +63,33 @@ describe('SplitPreview', () => {
 
   it('debounces content updates -- rapid content changes send only the final value, after 500ms', async () => {
     vi.useFakeTimers()
-    const { rerender } = render(<SplitPreview content="a" filePath={null} pageSetupOpen={false} />)
-    rerender(<SplitPreview content="ab" filePath={null} pageSetupOpen={false} />)
-    rerender(<SplitPreview content="abc" filePath={null} pageSetupOpen={false} />)
+    const { rerender } = render(
+      <SplitPreview
+        content="a"
+        filePath={null}
+        pageSetupOpen={false}
+        targetPage={1}
+        onPageChange={vi.fn()}
+      />
+    )
+    rerender(
+      <SplitPreview
+        content="ab"
+        filePath={null}
+        pageSetupOpen={false}
+        targetPage={1}
+        onPageChange={vi.fn()}
+      />
+    )
+    rerender(
+      <SplitPreview
+        content="abc"
+        filePath={null}
+        pageSetupOpen={false}
+        targetPage={1}
+        onPageChange={vi.fn()}
+      />
+    )
     await vi.advanceTimersByTimeAsync(500)
     // Mount's own immediate send (content 'a') plus exactly one debounced
     // send for the settled final value -- not one call per rerender.
@@ -71,7 +117,13 @@ describe('SplitPreview', () => {
     window.api.sendSplitPreviewDocument = sendDocument
 
     const { rerender } = render(
-      <SplitPreview content="# Hi" filePath={null} pageSetupOpen={false} />
+      <SplitPreview
+        content="# Hi"
+        filePath={null}
+        pageSetupOpen={false}
+        targetPage={1}
+        onPageChange={vi.fn()}
+      />
     )
     // Let the mount effect's rejected promise (and its .catch()) settle
     // before doing anything else, so lastSentRef's post-fix "only stamp on
@@ -80,7 +132,15 @@ describe('SplitPreview', () => {
 
     // A same-content, same-filePath rerender -- ordinary React re-render
     // noise, not an edit -- must not itself count as, or block, a retry.
-    rerender(<SplitPreview content="# Hi" filePath={null} pageSetupOpen={false} />)
+    rerender(
+      <SplitPreview
+        content="# Hi"
+        filePath={null}
+        pageSetupOpen={false}
+        targetPage={1}
+        onPageChange={vi.fn()}
+      />
+    )
     await vi.advanceTimersByTimeAsync(500)
 
     // Mount's failed attempt (call 1) plus the debounced effect's retry,
@@ -98,7 +158,15 @@ describe('SplitPreview', () => {
   // zero-size-bounds mitigation instead (see the pageSetupOpen prop's own
   // doc comment in SplitPreview.tsx).
   it('reports zero-size bounds instead of the real rectangle while pageSetupOpen is true', async () => {
-    render(<SplitPreview content="# Hi" filePath={null} pageSetupOpen={true} />)
+    render(
+      <SplitPreview
+        content="# Hi"
+        filePath={null}
+        pageSetupOpen={true}
+        targetPage={1}
+        onPageChange={vi.fn()}
+      />
+    )
     await waitFor(() => {
       expect(window.api.setSplitPreviewBounds).toHaveBeenCalledWith({
         x: 0,
@@ -113,13 +181,27 @@ describe('SplitPreview', () => {
     const setSplitPreviewBounds = vi.fn()
     window.api.setSplitPreviewBounds = setSplitPreviewBounds
     const { rerender } = render(
-      <SplitPreview content="# Hi" filePath={null} pageSetupOpen={true} />
+      <SplitPreview
+        content="# Hi"
+        filePath={null}
+        pageSetupOpen={true}
+        targetPage={1}
+        onPageChange={vi.fn()}
+      />
     )
     await waitFor(() => {
       expect(setSplitPreviewBounds).toHaveBeenLastCalledWith({ x: 0, y: 0, width: 0, height: 0 })
     })
 
-    rerender(<SplitPreview content="# Hi" filePath={null} pageSetupOpen={false} />)
+    rerender(
+      <SplitPreview
+        content="# Hi"
+        filePath={null}
+        pageSetupOpen={false}
+        targetPage={1}
+        onPageChange={vi.fn()}
+      />
+    )
 
     // No ResizeObserver/'resize' event fires here -- jsdom gives every
     // element a 0x0 getBoundingClientRect() regardless, so this asserts the
@@ -135,6 +217,191 @@ describe('SplitPreview', () => {
       // from "reported zero because that's jsdom's only value and the effect
       // never re-ran at all."
       expect(setSplitPreviewBounds.mock.calls.length).toBeGreaterThan(1)
+    })
+  })
+
+  // Task 6 (Page Navigation): SplitPreview applies a requested page by
+  // scrolling the native preview, and reports back what page it actually
+  // settled on (both an immediate scroll result and a periodic poll for a
+  // manual scroll the user performed inside the native view, which this
+  // component has no other way to observe). Nested in the outer describe
+  // block above rather than a second top-level one, so these tests reuse
+  // its existing window.api/beforeEach/afterEach setup instead of
+  // duplicating it.
+  describe('page navigation', () => {
+    function renderPreview(
+      targetPage: number,
+      onPageChange: (state: { currentPage: number; pageCount: number }) => void = vi.fn()
+    ): ReturnType<typeof render> & { onPageChange: typeof onPageChange } {
+      return {
+        onPageChange,
+        ...render(
+          <SplitPreview
+            content="# Hi"
+            filePath={null}
+            pageSetupOpen={false}
+            targetPage={targetPage}
+            onPageChange={onPageChange}
+          />
+        )
+      }
+    }
+
+    it('does not scroll on mount for page 1 (nothing to move to)', async () => {
+      renderPreview(1)
+      await waitFor(() => expect(window.api.sendSplitPreviewDocument).toHaveBeenCalled())
+      expect(window.api.scrollSplitPreviewToPage).not.toHaveBeenCalled()
+    })
+
+    it('scrolls on mount when it mounts already targeting a later page', async () => {
+      // This is the format -> split path: EditorScreen sets currentPage AND
+      // switches mode in one handler, so this component's very first render
+      // already carries the requested page. A preview always starts at page
+      // 1, so this must still issue a scroll -- lastAppliedPageRef has to be
+      // seeded to 1, NOT to targetPage, for this to happen (see the ref's
+      // own comment in SplitPreview.tsx).
+      renderPreview(3)
+      await waitFor(() => expect(window.api.scrollSplitPreviewToPage).toHaveBeenCalledWith(3))
+    })
+
+    it('scrolls when targetPage changes', async () => {
+      const { rerender, onPageChange } = renderPreview(1)
+      rerender(
+        <SplitPreview
+          content="# Hi"
+          filePath={null}
+          pageSetupOpen={false}
+          targetPage={3}
+          onPageChange={onPageChange}
+        />
+      )
+      await waitFor(() => expect(window.api.scrollSplitPreviewToPage).toHaveBeenCalledWith(3))
+    })
+
+    it('reports the page the sandbox actually settled on, not the one requested', async () => {
+      const scrollSplitPreviewToPage = vi.fn().mockResolvedValue({ currentPage: 2, pageCount: 2 })
+      window.api.scrollSplitPreviewToPage = scrollSplitPreviewToPage
+      const onPageChange = vi.fn()
+      const { rerender } = renderPreview(1, onPageChange)
+      rerender(
+        <SplitPreview
+          content="# Hi"
+          filePath={null}
+          pageSetupOpen={false}
+          targetPage={9}
+          onPageChange={onPageChange}
+        />
+      )
+      await waitFor(() =>
+        expect(onPageChange).toHaveBeenCalledWith({ currentPage: 2, pageCount: 2 })
+      )
+    })
+
+    it('does NOT report a scroll result that carries the empty-harness sentinel', async () => {
+      // `{ currentPage: 1, pageCount: 0 }` is what the main process returns
+      // when no split-preview harness exists yet (a real, common state on a
+      // cold Format -> Split switch, since the handlers are deliberately
+      // non-creating). Reporting it upward clobbers the page the user just
+      // asked for with a 1 -- caught for real by EditorScreen's own
+      // navigation tests, where "next page" from Format mode landed on page
+      // 1 of the preview it had just opened at page 2.
+      const scrollSplitPreviewToPage = vi.fn().mockResolvedValue({ currentPage: 1, pageCount: 0 })
+      window.api.scrollSplitPreviewToPage = scrollSplitPreviewToPage
+      const onPageChange = vi.fn()
+      renderPreview(3, onPageChange)
+
+      await waitFor(() => expect(scrollSplitPreviewToPage).toHaveBeenCalledWith(3))
+      expect(onPageChange).not.toHaveBeenCalled()
+    })
+
+    it('does not stack poll requests when one is still outstanding', async () => {
+      // The harness serializes ALL its work through a single queue, behind
+      // renders that can take hundreds of ms. An unguarded interval would
+      // enqueue a fresh getPage every tick regardless, so any tick that
+      // outlasts the interval makes the queue grow without bound --
+      // delaying real renders and the teardown that runs on the same queue.
+      vi.useFakeTimers()
+      // Never resolves: simulates a tick stuck behind a long render.
+      window.api.getSplitPreviewPage = vi.fn().mockReturnValue(new Promise(() => {}))
+      renderPreview(1)
+
+      await vi.advanceTimersByTimeAsync(2000)
+
+      expect(window.api.getSplitPreviewPage).toHaveBeenCalledTimes(1)
+      vi.useRealTimers()
+    })
+
+    it('ignores a poll result carrying the empty-harness sentinel', async () => {
+      // Same sentinel as the scroll path: pageCount 0 means "no harness /
+      // nothing rendered", not "the user is on page 1". Reporting it would
+      // yank the indicator back to 1 on every tick before the first render
+      // lands.
+      vi.useFakeTimers()
+      window.api.getSplitPreviewPage = vi.fn().mockResolvedValue({ currentPage: 1, pageCount: 0 })
+      const onPageChange = vi.fn()
+      renderPreview(1, onPageChange)
+
+      await vi.advanceTimersByTimeAsync(1200)
+
+      expect(window.api.getSplitPreviewPage).toHaveBeenCalled()
+      expect(onPageChange).not.toHaveBeenCalled()
+      vi.useRealTimers()
+    })
+
+    it('stops polling once unmounted', async () => {
+      // A leaked setInterval would keep firing IPC into a torn-down harness
+      // for the rest of the session -- silently, since every call swallows
+      // its own rejection.
+      vi.useFakeTimers()
+      const getSplitPreviewPage = vi.fn().mockResolvedValue({ currentPage: 1, pageCount: 3 })
+      window.api.getSplitPreviewPage = getSplitPreviewPage
+      const { unmount } = renderPreview(1)
+
+      await vi.advanceTimersByTimeAsync(1200)
+      const callsWhileMounted = getSplitPreviewPage.mock.calls.length
+      expect(callsWhileMounted).toBeGreaterThan(0)
+
+      unmount()
+      await vi.advanceTimersByTimeAsync(2000)
+
+      expect(getSplitPreviewPage).toHaveBeenCalledTimes(callsWhileMounted)
+      vi.useRealTimers()
+    })
+
+    it('reports a manual scroll detected by the poll', async () => {
+      vi.useFakeTimers()
+      const getSplitPreviewPage = vi.fn().mockResolvedValue({ currentPage: 5, pageCount: 8 })
+      window.api.getSplitPreviewPage = getSplitPreviewPage
+      const { onPageChange } = renderPreview(1)
+      await vi.advanceTimersByTimeAsync(1200)
+      expect(onPageChange).toHaveBeenCalledWith({ currentPage: 5, pageCount: 8 })
+      vi.useRealTimers()
+    })
+
+    it('does NOT scroll back to a page the poll just reported (no feedback loop)', async () => {
+      vi.useFakeTimers()
+      const getSplitPreviewPage = vi.fn().mockResolvedValue({ currentPage: 5, pageCount: 8 })
+      window.api.getSplitPreviewPage = getSplitPreviewPage
+      const onPageChange = vi.fn()
+      const { rerender } = renderPreview(1, onPageChange)
+      await vi.advanceTimersByTimeAsync(1200)
+      expect(onPageChange).toHaveBeenCalledWith({ currentPage: 5, pageCount: 8 })
+
+      // The parent owns currentPage and echoes the polled value back down as
+      // the new target -- without the ref guard this would trigger a scroll
+      // to 5, fighting the user's own scrolling on every poll tick.
+      rerender(
+        <SplitPreview
+          content="# Hi"
+          filePath={null}
+          pageSetupOpen={false}
+          targetPage={5}
+          onPageChange={onPageChange}
+        />
+      )
+      await vi.advanceTimersByTimeAsync(50)
+      expect(window.api.scrollSplitPreviewToPage).not.toHaveBeenCalled()
+      vi.useRealTimers()
     })
   })
 })

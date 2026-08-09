@@ -45,6 +45,15 @@ export interface SplitPreviewResult {
   }>
 }
 
+// Structurally identical to src/pagination/page-nav.ts's own exported
+// PageNavState -- deliberately NOT imported from there, same rationale as
+// SplitPreviewBounds/SplitPreviewResult above (that module lives outside
+// tsconfig.web.json's `include` list).
+export interface PageNavState {
+  currentPage: number
+  pageCount: number
+}
+
 export interface FileApi {
   openFile: () => Promise<{
     filePath: string
@@ -71,6 +80,8 @@ export interface FileApi {
     filePath: string | null
   ) => Promise<SplitPreviewResult>
   destroySplitPreview: () => Promise<void>
+  scrollSplitPreviewToPage: (pageIndex: number) => Promise<PageNavState>
+  getSplitPreviewPage: () => Promise<PageNavState>
 }
 
 declare global {

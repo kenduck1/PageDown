@@ -47,7 +47,14 @@ const api = {
   // non-null path with isKnownPath and drops it if unknown.
   sendSplitPreviewDocument: (content: string, filePath: string | null) =>
     ipcRenderer.invoke('split-preview:sendDocument', content, filePath),
-  destroySplitPreview: () => ipcRenderer.invoke('split-preview:destroy')
+  destroySplitPreview: () => ipcRenderer.invoke('split-preview:destroy'),
+  // Both are deliberately non-creating on the main-process side (see
+  // split-preview:scrollToPage/split-preview:getPage's own comments in
+  // src/main/index.ts) -- the renderer polls getSplitPreviewPage on a timer
+  // while Split mode is open, so this must never spin up a harness.
+  scrollSplitPreviewToPage: (pageIndex: number) =>
+    ipcRenderer.invoke('split-preview:scrollToPage', pageIndex),
+  getSplitPreviewPage: () => ipcRenderer.invoke('split-preview:getPage')
 }
 
 // Use `contextBridge` APIs to expose Electron APIs to

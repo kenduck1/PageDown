@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useAppStore, type ViewMode } from '../store/appStore'
 import { useDocumentStore } from '../store/documentStore'
 import MilkdownEditor, { type MilkdownEditorHandle } from '../milkdown/MilkdownEditor'
@@ -42,6 +42,8 @@ function EditorScreen(): React.JSX.Element {
   const setViewMode = useAppStore((state) => state.setViewMode)
   const splitLeftMode = useAppStore((state) => state.splitLeftMode)
   const splitRatio = useAppStore((state) => state.splitRatio)
+  const currentPage = useAppStore((state) => state.currentPage)
+  const setCurrentPage = useAppStore((state) => state.setCurrentPage)
   const filePath = useDocumentStore((state) => state.filePath)
   const content = useDocumentStore((state) => state.content)
   const revision = useDocumentStore((state) => state.revision)
@@ -82,6 +84,34 @@ function EditorScreen(): React.JSX.Element {
   }
   const { pageCount } = usePageCount(content, filePath)
   useAutosave({ content, filePath, isDirty })
+
+  // A different document -- or a different tab -- is a different set of
+  // pages, so the current page must not carry over. Without this, opening a
+  // 2-page letter while sitting on page 9 of a report leaves the status bar
+  // claiming page 9 (and the Pages list highlighting a row that no longer
+  // exists).
+  //
+  // Keyed on document IDENTITY (`activeTabId` + `filePath`), deliberately
+  // NOT on `revision`. `revision` bumps on any in-place content rewrite,
+  // including `handleSetViewMode`'s own `replaceContentForTab` call -- so a
+  // revision-keyed reset silently broke this feature's headline path:
+  // clicking "next page" in Format mode set the page, switched to Split,
+  // and the resulting revision bump immediately reset the page back to 1,
+  // landing the user on page 1 of a preview they had asked to open at page
+  // 2. A revision bump from an in-place rewrite (mode switch, Page Setup
+  // apply, History restore) is the SAME document, and the page count
+  // shrinking underneath is already handled by the clamp below.
+  useEffect(() => {
+    setCurrentPage(1)
+  }, [activeTabId, filePath, setCurrentPage])
+
+  // The page count can SHRINK under an edit while `currentPage` still points
+  // past the new end, so clamp for display rather than trusting the stored
+  // value. The sandbox clamps for real on its side too (it is the only thing
+  // that knows what actually rendered) and reports back through
+  // onPageChange; this is the renderer-side half, covering the window before
+  // that round trip lands.
+  const effectiveCurrentPage = pageCount ? Math.min(currentPage, pageCount) : currentPage
 
   // Which editing surface Find should search -- see lib/editing-surface.ts's
   // own comment for why this can't be answered from viewMode alone (Split
@@ -532,6 +562,34 @@ function EditorScreen(): React.JSX.Element {
     headingEls?.[index]?.scrollIntoView({ behavior: 'smooth', block: 'start' })
   }
 
+  // Page navigation targets the Split-mode preview, because it is the ONLY
+  // surface in this app with real page boundaries: renderPageCard() below
+  // emits ONE continuous card for the whole document, with page width and
+  // side margins but no vertical page divisions, so there is no "page 3"
+  // element in the Format canvas to scroll to. Mapping a page number onto a
+  // Format-canvas offset is not a viable substitute either -- Gate 10's
+  // parity proof is single-page, and Paged.js SPLITS content across page
+  // boundaries (a table fragmented over two pages has no counterpart element
+  // in the editor at all). See the design doc's "architectural constraint".
+  //
+  // So navigating from Format/Source switches to Split rather than being
+  // inert. That is deliberate: viewMode defaults to 'format', so disabling
+  // navigation there would ship a feature that is dead on arrival in the
+  // view the app actually opens in. The controls' own tooltips name the
+  // consequence BEFORE the click ("shown in Split view") rather than
+  // surprising the user after it.
+  //
+  // Routed through handleSetViewMode, NOT the bare setViewMode, so the
+  // Milkdown flush/remount coordination that switch requires actually runs.
+  // Sequencing needs no readiness handshake: enqueueSplitPreviewWork
+  // serializes every harness call, and SplitPreview's mount effect enqueues
+  // its sendDocument first, so the scroll necessarily runs after the render.
+  const handleNavigateToPage = (page: number): void => {
+    const clamped = pageCount ? Math.min(Math.max(page, 1), pageCount) : Math.max(page, 1)
+    setCurrentPage(clamped)
+    if (viewMode !== 'split') handleSetViewMode('split')
+  }
+
   // The page card (below) has real padding/blank space beyond the last
   // line of actual content, matching a real sheet of paper -- but unlike a
   // physically-enlarged editable region (an earlier, wrong-goal version of
@@ -931,6 +989,8 @@ function EditorScreen(): React.JSX.Element {
           onSelectHeading={handleSelectHeading}
           activeSourceOffset={activeSourceOffset}
           pageCount={pageCount ?? undefined}
+          currentPage={effectiveCurrentPage}
+          onSelectPage={handleNavigateToPage}
           filePath={filePath}
           onRestoreVersion={handleRestoreVersion}
         />
@@ -972,7 +1032,13 @@ function EditorScreen(): React.JSX.Element {
               branch's own comment above for why a scrolling right pane would
               silently desync the native preview from its placeholder. */}
               <div style={{ width: `${100 - splitRatio}%` }} className="h-full">
-                <SplitPreview content={content} filePath={filePath} pageSetupOpen={pageSetupOpen} />
+                <SplitPreview
+                  content={content}
+                  filePath={filePath}
+                  pageSetupOpen={pageSetupOpen}
+                  targetPage={effectiveCurrentPage}
+                  onPageChange={(state) => setCurrentPage(state.currentPage)}
+                />
               </div>
             </div>
           ) : (
@@ -987,8 +1053,10 @@ function EditorScreen(): React.JSX.Element {
       </div>
       <EditorStatusBar
         content={content}
-        filePath={filePath}
         isDirty={isDirty}
+        pageCount={pageCount}
+        currentPage={effectiveCurrentPage}
+        onNavigateToPage={handleNavigateToPage}
         zoom={zoom}
         onZoomChange={setZoom}
       />
