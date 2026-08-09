@@ -65,7 +65,8 @@ describe('HomeScreen', () => {
     vi.mocked(window.api.openFile).mockResolvedValue({
       filePath: '/tmp/example.md',
       content: '# Hello',
-      recoveredFromAutosave: false
+      recoveredFromAutosave: false,
+      mtimeMs: 1000
     })
     const user = userEvent.setup()
     render(<HomeScreen />)
@@ -157,7 +158,8 @@ describe('HomeScreen', () => {
     vi.mocked(window.api.openPath).mockResolvedValue({
       filePath: '/tmp/report.md',
       content: '# Report',
-      recoveredFromAutosave: false
+      recoveredFromAutosave: false,
+      mtimeMs: 1000
     })
     const user = userEvent.setup()
     render(<HomeScreen />)

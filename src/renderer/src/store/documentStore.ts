@@ -8,6 +8,14 @@ export interface DocumentTab {
   filePath: string | null
   content: string
   isDirty: boolean
+  // The file's on-disk mtime as of the last open/save of this path -- null
+  // for a document with no such baseline yet (never saved, or saved for the
+  // first time via Save-As, which picks a fresh target with no prior mtime
+  // to compare against). save() sends this to file:save so the main process
+  // can detect a change made on disk since this baseline (another program,
+  // or another PageDown window on the same file) rather than silently
+  // clobbering it -- see file-io.ts's saveFile.
+  mtimeMs: number | null
 }
 
 interface DocumentStateValues {
@@ -19,6 +27,9 @@ interface DocumentStateValues {
   content: string
   filePath: string | null
   isDirty: boolean
+  // Mirrors the active tab's own DocumentTab.mtimeMs -- see that field's own
+  // doc comment.
+  mtimeMs: number | null
   // Deliberately global, not per-tab: nothing in this codebase surfaces a
   // per-background-tab error today (the only producers -- openFile/openPath/
   // save -- all operate on whatever tab is currently active), so scoping
@@ -42,7 +53,12 @@ interface DocumentState extends DocumentStateValues {
   // lands dirty, reusing the app's existing unsaved-changes protections
   // (dirty-check-before-navigate, the "Save"/"Don't Save"/"Cancel" prompt)
   // rather than adding recovery-specific UI.
-  loadDocument: (filePath: string, content: string, startDirty?: boolean) => void
+  loadDocument: (
+    filePath: string,
+    content: string,
+    startDirty?: boolean,
+    mtimeMs?: number | null
+  ) => void
   openFile: () => Promise<boolean>
   openPath: (filePath: string) => Promise<boolean>
   save: () => Promise<void>
@@ -131,8 +147,15 @@ interface DocumentState extends DocumentStateValues {
   replaceContentForTab: (tabId: string, content: string) => void
   clearError: () => void
   // startDirty defaults to false, same as loadDocument above -- a recovered
-  // document is the only caller that ever passes true.
-  openTab: (filePath: string | null, content: string, startDirty?: boolean) => void
+  // document is the only caller that ever passes true. mtimeMs defaults to
+  // null, same as loadDocument -- only openFile/openPath (real reads of an
+  // existing file) ever pass a real value.
+  openTab: (
+    filePath: string | null,
+    content: string,
+    startDirty?: boolean,
+    mtimeMs?: number | null
+  ) => void
   // Closing a dirty tab is a simple in-memory discard for this pass -- no
   // "Save changes before closing?" confirmation. EditorScreen's existing
   // dirty-check-before-navigate flow (window.api.confirmDiscardChanges) only
@@ -157,15 +180,22 @@ function generateTabId(): string {
 }
 
 function createBlankTab(): DocumentTab {
-  return { id: generateTabId(), filePath: null, content: '', isDirty: false }
+  return { id: generateTabId(), filePath: null, content: '', isDirty: false, mtimeMs: null }
 }
 
 // Fields that mirror whichever tab is active -- factored out so every action
 // that changes the active tab (or the active tab's own fields) sets all of
 // them together, keeping `tabs` and the top-level mirror fields from ever
 // drifting apart.
-function activeMirror(tab: DocumentTab): Pick<DocumentTab, 'content' | 'filePath' | 'isDirty'> {
-  return { content: tab.content, filePath: tab.filePath, isDirty: tab.isDirty }
+function activeMirror(
+  tab: DocumentTab
+): Pick<DocumentTab, 'content' | 'filePath' | 'isDirty' | 'mtimeMs'> {
+  return {
+    content: tab.content,
+    filePath: tab.filePath,
+    isDirty: tab.isDirty,
+    mtimeMs: tab.mtimeMs
+  }
 }
 
 const initialTab = createBlankTab()
@@ -208,9 +238,15 @@ function readFileAsBase64(file: File): Promise<string> {
 
 export const useDocumentStore = create<DocumentState>()((set, get) => ({
   ...initialDocumentState,
-  openTab: (filePath, content, startDirty = false) =>
+  openTab: (filePath, content, startDirty = false, mtimeMs = null) =>
     set((state) => {
-      const tab: DocumentTab = { id: generateTabId(), filePath, content, isDirty: startDirty }
+      const tab: DocumentTab = {
+        id: generateTabId(),
+        filePath,
+        content,
+        isDirty: startDirty,
+        mtimeMs
+      }
       return {
         tabs: [...state.tabs, tab],
         activeTabId: tab.id,
@@ -274,13 +310,18 @@ export const useDocumentStore = create<DocumentState>()((set, get) => ({
   // behavior -- both are thin wrappers around openTab so there is exactly
   // one place ("what does opening a document do") to reason about.
   newDocument: (initialContent = '') => get().openTab(null, initialContent),
-  loadDocument: (filePath, content, startDirty = false) =>
-    get().openTab(filePath, content, startDirty),
+  loadDocument: (filePath, content, startDirty = false, mtimeMs = null) =>
+    get().openTab(filePath, content, startDirty, mtimeMs),
   openFile: async () => {
     try {
       const result = await window.api.openFile()
       if (!result) return false
-      get().loadDocument(result.filePath, result.content, result.recoveredFromAutosave)
+      get().loadDocument(
+        result.filePath,
+        result.content,
+        result.recoveredFromAutosave,
+        result.mtimeMs
+      )
       return true
     } catch (err) {
       set({ error: errorMessage(err) })
@@ -290,7 +331,12 @@ export const useDocumentStore = create<DocumentState>()((set, get) => ({
   openPath: async (filePath) => {
     try {
       const result = await window.api.openPath(filePath)
-      get().loadDocument(result.filePath, result.content, result.recoveredFromAutosave)
+      get().loadDocument(
+        result.filePath,
+        result.content,
+        result.recoveredFromAutosave,
+        result.mtimeMs
+      )
       return true
     } catch (err) {
       set({ error: errorMessage(err) })
@@ -308,13 +354,45 @@ export const useDocumentStore = create<DocumentState>()((set, get) => ({
     // saved/clean, not the tab whose content was actually written to disk
     // -- corrupting an unrelated background tab's isDirty/filePath while
     // leaving the tab that was truly saved still marked dirty.
-    const { content, filePath, activeTabId: tabId } = get()
+    const { content, filePath, activeTabId: tabId, mtimeMs } = get()
     try {
-      const result = await window.api.saveFile(filePath, content)
+      const result = await window.api.saveFile(filePath, content, mtimeMs)
       if (result) {
+        if (result.reloadedContent !== undefined) {
+          // The main process detected the file changed on disk since this
+          // tab's own mtimeMs baseline, and the user chose "Reload" in the
+          // resulting native dialog -- nothing was written. Adopt what's
+          // actually on disk as this tab's content instead of what the user
+          // was about to save, matching Reload's own stated meaning ("load
+          // the file as it is on disk now"). Bumping revision only when this
+          // is still the active tab mirrors replaceContentForTab's own
+          // guard: MilkdownEditor is uncontrolled after mount, so a
+          // Format-mode canvas showing this tab needs a fresh key to pick up
+          // content that changed outside its own onChange path.
+          const reloadedContent = result.reloadedContent
+          set((state) => {
+            const tabs = state.tabs.map((tab) =>
+              tab.id === tabId
+                ? { ...tab, content: reloadedContent, isDirty: false, mtimeMs: result.mtimeMs }
+                : tab
+            )
+            if (tabId !== state.activeTabId) return { tabs, error: null }
+            return {
+              tabs,
+              content: reloadedContent,
+              isDirty: false,
+              mtimeMs: result.mtimeMs,
+              error: null,
+              revision: state.revision + 1
+            }
+          })
+          return
+        }
         set((state) => {
           const tabs = state.tabs.map((tab) =>
-            tab.id === tabId ? { ...tab, filePath: result.filePath, isDirty: false } : tab
+            tab.id === tabId
+              ? { ...tab, filePath: result.filePath, isDirty: false, mtimeMs: result.mtimeMs }
+              : tab
           )
           // Only refresh the top-level mirror fields when the SAVED tab is
           // still the active one -- same guard as updateContentForTab/
@@ -329,7 +407,13 @@ export const useDocumentStore = create<DocumentState>()((set, get) => ({
           // and a just-succeeded save clearing a stale global error is
           // reasonable regardless of which tab it belonged to.
           if (tabId !== state.activeTabId) return { tabs, error: null }
-          return { tabs, filePath: result.filePath, isDirty: false, error: null }
+          return {
+            tabs,
+            filePath: result.filePath,
+            isDirty: false,
+            mtimeMs: result.mtimeMs,
+            error: null
+          }
         })
         // Best-effort -- see version-history's own "never blocks a real
         // Save" invariant. This call happens AFTER the real save already

@@ -22,7 +22,20 @@ export interface OpenedFile {
   filePath: string
   content: string
   recoveredFromAutosave: boolean
+  // The file's on-disk mtime at read time -- threaded back through the
+  // Document Store (see documentStore.ts's DocumentTab.mtimeMs) as the
+  // baseline saveFile below compares against to detect an external change.
+  mtimeMs: number
 }
+
+// A conflict-free save (the common case) omits reloadedContent entirely. A
+// save where the user chose "Reload" in response to a detected external
+// change carries reloadedContent instead -- nothing was written in that
+// case; the caller must adopt reloadedContent as the document's new content
+// rather than treating this as a normal successful save.
+export type SaveFileResult =
+  | { filePath: string; mtimeMs: number; reloadedContent?: undefined }
+  | { filePath: string; mtimeMs: number; reloadedContent: string }
 
 // Canonicalizes a document path via fs.realpath before it's used to key
 // version-history.ts storage. Required because two spellings of the SAME
@@ -146,14 +159,30 @@ export async function openFileDialog(userDataDir: string): Promise<OpenedFile | 
 
 export async function readFileByPath(filePath: string, userDataDir: string): Promise<OpenedFile> {
   const content = await readFile(filePath, 'utf8')
+  const fileStat = await stat(filePath)
   const recovery = await resolveContentWithRecovery(userDataDir, filePath, content)
-  return { filePath, ...recovery }
+  return { filePath, ...recovery, mtimeMs: fileStat.mtimeMs }
 }
 
+// Design doc Error Handling: "External file change detected via mtime check
+// on save -> prompt to reload or overwrite rather than silently clobbering."
+// `expectedMtimeMs` is the mtime OpenedFile (or a prior saveFile call)
+// reported the last time this app actually read or wrote the file --
+// `null` means the caller has no baseline (a brand-new, never-saved-to-this-
+// path document), in which case there is nothing to compare against and the
+// check is skipped entirely, matching every existing call site's fail-open
+// posture elsewhere in this file. Reusing MTIME_TOLERANCE_MS (rather than a
+// bare `>`) absorbs the same mtime-granularity-truncation risk documented on
+// that constant's own definition -- without it, a save immediately following
+// this exact save could round-trip through a truncating filesystem and
+// compare its own just-written mtime as "newer than expected," which would
+// incorrectly flag a conflict against no external change at all.
 export async function saveFile(
+  win: BrowserWindow,
   filePath: string | null,
-  content: string
-): Promise<{ filePath: string } | null> {
+  content: string,
+  expectedMtimeMs: number | null
+): Promise<SaveFileResult | null> {
   let targetPath = filePath
   if (targetPath === null) {
     const result = await dialog.showSaveDialog({
@@ -162,16 +191,48 @@ export async function saveFile(
     })
     if (result.canceled || !result.filePath) return null
     targetPath = result.filePath
+  } else if (expectedMtimeMs !== null) {
+    // A deleted-since-open file has nothing to conflict with (that's a
+    // separate, pre-existing "file moved/deleted externally" risk this
+    // feature doesn't touch) -- stat failing here just means proceed to the
+    // normal write below, which recreates the file.
+    const currentStat = await stat(targetPath).catch(() => null)
+    if (currentStat && currentStat.mtimeMs > expectedMtimeMs + MTIME_TOLERANCE_MS) {
+      const choice = await dialog.showMessageBox(win, {
+        type: 'warning',
+        buttons: ['Reload', 'Overwrite', 'Cancel'],
+        defaultId: 1,
+        cancelId: 2,
+        message: 'This file has changed on disk since it was opened.',
+        detail:
+          'Another program (or another PageDown window) has modified this file. ' +
+          'Reload to discard your changes here and load the file as it is on disk now, ' +
+          'or Overwrite to save your changes anyway, replacing what is on disk.'
+      })
+      if (choice.response === 2) return null // Cancel
+      if (choice.response === 0) {
+        // Reload: read what's actually on disk now; write nothing. The
+        // caller (documentStore.save()) adopts reloadedContent as the
+        // document's new content rather than treating this as a save.
+        const diskContent = await readFile(targetPath, 'utf8')
+        const diskStat = await stat(targetPath)
+        return { filePath: targetPath, mtimeMs: diskStat.mtimeMs, reloadedContent: diskContent }
+      }
+      // Overwrite (response === 1): fall through to the write below.
+    }
   }
   await writeFile(targetPath, content, 'utf8')
-  return { filePath: targetPath }
+  const newStat = await stat(targetPath)
+  return { filePath: targetPath, mtimeMs: newStat.mtimeMs }
 }
 
 export async function saveFileToKnownOrChosenPath(
+  win: BrowserWindow,
   userDataDir: string,
   filePath: string | null,
-  content: string
-): Promise<{ filePath: string } | null> {
+  content: string,
+  expectedMtimeMs: number | null
+): Promise<SaveFileResult | null> {
   if (filePath !== null && !(await isKnownPath(userDataDir, filePath))) {
     // filePath isn't (or is no longer) in the allowlist -- rather than
     // silently writing to an unvetted path, or permanently refusing to
@@ -179,9 +240,12 @@ export async function saveFileToKnownOrChosenPath(
     // trapped with an unsaveable document. This preserves the security
     // property (never write to a path we didn't get from the user via a
     // native dialog or an already-vetted path) without ever blocking them.
-    return saveFile(null, content)
+    // No conflict check applies to a Save-As target either -- it's a fresh
+    // path the user is about to pick via a native dialog, not one this app
+    // has any prior mtime baseline for.
+    return saveFile(win, null, content, null)
   }
-  return saveFile(filePath, content)
+  return saveFile(win, filePath, content, expectedMtimeMs)
 }
 
 export type SaveDroppedImageResult = { relativePath: string } | { error: string }

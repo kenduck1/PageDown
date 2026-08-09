@@ -81,11 +81,25 @@ export interface FileApi {
     filePath: string
     content: string
     recoveredFromAutosave: boolean
+    mtimeMs: number
   } | null>
-  openPath: (
+  openPath: (filePath: string) => Promise<{
     filePath: string
-  ) => Promise<{ filePath: string; content: string; recoveredFromAutosave: boolean }>
-  saveFile: (filePath: string | null, content: string) => Promise<{ filePath: string } | null>
+    content: string
+    recoveredFromAutosave: boolean
+    mtimeMs: number
+  }>
+  // expectedMtimeMs is the mtime baseline from the last open/save of this
+  // path (null when there is none, e.g. a brand-new document) -- used to
+  // detect an external change since that baseline. A conflict resolved via
+  // "Reload" returns reloadedContent instead of completing the save; the
+  // caller (documentStore.save()) must adopt it as the document's new
+  // content rather than treating the call as a normal successful save.
+  saveFile: (
+    filePath: string | null,
+    content: string,
+    expectedMtimeMs?: number | null
+  ) => Promise<{ filePath: string; mtimeMs: number; reloadedContent?: string } | null>
   getRecentFiles: () => Promise<RecentFileEntry[]>
   getThumbnail: (filePath: string) => Promise<{ dataUrl: string; pageCount: number }>
   getTemplateThumbnail: (content: string) => Promise<{ dataUrl: string; pageCount: number }>
