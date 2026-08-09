@@ -41,8 +41,11 @@ registerBreakHandlers()
 // pieces, concatenated in this order:
 //   1. A `:root` block defining the exact CSS custom properties
 //      document-typography.css's rules (piece 4, below) consume:
-//      --font-serif, --font-mono, --text-12, --text-13, --text-14,
-//      --text-16, --text-20, --text-26. Those properties are normally
+//      --font-serif, --font-mono, --font-doc-sans, --text-12, --text-13,
+//      --text-14, --text-15, --text-16, --text-20, --text-21, --text-26,
+//      --text-32 (the last four of those -- font-doc-sans, text-15,
+//      text-21, text-32 -- added by the theme/font-family rules at the end
+//      of document-typography.css). Those properties are normally
 //      minted by Tailwind's `@theme static` block in
 //      src/renderer/src/assets/base.css, which exists ONLY in the app-shell
 //      renderer -- this sandboxed context has no Tailwind and no base.css
@@ -74,18 +77,39 @@ registerBreakHandlers()
 //      document-typography.test.ts` now closes this mechanically by
 //      cross-checking all three files, so adding a var() reference without a
 //      definition fails `pnpm test:unit` rather than shipping.
-//   2. An @font-face rule for Source Serif 4, built here rather than
-//      shipped inside document-typography.css itself -- that file is
-//      shared with the Milkdown mount, which loads the SAME font through
-//      its own, already-existing Vite-bundled @font-face in base.css; only
-//      THIS context needs a self-contained, CSP-safe data: URI (see Task 5
-//      for the font-src data: CSP change this rule depends on). Kept
-//      declaration-for-declaration in sync with base.css's copy, including
-//      `font-display: block` -- inert here (Paged.js's Chunker.loadFonts()
-//      awaits every FontFace in document.fonts before it lays anything out,
-//      so there is no window in which a fallback face could paint), but the
-//      two rules are documented as a hand-synced pair and an unexplained
-//      one-declaration difference between them reads as drift.
+//   2. Two @font-face rules -- Source Serif 4 and (added by Task 4) Inter
+//      Variable -- built here rather than shipped inside
+//      document-typography.css itself -- that file is shared with the
+//      Milkdown mount, which loads both fonts through its own,
+//      already-existing Vite-bundled @font-face rules in base.css; only
+//      THIS context needs self-contained, CSP-safe data: URIs (see Task 5
+//      for the font-src data: CSP change these rules depend on). Kept
+//      declaration-for-declaration in sync with base.css's copies,
+//      including `font-display: block` -- inert here (Paged.js's
+//      Chunker.loadFonts() awaits every FontFace in document.fonts before
+//      it lays anything out, so there is no window in which a fallback
+//      face could paint), but the rules are documented as hand-synced pairs
+//      and an unexplained declaration difference between a pair reads as
+//      drift.
+//
+//      Both faces are emitted UNCONDITIONALLY on every request, regardless
+//      of whether the document's theme actually selects Inter -- and this
+//      is a real, non-free cost, not a harmless default. Confirmed by
+//      reading Paged.js's own source, not assumed: `Chunker.flow()` awaits
+//      `this.loadFonts()` (node_modules/pagedjs/src/chunker/chunker.js:170),
+//      and `loadFonts()` iterates EVERY entry already registered in
+//      `document.fonts`, calls `.load()` on each one not yet loaded, and
+//      awaits all of them (same file, ~541-557) -- it has no concept of
+//      "only load faces something on the page actually uses." Registering
+//      Inter Variable here therefore forces a real, awaited ~48KB base64
+//      decode on every single render, even for a document whose theme
+//      never resolves to it. `buildDocumentStylesheet` doesn't yet receive
+//      the document's own style/theme -- Task 4's scope is only the CSS
+//      itself, not wiring a theme parameter through -- so there is nothing
+//      here to conditionally branch on yet. Task 5, which adds that
+//      parameter, is expected to make this conditional once it exists;
+//      until then, ship the disclosed cost rather than a false
+//      "buys nothing to select" justification.
 //   3. An explicit @page rule matching src/typography/page-geometry.ts's
 //      constants (in inches, @page's native unit, matching
 //      DEFAULT_PAGE_CONFIG's own inch-denominated margins).

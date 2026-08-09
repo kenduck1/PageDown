@@ -425,10 +425,25 @@
   line-height: 1.45;
 }
 
+/* table/th are required here, not optional -- the base file
+   (.pagedown-document table { font-size: var(--text-14); ... }) matches
+   `table` DIRECTLY, and a direct match is never overridden by inheritance
+   from this rule's own ancestor selector, no matter how specific. Without
+   `table`/`th` restated here, `table` stays pinned at the base 14px under
+   every theme (coincidentally equal to this theme's own 13px `td` only
+   under the default theme, which is why omitting them was invisible until
+   a real second theme existed) and `th` -- which has no direct font-size
+   rule anywhere in this file -- inherits that same 14px from `table`,
+   while `td` (restated below) tracks the theme correctly. Result without
+   this fix: `th` renders LARGER than `td` in the same row under `resume`.
+   Same "list omission -> silent divergence" class as the font-family
+   override above -- name the element or it silently diverges. */
 .pagedown-document.pagedown-theme-resume p,
 .pagedown-document.pagedown-theme-resume li,
 .pagedown-document.pagedown-theme-resume td,
-.pagedown-document.pagedown-theme-resume blockquote {
+.pagedown-document.pagedown-theme-resume blockquote,
+.pagedown-document.pagedown-theme-resume table,
+.pagedown-document.pagedown-theme-resume th {
   font-size: var(--text-13);
   line-height: 1.45;
 }
@@ -466,10 +481,18 @@
   line-height: 1.6;
 }
 
+/* table/th restated for the same reason as the resume theme above -- see
+   that rule's own comment for the full "direct match beats inherited
+   override" explanation. Without this, `table`/`th` would stay pinned at
+   the base 14px while `td` tracks this theme's 15px, inverting the normal
+   header-vs-body size relationship the other direction (`th` SMALLER than
+   `td`, here, since 14 < 15). */
 .pagedown-document.pagedown-theme-letter p,
 .pagedown-document.pagedown-theme-letter li,
 .pagedown-document.pagedown-theme-letter td,
-.pagedown-document.pagedown-theme-letter blockquote {
+.pagedown-document.pagedown-theme-letter blockquote,
+.pagedown-document.pagedown-theme-letter table,
+.pagedown-document.pagedown-theme-letter th {
   font-size: var(--text-15);
   line-height: 1.6;
 }
