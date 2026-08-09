@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react'
+import type { PageNavState } from '../../../pagination/page-nav'
 
 interface SplitPreviewProps {
   content: string
@@ -14,9 +15,18 @@ interface SplitPreviewProps {
   // no new IPC, no harness teardown, and no re-layout -- see the bounds
   // effect below.
   pageSetupOpen: boolean
+  /**
+   * The page the app wants shown, 1-based. Changing this scrolls the preview.
+   * The value that comes BACK through onPageChange is authoritative -- the
+   * sandbox clamps to what actually rendered, so requesting page 9 of a
+   * 2-page document reports 2, and the parent reconciles to that.
+   */
+  targetPage: number
+  onPageChange: (state: PageNavState) => void
 }
 
 const DEBOUNCE_MS = 500
+const POLL_MS = 400
 
 // The real preview surface is a native WebContentsView, positioned by the
 // main process to sit exactly over this div's own on-screen rectangle --
@@ -26,7 +36,13 @@ const DEBOUNCE_MS = 500
 // preview's content in sync with the document (debounced
 // sendSplitPreviewDocument, matching usePageCount's own 500ms debounce so
 // this doesn't re-layout on every keystroke).
-function SplitPreview({ content, filePath, pageSetupOpen }: SplitPreviewProps): React.JSX.Element {
+function SplitPreview({
+  content,
+  filePath,
+  pageSetupOpen,
+  targetPage,
+  onPageChange
+}: SplitPreviewProps): React.JSX.Element {
   const placeholderRef = useRef<HTMLDivElement>(null)
   // Tracks the last {content, filePath} pair the harness has CONFIRMED
   // receiving (stamped only inside the .then() below, never before the call)
@@ -134,6 +150,62 @@ function SplitPreview({ content, filePath, pageSetupOpen }: SplitPreviewProps): 
     // established debounce shape (see that hook's own comment for why:
     // "a fast typing burst triggers one round trip after typing settles").
   }, [content, filePath])
+
+  // The last page this component KNOWS the preview is on -- written by both
+  // the scroll effect and the poll, before either calls onPageChange.
+  //
+  // This is what breaks the feedback loop. The parent owns currentPage and
+  // feeds it straight back down as targetPage, so a poll reporting "the user
+  // scrolled to page 5" would otherwise come back as targetPage=5 and trigger
+  // a scroll to 5 -- fighting the user's own scrolling on every poll tick.
+  // Recording the polled value here first means the scroll effect sees no
+  // change and stays out of the way.
+  //
+  // Initialized to 1, NOT to targetPage, and that distinction is load-bearing.
+  // A freshly-mounted preview always starts scrolled to the top, i.e. on page
+  // 1 -- and the format -> split navigation path mounts this component with
+  // targetPage ALREADY set to the requested page (EditorScreen sets
+  // currentPage and switches mode in the same handler). Seeding the ref from
+  // targetPage would make the scroll effect see "no change" on that very first
+  // render and skip the scroll entirely, so clicking "next page" from Format
+  // mode would open Split mode still showing page 1.
+  const lastAppliedPageRef = useRef(1)
+  // Latest-ref so the poll effect can call the current callback without
+  // re-subscribing its interval on every parent render.
+  const onPageChangeRef = useRef(onPageChange)
+  onPageChangeRef.current = onPageChange
+
+  useEffect(() => {
+    if (targetPage === lastAppliedPageRef.current) return
+    lastAppliedPageRef.current = targetPage
+    window.api
+      .scrollSplitPreviewToPage(targetPage)
+      .then((state) => {
+        lastAppliedPageRef.current = state.currentPage
+        onPageChangeRef.current(state)
+      })
+      .catch(() => {
+        // Best-effort, same governing rule as this component's other IPC
+        // calls: never surface as an unhandled rejection, never block editing.
+      })
+  }, [targetPage])
+
+  useEffect(() => {
+    const timer = setInterval(() => {
+      window.api
+        .getSplitPreviewPage()
+        .then((state) => {
+          if (state.pageCount === 0) return
+          if (state.currentPage === lastAppliedPageRef.current) return
+          lastAppliedPageRef.current = state.currentPage
+          onPageChangeRef.current(state)
+        })
+        .catch(() => {
+          // Same as above.
+        })
+    }, POLL_MS)
+    return () => clearInterval(timer)
+  }, [])
 
   useEffect(() => {
     return () => {
