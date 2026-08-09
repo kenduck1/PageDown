@@ -30,6 +30,7 @@ export interface Preferences {
   autosaveIntervalMs: number
   defaultPageConfig: DefaultPageConfig
   colorScheme: ColorScheme
+  authorName: string
 }
 
 // A CSS-pixel rectangle (getBoundingClientRect()'s own shape) for the Split

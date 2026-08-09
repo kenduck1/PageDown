@@ -12,6 +12,7 @@ import EditorStatusBar from '../components/EditorStatusBar'
 import PageSetupModal from '../components/PageSetupModal'
 import ShortcutsHelpModal from '../components/ShortcutsHelpModal'
 import FindBar from '../components/FindBar'
+import CommentComposer from '../components/CommentComposer'
 import Toast from '../components/Toast'
 import { extractOutline } from '../lib/extractOutline'
 import { isFormatEditing, isSourceEditing } from '../lib/editing-surface'
@@ -97,6 +98,9 @@ function EditorScreen(): React.JSX.Element {
   // there's no need to duplicate that fallback value here too.
   const autosaveIntervalMs = usePreferencesStore((state) => state.preferences?.autosaveIntervalMs)
   useAutosave({ content, filePath, isDirty, intervalMs: autosaveIntervalMs })
+  // Same narrow, single-field selector style as autosaveIntervalMs above --
+  // backs handleAddComment below.
+  const authorName = usePreferencesStore((state) => state.preferences?.authorName)
 
   // A different document -- or a different tab -- is a different set of
   // pages, so the current page must not carry over. Without this, opening a
@@ -174,6 +178,33 @@ function EditorScreen(): React.JSX.Element {
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
   }, [openShortcutsHelp])
+
+  // Add-comment shortcut -- same bare `window` keydown pattern, same
+  // "inline rather than its own hook file" reasoning as the shortcuts-help
+  // listener immediately above (a one-line action, no selection-seeding/
+  // focus-management to justify a separate module the way Find's does).
+  // Mod-Shift-M mirrors this app's OWN established "Mod-Shift-X" shortcut
+  // shape (Redo is Mod-Shift-z) rather than copying Word/Google Docs'
+  // Ctrl+Alt+M convention verbatim -- consistency with this app's other
+  // shortcuts matters more here than matching an external app exactly, and
+  // neither Word nor Docs' own binding is even the SAME across their two
+  // platforms' conventions to begin with. No live selection/view-mode check
+  // here, matching the toolbar's own "Add comment" button precedent (see
+  // EditorToolbar.tsx's own comment): addCommentCommand's own refusal
+  // (empty selection, Source mode's null editorRef, a selection spanning
+  // multiple blocks) is what the composer surfaces as a real inline error;
+  // duplicating that check here would just be a second, potentially
+  // drifting copy of the same logic.
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent): void => {
+      if ((event.metaKey || event.ctrlKey) && event.shiftKey && event.key.toLowerCase() === 'm') {
+        event.preventDefault()
+        useAppStore.getState().openCommentComposer()
+      }
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [])
 
   const handleSave = async (): Promise<void> => {
     // @milkdown/plugin-listener's onChange fires through an internal 200ms
@@ -598,6 +629,32 @@ function EditorScreen(): React.JSX.Element {
     if (index === -1) return
     const headingEls = canvasRef.current?.querySelectorAll('h1, h2, h3')
     headingEls?.[index]?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  }
+
+  // Simpler than handleSelectHeading above -- a comment mark's own id is
+  // already a precise, unique CSS selector (`data-comment-id`, set by
+  // comment.ts's toDOM), so this needs no index-matching against a
+  // separately-extracted list the way headings do (headings have no id of
+  // their own to select by).
+  const handleSelectComment = (id: string): void => {
+    const el = canvasRef.current?.querySelector(`.pagedown-comment-mark[data-comment-id="${id}"]`)
+    el?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+  }
+
+  const handleResolveComment = (id: string): void => {
+    editorRef.current?.resolveComment(id)
+  }
+
+  // authorName '' (the default -- no accounts system, see Preferences'
+  // own comment) falls back to the literal label "You" here, matching
+  // EditorComments.tsx's own identical fallback for DISPLAYING an existing
+  // comment's author -- keeping both fallbacks in the same place they're
+  // used, rather than baking "You" into the stored preference default
+  // itself, which would make an genuinely-blank preference indistinguishable
+  // from a user who deliberately typed "You" as their name.
+  const handleAddComment = (text: string): boolean => {
+    const author = authorName || 'You'
+    return editorRef.current?.addComment(author, text) ?? false
   }
 
   // Page navigation targets the Split-mode preview, because it is the ONLY
@@ -1060,6 +1117,9 @@ function EditorScreen(): React.JSX.Element {
         onReplaceAll={findController.replaceAll}
         queryInputRef={findQueryInputRef}
       />
+      {/* Same layout-row placement/reasoning as FindBar immediately above --
+      see CommentComposer.tsx's own module comment. */}
+      <CommentComposer onAddComment={handleAddComment} />
       <div className="flex flex-1 overflow-hidden">
         <EditorSidebar
           content={content}
@@ -1070,6 +1130,8 @@ function EditorScreen(): React.JSX.Element {
           onSelectPage={handleNavigateToPage}
           filePath={filePath}
           onRestoreVersion={handleRestoreVersion}
+          onSelectComment={handleSelectComment}
+          onResolveComment={handleResolveComment}
         />
         <div ref={canvasRef} data-testid="document-content" className="flex-1 overflow-hidden">
           {viewMode === 'split' ? (

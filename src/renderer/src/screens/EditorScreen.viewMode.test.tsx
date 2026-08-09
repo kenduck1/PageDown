@@ -59,7 +59,9 @@ const { mockEditorHandle } = vi.hoisted(() => ({
     setFindState: vi.fn(),
     replaceActiveMatch: vi.fn(),
     replaceAllMatches: vi.fn(),
-    getSelectedText: vi.fn(() => '')
+    getSelectedText: vi.fn(() => ''),
+    addComment: vi.fn(() => true),
+    resolveComment: vi.fn()
   }
 }))
 

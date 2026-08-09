@@ -24,6 +24,8 @@ describe('EditorSidebar', () => {
         onSelectPage={vi.fn()}
         filePath={null}
         onRestoreVersion={vi.fn()}
+        onSelectComment={vi.fn()}
+        onResolveComment={vi.fn()}
       />
     )
 
@@ -43,6 +45,8 @@ describe('EditorSidebar', () => {
         onSelectPage={vi.fn()}
         filePath={null}
         onRestoreVersion={vi.fn()}
+        onSelectComment={vi.fn()}
+        onResolveComment={vi.fn()}
       />
     )
 
@@ -64,6 +68,8 @@ describe('EditorSidebar', () => {
         onSelectPage={vi.fn()}
         filePath={null}
         onRestoreVersion={vi.fn()}
+        onSelectComment={vi.fn()}
+        onResolveComment={vi.fn()}
       />
     )
 
@@ -86,6 +92,8 @@ describe('EditorSidebar', () => {
         onSelectPage={vi.fn()}
         filePath={null}
         onRestoreVersion={vi.fn()}
+        onSelectComment={vi.fn()}
+        onResolveComment={vi.fn()}
       />
     )
 
@@ -106,6 +114,8 @@ describe('EditorSidebar', () => {
         onSelectPage={vi.fn()}
         filePath={null}
         onRestoreVersion={vi.fn()}
+        onSelectComment={vi.fn()}
+        onResolveComment={vi.fn()}
       />
     )
 
@@ -122,6 +132,8 @@ describe('EditorSidebar', () => {
         onSelectPage={vi.fn()}
         filePath={null}
         onRestoreVersion={vi.fn()}
+        onSelectComment={vi.fn()}
+        onResolveComment={vi.fn()}
       />
     )
 
@@ -140,6 +152,8 @@ describe('EditorSidebar', () => {
         onSelectPage={vi.fn()}
         filePath={null}
         onRestoreVersion={vi.fn()}
+        onSelectComment={vi.fn()}
+        onResolveComment={vi.fn()}
       />
     )
 
@@ -159,6 +173,8 @@ describe('EditorSidebar', () => {
         onSelectPage={onSelectPage}
         filePath={null}
         onRestoreVersion={vi.fn()}
+        onSelectComment={vi.fn()}
+        onResolveComment={vi.fn()}
       />
     )
 
@@ -203,6 +219,8 @@ describe('EditorSidebar', () => {
         onSelectPage={vi.fn()}
         filePath="/a.md"
         onRestoreVersion={vi.fn()}
+        onSelectComment={vi.fn()}
+        onResolveComment={vi.fn()}
       />
     )
 
@@ -247,6 +265,8 @@ describe('EditorSidebar', () => {
         onSelectPage={vi.fn()}
         filePath="/a.md"
         onRestoreVersion={vi.fn()}
+        onSelectComment={vi.fn()}
+        onResolveComment={vi.fn()}
       />
     )
 

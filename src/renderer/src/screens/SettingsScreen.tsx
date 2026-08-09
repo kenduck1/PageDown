@@ -178,6 +178,26 @@ function SettingsScreen(): React.JSX.Element {
 
         <section className="flex flex-col gap-2.5">
           <h2 className="text-11-5 font-semibold uppercase tracking-wide text-text-secondary">
+            Comments
+          </h2>
+          <p className="text-11-5 text-text-tertiary">
+            Attached to every comment you add. This app has no accounts -- a blank name shows as
+            &quot;You&quot; on your own comments.
+          </p>
+          <label className="flex items-center justify-between rounded-md border border-border-subtle bg-page px-3.5 py-2.5">
+            <span className="text-12-5 text-text-primary">Your name</span>
+            <input
+              type="text"
+              placeholder="You"
+              value={preferences.authorName}
+              onChange={(e) => applyChange({ authorName: e.target.value })}
+              className="w-40 rounded-sm border border-border-chrome bg-page px-2 py-1 text-right text-12-5"
+            />
+          </label>
+        </section>
+
+        <section className="flex flex-col gap-2.5">
+          <h2 className="text-11-5 font-semibold uppercase tracking-wide text-text-secondary">
             New document defaults
           </h2>
           <p className="text-11-5 text-text-tertiary">

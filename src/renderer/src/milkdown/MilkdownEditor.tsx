@@ -178,7 +178,9 @@ const MilkdownEditor = forwardRef<MilkdownEditorHandle, MilkdownEditorProps>(
       setFindState: (next) => commandsRef.current?.setFindState(next),
       replaceActiveMatch: (replacement) => commandsRef.current?.replaceActiveMatch(replacement),
       replaceAllMatches: (replacement) => commandsRef.current?.replaceAllMatches(replacement),
-      getSelectedText: () => commandsRef.current?.getSelectedText() ?? ''
+      getSelectedText: () => commandsRef.current?.getSelectedText() ?? '',
+      addComment: (author, text) => commandsRef.current?.addComment(author, text) ?? false,
+      resolveComment: (id) => commandsRef.current?.resolveComment(id)
     }))
 
     useEffect(() => {

@@ -12,7 +12,13 @@ import {
   toggleLinkCommand
 } from '@milkdown/preset-commonmark'
 import { insertTableCommand } from '@milkdown/preset-gfm'
-import { undoCommand, redoCommand, insertPagebreakCommand } from './commands'
+import {
+  undoCommand,
+  redoCommand,
+  insertPagebreakCommand,
+  addCommentCommand,
+  resolveCommentCommand
+} from './commands'
 import {
   applyFindState,
   replaceActiveMatchIn,
@@ -186,6 +192,17 @@ export interface EditorCommands {
   // is collapsed -- backs Cmd/Ctrl+F seeding the query from whatever the user
   // had selected, the way every editor does.
   getSelectedText: () => string
+  // addCommentCommand (commands.ts) -- applies a real comment mark over the
+  // current selection. Returns the command's own boolean result (`editor.
+  // action()` returns whatever the wrapped action returns, and callCommand's
+  // return type is genuinely `(ctx) => boolean`, not void) so the caller
+  // (CommentComposer.tsx) can show a real error rather than silently doing
+  // nothing when the selection is empty or spans more than one block -- see
+  // addCommentCommand's own doc comment for the exact refusal conditions.
+  addComment: (author: string, text: string) => boolean
+  // resolveCommentCommand (commands.ts) -- removes every mark instance for
+  // the given comment id, anywhere in the document.
+  resolveComment: (id: string) => void
 }
 
 // Builds the real formatting-toolbar command surface for a live Editor
@@ -349,6 +366,12 @@ export function buildEditorCommands(editor: Editor): EditorCommands {
         selected = from === to ? '' : view.state.doc.textBetween(from, to, ' ')
       })
       return selected
+    },
+    addComment: (author, text) => {
+      return editor.action(callCommand(addCommentCommand.key, { author, text }))
+    },
+    resolveComment: (id) => {
+      editor.action(callCommand(resolveCommentCommand.key, id))
     }
   }
 }

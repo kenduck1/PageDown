@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import { getMarkdown } from '@milkdown/utils'
 import { createTestEditor } from './test-editor'
 import { EDITOR_SCHEMA_PLUGINS } from './plugins'
+import { encodeCommentMeta, decodeCommentMeta } from '../../../markdown/comment-plugin'
 
 const CORPUS_DIR = join(__dirname, '..', '..', '..', '..', 'phase0', 'corpus')
 
@@ -102,5 +103,37 @@ describe('Full node-set round trip (frontmatter + pagebreak + commonmark + gfm t
 
     expect(output).toContain('$$x^2 + y^2 = z^2$$')
     expect(output).toContain('E = mc^2')
+  })
+
+  // Unlike pagebreak/footnotes (existing nodes) or math (deliberately inert
+  // text), a comment is a real ProseMirror MARK -- this is the first test in
+  // this suite proving a MARK (not a node) round-trips correctly through
+  // Milkdown's own parse/serialize pipeline via this project's custom
+  // remarkComment/remarkCommentToMarkdown plugin pair (comment-plugin.ts).
+  it('round-trips a comment mark, preserving its id/author/text/createdAt exactly', async () => {
+    const dataAttr = encodeCommentMeta({
+      author: 'Kai',
+      text: 'needs revision',
+      createdAt: '2026-08-09T06:00:00Z'
+    })
+    const source = `Before. <!--comment id="c1" data="${dataAttr}"-->the marked phrase<!--/comment id="c1"-->. After.`
+    const output = await roundTrip(source)
+
+    expect(output).toContain('the marked phrase')
+    expect(output).toContain('id="c1"')
+    // Re-decode whatever the round trip actually wrote, rather than
+    // asserting the same base64 string comes back byte-for-byte -- the
+    // serializer is expected to RE-ENCODE from the mark's current attrs on
+    // every save (see remarkCommentToMarkdown's own comment for why), which
+    // happens to produce identical bytes for an untouched mark but must not
+    // be conflated with "the string is stable" as the actual invariant.
+    const match = output.match(/data="([^"]+)"/)
+    expect(match).not.toBeNull()
+    const decoded = decodeCommentMeta(match![1])
+    expect(decoded).toEqual({
+      author: 'Kai',
+      text: 'needs revision',
+      createdAt: '2026-08-09T06:00:00Z'
+    })
   })
 })

@@ -2,7 +2,9 @@ import { $command, $prose, $useKeymap } from '@milkdown/utils'
 import { commandsCtx } from '@milkdown/core'
 import { history, undo, redo } from '@milkdown/prose/history'
 import { TextSelection } from '@milkdown/prose/state'
+import type { Mark } from '@milkdown/prose/model'
 import { pagebreakNode } from './nodes/pagebreak'
+import { commentSchema } from './nodes/comment'
 import { safeImageViewProse } from './image-security'
 
 // prosemirror-history is not wired into either stock preset this editor
@@ -107,6 +109,79 @@ export const insertPagebreakCommand = $command(
   }
 )
 
+// Applies a real comment MARK (not a node -- see comment.ts's own top
+// comment) over the current selection. Returns false (a no-op command,
+// standard ProseMirror convention for "not applicable right now") for an
+// empty selection or one spanning more than one block -- refused, not
+// silently clipped to the first block, per the design doc's own scope
+// boundary (docs/superpowers/specs/2026-08-09-comments-design.md):
+// `$from.sameParent($to)` is the direct ProseMirror check for "both ends of
+// the selection share the same immediate parent," which is exactly "does
+// not cross a block boundary" for the kinds of selections this app's
+// schema allows (a selection can't span, say, one list item into another
+// without ALSO crossing their shared parent list -- sameParent already
+// covers every case that matters here, not just the single-paragraph one).
+// `id`/`createdAt` are generated here, not passed in by the caller, so
+// every comment's identity is genuinely fresh and every timestamp reflects
+// the actual moment of creation -- crypto.randomUUID() is a standard Web
+// Crypto API, present in this renderer with no additional plugin (same
+// global this codebase already relies on being real -- see e.g.
+// documentStore's own use for tab ids).
+export const addCommentCommand = $command(
+  'AddComment',
+  (ctx) => (payload?: { author: string; text: string }) => (state, dispatch) => {
+    if (!payload || payload.text.trim() === '') return false
+    const { from, to } = state.selection
+    if (from === to) return false
+    const $from = state.doc.resolve(from)
+    const $to = state.doc.resolve(to)
+    if (!$from.sameParent($to)) return false
+
+    const markType = commentSchema.type(ctx)
+    const mark = markType.create({
+      id: crypto.randomUUID(),
+      author: payload.author,
+      text: payload.text,
+      createdAt: new Date().toISOString()
+    })
+    const tr = state.tr.addMark(from, to, mark)
+    dispatch?.(tr)
+    return true
+  }
+)
+
+// Removes every mark instance carrying the given `id` from the WHOLE
+// document, not just the current selection -- a single logical comment can
+// in principle be represented by more than one ProseMirror mark instance
+// sharing the same id (e.g. if editing ever split a marked range), so
+// "resolve this comment" must sweep everywhere, matching how the sidebar's
+// own extractComments treats same-id occurrences as one comment. Walks
+// every descendant (not just text nodes) because a comment can mark any
+// inline content, including non-text inline nodes this schema might add in
+// the future -- matching Mark, not the node's type, so this only ever
+// removes marks belonging to THIS one comment id, never an unrelated,
+// overlapping comment.
+export const resolveCommentCommand = $command(
+  'ResolveComment',
+  (ctx) => (id?: string) => (state, dispatch) => {
+    if (!id) return false
+    const markType = commentSchema.type(ctx)
+    let tr = state.tr
+    let found = false
+    state.doc.descendants((node, pos) => {
+      const mark = node.marks.find((m: Mark) => m.type === markType && m.attrs.id === id)
+      if (mark) {
+        tr = tr.removeMark(pos, pos + node.nodeSize, mark)
+        found = true
+      }
+      return true
+    })
+    if (!found) return false
+    dispatch?.(tr)
+    return true
+  }
+)
+
 // The full set of non-schema editing-BEHAVIOR plugins MilkdownEditor.tsx
 // mounts alongside EDITOR_SCHEMA_PLUGINS (plugins.ts) -- deliberately a
 // separate list, for the same reason plugins.ts's own comment gives for
@@ -133,6 +208,8 @@ export const EDITOR_COMMAND_PLUGINS = [
   redoCommand,
   historyKeymap,
   insertPagebreakCommand,
+  addCommentCommand,
+  resolveCommentCommand,
   // See image-security.ts's own module comment for the real, confirmed
   // vulnerability this closes: the stock commonmark image node renders an
   // unrestricted <img src> directly in this privileged renderer. Rendering

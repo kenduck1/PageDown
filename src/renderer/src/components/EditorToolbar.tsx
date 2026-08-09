@@ -150,6 +150,7 @@ function EditorToolbar({
   const setSplitLeftMode = useAppStore((state) => state.setSplitLeftMode)
   const openPageSetup = useAppStore((state) => state.openPageSetup)
   const openShortcutsHelp = useAppStore((state) => state.openShortcutsHelp)
+  const openCommentComposer = useAppStore((state) => state.openCommentComposer)
   // F2 (final whole-branch review): every control below bound to
   // editorRef.current?.X() no-ops in Source mode, because MilkdownEditor is
   // unmounted there and editorRef.current is null -- but before this guard
@@ -702,6 +703,26 @@ function EditorToolbar({
                 <rect x="5" y="3" width="14" height="18" rx="1.5" />
                 <path d="M6.5 12h3M14.5 12h3" />
                 <path d="M11 10.3v3.4" />
+              </Icon>
+            </ToolbarIconButton>
+            {/* Opens CommentComposer (a FindBar-style layout row, rendered by
+            EditorScreen) -- disabled the same way and for the same reason as
+            every other editorRef-bound button in this cluster: Source mode
+            unmounts MilkdownEditor, so editorRef.current is null there.
+            Whether the CURRENT selection is actually valid for a comment
+            (non-empty, single block) is deliberately NOT checked here --
+            this toolbar has no live selection-state tracking at all (see
+            the paragraph-style dropdown's own comment on why), so this
+            button just opens the composer; addCommentCommand's own refusal
+            is what the composer surfaces as a real inline error if the
+            selection turns out not to qualify. */}
+            <ToolbarIconButton
+              label="Add comment"
+              onClick={openCommentComposer}
+              disabled={isSourceMode}
+            >
+              <Icon strokeWidth={1.7}>
+                <path d="M4 5.5h16v10H10l-4 3.5v-3.5H4z" />
               </Icon>
             </ToolbarIconButton>
           </div>

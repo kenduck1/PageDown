@@ -2,7 +2,7 @@ import { create } from 'zustand'
 
 type Screen = 'home' | 'editor' | 'settings'
 export type ViewMode = 'format' | 'split' | 'source'
-type SidebarTab = 'pages' | 'outline' | 'history'
+type SidebarTab = 'pages' | 'outline' | 'history' | 'comments'
 export type SplitLeftMode = 'source' | 'format'
 type HomeActiveSection = 'recent' | 'templates'
 
@@ -17,6 +17,7 @@ interface AppStateValues {
   splitRatio: number
   pageSetupOpen: boolean
   shortcutsHelpOpen: boolean
+  commentComposerOpen: boolean
   homeActiveSection: HomeActiveSection
   currentPage: number
 }
@@ -33,6 +34,8 @@ interface AppState extends AppStateValues {
   closePageSetup: () => void
   openShortcutsHelp: () => void
   closeShortcutsHelp: () => void
+  openCommentComposer: () => void
+  closeCommentComposer: () => void
   setHomeActiveSection: (section: HomeActiveSection) => void
   setCurrentPage: (page: number) => void
 }
@@ -45,6 +48,7 @@ export const initialAppState: AppStateValues = {
   splitRatio: 50,
   pageSetupOpen: false,
   shortcutsHelpOpen: false,
+  commentComposerOpen: false,
   homeActiveSection: 'recent',
   currentPage: 1
 }
@@ -67,6 +71,8 @@ export const useAppStore = create<AppState>()((set) => ({
   closePageSetup: () => set({ pageSetupOpen: false }),
   openShortcutsHelp: () => set({ shortcutsHelpOpen: true }),
   closeShortcutsHelp: () => set({ shortcutsHelpOpen: false }),
+  openCommentComposer: () => set({ commentComposerOpen: true }),
+  closeCommentComposer: () => set({ commentComposerOpen: false }),
   setHomeActiveSection: (section) => set({ homeActiveSection: section }),
   setCurrentPage: (page) =>
     set((state) => (Number.isFinite(page) ? { currentPage: Math.max(1, Math.floor(page)) } : state))

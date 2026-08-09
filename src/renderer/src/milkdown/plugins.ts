@@ -2,6 +2,7 @@ import { commonmark } from '@milkdown/preset-commonmark'
 import { gfm } from '@milkdown/preset-gfm'
 import { frontmatterRemark, frontmatterNode } from './nodes/frontmatter'
 import { pagebreakRemark, pagebreakRemarkToMarkdown, pagebreakNode } from './nodes/pagebreak'
+import { commentRemark, commentRemarkToMarkdown, commentSchema } from './nodes/comment'
 
 // The full custom schema/plugin set the real editor mounts (MilkdownEditor.tsx)
 // -- shared with round-trip.test.ts so "the tested composition" and "the
@@ -17,5 +18,8 @@ export const EDITOR_SCHEMA_PLUGINS = [
   frontmatterNode,
   pagebreakRemark,
   pagebreakRemarkToMarkdown,
-  pagebreakNode
+  pagebreakNode,
+  commentRemark,
+  commentRemarkToMarkdown,
+  commentSchema
 ]
