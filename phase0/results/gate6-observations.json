@@ -1,6 +1,6 @@
 {
   "tables-spanning-pages.md": {
-    "pageCount": 1,
+    "pageCount": 2,
     "perPageHeadings": [
       [
         {
@@ -8,10 +8,11 @@
           "text": "Quarterly Expense Ledger",
           "breakAfterAvoid": true
         }
-      ]
+      ],
+      []
     ],
-    "tableCount": 1,
-    "splitTableCount": 0,
+    "tableCount": 2,
+    "splitTableCount": 1,
     "orderedListCount": 0,
     "diagramBoxes": []
   },

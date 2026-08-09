@@ -10,7 +10,7 @@
       "textMatch": true,
       "firstMismatchDetail": null,
       "textDeltaSample": "1.1.2.1.",
-      "exportMs": 65,
+      "exportMs": 78,
       "imgInfo": []
     },
     {
@@ -23,7 +23,7 @@
       "textMatch": true,
       "firstMismatchDetail": null,
       "textDeltaSample": "",
-      "exportMs": 59,
+      "exportMs": 68,
       "imgInfo": []
     },
     {
@@ -36,7 +36,7 @@
       "textMatch": true,
       "firstMismatchDetail": null,
       "textDeltaSample": "",
-      "exportMs": 54,
+      "exportMs": 58,
       "imgInfo": []
     },
     {
@@ -49,7 +49,7 @@
       "textMatch": true,
       "firstMismatchDetail": null,
       "textDeltaSample": "",
-      "exportMs": 53,
+      "exportMs": 59,
       "imgInfo": []
     },
     {
@@ -62,7 +62,7 @@
       "textMatch": true,
       "firstMismatchDetail": null,
       "textDeltaSample": "Diagramoftheproposedsitelayout,showingthemainentranceonthenorthsideandparkingtotheeast.",
-      "exportMs": 55,
+      "exportMs": 60,
       "imgInfo": [
         {
           "src": "pagedown-render://render/assets/diagram-placeholder.png",
@@ -83,7 +83,7 @@
       "textMatch": true,
       "firstMismatchDetail": null,
       "textDeltaSample": "",
-      "exportMs": 235,
+      "exportMs": 251,
       "imgInfo": []
     },
     {
@@ -96,7 +96,7 @@
       "textMatch": true,
       "firstMismatchDetail": null,
       "textDeltaSample": "",
-      "exportMs": 67,
+      "exportMs": 66,
       "imgInfo": []
     },
     {
@@ -109,7 +109,7 @@
       "textMatch": true,
       "firstMismatchDetail": null,
       "textDeltaSample": "Siteplan1.2.",
-      "exportMs": 58,
+      "exportMs": 84,
       "imgInfo": [
         {
           "src": "pagedown-render://render/assets/diagram-placeholder.png",
@@ -130,7 +130,7 @@
       "textMatch": true,
       "firstMismatchDetail": null,
       "textDeltaSample": "1.1.2.2.1.2.3.1.2.",
-      "exportMs": 54,
+      "exportMs": 59,
       "imgInfo": []
     },
     {
@@ -143,7 +143,7 @@
       "textMatch": true,
       "firstMismatchDetail": null,
       "textDeltaSample": "",
-      "exportMs": 53,
+      "exportMs": 75,
       "imgInfo": []
     },
     {
@@ -156,7 +156,7 @@
       "textMatch": true,
       "firstMismatchDetail": null,
       "textDeltaSample": "1.",
-      "exportMs": 60,
+      "exportMs": 62,
       "imgInfo": []
     },
     {
@@ -169,20 +169,20 @@
       "textMatch": true,
       "firstMismatchDetail": null,
       "textDeltaSample": "",
-      "exportMs": 55,
+      "exportMs": 59,
       "imgInfo": []
     },
     {
       "file": "tables-spanning-pages.md",
-      "onscreenPageCount": 1,
-      "pdfLibPageCount": 1,
-      "pdfjsPageCount": 1,
+      "onscreenPageCount": 2,
+      "pdfLibPageCount": 2,
+      "pdfjsPageCount": 2,
       "pageCountMatch": true,
       "textCategory": "exact",
       "textMatch": true,
       "firstMismatchDetail": null,
       "textDeltaSample": "",
-      "exportMs": 57,
+      "exportMs": 63,
       "imgInfo": []
     },
     {
@@ -195,7 +195,7 @@
       "textMatch": true,
       "firstMismatchDetail": null,
       "textDeltaSample": "",
-      "exportMs": 633,
+      "exportMs": 699,
       "imgInfo": []
     }
   ],

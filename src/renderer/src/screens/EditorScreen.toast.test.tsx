@@ -23,7 +23,14 @@ const { mockEditorHandle } = vi.hoisted(() => ({
     insertPageBreak: vi.fn(),
     undo: vi.fn(),
     redo: vi.fn(),
-    focusEnd: vi.fn()
+    focusEnd: vi.fn(),
+    // Find & Replace sub-project: these four are part of MilkdownEditorHandle
+    // now, so this hand-built mock has to carry them to satisfy the interface.
+    // Pure stubs -- nothing in this file's toast tests drives find/replace.
+    setFindState: vi.fn(),
+    replaceActiveMatch: vi.fn(),
+    replaceAllMatches: vi.fn(),
+    getSelectedText: vi.fn(() => '')
   }
 }))
 

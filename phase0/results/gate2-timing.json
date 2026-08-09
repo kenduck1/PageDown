@@ -1,79 +1,79 @@
 {
-  "harnessCreateMs": 275.63654099999997,
+  "harnessCreateMs": 254.200042,
   "warmup": {
     "stages": {
-      "markdownToHtml": 5.247541000000069,
-      "sendAndPaginate": 62.52737499999989
+      "markdownToHtml": 5.580500000000029,
+      "sendAndPaginate": 71.74745800000005
     },
     "pageCount": 1,
-    "layoutMs": 13.699999809265137
+    "layoutMs": 25.200000286102295
   },
   "firstPass": {
     "5-page-ish": {
       "stages": {
-        "markdownToHtml": 3.6312500000000227,
-        "sendAndPaginate": 56.28945799999997
+        "markdownToHtml": 3.8488330000000133,
+        "sendAndPaginate": 59.17954099999997
       },
       "pageCount": 1,
-      "layoutMs": 3.4000000953674316
+      "layoutMs": 5.900000095367432
     },
     "~25-page": {
       "stages": {
-        "markdownToHtml": 3.3418329999999514,
-        "sendAndPaginate": 58.06762500000002
+        "markdownToHtml": 3.181459000000018,
+        "sendAndPaginate": 51.047791000000075
       },
       "pageCount": 1,
-      "layoutMs": 6.799999952316284
+      "layoutMs": 15.099999904632568
     },
     "~100-page": {
       "stages": {
-        "markdownToHtml": 65.41670800000009,
-        "sendAndPaginate": 932.803833
+        "markdownToHtml": 69.35725000000002,
+        "sendAndPaginate": 938.0355420000001
       },
       "pageCount": 108,
-      "layoutMs": 897.7999999523163
+      "layoutMs": 892.9000000953674
     },
     "~300-page": {
       "stages": {
-        "markdownToHtml": 181.22645799999987,
-        "sendAndPaginate": 2720.290083
+        "markdownToHtml": 188.0753749999999,
+        "sendAndPaginate": 2744.7505
       },
       "pageCount": 322,
-      "layoutMs": 2684.7999999523163
+      "layoutMs": 2685.2999997138977
     }
   },
   "secondPass": {
     "5-page-ish": {
       "stages": {
-        "markdownToHtml": 1.264458999999988,
-        "sendAndPaginate": 63.5908330000002
+        "markdownToHtml": 1.2574580000000424,
+        "sendAndPaginate": 65.53825000000052
       },
       "pageCount": 1,
-      "layoutMs": 2.200000047683716
+      "layoutMs": 6.099999904632568
     },
     "~25-page": {
       "stages": {
-        "markdownToHtml": 1.5360000000000582,
-        "sendAndPaginate": 56.48454200000015
+        "markdownToHtml": 1.5230409999994663,
+        "sendAndPaginate": 57.02079100000083
       },
       "pageCount": 1,
-      "layoutMs": 7.8999998569488525
+      "layoutMs": 13.800000190734863
     },
     "~100-page": {
       "stages": {
-        "markdownToHtml": 60.08229200000005,
-        "sendAndPaginate": 934.539291
+        "markdownToHtml": 58.484958000000006,
+        "sendAndPaginate": 950.0256250000002
       },
       "pageCount": 108,
-      "layoutMs": 897.5
+      "layoutMs": 895.9000000953674
     },
     "~300-page": {
       "stages": {
-        "markdownToHtml": 167.11312499999985,
-        "sendAndPaginate": 2723.6412500000006
+        "markdownToHtml": 177.19758300000012,
+        "sendAndPaginate": 2738.6300410000013
       },
       "pageCount": 322,
-      "layoutMs": 2687.9000000953674
+      "layoutMs": 2686.2999997138977
     }
   }
 }

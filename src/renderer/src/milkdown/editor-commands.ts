@@ -13,6 +13,12 @@ import {
 } from '@milkdown/preset-commonmark'
 import { insertTableCommand } from '@milkdown/preset-gfm'
 import { undoCommand, redoCommand, insertPagebreakCommand } from './commands'
+import {
+  applyFindState,
+  replaceActiveMatchIn,
+  replaceAllMatchesIn,
+  type FindStateInput
+} from './find-plugin'
 
 // This is a separate file from MilkdownEditor.tsx (fix-round change) purely
 // for eslint-plugin-react-refresh's `only-export-components` rule -- a
@@ -165,6 +171,21 @@ export interface EditorCommands {
   // that node, per ProseMirror's ordinary "typing over a NodeSelection"
   // behavior. The implementation below special-cases this.
   focusEnd: () => void
+  // Pushes the find bar's current query/options/cursor into the mounted find
+  // plugin (find-plugin.ts) and, when the active match changes, selects and
+  // scrolls to it -- see applyFindState's own doc comment for why selecting
+  // (rather than only decorating) is the right move and why it deliberately
+  // does not steal focus.
+  setFindState: (next: FindStateInput) => void
+  // Replaces the currently active match with literal text, inheriting the
+  // marks at the match's start. A no-op when there is no active match.
+  replaceActiveMatch: (replacement: string) => void
+  // Replaces every current match in ONE transaction, i.e. one undo step.
+  replaceAllMatches: (replacement: string) => void
+  // The document text under the current selection, or '' when the selection
+  // is collapsed -- backs Cmd/Ctrl+F seeding the query from whatever the user
+  // had selected, the way every editor does.
+  getSelectedText: () => string
 }
 
 // Builds the real formatting-toolbar command surface for a live Editor
@@ -304,6 +325,30 @@ export function buildEditorCommands(editor: Editor): EditorCommands {
         view.dispatch(tr)
         view.focus()
       })
+    },
+    setFindState: (next) => {
+      editor.action((ctx) => {
+        applyFindState(ctx.get(editorViewCtx), next)
+      })
+    },
+    replaceActiveMatch: (replacement) => {
+      editor.action((ctx) => {
+        replaceActiveMatchIn(ctx.get(editorViewCtx), replacement)
+      })
+    },
+    replaceAllMatches: (replacement) => {
+      editor.action((ctx) => {
+        replaceAllMatchesIn(ctx.get(editorViewCtx), replacement)
+      })
+    },
+    getSelectedText: () => {
+      let selected = ''
+      editor.action((ctx) => {
+        const view = ctx.get(editorViewCtx)
+        const { from, to } = view.state.selection
+        selected = from === to ? '' : view.state.doc.textBetween(from, to, ' ')
+      })
+      return selected
     }
   }
 }
