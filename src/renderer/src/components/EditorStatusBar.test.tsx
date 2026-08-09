@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import EditorStatusBar from './EditorStatusBar'
 
@@ -35,10 +35,12 @@ describe('EditorStatusBar', () => {
     render(
       <EditorStatusBar
         content={'# Heading\n\nOne two three four.'}
-        filePath={null}
         isDirty={false}
         zoom={1}
         onZoomChange={vi.fn()}
+        pageCount={3}
+        currentPage={1}
+        onNavigateToPage={vi.fn()}
       />
     )
     // "Heading" + "One two three four." = 5 words.
@@ -49,10 +51,12 @@ describe('EditorStatusBar', () => {
     render(
       <EditorStatusBar
         content="Hi"
-        filePath={null}
         isDirty={false}
         zoom={1}
         onZoomChange={vi.fn()}
+        pageCount={3}
+        currentPage={1}
+        onNavigateToPage={vi.fn()}
       />
     )
     expect(screen.getByText('1 word')).toBeInTheDocument()
@@ -62,10 +66,12 @@ describe('EditorStatusBar', () => {
     render(
       <EditorStatusBar
         content="Hi"
-        filePath={null}
         isDirty={false}
         zoom={1}
         onZoomChange={vi.fn()}
+        pageCount={3}
+        currentPage={1}
+        onNavigateToPage={vi.fn()}
       />
     )
     expect(screen.getByText('Saved')).toBeInTheDocument()
@@ -76,10 +82,12 @@ describe('EditorStatusBar', () => {
     render(
       <EditorStatusBar
         content="Hi"
-        filePath={null}
         isDirty={true}
         zoom={1}
         onZoomChange={vi.fn()}
+        pageCount={3}
+        currentPage={1}
+        onNavigateToPage={vi.fn()}
       />
     )
     expect(screen.getByText('Unsaved changes')).toBeInTheDocument()
@@ -92,10 +100,12 @@ describe('EditorStatusBar', () => {
     render(
       <EditorStatusBar
         content="Hi"
-        filePath={null}
         isDirty={false}
         zoom={1}
         onZoomChange={onZoomChange}
+        pageCount={3}
+        currentPage={1}
+        onNavigateToPage={vi.fn()}
       />
     )
 
@@ -108,99 +118,90 @@ describe('EditorStatusBar', () => {
     render(
       <EditorStatusBar
         content="Hi"
-        filePath={null}
         isDirty={false}
         zoom={0.75}
         onZoomChange={vi.fn()}
+        pageCount={3}
+        currentPage={1}
+        onNavigateToPage={vi.fn()}
       />
     )
     expect(screen.getByLabelText('Zoom level')).toHaveValue('0.75')
   })
+})
 
-  it('fetches and displays the real page count via window.api.getPageCount', async () => {
-    render(
-      <EditorStatusBar
-        content="# Doc"
-        filePath={null}
-        isDirty={false}
-        zoom={1}
-        onZoomChange={vi.fn()}
-      />
-    )
+function renderBar(overrides: Partial<React.ComponentProps<typeof EditorStatusBar>> = {}): {
+  onNavigateToPage: ReturnType<typeof vi.fn>
+} {
+  const onNavigateToPage = vi.fn()
+  render(
+    <EditorStatusBar
+      content="one two three"
+      isDirty={false}
+      zoom={1}
+      onZoomChange={vi.fn()}
+      pageCount={12}
+      currentPage={3}
+      onNavigateToPage={onNavigateToPage}
+      {...overrides}
+    />
+  )
+  return { onNavigateToPage }
+}
 
-    await waitFor(() => expect(screen.getByText('Page 1 of 3')).toBeInTheDocument(), {
-      timeout: 2000
-    })
-    expect(window.api.getPageCount).toHaveBeenCalledWith('# Doc', null)
+describe('EditorStatusBar page navigation', () => {
+  it('shows the real current page and total', () => {
+    renderBar()
+    expect(screen.getByRole('button', { name: /page 3 of 12/i })).toBeInTheDocument()
   })
 
-  it("forwards the document's own file path so local image references can resolve", async () => {
-    render(
-      <EditorStatusBar
-        content="# Doc"
-        filePath="/Users/someone/notes/report.md"
-        isDirty={false}
-        zoom={1}
-        onZoomChange={vi.fn()}
-      />
-    )
-
-    // The path is what the main process turns into an asset root for this
-    // document's own directory (src/main/page-count-generator.ts) -- without
-    // it, every local image in the counted document silently 404s.
-    await waitFor(
-      () =>
-        expect(window.api.getPageCount).toHaveBeenCalledWith(
-          '# Doc',
-          '/Users/someone/notes/report.md'
-        ),
-      { timeout: 2000 }
-    )
-  })
-
-  it('shows a placeholder page count while the real count is still loading', () => {
-    // Never resolves within this test, so the initial "—" placeholder is
-    // what's on screen throughout.
-    vi.mocked(window.api.getPageCount).mockReturnValue(new Promise(() => {}))
-    render(
-      <EditorStatusBar
-        content="# Doc"
-        filePath={null}
-        isDirty={false}
-        zoom={1}
-        onZoomChange={vi.fn()}
-      />
-    )
-    expect(screen.getByText('Page 1 of —')).toBeInTheDocument()
-  })
-
-  it('page-nav chevrons and the jump-to-page text are present but inert', async () => {
-    // Never resolves, so the page count stays at its initial placeholder for
-    // the lifetime of this test regardless of real wall-clock time elapsed
-    // during the two clicks below -- avoids a race against usePageCount's
-    // real 500ms debounce.
-    vi.mocked(window.api.getPageCount).mockReturnValue(new Promise(() => {}))
+  it('navigates forward and back', async () => {
     const user = userEvent.setup()
-    render(
-      <EditorStatusBar
-        content="# Doc"
-        filePath={null}
-        isDirty={false}
-        zoom={1}
-        onZoomChange={vi.fn()}
-      />
-    )
+    const { onNavigateToPage } = renderBar()
+    await user.click(screen.getByRole('button', { name: 'Next page' }))
+    expect(onNavigateToPage).toHaveBeenCalledWith(4)
+    await user.click(screen.getByRole('button', { name: 'Previous page' }))
+    expect(onNavigateToPage).toHaveBeenCalledWith(2)
+  })
 
-    const prevButton = screen.getByRole('button', { name: 'Previous page' })
-    const nextButton = screen.getByRole('button', { name: 'Next page' })
-    const jumpButton = screen.getByRole('button', { name: 'Page 1 of —' })
+  it('disables Previous on the first page', () => {
+    renderBar({ currentPage: 1 })
+    expect(screen.getByRole('button', { name: 'Previous page' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Next page' })).toBeEnabled()
+  })
 
-    // Clicking must not throw and must not change the displayed page text --
-    // proving these are genuine no-ops, not just "didn't crash."
-    await user.click(prevButton)
-    await user.click(nextButton)
-    await user.click(jumpButton)
+  it('disables Next on the last page', () => {
+    renderBar({ currentPage: 12 })
+    expect(screen.getByRole('button', { name: 'Next page' })).toBeDisabled()
+  })
 
-    expect(screen.getByText('Page 1 of —')).toBeInTheDocument()
+  it('disables both when the page count is unknown', () => {
+    renderBar({ pageCount: null })
+    expect(screen.getByRole('button', { name: 'Previous page' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Next page' })).toBeDisabled()
+  })
+
+  it('jumps to a typed page on Enter', async () => {
+    const user = userEvent.setup()
+    const { onNavigateToPage } = renderBar()
+    await user.click(screen.getByRole('button', { name: /page 3 of 12/i }))
+    const input = screen.getByRole('spinbutton', { name: /jump to page/i })
+    await user.clear(input)
+    await user.type(input, '7{Enter}')
+    expect(onNavigateToPage).toHaveBeenCalledWith(7)
+  })
+
+  it('cancels the jump input on Escape without navigating', async () => {
+    const user = userEvent.setup()
+    const { onNavigateToPage } = renderBar()
+    await user.click(screen.getByRole('button', { name: /page 3 of 12/i }))
+    await user.type(screen.getByRole('spinbutton', { name: /jump to page/i }), '7{Escape}')
+    expect(onNavigateToPage).not.toHaveBeenCalled()
+    expect(screen.getByRole('button', { name: /page 3 of 12/i })).toBeInTheDocument()
+  })
+
+  it('still shows the word count', () => {
+    renderBar()
+    expect(screen.getByText('3 words')).toBeInTheDocument()
   })
 })
