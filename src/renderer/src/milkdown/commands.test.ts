@@ -214,6 +214,28 @@ describe('insertMathBlockCommand', () => {
     expect(applied).toBe(false)
     expect(editor.action(getMarkdown())).toBe(source)
   })
+
+  // Fix-round regression test (Critical 1): a heading is a textblock too
+  // (headingSchema's content is also `inline*`), and its content ALSO
+  // passes the validContent check just below the guard this test exercises
+  // -- so the original `!blockNode.isTextblock` guard let this command run
+  // against a heading, destroying its title text and producing a broken
+  // `"$$\nx^2\n$$\n--\n"` (mdast-util-to-markdown falling back to Setext
+  // underline syntax because of the embedded raw newlines), which was
+  // neither a working heading nor working math (only a genuine paragraph's
+  // content parses as remark-math block math). The pre-existing code-block
+  // test just above does NOT exercise this branch -- it's refused by
+  // `validContent` failing (no room for a hardbreak in `text*` content),
+  // never reaching the paragraph-type check at all -- which is exactly why
+  // this bug shipped without a failing test. Reproduced directly against
+  // the pre-fix guard before writing this test, not assumed.
+  it('refuses (returns false, mutates nothing) inside a heading -- only a paragraph is a valid target', async () => {
+    const source = '## My Heading\n'
+    const editor = await createTestEditor(source, EDITOR_COMMAND_PLUGINS)
+    const applied = editor.action((ctx) => ctx.get(commandsCtx).call(insertMathBlockCommand.key))
+    expect(applied).toBe(false)
+    expect(editor.action(getMarkdown())).toBe(source)
+  })
 })
 
 describe('insertMermaidBlockCommand', () => {

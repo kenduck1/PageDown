@@ -10,7 +10,8 @@ import {
   bulletListSchema,
   listItemSchema,
   codeBlockSchema,
-  hardbreakSchema
+  hardbreakSchema,
+  paragraphSchema
 } from '@milkdown/preset-commonmark'
 import { pagebreakNode } from './nodes/pagebreak'
 import { commentSchema } from './nodes/comment'
@@ -319,18 +320,53 @@ export const insertTaskListCommand = $command(
 // its paragraph" -- see pagebreak-plugin.ts), so replacing the whole
 // current block's content is what actually guarantees that shape, matching
 // how insertMermaidBlockCommand below also replaces its target block's
-// content wholesale rather than inserting into it. Refuses (returns
-// false) via `validContent` when the current block's schema can't actually
-// hold this node sequence -- e.g. a code_block, whose content is
-// `text*` only, no hardbreak permitted -- rather than throwing or silently
-// corrupting the document.
+// content wholesale rather than inserting into it.
+//
+// CONTRACT, not enforced by ProseMirror itself: this command replaces
+// whatever the target block currently holds with NO confirmation and NO
+// attempt to preserve it -- mirroring insertPagebreakCommand's own doc
+// comment above, which documents a real, previously-shipped bug from doing
+// the opposite (a ranged selection silently eaten by a naive
+// `replaceSelectionWith`). Callers (the slash-menu palette, built in a
+// later task) must only invoke this where the target block's content is
+// genuinely expendable -- in practice, an empty or soon-to-be-cleared
+// paragraph at the point the palette itself was triggered from, not
+// arbitrary existing prose.
+//
+// Fix-round finding (verified by direct execution, not theorized): the
+// original guard here was `!blockNode.isTextblock`, which is strictly
+// BROADER than "is this a paragraph" -- a `heading` is a textblock too
+// (`headingSchema.content = "inline*"`), and its content also passes the
+// `validContent` check just below (hardbreak/text fit `inline*` fine). That
+// let this command run against a heading like `## My Heading`: `applied`
+// came back `true`, but the result was neither a working heading (its
+// title text was gone, replaced by the math sequence) nor working math
+// (only a PARAGRAPH's worth of content parses as `remark-math` block math,
+// per this comment's own paragraph-requirement claim two paragraphs up --
+// a heading never does), and `getMarkdown()` produced a broken
+// `"$$\nx^2\n$$\n--\n"` -- mdast-util-to-markdown falling back to Setext
+// underline syntax because the embedded raw newlines no longer round-trip
+// as a clean ATX heading. Narrowing the guard to an exact paragraph-type
+// check (rather than "any textblock") closes this: a heading, a table
+// cell's own inline content, and any other non-paragraph textblock now all
+// correctly refuse instead of silently corrupting. Table cells and list
+// items are UNAFFECTED by this narrowing and stay working, because their
+// own textblock child already IS a real `paragraph` node (confirmed by
+// reading both schemas) -- this only newly refuses genuinely non-paragraph
+// textblocks like headings.
 export const insertMathBlockCommand = $command(
   'InsertMathBlock',
   (ctx) => () => (state, dispatch) => {
     const hardbreakType = hardbreakSchema.type(ctx)
+    const paragraphType = paragraphSchema.type(ctx)
     const $from = state.selection.$from
     const blockNode = $from.parent
-    if (!blockNode.isTextblock) return false
+    // Exact paragraph-type check, not `isTextblock` -- see this command's
+    // own doc comment above for the real heading-corruption bug this
+    // guards against. `validContent` alone (below) is not enough on its
+    // own: a heading's `inline*` content happily accepts a hardbreak too,
+    // so it never rejects a heading by itself.
+    if (blockNode.type !== paragraphType) return false
 
     const placeholder = 'x^2'
     const nodes = [
@@ -340,10 +376,10 @@ export const insertMathBlockCommand = $command(
       hardbreakType.create({ isInline: true }),
       state.schema.text('$$')
     ]
-    // Can the current block's own schema actually hold this exact node
-    // sequence? (Answers no for e.g. a code_block, whose content is
-    // `text*` only -- no hardbreak permitted.) `Fragment.from` + `validContent`
-    // is a pure, read-only check -- nothing is mutated by asking it.
+    // Belt-and-suspenders: even restricted to a genuine paragraph, confirm
+    // its schema can actually hold this exact node sequence before
+    // mutating anything. `Fragment.from` + `validContent` is a pure,
+    // read-only check.
     if (!blockNode.type.validContent(Fragment.from(nodes))) return false
 
     const blockStart = $from.before($from.depth)
@@ -385,6 +421,19 @@ export const insertMathBlockCommand = $command(
 // boundary to split on the way a table/paragraph split would) -- replacing
 // the block's content outright, the same fix insertMathBlockCommand needed,
 // avoids that regardless of what the block contained before conversion.
+//
+// CONTRACT, not enforced by ProseMirror itself, same as insertMathBlockCommand
+// above: this command replaces whatever the target block currently holds with
+// NO confirmation and NO attempt to preserve it. Unlike insertMathBlockCommand,
+// there is deliberately no paragraph-only guard here -- `setBlockType` (the
+// same underlying function createCodeBlockCommand itself calls) already
+// converts ANY qualifying textblock, headings included, into a code_block,
+// which is ordinary, expected stock behavior (the same thing typing a code
+// fence's own input rule while the cursor is in a heading would do), not a
+// new correctness bug this command introduces. Callers (the slash-menu
+// palette, built in a later task) must still only invoke this where the
+// target block's content is genuinely expendable, for the same reason
+// insertMathBlockCommand's own contract note gives.
 export const insertMermaidBlockCommand = $command(
   'InsertMermaidBlock',
   (ctx) => () => (state, dispatch) => {
