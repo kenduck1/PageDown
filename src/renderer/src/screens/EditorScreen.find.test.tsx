@@ -108,7 +108,8 @@ beforeEach(() => {
     destroySplitPreview: vi.fn(),
     scrollSplitPreviewToPage: vi.fn().mockResolvedValue({ currentPage: 1, pageCount: 0 }),
     getSplitPreviewPage: vi.fn().mockResolvedValue({ currentPage: 1, pageCount: 0 }),
-    saveDroppedImage: vi.fn()
+    saveDroppedImage: vi.fn(),
+    openInNewWindow: vi.fn()
   }
 })
 

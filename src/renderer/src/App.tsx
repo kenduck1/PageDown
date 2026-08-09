@@ -1,5 +1,6 @@
 import { useEffect } from 'react'
 import { useAppStore } from './store/appStore'
+import { useDocumentStore } from './store/documentStore'
 import { usePreferencesStore } from './store/preferencesStore'
 import HomeScreen from './screens/HomeScreen'
 import EditorScreen from './screens/EditorScreen'
@@ -7,6 +8,7 @@ import SettingsScreen from './screens/SettingsScreen'
 
 function App(): React.JSX.Element {
   const screen = useAppStore((state) => state.screen)
+  const goEditor = useAppStore((state) => state.goEditor)
   const preferences = usePreferencesStore((state) => state.preferences)
   const setPreferences = usePreferencesStore((state) => state.setPreferences)
 
@@ -20,6 +22,29 @@ function App(): React.JSX.Element {
   useEffect(() => {
     window.api.getPreferences().then(setPreferences)
   }, [setPreferences])
+
+  // "Open in New Window" (Multi-window support): a fresh window's own
+  // main-process createWindow() rides the target document's path along as
+  // a `?openPath=...` query param (src/main/index.ts) rather than pushing
+  // it over some new dedicated IPC channel -- this reads it back the same
+  // way any web app reads its own launch URL. Goes through the EXACT SAME
+  // documentStore.openPath() action a user clicking a recent-file row
+  // already calls, so it re-validates through the real file:openPath
+  // IPC/isKnownPath check independently of whatever the opening window
+  // claimed -- the query param carries no elevated trust. `window.location.search`
+  // itself never changes after this window's initial load, so `goEditor`
+  // (a stable Zustand action reference, like setPreferences above) is the
+  // only real dependency.
+  useEffect(() => {
+    const openPath = new URLSearchParams(window.location.search).get('openPath')
+    if (!openPath) return
+    useDocumentStore
+      .getState()
+      .openPath(openPath)
+      .then((loaded) => {
+        if (loaded) goEditor()
+      })
+  }, [goEditor])
 
   // Applies the app-shell CHROME theme by setting data-theme on <html> --
   // base.css's :root[data-theme='dark'] block is what actually overrides

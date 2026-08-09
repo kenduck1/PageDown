@@ -40,7 +40,8 @@ beforeEach(() => {
     destroySplitPreview: vi.fn(),
     scrollSplitPreviewToPage: vi.fn(),
     getSplitPreviewPage: vi.fn(),
-    saveDroppedImage: vi.fn()
+    saveDroppedImage: vi.fn(),
+    openInNewWindow: vi.fn()
   }
 })
 
@@ -69,6 +70,48 @@ describe('App', () => {
     await user.click(screen.getByRole('button', { name: '← Home' }))
     expect(screen.getByText('PageDown')).toBeInTheDocument()
     expect(screen.queryAllByText('Untitled')).toHaveLength(0)
+  })
+
+  describe('opening a document via ?openPath= (Multi-window support)', () => {
+    afterEach(() => {
+      window.history.replaceState(null, '', '/')
+    })
+
+    it('opens the document named by ?openPath= and navigates straight to Editor', async () => {
+      window.history.replaceState(null, '', '/?openPath=%2Ftmp%2Freport.md')
+      vi.mocked(window.api.openPath).mockResolvedValue({
+        filePath: '/tmp/report.md',
+        content: '# Report',
+        recoveredFromAutosave: false
+      })
+
+      render(<App />)
+
+      expect(await screen.findAllByText(/report\.md|Report/)).not.toHaveLength(0)
+      expect(window.api.openPath).toHaveBeenCalledWith('/tmp/report.md')
+      expect(useAppStore.getState().screen).toBe('editor')
+    })
+
+    it('stays on Home and shows no error when ?openPath= points at an unknown path', async () => {
+      window.history.replaceState(null, '', '/?openPath=%2Ftmp%2Funknown.md')
+      vi.mocked(window.api.openPath).mockRejectedValue(
+        new Error('Requested path is not a known recent file')
+      )
+
+      render(<App />)
+
+      await screen.findByText('PageDown')
+      expect(window.api.openPath).toHaveBeenCalledWith('/tmp/unknown.md')
+      expect(useAppStore.getState().screen).toBe('home')
+    })
+
+    it('does nothing when there is no ?openPath= at all (ordinary launch)', async () => {
+      render(<App />)
+      await screen.findByText('PageDown')
+
+      expect(window.api.openPath).not.toHaveBeenCalled()
+      expect(useAppStore.getState().screen).toBe('home')
+    })
   })
 
   describe('app-level color scheme', () => {

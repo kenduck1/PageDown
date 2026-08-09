@@ -68,7 +68,13 @@ const api = {
   // reasonable "denied but still proceeds" behavior for a feature whose
   // entire purpose is writing a new file next to the document.
   saveDroppedImage: (filePath: string | null, base64Data: string, suggestedFilename: string) =>
-    ipcRenderer.invoke('file:saveDroppedImage', filePath, base64Data, suggestedFilename)
+    ipcRenderer.invoke('file:saveDroppedImage', filePath, base64Data, suggestedFilename),
+  // `filePath: null`/omitted opens a plain new window at Home, same as the
+  // app's own first launch -- see createWindow's own doc comment in
+  // src/main/index.ts for why no isKnownPath check is needed here
+  // specifically (the new window re-validates independently).
+  openInNewWindow: (filePath?: string | null) =>
+    ipcRenderer.invoke('window:openInNew', filePath ?? null)
 }
 
 // Use `contextBridge` APIs to expose Electron APIs to

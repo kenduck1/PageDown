@@ -79,30 +79,75 @@ function TemplateCard({
 
 function RecentRow({
   entry,
-  onSelect
+  onSelect,
+  onOpenInNewWindow
 }: {
   entry: RecentFileEntry
   onSelect: () => void
+  onOpenInNewWindow: () => void
 }): React.JSX.Element {
   const thumbnail = useThumbnail(entry.filePath, () => window.api.getThumbnail(entry.filePath))
   const filename = entry.filePath.split(/[/\\]/).pop() ?? entry.filePath
 
   return (
-    <button
-      onClick={onSelect}
-      className="flex w-full items-center gap-3 rounded-md px-2 py-2 text-left hover:bg-accent/6"
-    >
-      <div className="h-[52px] w-[40px] flex-shrink-0 overflow-hidden rounded-sm bg-canvas">
-        {thumbnail.dataUrl && (
-          <img src={thumbnail.dataUrl} alt="" className="h-full w-full object-cover" />
-        )}
-      </div>
-      <div className="flex flex-1 flex-col">
-        <span className="text-13 font-semibold text-text-primary">{filename}</span>
-        <span className="text-11-5 text-text-tertiary">{thumbnail.pageCount ?? '—'} pages</span>
-      </div>
+    // A plain div, not a single row-wide <button> -- Multi-window support
+    // added a SECOND, real action (Open in New Window) to this row, and
+    // nesting one <button> inside another is invalid HTML. The main open
+    // action and the new-window action are now two sibling buttons inside
+    // this wrapper instead.
+    <div className="flex w-full items-center gap-3 rounded-md px-2 py-2 hover:bg-accent/6">
+      <button onClick={onSelect} className="flex flex-1 items-center gap-3 text-left">
+        <div className="h-[52px] w-[40px] flex-shrink-0 overflow-hidden rounded-sm bg-canvas">
+          {thumbnail.dataUrl && (
+            <img src={thumbnail.dataUrl} alt="" className="h-full w-full object-cover" />
+          )}
+        </div>
+        <div className="flex flex-1 flex-col">
+          <span className="text-13 font-semibold text-text-primary">{filename}</span>
+          <span className="text-11-5 text-text-tertiary">{thumbnail.pageCount ?? '—'} pages</span>
+        </div>
+      </button>
       <span className="text-11-5 text-text-tertiary">{formatRelativeTime(entry.editedAt)}</span>
-    </button>
+      {/* Always visible (not opacity-0-until-hover) -- a hover-only reveal
+      for the Split-mode divider was already found, this same session, to
+      have a real discoverability problem in its resting state; this button
+      stays subtle (text-tertiary) rather than invisible instead.
+
+      Deliberately a GENERIC "Open in new window" label, not "Open
+      {filename} in a new window" -- a real regression, not a style
+      preference: the filename substring in this button's own name made it
+      match the exact same bare `new RegExp(filename)` pattern nine
+      pre-existing gate specs already use to click a recent-file row's
+      MAIN open button (phase0/gate11/14/16/17/18/19/20/22/23), producing a
+      genuine Playwright strict-mode ambiguity (two buttons, one name
+      match) -- caught by gate14 failing for real, not a flake. A screen
+      reader traversing this row already announces the filename via the
+      main button immediately before this one, so a generic label here
+      reads naturally in context, matching how many real apps label a
+      per-row icon action. */}
+      <button
+        onClick={onOpenInNewWindow}
+        title="Open in new window"
+        aria-label="Open in new window"
+        className="flex-shrink-0 rounded-sm p-1.5 text-text-tertiary hover:bg-accent/9 hover:text-text-primary"
+      >
+        <svg
+          width="14"
+          height="14"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1.75"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          aria-hidden="true"
+        >
+          <rect x="4" y="4" width="16" height="16" rx="2" />
+          <path d="M14 4h6v6" />
+          <path d="M20 4l-8 8" />
+        </svg>
+      </button>
+    </div>
   )
 }
 
@@ -161,6 +206,18 @@ function HomeScreen(): React.JSX.Element {
   const handleOpenRecent = async (filePath: string): Promise<void> => {
     const loaded = await openPath(filePath)
     if (loaded) goEditor()
+  }
+
+  // Fire-and-forget, same rationale as every other one-shot IPC action in
+  // this app that has no meaningful loading/error state of its own to
+  // show (e.g. this component's own thumbnail requests) -- the new
+  // window's own creation/load failures have nothing THIS window could
+  // usefully surface anyway. Deliberately does NOT touch this window's own
+  // state at all: it stays exactly where it was (Home), which is the
+  // whole point of opening a second document in its OWN window rather than
+  // navigating away from this one.
+  const handleOpenInNewWindow = (filePath: string): void => {
+    void window.api.openInNewWindow(filePath)
   }
 
   // Matches against the same basename RecentRow itself displays (not the
@@ -264,6 +321,7 @@ function HomeScreen(): React.JSX.Element {
                   key={entry.filePath}
                   entry={entry}
                   onSelect={() => handleOpenRecent(entry.filePath)}
+                  onOpenInNewWindow={() => handleOpenInNewWindow(entry.filePath)}
                 />
               ))}
             </div>
