@@ -16,6 +16,7 @@ interface AppStateValues {
   splitLeftMode: SplitLeftMode
   splitRatio: number
   pageSetupOpen: boolean
+  shortcutsHelpOpen: boolean
   homeActiveSection: HomeActiveSection
   currentPage: number
 }
@@ -30,6 +31,8 @@ interface AppState extends AppStateValues {
   setSplitRatio: (percent: number) => void
   openPageSetup: () => void
   closePageSetup: () => void
+  openShortcutsHelp: () => void
+  closeShortcutsHelp: () => void
   setHomeActiveSection: (section: HomeActiveSection) => void
   setCurrentPage: (page: number) => void
 }
@@ -41,6 +44,7 @@ export const initialAppState: AppStateValues = {
   splitLeftMode: 'format',
   splitRatio: 50,
   pageSetupOpen: false,
+  shortcutsHelpOpen: false,
   homeActiveSection: 'recent',
   currentPage: 1
 }
@@ -61,6 +65,8 @@ export const useAppStore = create<AppState>()((set) => ({
   setSplitRatio: (percent) => set({ splitRatio: clampSplitRatio(percent) }),
   openPageSetup: () => set({ pageSetupOpen: true }),
   closePageSetup: () => set({ pageSetupOpen: false }),
+  openShortcutsHelp: () => set({ shortcutsHelpOpen: true }),
+  closeShortcutsHelp: () => set({ shortcutsHelpOpen: false }),
   setHomeActiveSection: (section) => set({ homeActiveSection: section }),
   setCurrentPage: (page) =>
     set((state) => (Number.isFinite(page) ? { currentPage: Math.max(1, Math.floor(page)) } : state))

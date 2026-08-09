@@ -1,15 +1,18 @@
 import { useEffect, type RefObject } from 'react'
 import { useFindStore } from '../store/findStore'
 
-// This app's FIRST AND ONLY keyboard shortcut. There is no Electron
-// application Menu (see CLAUDE.md's known-gaps notes elsewhere for the
-// broader "no real app menu yet" state), and the only other `keydown`
+// This app's FIRST bare-`window`-level keyboard shortcut (a second,
+// ShortcutsHelpModal's Mod-/, followed the same pattern later -- see
+// EditorScreen.tsx's own shortcuts-help keydown effect). There is no
+// Electron application Menu (see CLAUDE.md's known-gaps notes elsewhere for
+// the broader "no real app menu yet" state), and the only other `keydown`
 // listener anywhere in the renderer is EditorTabBar's own per-tab Enter/Space
 // a11y handler -- so a bare `window` listener, rather than a real menu
 // accelerator, is genuinely the only mechanism available right now. The
 // stated cost of that choice: this shortcut does not show up in any menu (no
 // menu exists to show it in), and there is no discoverability path beyond the
-// toolbar's own Find button. Building a real app Menu -- which would need
+// toolbar's own Find button (and now ShortcutsHelpModal's own reference
+// list, once a user finds THAT). Building a real app Menu -- which would need
 // main-process menu construction plus an IPC channel to deliver the resulting
 // command into the renderer -- is a separate, deliberately deferred
 // sub-project, not something folded into this one.
