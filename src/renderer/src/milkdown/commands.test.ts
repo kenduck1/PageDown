@@ -10,7 +10,10 @@ import {
   undoCommand,
   redoCommand,
   addCommentCommand,
-  resolveCommentCommand
+  resolveCommentCommand,
+  insertTaskListCommand,
+  insertMathBlockCommand,
+  insertMermaidBlockCommand
 } from './commands'
 import { EDITOR_SCHEMA_PLUGINS } from './plugins'
 
@@ -148,5 +151,90 @@ describe('comment mark commands', () => {
       ctx.get(commandsCtx).call(resolveCommentCommand.key, 'not-a-real-id')
     )
     expect(resolved).toBe(false)
+  })
+})
+
+// insertTaskListCommand/insertMathBlockCommand/insertMermaidBlockCommand
+// need no schema beyond what commonmark/gfm already register (task list
+// reuses gfm's existing extendListItemSchemaForTask `checked` attr; math
+// reuses commonmark's own hardbreak/text; mermaid reuses commonmark's own
+// code_block) -- so, like the historyKeymap tests above and unlike the
+// comment-mark tests, EDITOR_COMMAND_PLUGINS alone is enough (createTestEditor
+// always mounts commonmark+gfm as its own unconditional baseline).
+describe('insertTaskListCommand', () => {
+  it('wraps the current block in a task-list item that serializes to exactly "- [ ] "', async () => {
+    const editor = await createTestEditor('Buy milk', EDITOR_COMMAND_PLUGINS)
+    const applied = editor.action((ctx) => ctx.get(commandsCtx).call(insertTaskListCommand.key))
+    expect(applied).toBe(true)
+    expect(editor.action(getMarkdown())).toBe('- [ ] Buy milk\n')
+  })
+
+  it('is a real ProseMirror Command: dry-run (called via a Command function directly, with no dispatch) mutates nothing', async () => {
+    // Exercises the command's OWN returned function with dispatch omitted --
+    // the standard ProseMirror "is this applicable" convention -- rather
+    // than going through commandsCtx.call (which always supplies a real
+    // dispatch), to prove the guard this file's own module comment
+    // describes (every dispatch?.(...) call site) actually holds.
+    const editor = await createTestEditor('Buy milk', EDITOR_COMMAND_PLUGINS)
+    const before = editor.action(getMarkdown())
+    editor.action((ctx) => {
+      const command = ctx.get(commandsCtx).get(insertTaskListCommand.key)(undefined)
+      const view = ctx.get(editorViewCtx)
+      const applicable = command(view.state)
+      expect(applicable).toBe(true)
+    })
+    expect(editor.action(getMarkdown())).toBe(before)
+  })
+})
+
+describe('insertMathBlockCommand', () => {
+  it('replaces the current block with the $$ math placeholder sequence, exactly matching the verified round-trip recipe', async () => {
+    const editor = await createTestEditor('Some text', EDITOR_COMMAND_PLUGINS)
+    const applied = editor.action((ctx) => ctx.get(commandsCtx).call(insertMathBlockCommand.key))
+    expect(applied).toBe(true)
+    expect(editor.action(getMarkdown())).toBe('$$\nx^2\n$$\n')
+  })
+
+  it('selects the placeholder text ("x^2") so the next keystroke types over it, not the surrounding $$/hardbreaks', async () => {
+    const editor = await createTestEditor('Some text', EDITOR_COMMAND_PLUGINS)
+    editor.action((ctx) => ctx.get(commandsCtx).call(insertMathBlockCommand.key))
+    const view = editor.action((ctx) => ctx.get(editorViewCtx)) as EditorView
+    const selected = view.state.doc.textBetween(
+      view.state.selection.from,
+      view.state.selection.to,
+      ' '
+    )
+    expect(selected).toBe('x^2')
+  })
+
+  it('refuses (returns false, mutates nothing) inside a code block, whose schema has no room for a hardbreak', async () => {
+    const source = '```js\nconsole.log(1)\n```\n'
+    const editor = await createTestEditor(source, EDITOR_COMMAND_PLUGINS)
+    const applied = editor.action((ctx) => ctx.get(commandsCtx).call(insertMathBlockCommand.key))
+    expect(applied).toBe(false)
+    expect(editor.action(getMarkdown())).toBe(source)
+  })
+})
+
+describe('insertMermaidBlockCommand', () => {
+  it('converts the current block into a ```mermaid fenced code block carrying the placeholder diagram', async () => {
+    const editor = await createTestEditor('Some text', EDITOR_COMMAND_PLUGINS)
+    const applied = editor.action((ctx) => ctx.get(commandsCtx).call(insertMermaidBlockCommand.key))
+    expect(applied).toBe(true)
+    expect(editor.action(getMarkdown())).toBe('```mermaid\ngraph TD;\n  A-->B;\n```\n')
+  })
+
+  it('replaces whatever text the block already held, rather than prepending the placeholder before it', async () => {
+    // Regression test for the reverse-of-drop-image-style bug this command's
+    // own doc comment describes: an earlier probe that inserted the
+    // placeholder at the post-conversion cursor (instead of replacing the
+    // block's content) produced "graph TD;\n  A-->B;Hello world." -- the
+    // placeholder glued onto the pre-existing text with no separator, since
+    // a code_block's `text*` content has no block boundary to split on.
+    const editor = await createTestEditor('Hello world.', EDITOR_COMMAND_PLUGINS)
+    editor.action((ctx) => ctx.get(commandsCtx).call(insertMermaidBlockCommand.key))
+    const output = editor.action(getMarkdown())
+    expect(output).toBe('```mermaid\ngraph TD;\n  A-->B;\n```\n')
+    expect(output).not.toContain('Hello world.')
   })
 })

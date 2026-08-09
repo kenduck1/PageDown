@@ -105,6 +105,30 @@ describe('Full node-set round trip (frontmatter + pagebreak + commonmark + gfm t
     expect(output).toContain('E = mc^2')
   })
 
+  // Task 2 (slash menu) added insertMathBlockCommand (commands.ts), which
+  // builds a math placeholder by hand as a paragraph containing
+  // text("$$"), an INLINE hardbreak, placeholder text, another inline
+  // hardbreak, then text("$$") -- the exact shape this test parses from raw
+  // markdown, byte-for-byte, below. The test just above already proves a
+  // $$-fenced block round-trips as INERT TEXT somewhere inside a bigger
+  // document (a `.toContain` check); this one is stricter and exists for a
+  // different reason: it pins the EXACT parse of an isolated
+  // `$$\n...\n$$\n` document via a byte-identical `.toBe`, so a future
+  // Milkdown/remark-stringify upgrade that changes how a soft line break
+  // inside a paragraph serializes (e.g. switching an inline hardbreak's
+  // literal "\n" back to a two-trailing-space hard break) fails THIS test
+  // loudly, rather than silently producing a math placeholder that no
+  // longer reparses as a `$$`-fenced block for insertMathBlockCommand's real
+  // users. `x^2` matches insertMathBlockCommand's own placeholder text, so
+  // this is also a direct proof that command's output is exactly what a
+  // fresh parse of its own serialized markdown would reproduce.
+  it('preserves an isolated $$-fenced math placeholder byte-identically -- the exact shape insertMathBlockCommand (commands.ts) builds', async () => {
+    const source = '$$\nx^2\n$$\n'
+    const output = await roundTrip(source)
+
+    expect(output).toBe(source)
+  })
+
   // Unlike pagebreak/footnotes (existing nodes) or math (deliberately inert
   // text), a comment is a real ProseMirror MARK -- this is the first test in
   // this suite proving a MARK (not a node) round-trips correctly through
