@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useAppStore, type ViewMode } from '../store/appStore'
 import { useDocumentStore } from '../store/documentStore'
 import { usePreferencesStore } from '../store/preferencesStore'
@@ -15,7 +15,10 @@ import FindBar from '../components/FindBar'
 import CommentComposer from '../components/CommentComposer'
 import LinkComposer from '../components/LinkComposer'
 import RemoteImageBanner from '../components/RemoteImageBanner'
+import SelectionBubble from '../components/SelectionBubble'
 import Toast from '../components/Toast'
+import { intersectRect, sameRect, type Rect } from '../lib/floating-position'
+import type { SelectionSnapshot } from '../milkdown/selection-plugin'
 import { extractOutline } from '../lib/extractOutline'
 import { isFormatEditing, isSourceEditing } from '../lib/editing-surface'
 import { usePageCount } from '../hooks/usePageCount'
@@ -44,6 +47,10 @@ function EditorScreen(): React.JSX.Element {
   const pageSetupOpen = useAppStore((state) => state.pageSetupOpen)
   const closePageSetup = useAppStore((state) => state.closePageSetup)
   const shortcutsHelpOpen = useAppStore((state) => state.shortcutsHelpOpen)
+  const commentComposerOpen = useAppStore((state) => state.commentComposerOpen)
+  const openCommentComposer = useAppStore((state) => state.openCommentComposer)
+  const linkComposerOpen = useAppStore((state) => state.linkComposerOpen)
+  const openLinkComposer = useAppStore((state) => state.openLinkComposer)
   const openShortcutsHelp = useAppStore((state) => state.openShortcutsHelp)
   const closeShortcutsHelp = useAppStore((state) => state.closeShortcutsHelp)
   const viewMode = useAppStore((state) => state.viewMode)
@@ -79,6 +86,13 @@ function EditorScreen(): React.JSX.Element {
   const sourceEditorRef = useRef<SourceEditorHandle>(null)
   const findQueryInputRef = useRef<HTMLInputElement>(null)
   const canvasRef = useRef<HTMLDivElement>(null)
+  // The scrolling editor pane -- attached to BOTH pane wrappers below (Split
+  // mode's left pane, and the single-pane zoom wrapper). One ref is correct
+  // for the same reason editorRef/sourceEditorRef already document: the two
+  // are mutually exclusive branches of a ternary, so only one is ever mounted.
+  // Its rect, intersected with the canvas's, is the selection bubble's safe
+  // area -- the region provably disjoint from Split mode's native preview view.
+  const editorPaneRef = useRef<HTMLDivElement>(null)
   const splitRowRef = useRef<HTMLDivElement>(null)
   const [zoom, setZoom] = useState(1)
   const [activeSourceOffset, setActiveSourceOffset] = useState<number | undefined>(undefined)
@@ -90,6 +104,47 @@ function EditorScreen(): React.JSX.Element {
   // when two triggers in a row produce byte-identical message text.
   const [toast, setToast] = useState<{ id: number; message: string } | null>(null)
   const toastIdRef = useRef(0)
+  // The selection bubble's three inputs: WHAT is selected (reported by
+  // milkdown/selection-plugin.ts), WHERE it is, and the box it may be drawn
+  // in. State rather than refs because the bubble is React-rendered chrome.
+  const [selectionSnapshot, setSelectionSnapshot] = useState<SelectionSnapshot | null>(null)
+  const [selectionAnchor, setSelectionAnchor] = useState<Rect | null>(null)
+  const [selectionSafeRect, setSelectionSafeRect] = useState<Rect | null>(null)
+
+  // Measures both rects and publishes them, skipping the setState entirely
+  // when nothing actually moved (sameRect) -- this runs on every scroll tick
+  // while the bubble is up, and an unguarded setState there would re-render
+  // this whole screen per tick.
+  //
+  // Called from a ProseMirror view.update callback and from the bubble's own
+  // scroll/resize listeners -- never from an effect body, which is both what
+  // react-hooks' set-state-in-effect rule wants and simply the right place:
+  // the selection's on-screen box is only knowable at the moments something
+  // moved it, and both of those moments are already callbacks.
+  //
+  // Measured UNCONDITIONALLY, including for a collapsed selection (where the
+  // rect is a caret box): SelectionBubble's own visibility rules decide what
+  // to do with it, and branching here would just be a second, drifting copy of
+  // those rules.
+  const measureSelectionGeometry = useCallback((): void => {
+    const anchor = editorRef.current?.getSelectionRect() ?? null
+    setSelectionAnchor((prev) => (sameRect(prev, anchor) ? prev : anchor))
+    const pane = editorPaneRef.current
+    const canvas = canvasRef.current
+    const safe =
+      pane && canvas
+        ? intersectRect(canvas.getBoundingClientRect(), pane.getBoundingClientRect())
+        : null
+    setSelectionSafeRect((prev) => (sameRect(prev, safe) ? prev : safe))
+  }, [])
+
+  const handleSelectionChanged = useCallback(
+    (snapshot: SelectionSnapshot | null): void => {
+      setSelectionSnapshot(snapshot)
+      measureSelectionGeometry()
+    },
+    [measureSelectionGeometry]
+  )
   const showUndoBarrierToast = (): void => {
     toastIdRef.current += 1
     setToast({ id: toastIdRef.current, message: UNDO_BARRIER_TOAST_MESSAGE })
@@ -1093,6 +1148,7 @@ function EditorScreen(): React.JSX.Element {
         onError={(message) => useDocumentStore.setState({ error: message })}
         onFindMatchesChanged={findController.handleFormatMatches}
         onDropImage={saveDroppedImage}
+        onSelectionChanged={handleSelectionChanged}
       />
     </div>
   )
@@ -1124,6 +1180,12 @@ function EditorScreen(): React.JSX.Element {
         editorRef={editorRef}
         onSetViewMode={handleSetViewMode}
         onSetFontFamily={handleSetFontFamily}
+        // The same snapshot the selection bubble runs on, reused here so
+        // Bold/Italic/list buttons show real pressed state instead of the
+        // hardcoded `active={false}` they carried since the design handoff.
+        // One source, so the two toolbars can never disagree about whether the
+        // cursor is in bold text.
+        selection={selectionSnapshot}
       />
       {/* Position is load-bearing, not cosmetic (see FindBar.tsx's own module
       comment) -- rendering FindBar here, as a LAYOUT ROW between the toolbar
@@ -1195,7 +1257,11 @@ function EditorScreen(): React.JSX.Element {
             // taller-than-viewport document -- this row itself never grows
             // past the viewport and never needs to scroll.
             <div ref={splitRowRef} className="flex h-full">
-              <div style={{ width: `calc(${splitRatio}% - 3px)` }} className="h-full overflow-auto">
+              <div
+                ref={editorPaneRef}
+                style={{ width: `calc(${splitRatio}% - 3px)` }}
+                className="h-full overflow-auto"
+              >
                 {splitLeftMode === 'source' ? renderSourceEditor() : renderPageCard()}
               </div>
               {/* 6px wide, split evenly (3px) into each pane's own calc() above,
@@ -1250,6 +1316,7 @@ function EditorScreen(): React.JSX.Element {
             </div>
           ) : (
             <div
+              ref={editorPaneRef}
               className="h-full overflow-auto"
               style={{ transform: `scale(${zoom})`, transformOrigin: 'top center' }}
             >
@@ -1275,6 +1342,42 @@ function EditorScreen(): React.JSX.Element {
         onClose={closePageSetup}
       />
       <ShortcutsHelpModal open={shortcutsHelpOpen} onClose={closeShortcutsHelp} />
+      {/* Rendered HERE, at this screen's root alongside the modals and Toast,
+      and deliberately NOT inside `document-content` -- the single-pane branch
+      wraps its pane in `transform: scale(zoom)`, and a transform establishes a
+      containing block for fixed-position descendants, so a bubble nested in
+      there would be positioned relative to the scaled wrapper and rendered at
+      the zoom factor's own size. See SelectionBubble.tsx's module comment.
+
+      `suppressed` is every overlay/composer that can be open at the same time:
+      the two full-screen modals (which the bubble would otherwise sit on top
+      of, being z-40 under their z-50) plus the two composer ROWS, which the
+      bubble's own Link/Add-comment buttons open -- opening either shifts the
+      whole content area downward, invalidating the anchor this bubble was
+      placed against. Find is deliberately absent: it needs no suppression,
+      because applyFindState selects each match WITHOUT focusing, so
+      snapshot.hasFocus is already false while the user is in the find bar. */}
+      <SelectionBubble
+        snapshot={selectionSnapshot}
+        anchor={selectionAnchor}
+        safe={selectionSafeRect}
+        suppressed={pageSetupOpen || shortcutsHelpOpen || commentComposerOpen || linkComposerOpen}
+        onRemeasure={measureSelectionGeometry}
+        paneRef={editorPaneRef}
+        commands={{
+          // Dispatched through the SAME MilkdownEditorHandle methods the
+          // persistent toolbar uses, not a second command path -- the
+          // historyKeymap-vs-toolbar precedent, so the two surfaces cannot
+          // drift apart in what "Bold" means.
+          toggleBold: () => editorRef.current?.toggleBold(),
+          toggleItalic: () => editorRef.current?.toggleItalic(),
+          toggleInlineCode: () => editorRef.current?.toggleInlineCode(),
+          toggleHeading: (level) => editorRef.current?.toggleHeading(level),
+          setParagraph: () => editorRef.current?.setParagraph(),
+          insertLink: openLinkComposer,
+          addComment: openCommentComposer
+        }}
+      />
       {toast && <Toast key={toast.id} message={toast.message} onDismiss={() => setToast(null)} />}
     </div>
   )

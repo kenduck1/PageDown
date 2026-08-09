@@ -179,6 +179,42 @@ describe('MilkdownEditorHandle commands needing a real ranged selection — wire
     expect(root.querySelector('h1')?.innerHTML).toBe('Hello World')
   })
 
+  it('toggleInlineCode() wraps a real selection in <code>, and calling it again removes it', async () => {
+    // Wired for the first time by the bubble menu sub-project:
+    // toggleInlineCodeCommand has shipped in @milkdown/preset-commonmark (and
+    // been bound to Mod-e by it) since long before this project existed, but
+    // nothing in this app's own UI reached it. Asserted through the real
+    // rendered DOM, like its bold/italic siblings above, so a wiring mistake
+    // (dispatching some other command's key) fails here rather than silently
+    // doing nothing in the app.
+    const editor = await createTestEditor('# Hello World', PLUGINS)
+    currentEditor = editor
+    const root = document.querySelector('.ProseMirror') as HTMLElement
+    const commands = buildEditorCommands(editor)
+
+    selectWorld(editor)
+    commands.toggleInlineCode()
+    expect(root.querySelector('h1')?.innerHTML).toBe('Hello <code>World</code>')
+
+    selectWorld(editor)
+    commands.toggleInlineCode()
+    expect(root.querySelector('h1')?.innerHTML).toBe('Hello World')
+  })
+
+  it('getSelectionRect() returns a rect for a real ranged selection -- ZEROS under jsdom, see the warning', async () => {
+    // Pins the plumbing (handle -> readSelectionRect -> coordsAtPos), NOT the
+    // numbers: jsdom has no layout, and this repo's own test-setup.ts Range
+    // polyfills make coordsAtPos return all-zero rects instead of throwing, so
+    // asserting a POSITION here would pass against nonsense. See
+    // selection-plugin.ts's readSelectionRect for the full writeup.
+    const editor = await createTestEditor('# Hello World', PLUGINS)
+    currentEditor = editor
+    const commands = buildEditorCommands(editor)
+
+    selectWorld(editor)
+    expect(commands.getSelectionRect()).toEqual({ left: 0, top: 0, right: 0, bottom: 0 })
+  })
+
   it('insertLink(href) wraps a real selection in a real <a href>', async () => {
     const editor = await createTestEditor('# Hello World', PLUGINS)
     currentEditor = editor
@@ -407,6 +443,33 @@ describe('MilkdownEditor', () => {
     })
     expect(container.querySelector('h1')?.textContent).toBe('Hello World')
     expect(onError).not.toHaveBeenCalled()
+  })
+
+  it('reports a null selection snapshot when it unmounts, so a stale bubble cannot outlive the editor', async () => {
+    // The half of the selection wiring that only exists at the component
+    // level: the plugin's own destroy() -> onSelectionChanged(null) has to
+    // survive the ref indirection and reach the CURRENT prop, or a
+    // key={revision} remount (Page Setup apply, History restore, a mode
+    // switch) would leave a bubble on screen pointing at a destroyed editor's
+    // selection.
+    const onSelectionChanged = vi.fn()
+    const { container, unmount } = render(
+      <MilkdownEditor
+        geometry={DEFAULT_GEOMETRY}
+        documentStyle={DEFAULT_DOCUMENT_STYLE}
+        content="# Hello World"
+        onChange={vi.fn()}
+        onError={vi.fn()}
+        onSelectionChanged={onSelectionChanged}
+      />
+    )
+    await waitFor(() => {
+      expect(container.querySelector('.ProseMirror')).toBeInTheDocument()
+    })
+    unmount()
+    await waitFor(() => {
+      expect(onSelectionChanged).toHaveBeenCalledWith(null)
+    })
   })
 
   it('sets dir="rtl" on the mount div when the document style requests it', async () => {

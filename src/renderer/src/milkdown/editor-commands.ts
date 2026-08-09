@@ -1,10 +1,10 @@
 import { editorViewCtx, type Editor } from '@milkdown/core'
 import { callCommand } from '@milkdown/utils'
 import { NodeSelection, Selection, TextSelection } from '@milkdown/prose/state'
-import type { EditorView } from '@milkdown/prose/view'
 import {
   toggleStrongCommand,
   toggleEmphasisCommand,
+  toggleInlineCodeCommand,
   wrapInHeadingCommand,
   wrapInBulletListCommand,
   wrapInOrderedListCommand,
@@ -25,6 +25,8 @@ import {
   replaceAllMatchesIn,
   type FindStateInput
 } from './find-plugin'
+import { findAncestorListType, readSelectionRect } from './selection-plugin'
+import type { Rect } from '../lib/floating-position'
 
 // This is a separate file from MilkdownEditor.tsx (fix-round change) purely
 // for eslint-plugin-react-refresh's `only-export-components` rule -- a
@@ -38,30 +40,14 @@ import {
 // exposes -- see EditorToolbar.tsx.
 export type ToggleableHeadingLevel = 1 | 2 | 3
 
-type ListTypeName = 'bullet_list' | 'ordered_list'
-
-// Walks up from the current selection's resolved position looking for an
-// ancestor `bullet_list`/`ordered_list` node, returning WHICH one (not just
-// whether the target type matches). Fix-round finding (verified, not
-// theorized): the original version of this helper only checked the TARGET
-// type (`isInListType(view, 'bullet_list')` returned `false` while the
-// cursor was inside an `ordered_list`), so toggleBulletList() with the
-// cursor in an ordered list took the "wrap" branch -- and
-// wrapInBulletListCommand's underlying ProseMirror `wrapIn` silently no-ops
-// when the selection is already inside ANY list (confirmed: DOM
-// byte-identical before/after, the `<ol>` stays an `<ol>`). Returning the
-// actual ancestor list type (or `null`) lets the two toggle methods below
-// distinguish "already this type, so lift out" from "in the OTHER type, so
-// convert" from "not in a list at all, so wrap" -- three real cases the
-// single boolean this replaces could not tell apart.
-function findAncestorListType(view: EditorView): ListTypeName | null {
-  const { $from } = view.state.selection
-  for (let depth = $from.depth; depth > 0; depth--) {
-    const name = $from.node(depth).type.name
-    if (name === 'bullet_list' || name === 'ordered_list') return name
-  }
-  return null
-}
+// findAncestorListType MOVED to selection-plugin.ts (bubble-menu sub-project)
+// and is imported above rather than reimplemented. Its own reasoning is
+// unchanged and now lives with the definition; the reason for the move is
+// that the bubble/toolbar's list ACTIVE state must be computed by the exact
+// same ancestor walk the toggle commands below branch on, or the indicator and
+// the action can disagree. Its signature changed from (view) to (state) in the
+// same move -- it only ever read `view.state.selection` -- which is why the
+// call sites below pass `view.state`.
 
 // The formatting-toolbar command surface -- everything MilkdownEditorHandle
 // exposes besides flush() (which stays in MilkdownEditor.tsx, since it
@@ -92,6 +78,17 @@ export interface EditorCommands {
   toggleBold: () => void
   // toggleEmphasisCommand -- same toggleMark-backed behavior as bold.
   toggleItalic: () => void
+  // toggleInlineCodeCommand -- @milkdown/preset-commonmark's own command,
+  // exported and keymapped (Mod-e) by that preset since before this project
+  // existed, but never reachable from this app's own UI until the selection
+  // bubble needed it. NOT a plain toggleMark, unlike bold/italic: reading its
+  // source, it refuses a collapsed selection outright (`if (selection.empty)
+  // return false`, so there is no stored-mark behaviour to speak of) and, when
+  // applying, first STRIPS every other mark from the range -- correct for
+  // Markdown, where inline code is a verbatim span that cannot itself be bold
+  // or a link, and worth knowing before wiring it to anything that assumes
+  // toggleMark semantics.
+  toggleInlineCode: () => void
   // wrapInHeadingCommand is NOT a toggle by itself (confirmed by reading its
   // source: it always calls `setBlockType` to the given level, with no
   // "already this level, so revert to paragraph" branch) -- this method adds
@@ -192,6 +189,15 @@ export interface EditorCommands {
   // is collapsed -- backs Cmd/Ctrl+F seeding the query from whatever the user
   // had selected, the way every editor does.
   getSelectedText: () => string
+  // The selection's on-screen box, in viewport coordinates, or null when it
+  // can't be measured -- the GEOMETRY half of the selection bubble's contract
+  // (selection-plugin.ts reports state; this reports where it is; React does
+  // layout). Deliberately a pull, not a push: the bubble must re-measure on
+  // scroll and resize, neither of which produces a ProseMirror transaction, so
+  // a snapshot carrying a rect would go stale with nothing to invalidate it.
+  // See readSelectionRect (selection-plugin.ts) for the zoom-transform
+  // reasoning and the measured jsdom hazard before writing any test against it.
+  getSelectionRect: () => Rect | null
   // addCommentCommand (commands.ts) -- applies a real comment mark over the
   // current selection. Returns the command's own boolean result (`editor.
   // action()` returns whatever the wrapped action returns, and callCommand's
@@ -230,6 +236,9 @@ export function buildEditorCommands(editor: Editor): EditorCommands {
     toggleItalic: () => {
       editor.action(callCommand(toggleEmphasisCommand.key))
     },
+    toggleInlineCode: () => {
+      editor.action(callCommand(toggleInlineCodeCommand.key))
+    },
     toggleHeading: (level) => {
       editor.action((ctx) => {
         const view = ctx.get(editorViewCtx)
@@ -253,7 +262,7 @@ export function buildEditorCommands(editor: Editor): EditorCommands {
     toggleBulletList: () => {
       editor.action((ctx) => {
         const view = ctx.get(editorViewCtx)
-        const listType = findAncestorListType(view)
+        const listType = findAncestorListType(view.state)
         if (listType === 'bullet_list') {
           return callCommand(liftListItemCommand.key)(ctx)
         }
@@ -274,7 +283,7 @@ export function buildEditorCommands(editor: Editor): EditorCommands {
     toggleOrderedList: () => {
       editor.action((ctx) => {
         const view = ctx.get(editorViewCtx)
-        const listType = findAncestorListType(view)
+        const listType = findAncestorListType(view.state)
         if (listType === 'ordered_list') {
           return callCommand(liftListItemCommand.key)(ctx)
         }
@@ -366,6 +375,17 @@ export function buildEditorCommands(editor: Editor): EditorCommands {
         selected = from === to ? '' : view.state.doc.textBetween(from, to, ' ')
       })
       return selected
+    },
+    getSelectionRect: () => {
+      // Same "assign inside editor.action, return after" shape as
+      // getSelectedText immediately above -- editor.action runs its callback
+      // synchronously, which is what makes this read (rather than a promise)
+      // correct.
+      let rect: Rect | null = null
+      editor.action((ctx) => {
+        rect = readSelectionRect(ctx.get(editorViewCtx))
+      })
+      return rect
     },
     addComment: (author, text) => {
       return editor.action(callCommand(addCommentCommand.key, { author, text }))
