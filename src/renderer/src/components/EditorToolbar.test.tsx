@@ -19,6 +19,7 @@ function createFakeEditorHandle(): MilkdownEditorHandle {
     flush: vi.fn(),
     toggleBold: vi.fn(),
     toggleItalic: vi.fn(),
+    toggleInlineCode: vi.fn(),
     toggleHeading: vi.fn(),
     setParagraph: vi.fn(),
     toggleBulletList: vi.fn(),
@@ -33,6 +34,7 @@ function createFakeEditorHandle(): MilkdownEditorHandle {
     replaceActiveMatch: vi.fn(),
     replaceAllMatches: vi.fn(),
     getSelectedText: vi.fn(() => ''),
+    getSelectionRect: vi.fn(() => null),
     addComment: vi.fn(() => true),
     resolveComment: vi.fn()
   }
@@ -682,6 +684,53 @@ describe('EditorToolbar', () => {
     // wiring comment in EditorToolbar.tsx), so it belongs with Bold/Italic/
     // the list buttons above, not with Undo/Insert table.
     expect(screen.getByRole('button', { name: 'Find' })).toHaveAttribute('aria-pressed', 'false')
+  })
+
+  // The `selection` prop (bubble menu sub-project) is what finally makes these
+  // four buttons' pressed state REAL. They carried a hardcoded
+  // `active={false}` from the design handoff until then, which meant the
+  // toolbar announced aria-pressed="false" while the cursor sat squarely
+  // inside bold text -- worse than saying nothing. Rendering with no prop (as
+  // every other test in this file does) still yields false, which is the
+  // honest reading of "no live editor to ask".
+  it('Bold/Italic and the list buttons report REAL pressed state from the live selection snapshot', () => {
+    const ref = createRef<MilkdownEditorHandle>()
+    const { rerender } = render(
+      <EditorToolbar
+        editorRef={ref}
+        selection={{
+          from: 1,
+          to: 5,
+          empty: false,
+          hasFocus: true,
+          nodeSelection: false,
+          marks: { bold: true, italic: false, inlineCode: false, link: false },
+          headingLevel: null,
+          listType: 'ordered_list'
+        }}
+      />
+    )
+    expect(screen.getByRole('button', { name: 'Bold' })).toHaveAttribute('aria-pressed', 'true')
+    expect(screen.getByRole('button', { name: 'Italic' })).toHaveAttribute('aria-pressed', 'false')
+    expect(screen.getByRole('button', { name: 'Numbered list' })).toHaveAttribute(
+      'aria-pressed',
+      'true'
+    )
+    // The list buttons read the SAME ancestor-list walk the toggle commands
+    // branch on (findAncestorListType, selection-plugin.ts), so "pressed" and
+    // "what the click does" cannot disagree -- which also means bullet must be
+    // false while ordered is true, not merely "some list is active".
+    expect(screen.getByRole('button', { name: 'Bulleted list' })).toHaveAttribute(
+      'aria-pressed',
+      'false'
+    )
+
+    rerender(<EditorToolbar editorRef={ref} selection={null} />)
+    expect(screen.getByRole('button', { name: 'Bold' })).toHaveAttribute('aria-pressed', 'false')
+    expect(screen.getByRole('button', { name: 'Numbered list' })).toHaveAttribute(
+      'aria-pressed',
+      'false'
+    )
   })
 
   // Task 8 of the Find & Replace sub-project: the Find button was previously

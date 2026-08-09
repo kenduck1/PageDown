@@ -9,6 +9,7 @@ import { PINNED_STRINGIFY_OPTIONS } from './stringify-options'
 import { buildEditorCommands, type EditorCommands } from './editor-commands'
 import { createFindPlugin } from './find-plugin'
 import { createDropImagePlugin } from './drop-image'
+import { createSelectionPlugin, type SelectionSnapshot } from './selection-plugin'
 import type { PageGeometry } from '../../../typography/page-geometry'
 import type { DocumentStyle } from '../../../typography/document-style'
 
@@ -44,6 +45,13 @@ interface MilkdownEditorProps {
   // dependency anywhere else, and this stays consistent with that. Latest-
   // ref captured below, same as onChange/onError/onFindMatchesChanged.
   onDropImage?: (file: File) => Promise<{ relativePath: string } | { error: string }>
+  // Fired whenever the selection or its formatting state actually changes
+  // (selection-plugin.ts's own sameSnapshot early-return decides "actually"),
+  // and with `null` when this editor is destroyed so a stale bubble can't
+  // outlive the instance it belongs to. Backs the selection bubble
+  // (components/SelectionBubble.tsx) and EditorToolbar's live active-state.
+  // Latest-ref captured below, exactly like every other callback prop here.
+  onSelectionChanged?: (snapshot: SelectionSnapshot | null) => void
 }
 
 // Extends EditorCommands (editor-commands.ts) with flush() -- the one
@@ -86,7 +94,16 @@ export interface MilkdownEditorHandle extends EditorCommands {
 
 const MilkdownEditor = forwardRef<MilkdownEditorHandle, MilkdownEditorProps>(
   function MilkdownEditor(
-    { content, geometry, documentStyle, onChange, onError, onFindMatchesChanged, onDropImage },
+    {
+      content,
+      geometry,
+      documentStyle,
+      onChange,
+      onError,
+      onFindMatchesChanged,
+      onDropImage,
+      onSelectionChanged
+    },
     ref
   ) {
     const rootRef = useRef<HTMLDivElement>(null)
@@ -142,11 +159,16 @@ const MilkdownEditor = forwardRef<MilkdownEditorHandle, MilkdownEditorProps>(
     // once inside the mount effect below (see dropImageProse), same
     // reasoning as onFindMatchesChangedRef above.
     const onDropImageRef = useRef(onDropImage)
+    // Same latest-ref treatment, for the selection plugin -- constructed once
+    // inside the mount effect below (see selectionProse), same reasoning as
+    // onFindMatchesChangedRef above.
+    const onSelectionChangedRef = useRef(onSelectionChanged)
     useEffect(() => {
       onChangeRef.current = onChange
       onErrorRef.current = onError
       onFindMatchesChangedRef.current = onFindMatchesChanged
       onDropImageRef.current = onDropImage
+      onSelectionChangedRef.current = onSelectionChanged
     })
 
     // Set once the editor has finished constructing (inside the mount
@@ -178,7 +200,9 @@ const MilkdownEditor = forwardRef<MilkdownEditorHandle, MilkdownEditorProps>(
       setFindState: (next) => commandsRef.current?.setFindState(next),
       replaceActiveMatch: (replacement) => commandsRef.current?.replaceActiveMatch(replacement),
       replaceAllMatches: (replacement) => commandsRef.current?.replaceAllMatches(replacement),
+      toggleInlineCode: () => commandsRef.current?.toggleInlineCode(),
       getSelectedText: () => commandsRef.current?.getSelectedText() ?? '',
+      getSelectionRect: () => commandsRef.current?.getSelectionRect() ?? null,
       addComment: (author, text) => commandsRef.current?.addComment(author, text) ?? false,
       resolveComment: (id) => commandsRef.current?.resolveComment(id)
     }))
@@ -219,6 +243,19 @@ const MilkdownEditor = forwardRef<MilkdownEditorHandle, MilkdownEditorProps>(
       const findProse = $prose(() =>
         createFindPlugin((count, activeIndex) => {
           onFindMatchesChangedRef.current?.(count, activeIndex)
+        })
+      )
+
+      // Same per-mount construction as findProse above, for the same reason.
+      // Note this one reports through the ref even for its `null`
+      // (destroy-time) call: that call happens during editor.destroy() inside
+      // this effect's own cleanup, i.e. after React has already committed the
+      // unmount, so reading the latest prop rather than a mount-time capture
+      // is what keeps a remount (key={revision}) from clearing the bubble via
+      // the OUTGOING instance's stale callback.
+      const selectionProse = $prose(() =>
+        createSelectionPlugin((snapshot) => {
+          onSelectionChangedRef.current?.(snapshot)
         })
       )
 
@@ -279,6 +316,7 @@ const MilkdownEditor = forwardRef<MilkdownEditorHandle, MilkdownEditorProps>(
         .use(listener)
         .use(editedTrackerProse)
         .use(findProse)
+        .use(selectionProse)
         .use(dropImageProse)
         .create()
         .then((created) => {

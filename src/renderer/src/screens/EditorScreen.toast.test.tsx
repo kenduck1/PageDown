@@ -14,6 +14,7 @@ const { mockEditorHandle } = vi.hoisted(() => ({
     flush: vi.fn(),
     toggleBold: vi.fn(),
     toggleItalic: vi.fn(),
+    toggleInlineCode: vi.fn(),
     toggleHeading: vi.fn(),
     setParagraph: vi.fn(),
     toggleBulletList: vi.fn(),
@@ -31,6 +32,7 @@ const { mockEditorHandle } = vi.hoisted(() => ({
     replaceActiveMatch: vi.fn(),
     replaceAllMatches: vi.fn(),
     getSelectedText: vi.fn(() => ''),
+    getSelectionRect: vi.fn(() => null),
     addComment: vi.fn(() => true),
     resolveComment: vi.fn()
   }

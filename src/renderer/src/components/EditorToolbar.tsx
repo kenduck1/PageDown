@@ -5,6 +5,7 @@ import { useFindStore } from '../store/findStore'
 import { isSourceEditing } from '../lib/editing-surface'
 import { resolvePageConfig, type PageFontFamily } from '../../../markdown/page-config'
 import type { MilkdownEditorHandle } from '../milkdown/MilkdownEditor'
+import type { SelectionSnapshot } from '../milkdown/selection-plugin'
 
 // The formatting toolbar described in docs/design-handoff/README.md's
 // "Editor — shared chrome" section, item 3. Mounted into EditorScreen.tsx
@@ -43,6 +44,19 @@ export interface EditorToolbarProps {
   // `editorRef`; the select still shows the document's real current family
   // either way, it just can't change it.
   onSetFontFamily?: (fontFamily: PageFontFamily) => void
+  // The live selection/formatting state from milkdown/selection-plugin.ts,
+  // threaded through EditorScreen. Optional and defaulting to null, so this
+  // component's own standalone tests (which render it with only `editorRef`)
+  // keep working and simply see everything inactive -- the same optional-prop
+  // convention onSetViewMode/onSetFontFamily above already use.
+  //
+  // This is what makes Bold/Italic/list buttons report a REAL pressed state
+  // instead of the hardcoded `active={false}` they carried until the bubble
+  // menu sub-project built the plugin that can answer the question. Null (no
+  // live editor, e.g. Source mode) is genuinely "unknown", and rendering
+  // everything unpressed is the honest reading of that -- the same buttons are
+  // already disabled there anyway.
+  selection?: SelectionSnapshot | null
 }
 
 // All icon paths below are adapted from docs/design-handoff/PageDown.dc.html's
@@ -143,7 +157,8 @@ function ToolbarIconButton({
 function EditorToolbar({
   editorRef,
   onSetViewMode,
-  onSetFontFamily
+  onSetFontFamily,
+  selection = null
 }: EditorToolbarProps): ReactElement {
   const viewMode = useAppStore((state) => state.viewMode)
   const setViewMode = useAppStore((state) => state.setViewMode)
@@ -310,11 +325,25 @@ function EditorToolbar({
   })()
 
   const handleHeadingChange = (value: string): void => {
-    // Fix-round finding: this dropdown has no live selection-state tracking
-    // (a separate, larger "bubble menu / active formatting state" feature,
-    // out of scope here -- see this component's own module comment), so it
-    // cannot be a CONTROLLED indicator of the cursor's live heading level --
-    // it's a stateless action trigger instead. Bumping this key forces
+    // This dropdown stays a stateless ACTION TRIGGER rather than a controlled
+    // indicator of the cursor's live heading level -- and as of the bubble
+    // menu sub-project that is a deliberate choice rather than the missing
+    // capability it used to be. The live state now exists (`selection` above;
+    // the bubble's own H1/H2/H3 buttons genuinely light up from it), and the
+    // mark buttons below consume it -- but binding it to this <select>'s
+    // `value` is a real behaviour change, not a cosmetic one, and it is
+    // deliberately not made here:
+    //   - `selection` is null whenever there is no live Milkdown instance, and
+    //     a controlled value would then fall back to "Normal text" while the
+    //     cursor's block is genuinely an H1 -- picking "Normal text" in that
+    //     state fires no change event at all (same browser behaviour as
+    //     below), so the one option a user reaches for to UNDO a heading
+    //     becomes the one that silently does nothing.
+    //   - it turns an action control into a state control, which interacts
+    //     with toggleHeading's own toggle-off-to-paragraph branch: selecting
+    //     the already-selected level would become unreachable rather than
+    //     reverting the block.
+    // Bumping this key forces
     // React to remount the <select> with a fresh DOM node (back to its
     // uncontrolled "Normal text" default) after every selection. Without
     // this, a real browser fires no `change` event when the same option is
@@ -567,9 +596,16 @@ function EditorToolbar({
           syntax, and this sub-project's brief doesn't scope a color-mark
           command -- so both stay real, present, but unwired buttons. */}
           <div className="flex items-center gap-0.5">
+            {/* Real, live pressed state as of the bubble menu sub-project --
+            these two carried a hardcoded `active={false}` from the design
+            handoff until then, which rendered an actively misleading
+            aria-pressed="false" while the cursor sat inside bold text.
+            Underline keeps its hardcoded false because it has no backing
+            command at all (Markdown has no underline), i.e. there is no state
+            to report, not merely no way to read it. */}
             <ToolbarIconButton
               label="Bold"
-              active={false}
+              active={selection?.marks.bold ?? false}
               onClick={() => editorRef.current?.toggleBold()}
               disabled={isSourceMode}
             >
@@ -577,7 +613,7 @@ function EditorToolbar({
             </ToolbarIconButton>
             <ToolbarIconButton
               label="Italic"
-              active={false}
+              active={selection?.marks.italic ?? false}
               onClick={() => editorRef.current?.toggleItalic()}
               disabled={isSourceMode}
             >
@@ -606,7 +642,7 @@ function EditorToolbar({
           <div className="flex items-center gap-0.5">
             <ToolbarIconButton
               label="Bulleted list"
-              active={false}
+              active={selection?.listType === 'bullet_list'}
               onClick={() => editorRef.current?.toggleBulletList()}
               disabled={isSourceMode}
             >
@@ -621,7 +657,7 @@ function EditorToolbar({
             </ToolbarIconButton>
             <ToolbarIconButton
               label="Numbered list"
-              active={false}
+              active={selection?.listType === 'ordered_list'}
               onClick={() => editorRef.current?.toggleOrderedList()}
               disabled={isSourceMode}
             >
