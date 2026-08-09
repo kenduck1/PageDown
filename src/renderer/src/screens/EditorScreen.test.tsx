@@ -1328,6 +1328,45 @@ describe('EditorScreen', () => {
         expect(document.querySelector('.ProseMirror h1')?.textContent).toContain('Report Q3')
       })
     })
+
+    it("dragging the split divider updates splitRatio, clamped to the store's own bounds", async () => {
+      useDocumentStore.setState({ filePath: '/tmp/report.md', content: '# Report' })
+      useAppStore.setState({ viewMode: 'split', splitLeftMode: 'format', splitRatio: 50 })
+      render(<EditorScreen />)
+
+      const divider = screen.getByTestId('split-divider')
+      const row = divider.parentElement as HTMLElement
+      // jsdom performs no real layout, so getBoundingClientRect() is all
+      // zeros unless mocked -- a realistic 800px-wide row makes the drag's
+      // percentage math meaningful and testable.
+      vi.spyOn(row, 'getBoundingClientRect').mockReturnValue({
+        x: 0,
+        y: 0,
+        left: 0,
+        top: 0,
+        right: 800,
+        bottom: 600,
+        width: 800,
+        height: 600,
+        toJSON: () => ({})
+      })
+
+      fireEvent.mouseDown(divider)
+      // 640 / 800 = 80%, above MAX_SPLIT_RATIO (75) -- exercises the clamp,
+      // not just the raw calculation.
+      fireEvent.mouseMove(window, { clientX: 640 })
+      expect(useAppStore.getState().splitRatio).toBe(75)
+
+      // Within bounds: 240 / 800 = 30%.
+      fireEvent.mouseMove(window, { clientX: 240 })
+      expect(useAppStore.getState().splitRatio).toBe(30)
+
+      fireEvent.mouseUp(window)
+      // Further movement after mouseup must be ignored -- the listener was
+      // removed, not merely a no-op this tick.
+      fireEvent.mouseMove(window, { clientX: 640 })
+      expect(useAppStore.getState().splitRatio).toBe(30)
+    })
   })
 
   describe('page-card blank-space click behavior (focusEnd)', () => {
