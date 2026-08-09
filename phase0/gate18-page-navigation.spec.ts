@@ -135,7 +135,7 @@ async function probePageScroll(app: ElectronApplication): Promise<PageScrollProb
 // heading+paragraph blocks is comfortably past that with real margin, so
 // this gate does not become flaky if typography is retuned by a few px.
 function buildMultiPageFixture(): string {
-  const blocks: string[] = ['# Gate 17 Page Navigation Fixture', '']
+  const blocks: string[] = ['# Gate 18 Page Navigation Fixture', '']
   for (let i = 1; i <= 40; i += 1) {
     blocks.push(`## Section ${i}`)
     blocks.push('')
@@ -150,7 +150,7 @@ function buildMultiPageFixture(): string {
   return blocks.join('\n')
 }
 
-test('Gate 17: clicking "Next page" really scrolls the sandboxed paginated preview to page 2', async () => {
+test('Gate 18: clicking "Next page" really scrolls the sandboxed paginated preview to page 2', async () => {
   test.setTimeout(120_000)
 
   let app: ElectronApplication | undefined
@@ -172,8 +172,8 @@ test('Gate 17: clicking "Next page" really scrolls the sandboxed paginated previ
     userDataDir = await app.evaluate(({ app }) => app.getPath('userData'))
     expect(await realpath(userDataDir)).toBe(await realpath(launched.userDataDir))
 
-    fixtureDir = await mkdtemp(join(tmpdir(), 'pagedown-gate17-'))
-    const fixtureFilename = 'gate17-navigation.md'
+    fixtureDir = await mkdtemp(join(tmpdir(), 'pagedown-gate18-'))
+    const fixtureFilename = 'gate18-navigation.md'
     const fixturePath = join(fixtureDir, fixtureFilename)
     await writeFile(fixturePath, buildMultiPageFixture(), 'utf8')
 
