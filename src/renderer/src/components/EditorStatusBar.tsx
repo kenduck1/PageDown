@@ -142,8 +142,15 @@ function EditorStatusBar({
   const canGoNext = hasPages && currentPage < (pageCount as number)
 
   const commitJump = (): void => {
-    const parsed = Number(jumpDraft)
+    const draft = jumpDraft ?? ''
+    const parsed = Number(draft)
     setJumpDraft(null)
+    // An emptied input is a cancel, not a jump to page 1. `Number('')` is 0,
+    // which is finite, so without this check clearing the field and pressing
+    // Enter silently navigated to page 1 -- the one thing the user plainly
+    // did not ask for. (A `type="number"` input also reports '' for any
+    // value the browser considers invalid, so this covers that too.)
+    if (draft.trim() === '') return
     if (!Number.isFinite(parsed) || !hasPages) return
     const clamped = Math.min(Math.max(Math.floor(parsed), 1), pageCount as number)
     onNavigateToPage(clamped)

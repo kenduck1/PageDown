@@ -214,6 +214,19 @@ describe('EditorStatusBar page navigation', () => {
     expect(onNavigateToPage).toHaveBeenCalledWith(1)
   })
 
+  it('treats an emptied jump input as a cancel, not a jump to page 1', async () => {
+    // `Number('')` is 0, which is finite -- so without an explicit
+    // empty-string check, clearing the field and pressing Enter silently
+    // navigated to page 1.
+    const user = userEvent.setup()
+    const { onNavigateToPage } = renderBar()
+    await user.click(screen.getByRole('button', { name: /page 3 of 12/i }))
+    const input = screen.getByRole('spinbutton', { name: /jump to page/i })
+    await user.clear(input)
+    await user.type(input, '{Enter}')
+    expect(onNavigateToPage).not.toHaveBeenCalled()
+  })
+
   it('cancels the jump input on Escape without navigating', async () => {
     const user = userEvent.setup()
     const { onNavigateToPage } = renderBar()
