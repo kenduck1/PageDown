@@ -52,3 +52,32 @@ if (typeof globalThis.ResizeObserver === 'undefined') {
     /* eslint-enable @typescript-eslint/no-empty-function */
   }
 }
+
+// jsdom doesn't implement matchMedia at all (a long-standing jsdom gap --
+// no real viewport/OS preference to query in the first place) -- found
+// empirically while building App.tsx's own colorScheme='system' handling
+// (a real `window.matchMedia('(prefers-color-scheme: dark)')` call threw
+// under every test that renders <App />, including ones that predate this
+// feature). Polyfilled as a real, minimal MediaQueryList-like object backed
+// by an actual EventTarget -- not a bare no-op -- so a test can genuinely
+// dispatch a 'change' event and observe App.tsx's own listener react to it,
+// the same "real functional polyfill, not a stub" preference the Range
+// rects polyfill above already follows. `matches` starts `false` (a
+// reasonable default for a test environment with no real OS to query); a
+// test needing `true` reassigns it directly on the returned object before
+// dispatching.
+if (typeof window.matchMedia !== 'function') {
+  window.matchMedia = (query: string): MediaQueryList => {
+    const target = new EventTarget()
+    return {
+      matches: false,
+      media: query,
+      onchange: null,
+      addEventListener: target.addEventListener.bind(target),
+      removeEventListener: target.removeEventListener.bind(target),
+      dispatchEvent: target.dispatchEvent.bind(target),
+      addListener: () => {},
+      removeListener: () => {}
+    } as unknown as MediaQueryList
+  }
+}

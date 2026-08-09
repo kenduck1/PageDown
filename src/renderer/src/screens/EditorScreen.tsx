@@ -974,7 +974,15 @@ function EditorScreen(): React.JSX.Element {
   const renderPageCard = (): React.JSX.Element => (
     <div
       data-testid="page-card"
-      className="mx-auto my-8 shrink-0 rounded-sm bg-page shadow-page"
+      // bg-white, not bg-page -- deliberate, App-level Dark Mode's own
+      // invariant. `--color-page` (bg-page's token) gets a real dark value
+      // in base.css's :root[data-theme='dark'] block for every OTHER card
+      // surface in the app; this one page-card wrapper represents an
+      // actual sheet of paper and must render identically regardless of
+      // app theme, matching document-typography.css's own hardcoded
+      // background/color pin on .pagedown-document (the Milkdown mount
+      // this div wraps) for the same reason -- see that file's comment.
+      className="mx-auto my-8 shrink-0 rounded-sm bg-white shadow-page"
       style={{
         width: pageGeometry.pageWidthPx,
         paddingLeft: pageGeometry.marginLeftPx,

@@ -79,6 +79,45 @@
   --shadow-glow-accent: 0 2px 8px rgba(36, 97, 192, 0.25);
 }
 
+/* App-level dark mode -- overrides the SAME custom-property names @theme
+   static already declared on :root above, at higher selector specificity
+   (:root[data-theme] beats bare :root), so every existing component
+   keeps using its current `bg-chrome-light`/`text-primary`/etc. Tailwind
+   classes completely unchanged: only what those custom properties RESOLVE
+   TO changes. `data-theme` is set on <html> by App.tsx, from the
+   real persisted `colorScheme` preference ('light' | 'dark' | 'system',
+   with 'system' resolved against prefers-color-scheme and kept live via a
+   matchMedia change listener -- see App.tsx's own comment).
+
+   Document content (.pagedown-document -- the Milkdown canvas and the
+   sandboxed pagination preview/exported PDF) is DELIBERATELY NOT themed by
+   this block at all: this app's whole reason for existing is print/export
+   fidelity, and a printed page has no "dark mode." document-typography.css
+   pins .pagedown-document's own background/text color to hardcoded light
+   values (not these tokens), and EditorScreen's page-card wrapper uses
+   Tailwind's own built-in `bg-white` rather than the `--color-page` token
+   for the same reason -- see both files' own comments. Only the CHROME
+   (toolbars, sidebars, Home screen, Settings, modals) goes dark. */
+:root[data-theme='dark'] {
+  --color-chrome-dark: #1c1c1e;
+  --color-chrome-light: #242426;
+  --color-canvas: #18181a;
+  --color-page: #2c2c2f;
+  --color-border-subtle: #3a3a3d;
+  --color-border-chrome: #333336;
+  --color-text-primary: #e8e8ea;
+  --color-text-secondary: #a8a8ac;
+  --color-text-tertiary: #737376;
+  --color-text-faint: #4a4a4d;
+  --color-accent: #4c8dff;
+  --color-accent-hover: #6ba0ff;
+  --color-on-accent: #ffffff;
+  --color-success: #4caf6a;
+  --color-scrim: rgba(0, 0, 0, 0.6);
+  --color-find-match: #6b5b1a;
+  --color-find-match-active: #a3860f;
+}
+
 @utility text-eyebrow {
   font-size: var(--text-11);
   font-weight: 700;

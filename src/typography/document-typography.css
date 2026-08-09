@@ -66,6 +66,34 @@
   font-family: var(--font-serif);
   font-size: var(--text-14);
   line-height: 1.7;
+  /* Hardcoded literals here, NOT a reference to the app shell's own color
+     custom properties -- deliberate, and load-bearing for the App-level
+     Dark Mode sub-project. This file's own regex-based cross-check test
+     (document-typography.test.ts) scans for the literal `var(` call
+     syntax anywhere in this file, including comments -- so this note
+     deliberately avoids writing that syntax at all, to avoid tripping it
+     the same way an earlier draft of this exact comment did.
+     base.css's own color tokens (the "page" surface color and the
+     "primary text" color, among others) get real dark-mode values under
+     its :root[data-theme='dark'] block, but a printed page has no "dark
+     mode": this app's whole reason for existing is print/export fidelity,
+     so document content must render identically regardless of the app's
+     own chrome theme. Pinning to a literal here is what makes that true
+     even though `.pagedown-document` sits inside the SAME app-shell DOM
+     tree as everything else base.css themes -- referencing the token
+     instead would silently make the editable canvas dark too when the app
+     switches theme. The sandboxed pagination context is unaffected either
+     way (it never sees base.css's dark-mode block at all), but the
+     Milkdown mount very much does, which is why this can't be left to
+     "the sandboxed side doesn't have the token so it's fine" -- the editor
+     side does. Values below match this file's own light-mode defaults
+     exactly (#ffffff, #202124 -- the same values base.css's light-mode
+     root already resolves those two tokens to). EditorScreen's page-card
+     wrapper independently uses Tailwind's own built-in white utility
+     class rather than the page-surface token, for the identical reason --
+     see that file's own comment. */
+  background: #ffffff;
+  color: #202124;
 }
 
 /* First block-level child anywhere in this scope starts flush, no top

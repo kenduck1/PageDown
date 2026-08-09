@@ -13,7 +13,8 @@ const REAL_PREFERENCES = {
     orientation: 'portrait' as const,
     theme: 'default' as const,
     fontFamily: 'source-serif-4' as const
-  }
+  },
+  colorScheme: 'system' as const
 }
 
 beforeEach(() => {
@@ -123,5 +124,22 @@ describe('SettingsScreen', () => {
         })
       })
     )
+  })
+
+  it('changing the color scheme persists it immediately and does not disturb the document-theme combobox', async () => {
+    usePreferencesStore.setState({ preferences: REAL_PREFERENCES, loaded: true })
+    const user = userEvent.setup()
+    render(<SettingsScreen />)
+
+    // Two distinct comboboxes named "Color scheme" and "Theme" -- proves
+    // the earlier collision (both accessible-named "Theme") was really
+    // fixed, not just avoided in this one assertion.
+    await user.selectOptions(screen.getByRole('combobox', { name: 'Color scheme' }), 'dark')
+
+    expect(window.api.setPreferences).toHaveBeenCalledWith(
+      expect.objectContaining({ colorScheme: 'dark' })
+    )
+    expect(usePreferencesStore.getState().preferences?.colorScheme).toBe('dark')
+    expect(screen.getByRole('combobox', { name: 'Theme' })).toHaveValue('default')
   })
 })
