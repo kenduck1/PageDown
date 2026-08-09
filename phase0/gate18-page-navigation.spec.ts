@@ -26,11 +26,11 @@ import { mergeRecentFiles, readRecentFiles, writeRecentFiles } from '../src/main
 // Testing section for why a bare launch silently reads/writes the
 // developer's real userData directory.
 //
-// close() is wrapped in try/finally via the bounded safeClose below,
-// following gate15-split-mode.spec.ts's own template (which CLAUDE.md names
-// as the one to copy): under real host load, _electron's app.close() can
-// hang indefinitely, so this races it against a deadline and SIGKILLs the
-// process tree on expiry.
+// close() is wrapped in try/finally, so a thrown assertion still tears the
+// app down. Under real host load _electron's app.close() can itself hang
+// indefinitely, so close() is additionally BOUNDED -- it races a deadline
+// and SIGKILLs the process tree on expiry -- but that now lives once inside
+// launchIsolatedApp (phase0/electron-launch.ts), not in a per-file copy.
 //
 // ASSERTION MECHANISM: the paginated DOM lives ONLY inside a sandboxed
 // WebContentsView with no preload and no contextBridge, so it is by design
@@ -42,8 +42,6 @@ import { mergeRecentFiles, readRecentFiles, writeRecentFiles } from '../src/main
 // own probeSplitPreviewView -- NOT the discouraged __pagedownPhase0 bridge.
 
 const GET_MAIN_WINDOW_TIMEOUT_MS = 60_000
-const CLOSE_TIMEOUT_MS = 15_000
-
 // Same POSITIVE file:// match as gate9/gate11/gate12/gate14/gate15's own
 // getMainWindow -- this app opens a SECOND window at startup (the Phase 0
 // spike's sandboxed pagedown-render:// harness), and both firstWindow() and
@@ -63,26 +61,6 @@ async function getMainWindow(app: ElectronApplication): Promise<Page> {
     await new Promise((resolve) => setTimeout(resolve, 200))
   }
   throw new Error('Timed out locating the main app-shell window (only found the sandboxed one)')
-}
-
-async function safeClose(app: ElectronApplication, close: () => Promise<void>): Promise<void> {
-  const closeOutcome = close().then(
-    () => 'closed' as const,
-    () => 'closed' as const
-  )
-  const outcome = await Promise.race([
-    closeOutcome,
-    new Promise<'timeout'>((resolve) => setTimeout(() => resolve('timeout'), CLOSE_TIMEOUT_MS))
-  ])
-  if (outcome === 'timeout') {
-    try {
-      // SIGKILL, not SIGTERM -- a hung app.close() means the graceful
-      // shutdown path is itself what isn't completing.
-      app.process().kill('SIGKILL')
-    } catch {
-      // Best-effort; the process may already be gone.
-    }
-  }
 }
 
 interface PageScrollProbe {
@@ -273,7 +251,7 @@ test('Gate 18: clicking "Next page" really scrolls the sandboxed paginated previ
       await rm(fixtureDir, { recursive: true, force: true }).catch(() => {})
     }
     if (app && close) {
-      await safeClose(app, close)
+      await close()
     }
   }
 })

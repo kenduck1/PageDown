@@ -24,26 +24,6 @@ import { mergeRecentFiles, readRecentFiles, writeRecentFiles } from '../src/main
 // browsers restrict DataTransfer mutation only during a TRUSTED, OS-driven
 // drag gesture; a script-dispatched DragEvent has no such restriction).
 
-const CLOSE_TIMEOUT_MS = 20_000
-
-async function safeClose(app: ElectronApplication, close: () => Promise<void>): Promise<void> {
-  const closeOutcome = close().then(
-    () => 'closed' as const,
-    () => 'closed' as const
-  )
-  const outcome = await Promise.race([
-    closeOutcome,
-    new Promise<'timeout'>((resolve) => setTimeout(() => resolve('timeout'), CLOSE_TIMEOUT_MS))
-  ])
-  if (outcome === 'timeout') {
-    try {
-      app.process().kill('SIGKILL')
-    } catch {
-      // Best-effort; the process may already be gone.
-    }
-  }
-}
-
 const GET_MAIN_WINDOW_TIMEOUT_MS = 60_000
 
 async function getMainWindow(application: ElectronApplication): Promise<Page> {
@@ -163,6 +143,6 @@ test('Gate 23: a real native file drop inserts a real image reference and writes
       .toContain('![dropped-photo.png](dropped-photo.png)')
   } finally {
     if (fixtureDir) await rm(fixtureDir, { recursive: true, force: true })
-    if (app && close) await safeClose(app, close)
+    if (app && close) await close()
   }
 })

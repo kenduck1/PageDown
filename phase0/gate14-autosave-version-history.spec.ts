@@ -34,7 +34,8 @@ import { hashDocumentPath } from '../src/main/version-history'
 // own main-process code (queues, autosave interval) perturbing teardown,
 // since gate11/gate13/gate14 all launch the SAME built app.
 //
-// `getMainWindow` and `safeClose` below harden against the SYMPTOM (a
+// `getMainWindow` below and launchIsolatedApp's own bounded close() harden
+// against the SYMPTOM (a
 // hung/slow teardown escalating into a leaked, unkillable Electron process
 // tree), not the underlying host-load flakiness itself, which they cannot
 // and do not fix -- measured, not assumed: two separate `--repeat-each=3`
@@ -83,57 +84,6 @@ async function seedRecentFile(userDataDir: string, filePath: string): Promise<vo
   )
 }
 
-const CLOSE_TIMEOUT_MS = 15_000
-
-// gate14 has directly reproduced (see this file's header comment and
-// CLAUDE.md's Testing section) that app.close() can hang indefinitely on
-// this host under load -- escalating what would otherwise be a fast test
-// into a 60s test timeout PLUS a separate 60s worker-teardown timeout,
-// while leaking a live 6+-process Electron tree the whole time (CLAUDE.md's
-// own documented concern about un-torn-down gate processes). Bounding
-// close() HERE, in this file only -- not in phase0/electron-launch.ts,
-// which every other gate shares, and changing its behavior for all of them
-// is out of scope for this file -- so a hung graceful shutdown can't block
-// the test runner (or leak a process) indefinitely: race close() against a
-// fixed timeout, and on expiry, force-kill the process tree directly and
-// clean up the temp userData directory ourselves, since
-// launchIsolatedApp's own close() may never reach its own rm() call if
-// it's stuck awaiting app.close().
-async function safeClose(
-  app: ElectronApplication,
-  close: () => Promise<void>,
-  userDataDir: string
-): Promise<void> {
-  // Attach handlers to the close() promise immediately, regardless of which
-  // side of the race below wins, so a resolution/rejection that arrives
-  // AFTER the timeout branch was already taken never surfaces as an
-  // unhandled rejection.
-  const closeOutcome = close().then(
-    () => 'closed' as const,
-    () => 'closed' as const
-  )
-  const outcome = await Promise.race([
-    closeOutcome,
-    new Promise<'timeout'>((resolve) => setTimeout(() => resolve('timeout'), CLOSE_TIMEOUT_MS))
-  ])
-  if (outcome === 'timeout') {
-    try {
-      // SIGKILL, not the default SIGTERM: a hung app.close() means the
-      // main process's graceful-shutdown path is itself the thing that
-      // isn't completing, so a signal it could catch/defer is exactly the
-      // wrong tool here -- SIGKILL can't be caught, deferred, or ignored,
-      // guaranteeing the OS actually reclaims this process rather than
-      // trusting a possibly-wedged event loop to notice a softer signal.
-      app.process().kill('SIGKILL')
-    } catch {
-      // Best-effort -- if the process is already gone or unkillable for
-      // some other reason, there's nothing more to do here beyond the
-      // userData cleanup below.
-    }
-    await rm(userDataDir, { recursive: true, force: true }).catch(() => undefined)
-  }
-}
-
 test('Gate 14: opening a document with a newer autosave snapshot silently loads that content', async () => {
   // Bumped from 60s to 120s (fix-round-2 review): getMainWindow's own
   // search budget is ALSO 60s (see this file's header/getMainWindow
@@ -142,7 +92,8 @@ test('Gate 14: opening a document with a newer autosave snapshot silently loads 
   // timeout would fire at essentially the same moment, turning
   // getMainWindow's specific, actionable "Timed out locating the main
   // app-shell window" error into an ambiguous "Test timeout exceeded" and
-  // leaving no runway for safeClose's own 15s race in the finally block.
+  // leaving no runway for close()'s own bounded 15s race in the finally
+  // block.
   test.setTimeout(120_000)
 
   // `close`/`app`/`userDataDir`/`fixtureDir` are declared outside the try so
@@ -231,7 +182,7 @@ test('Gate 14: opening a document with a newer autosave snapshot silently loads 
     expect(result.recoveredFromAutosave).toBe(true)
     expect(result.content).toBe('# Newer autosaved content')
   } finally {
-    if (app && close && userDataDir) await safeClose(app, close, userDataDir)
+    if (app && close && userDataDir) await close()
     if (fixtureDir) await rm(fixtureDir, { recursive: true, force: true })
   }
 })
@@ -344,7 +295,7 @@ test('Gate 14: clearing pending autosave means a subsequent open does NOT recove
     expect(result.recoveredFromAutosave).toBe(false)
     expect(result.content).toBe('# Original content')
   } finally {
-    if (app && close && userDataDir) await safeClose(app, close, userDataDir)
+    if (app && close && userDataDir) await close()
     if (fixtureDir) await rm(fixtureDir, { recursive: true, force: true })
   }
 })
@@ -473,7 +424,7 @@ test('Gate 14: the History sidebar tab lists a real saved version and restoring 
     await expect(win.locator('.milkdown-mount')).toContainText('Original body')
     await expect(win.locator('.milkdown-mount')).not.toContainText('Edited body')
   } finally {
-    if (app && close && userDataDir) await safeClose(app, close, userDataDir)
+    if (app && close && userDataDir) await close()
     if (fixtureDir) await rm(fixtureDir, { recursive: true, force: true })
   }
 })
@@ -636,7 +587,7 @@ test('Gate 14: the four version-history IPC handlers drop an unknown (non-allowl
     const dirsAfterUnknown = await readdir(versionHistoryRoot).catch(() => [] as string[])
     expect(dirsAfterUnknown).toEqual(dirsBeforeUnknown)
   } finally {
-    if (app && close && userDataDir) await safeClose(app, close, userDataDir)
+    if (app && close && userDataDir) await close()
     if (fixtureDir) await rm(fixtureDir, { recursive: true, force: true })
   }
 })

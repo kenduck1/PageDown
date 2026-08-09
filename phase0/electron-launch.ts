@@ -1,5 +1,6 @@
 import { _electron as electron, type ElectronApplication } from '@playwright/test'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { rmSync } from 'node:fs'
+import { mkdtemp, readdir, rm, stat } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -19,12 +20,125 @@ import { join } from 'node:path'
 export interface IsolatedApp {
   app: ElectronApplication
   userDataDir: string
+  /**
+   * Tears the launched app down and removes its isolated userData directory.
+   *
+   * BOUNDED and best-effort by construction -- see CLOSE_TIMEOUT_MS below.
+   * Never rejects, so it is always safe to call from a `finally` block
+   * without masking the real failure that got you there.
+   */
   close: () => Promise<void>
 }
 
+// Upper bound on how long a single app.close() gets before the process tree
+// is killed outright. Under real host load on this development machine,
+// `_electron`'s app.close() can hang indefinitely (CLAUDE.md's Testing
+// section documents the measured 60s+ hangs, reproduced on gate11/gate13/
+// gate14 alike) -- an unbounded await there wedges the Playwright worker
+// until ITS teardown timeout, and leaves both the process tree and this
+// launch's temp directory behind.
+//
+// 15s is deliberately generous relative to a healthy close (sub-second) and
+// still well inside Playwright's own worker-teardown budget.
+const CLOSE_TIMEOUT_MS = 15_000
+
+// Every launch that has not yet been closed, so the worker-exit sweep below
+// can find it. Entries are added BEFORE electron.launch() is awaited (the
+// temp directory already exists by then) and removed by close().
+interface LiveLaunch {
+  userDataDir: string
+  app?: ElectronApplication
+}
+const liveLaunches = new Set<LiveLaunch>()
+
+// LAST-RESORT sweep, and the one that covers the case try/finally provably
+// cannot: a Playwright TEST TIMEOUT.
+//
+// Measured, not assumed (throwaway probe spec, a test that awaits a
+// never-settling promise with a 2s timeout): on timeout Playwright abandons
+// the still-suspended test function rather than throwing into it, so a
+// `finally` in the test body NEVER RUNS -- only hooks do. try/finally at the
+// call sites therefore covers thrown assertions, and nothing else. That
+// distinction matters here because the measured leak this whole fix targets
+// -- 328 stale pagedown-gate-userdata-* directories (~353MB) plus orphaned
+// 6+-process Electron trees -- came from gates hitting 60-90s LAUNCH
+// timeouts, i.e. exactly the path try/finally misses.
+//
+// A process 'exit' handler is used rather than a per-file test.afterEach /
+// test.afterAll registration because it needs no change in (and no import
+// by) any of the 27 gate files, and cannot perturb hook ordering in the
+// gates that deliberately share one app across a whole describe block. It
+// must be fully synchronous, hence rmSync/kill rather than the async
+// close() path. Residual gap, stated rather than papered over: if the
+// Playwright worker is itself force-killed (its own teardown timeout), no
+// exit handler runs and that launch still leaks -- reproduced live while
+// verifying this fix. That last hole is what sweepStaleUserDataDirs below
+// exists for.
+process.once('exit', () => {
+  for (const live of liveLaunches) {
+    try {
+      live.app?.process().kill('SIGKILL')
+    } catch {
+      // Already gone.
+    }
+    try {
+      rmSync(live.userDataDir, { recursive: true, force: true })
+    } catch {
+      // Best-effort.
+    }
+  }
+})
+
+// How old a stray pagedown-gate-userdata-* directory must be before the
+// janitor below will delete it. Deliberately far longer than any real gate
+// run (the whole phase0 suite is minutes, not hours), so this can never race
+// a directory another worker is actively using -- the point is to bound
+// accumulation to a single session's worth of leaks, not to collect promptly.
+const STALE_USERDATA_AGE_MS = 6 * 60 * 60 * 1000
+
+let sweptThisProcess = false
+
+// Janitor for leaks NEITHER try/finally NOR the exit hook above can catch:
+// when a worker exceeds its own teardown timeout, Playwright kills it
+// outright and no exit handler runs at all. That is not hypothetical -- it
+// is precisely how the measured 328-directory / ~353MB pile-up happened
+// (gates hitting 60-90s launch timeouts), and it was reproduced again while
+// verifying this very fix. Sweeping on launch makes the leak self-healing
+// across runs instead of permanent.
+async function sweepStaleUserDataDirs(): Promise<void> {
+  const parent = tmpdir()
+  const entries = await readdir(parent).catch(() => [] as string[])
+  const cutoff = Date.now() - STALE_USERDATA_AGE_MS
+  for (const name of entries) {
+    if (!name.startsWith('pagedown-gate-userdata-')) continue
+    const full = join(parent, name)
+    const info = await stat(full).catch(() => null)
+    if (!info || info.mtimeMs > cutoff) continue
+    await rm(full, { recursive: true, force: true }).catch(() => undefined)
+  }
+}
+
 export async function launchIsolatedApp(args: string[]): Promise<IsolatedApp> {
+  if (!sweptThisProcess) {
+    sweptThisProcess = true
+    // Fire-and-forget: a gate must never be delayed or failed by janitorial
+    // work on unrelated directories.
+    void sweepStaleUserDataDirs()
+  }
   const userDataDir = await mkdtemp(join(tmpdir(), 'pagedown-gate-userdata-'))
-  const app = await electron.launch({ args: [...args, `--user-data-dir=${userDataDir}`] })
+  const live: LiveLaunch = { userDataDir }
+  liveLaunches.add(live)
+  let app: ElectronApplication
+  try {
+    app = await electron.launch({ args: [...args, `--user-data-dir=${userDataDir}`] })
+    live.app = app
+  } catch (err) {
+    // The temp directory exists but no close() will ever be handed to a
+    // caller, so this is the only chance to clean it up promptly.
+    liveLaunches.delete(live)
+    await rm(userDataDir, { recursive: true, force: true }).catch(() => undefined)
+    throw err
+  }
   // SECOND, independent reason every gate must go through this helper (the
   // first is the userData isolation above): Playwright's _electron.launch()
   // resolves as soon as it can talk to the main process, which is BEFORE
@@ -46,8 +160,42 @@ export async function launchIsolatedApp(args: string[]): Promise<IsolatedApp> {
     app,
     userDataDir,
     close: async () => {
-      await app.close()
-      await rm(userDataDir, { recursive: true, force: true })
+      try {
+        // Attach the settle handlers immediately, regardless of which side of
+        // the race wins, so a close() that rejects LATER (after the timeout
+        // already resolved) can never surface as an unhandled rejection.
+        const closeOutcome = app.close().then(
+          () => 'closed' as const,
+          () => 'closed' as const
+        )
+        let timer: ReturnType<typeof setTimeout> | undefined
+        const timedOut = new Promise<'timeout'>((resolve) => {
+          timer = setTimeout(() => resolve('timeout'), CLOSE_TIMEOUT_MS)
+        })
+        const outcome = await Promise.race([closeOutcome, timedOut])
+        clearTimeout(timer)
+        if (outcome === 'timeout') {
+          try {
+            // SIGKILL, not the default SIGTERM: a hung app.close() means the
+            // main process's own graceful-shutdown path is itself what isn't
+            // completing, so a signal it could catch or defer is the wrong
+            // tool.
+            app.process().kill('SIGKILL')
+          } catch {
+            // Best-effort -- if the process is already gone there is nothing
+            // more to do.
+          }
+        }
+      } finally {
+        // ALWAYS remove the temp directory, including on the timeout/SIGKILL
+        // path. This `finally` is part of the fix for a measured,
+        // non-theoretical leak: 328 stale pagedown-gate-userdata-*
+        // directories (~353MB) had accumulated in $TMPDIR, because the old
+        // body did `await app.close()` FIRST and only then rm()'d -- so any
+        // hung or throwing close skipped the cleanup entirely.
+        liveLaunches.delete(live)
+        await rm(userDataDir, { recursive: true, force: true }).catch(() => undefined)
+      }
     }
   }
 }

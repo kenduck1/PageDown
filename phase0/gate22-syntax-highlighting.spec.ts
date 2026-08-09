@@ -23,26 +23,6 @@ import { mergeRecentFiles, readRecentFiles, writeRecentFiles } from '../src/main
 // established, since contextBridge deep-freezes window.api and makes
 // renderer-side spying categorically impossible (Gate 15's own finding).
 
-const CLOSE_TIMEOUT_MS = 20_000
-
-async function safeClose(app: ElectronApplication, close: () => Promise<void>): Promise<void> {
-  const closeOutcome = close().then(
-    () => 'closed' as const,
-    () => 'closed' as const
-  )
-  const outcome = await Promise.race([
-    closeOutcome,
-    new Promise<'timeout'>((resolve) => setTimeout(() => resolve('timeout'), CLOSE_TIMEOUT_MS))
-  ])
-  if (outcome === 'timeout') {
-    try {
-      app.process().kill('SIGKILL')
-    } catch {
-      // Best-effort; the process may already be gone.
-    }
-  }
-}
-
 const GET_MAIN_WINDOW_TIMEOUT_MS = 60_000
 
 async function getMainWindow(application: ElectronApplication): Promise<Page> {
@@ -209,6 +189,6 @@ test('Gate 22: a labeled fenced code block is really syntax-highlighted by the c
     ).toBe(false)
   } finally {
     if (fixtureDir) await rm(fixtureDir, { recursive: true, force: true })
-    if (app && close) await safeClose(app, close)
+    if (app && close) await close()
   }
 })

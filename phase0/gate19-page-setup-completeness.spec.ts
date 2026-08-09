@@ -34,8 +34,6 @@ import { mergeRecentFiles, readRecentFiles, writeRecentFiles } from '../src/main
 // asserts it. Every header/footer assertion below therefore reads
 // `getComputedStyle(el, '::after').content`, never `textContent`.
 
-const CLOSE_TIMEOUT_MS = 20_000
-
 // --- Hand-derived expectations -------------------------------------------
 //
 // Custom page size: 5in x 7in at 96dpi. Chosen because it is a legal custom
@@ -53,24 +51,6 @@ const LETTER_PAGE_HEIGHT_PX = 11 * 96 // 1056
 // that instead, which is what makes this discriminating.
 const RESUME_BODY_FONT_PX = 13
 const DEFAULT_BODY_FONT_PX = 14
-
-async function safeClose(app: ElectronApplication, close: () => Promise<void>): Promise<void> {
-  const closeOutcome = close().then(
-    () => 'closed' as const,
-    () => 'closed' as const
-  )
-  const outcome = await Promise.race([
-    closeOutcome,
-    new Promise<'timeout'>((resolve) => setTimeout(() => resolve('timeout'), CLOSE_TIMEOUT_MS))
-  ])
-  if (outcome === 'timeout') {
-    try {
-      app.process().kill('SIGKILL')
-    } catch {
-      // Best-effort; the process may already be gone.
-    }
-  }
-}
 
 interface PreviewProbe {
   pageCount: number
@@ -239,7 +219,7 @@ test.afterAll(async () => {
   try {
     if (fixtureDir) await rm(fixtureDir, { recursive: true, force: true })
   } finally {
-    if (app && close) await safeClose(app, close)
+    if (app && close) await close()
   }
 })
 

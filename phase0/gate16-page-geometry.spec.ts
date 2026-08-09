@@ -45,11 +45,10 @@ import { mergeRecentFiles, readRecentFiles, writeRecentFiles } from '../src/main
 // FED INTO the pipeline (and so must come from the real function); these are
 // values ASSERTED ON the pipeline's output.
 //
-// close() is wrapped in try/finally via the bounded `safeClose` below,
-// following gate15-split-mode.spec.ts / gate14-autosave-version-history.
-// spec.ts -- CLAUDE.md documents that most gate files still use a bare,
-// unwrapped close(), and that a test throwing before reaching it leaks both
-// the temp userData directory and a live 6+-process Electron tree.
+// close() is wrapped in try/finally, so a test throwing before reaching it
+// can't leak the temp userData directory or a live 6+-process Electron tree.
+// The bounded/SIGKILL half now lives inside launchIsolatedApp's own returned
+// close() (phase0/electron-launch.ts), not in a per-file `safeClose` copy.
 
 // --- The fixture's page configuration, and the geometry it implies --------
 //
@@ -154,33 +153,6 @@ async function getMainWindow(app: ElectronApplication): Promise<Page> {
     await new Promise((resolve) => setTimeout(resolve, 200))
   }
   throw new Error('Timed out locating the main app-shell window (only found the sandboxed one)')
-}
-
-const CLOSE_TIMEOUT_MS = 15_000
-
-// Bounded close(), copied from gate15-split-mode.spec.ts's own `safeClose`
-// -- see that file (and gate14's header) for the measured rationale:
-// repeated launch/close cycles under host load can hang indefinitely at
-// app.close(), and launchIsolatedApp's own close() never reaches its rm()
-// cleanup if it's stuck there.
-async function safeClose(app: ElectronApplication, close: () => Promise<void>): Promise<void> {
-  const closeOutcome = close().then(
-    () => 'closed' as const,
-    () => 'closed' as const
-  )
-  const outcome = await Promise.race([
-    closeOutcome,
-    new Promise<'timeout'>((resolve) => setTimeout(() => resolve('timeout'), CLOSE_TIMEOUT_MS))
-  ])
-  if (outcome === 'timeout') {
-    try {
-      // SIGKILL, not SIGTERM -- a hung app.close() means the main process's
-      // own graceful-shutdown path is what isn't completing.
-      app.process().kill('SIGKILL')
-    } catch {
-      // Best-effort; the process may already be gone.
-    }
-  }
 }
 
 interface PreviewGeometryProbe {
@@ -609,6 +581,6 @@ test('Gate 16: a document whose frontmatter sets A4 lays out at A4 in BOTH the e
     ).toBeLessThanOrEqual(PX_TOLERANCE)
   } finally {
     if (fixtureDir) await rm(fixtureDir, { recursive: true, force: true })
-    if (app && close) await safeClose(app, close)
+    if (app && close) await close()
   }
 })

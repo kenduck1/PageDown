@@ -191,199 +191,202 @@ test('Gate 3: editor/paginator layout parity for mixed.md top-level blocks', asy
   // --- Pagination side: real Electron app, real harness -------------------
   const { app, close } = await launchIsolatedApp(['.'])
 
-  await app.evaluate(async ({ BaseWindow }) => {
-    const bridge = (
-      globalThis as unknown as {
-        __pagedownPhase0: {
-          createPaginationHarness: typeof import('../src/main/pagination-window').createPaginationHarness
-        }
-      }
-    ).__pagedownPhase0
-    const win = new BaseWindow({ show: false })
-    ;(globalThis as unknown as { __gate3Harness: unknown }).__gate3Harness =
-      await bridge.createPaginationHarness(win)
-    return true
-  })
-
-  const { html } = markdownToHtml(rawMarkdown)
-
-  const paginationResult = (await app.evaluate(
-    async (_electronNS, { html, geometry, documentStyle }) => {
-      const harness = (
+  try {
+    await app.evaluate(async ({ BaseWindow }) => {
+      const bridge = (
         globalThis as unknown as {
-          __gate3Harness: import('../src/main/pagination-window').PaginationHarness
+          __pagedownPhase0: {
+            createPaginationHarness: typeof import('../src/main/pagination-window').createPaginationHarness
+          }
         }
-      ).__gate3Harness
-      const sendResult = await harness.sendDocument(html, geometry, documentStyle)
+      ).__pagedownPhase0
+      const win = new BaseWindow({ show: false })
+      ;(globalThis as unknown as { __gate3Harness: unknown }).__gate3Harness =
+        await bridge.createPaginationHarness(win)
+      return true
+    })
 
-      // `.pagedjs_area` is the real, on-screen laid-out content box (see this
-      // file's header comment for why its 624px width is what it is) --
-      // measuring every top-level block's rect.top relative to ITS top
-      // (rather than an absolute screen coordinate) is what makes this
-      // comparable to the Milkdown side at all: the two pages have no reason
-      // to share an absolute on-screen origin (different window chrome,
-      // different body margins -- see below), only a shared content-flow
-      // start point makes sense to diff.
-      const raw = (await harness.view.webContents.executeJavaScript(`
-      (function () {
-        var area = document.querySelector('.pagedjs_area')
-        if (!area) return JSON.stringify({ error: 'no .pagedjs_area found' })
-        var areaTop = area.getBoundingClientRect().top
-        var blocks = Array.prototype.slice.call(area.querySelectorAll(':scope > .pagedjs_page_content > div > *'))
-        var out = blocks.map(function (el) {
-          var r = el.getBoundingClientRect()
-          return { tag: el.tagName, text: String(el.textContent || '').trim().slice(0, 50), relativeTop: r.top - areaTop }
-        })
-        return JSON.stringify(out)
-      })()
-    `)) as string
+    const { html } = markdownToHtml(rawMarkdown)
 
-      return { sendResult, blocks: JSON.parse(raw) as BlockMeasurement[] }
-    },
-    { html, geometry: LETTER_GEOMETRY, documentStyle: DEFAULT_STYLE }
-  )) as { sendResult: { pageCount: number }; blocks: BlockMeasurement[] }
+    const paginationResult = (await app.evaluate(
+      async (_electronNS, { html, geometry, documentStyle }) => {
+        const harness = (
+          globalThis as unknown as {
+            __gate3Harness: import('../src/main/pagination-window').PaginationHarness
+          }
+        ).__gate3Harness
+        const sendResult = await harness.sendDocument(html, geometry, documentStyle)
 
-  await close()
+        // `.pagedjs_area` is the real, on-screen laid-out content box (see this
+        // file's header comment for why its 624px width is what it is) --
+        // measuring every top-level block's rect.top relative to ITS top
+        // (rather than an absolute screen coordinate) is what makes this
+        // comparable to the Milkdown side at all: the two pages have no reason
+        // to share an absolute on-screen origin (different window chrome,
+        // different body margins -- see below), only a shared content-flow
+        // start point makes sense to diff.
+        const raw = (await harness.view.webContents.executeJavaScript(`
+        (function () {
+          var area = document.querySelector('.pagedjs_area')
+          if (!area) return JSON.stringify({ error: 'no .pagedjs_area found' })
+          var areaTop = area.getBoundingClientRect().top
+          var blocks = Array.prototype.slice.call(area.querySelectorAll(':scope > .pagedjs_page_content > div > *'))
+          var out = blocks.map(function (el) {
+            var r = el.getBoundingClientRect()
+            return { tag: el.tagName, text: String(el.textContent || '').trim().slice(0, 50), relativeTop: r.top - areaTop }
+          })
+          return JSON.stringify(out)
+        })()
+      `)) as string
 
-  expect(
-    paginationResult.sendResult.pageCount,
-    'mixed.md is expected to fit on a single page at the harness default Letter/1in-margin geometry -- a multi-page result would mean blocks landed on different pages, invalidating a single flat top-level comparison'
-  ).toBe(1)
-  expect(paginationResult.blocks.length, 'expected the 8 known top-level blocks in mixed.md').toBe(
-    8
-  )
+        return { sendResult, blocks: JSON.parse(raw) as BlockMeasurement[] }
+      },
+      { html, geometry: LETTER_GEOMETRY, documentStyle: DEFAULT_STYLE }
+    )) as { sendResult: { pageCount: number }; blocks: BlockMeasurement[] }
 
-  // --- Milkdown side: plain chromium, throwaway local HTML fixture -------
-  const browser = await chromium.launch()
-  const page = await browser.newPage()
-  await page.addInitScript((markdown) => {
-    ;(window as unknown as { __gate3Markdown: string }).__gate3Markdown = markdown
-  }, bodyMarkdown)
-  await page.goto(`file://${milkdownCompareHtml}`)
-  await page.waitForFunction(
-    () =>
-      (window as unknown as { __gate3Ready?: boolean; __gate3Error?: string }).__gate3Ready ===
-        true || Boolean((window as unknown as { __gate3Error?: string }).__gate3Error)
-  )
-  const mountError = await page.evaluate(
-    () => (window as unknown as { __gate3Error?: string }).__gate3Error
-  )
-  expect(mountError, 'Milkdown editor failed to mount in the comparison page').toBeUndefined()
+    expect(
+      paginationResult.sendResult.pageCount,
+      'mixed.md is expected to fit on a single page at the harness default Letter/1in-margin geometry -- a multi-page result would mean blocks landed on different pages, invalidating a single flat top-level comparison'
+    ).toBe(1)
+    expect(
+      paginationResult.blocks.length,
+      'expected the 8 known top-level blocks in mixed.md'
+    ).toBe(8)
 
-  // Two animation-frame ticks after Editor.create() resolves, for the same
-  // reason this repo's other gates settle before measuring: ProseMirror's
-  // own initial paint is not guaranteed complete the instant `.create()`'s
-  // promise resolves, and this gate cares about real, final layout.
-  await page.evaluate(
-    () =>
-      new Promise<void>((resolve) =>
-        requestAnimationFrame(() => requestAnimationFrame(() => resolve()))
-      )
-  )
+    // --- Milkdown side: plain chromium, throwaway local HTML fixture -------
+    const browser = await chromium.launch()
+    const page = await browser.newPage()
+    await page.addInitScript((markdown) => {
+      ;(window as unknown as { __gate3Markdown: string }).__gate3Markdown = markdown
+    }, bodyMarkdown)
+    await page.goto(`file://${milkdownCompareHtml}`)
+    await page.waitForFunction(
+      () =>
+        (window as unknown as { __gate3Ready?: boolean; __gate3Error?: string }).__gate3Ready ===
+          true || Boolean((window as unknown as { __gate3Error?: string }).__gate3Error)
+    )
+    const mountError = await page.evaluate(
+      () => (window as unknown as { __gate3Error?: string }).__gate3Error
+    )
+    expect(mountError, 'Milkdown editor failed to mount in the comparison page').toBeUndefined()
 
-  const milkdownRaw = await page.evaluate(() => {
-    // Not a direct child of #content-root: Milkdown wraps its own
-    // contenteditable .ProseMirror element inside an intermediate
-    // `<div class="milkdown">` wrapper it creates itself -- confirmed by
-    // dumping the real mounted DOM (`<div id="content-root"><div
-    // class="milkdown"><div class="ProseMirror editor" ...>`), not assumed
-    // from the DOM shape Editor.make()/rootCtx's own types imply. This
-    // wrapper is itself one concrete instance of the "Milkdown node-view
-    // chrome" this gate's brief anticipated as a possible source of
-    // mismatch -- a bare, unstyled <div> has no default margin/padding/
-    // border, so per CSS box-model rules it should not shift any measured
-    // block position, but this gate measures rather than assumes that. See
-    // this file's header, and docs/superpowers/plans/
-    // 2026-07-28-phase1-findings.md (Gate 3 section), for the measured
-    // answer.
-    const editorRoot = document.querySelector('#content-root .ProseMirror')
-    if (!editorRoot) return JSON.stringify({ error: 'no .ProseMirror element found' })
-    const rootTop = editorRoot.getBoundingClientRect().top
-    const rootWidth = editorRoot.getBoundingClientRect().width
-    const blocks = Array.from(editorRoot.children).map((el) => {
-      const r = el.getBoundingClientRect()
+    // Two animation-frame ticks after Editor.create() resolves, for the same
+    // reason this repo's other gates settle before measuring: ProseMirror's
+    // own initial paint is not guaranteed complete the instant `.create()`'s
+    // promise resolves, and this gate cares about real, final layout.
+    await page.evaluate(
+      () =>
+        new Promise<void>((resolve) =>
+          requestAnimationFrame(() => requestAnimationFrame(() => resolve()))
+        )
+    )
+
+    const milkdownRaw = await page.evaluate(() => {
+      // Not a direct child of #content-root: Milkdown wraps its own
+      // contenteditable .ProseMirror element inside an intermediate
+      // `<div class="milkdown">` wrapper it creates itself -- confirmed by
+      // dumping the real mounted DOM (`<div id="content-root"><div
+      // class="milkdown"><div class="ProseMirror editor" ...>`), not assumed
+      // from the DOM shape Editor.make()/rootCtx's own types imply. This
+      // wrapper is itself one concrete instance of the "Milkdown node-view
+      // chrome" this gate's brief anticipated as a possible source of
+      // mismatch -- a bare, unstyled <div> has no default margin/padding/
+      // border, so per CSS box-model rules it should not shift any measured
+      // block position, but this gate measures rather than assumes that. See
+      // this file's header, and docs/superpowers/plans/
+      // 2026-07-28-phase1-findings.md (Gate 3 section), for the measured
+      // answer.
+      const editorRoot = document.querySelector('#content-root .ProseMirror')
+      if (!editorRoot) return JSON.stringify({ error: 'no .ProseMirror element found' })
+      const rootTop = editorRoot.getBoundingClientRect().top
+      const rootWidth = editorRoot.getBoundingClientRect().width
+      const blocks = Array.from(editorRoot.children).map((el) => {
+        const r = el.getBoundingClientRect()
+        return {
+          tag: el.tagName,
+          text: (el.textContent || '').trim().slice(0, 50),
+          relativeTop: r.top - rootTop
+        }
+      })
+      return JSON.stringify({ rootWidth, blocks })
+    })
+    const milkdownParsed = JSON.parse(milkdownRaw) as {
+      rootWidth: number
+      blocks: BlockMeasurement[]
+    }
+
+    await browser.close()
+
+    // Structural sanity check before any position comparison is meaningful:
+    // the Milkdown-mounted content box must actually BE 624px wide (the same
+    // content box width the pagination side measured) for a "same width,
+    // does text wrap/flow the same way" comparison to mean anything at all.
+    expect(
+      milkdownParsed.rootWidth,
+      '.ProseMirror content box must render at the same 624px width as .pagedjs_area for this to be a fair comparison'
+    ).toBe(624)
+
+    // --- The actual per-block comparison, recorded in full ------------------
+    const rows = paginationResult.blocks.map((pagBlock, i) => {
+      const mdBlock = milkdownParsed.blocks[i]
+      const tagsMatch = mdBlock ? pagBlock.tag === mdBlock.tag : false
+      const delta = mdBlock ? Math.abs(pagBlock.relativeTop - mdBlock.relativeTop) : null
+      const withinTolerance = delta !== null && delta <= TOLERANCE_PX
       return {
-        tag: el.tagName,
-        text: (el.textContent || '').trim().slice(0, 50),
-        relativeTop: r.top - rootTop
+        index: i,
+        paginationTag: pagBlock.tag,
+        paginationText: pagBlock.text,
+        paginationTop: Number(pagBlock.relativeTop.toFixed(3)),
+        milkdownTag: mdBlock?.tag ?? '(missing)',
+        milkdownText: mdBlock?.text ?? '(missing)',
+        milkdownTop: mdBlock ? Number(mdBlock.relativeTop.toFixed(3)) : null,
+        deltaPx: delta !== null ? Number(delta.toFixed(3)) : null,
+        tagsMatch,
+        withinTolerance
       }
     })
-    return JSON.stringify({ rootWidth, blocks })
-  })
-  const milkdownParsed = JSON.parse(milkdownRaw) as {
-    rootWidth: number
-    blocks: BlockMeasurement[]
-  }
 
-  await browser.close()
+    // This table IS the recorded finding this gate exists to produce; see
+    // docs/superpowers/plans/2026-07-28-phase1-findings.md (Gate 3 section)
+    // for the committed copy of a real run's output.
+    console.log('\nGate 3 per-block layout comparison (tolerance: ' + TOLERANCE_PX + 'px):')
+    console.table(rows)
 
-  // Structural sanity check before any position comparison is meaningful:
-  // the Milkdown-mounted content box must actually BE 624px wide (the same
-  // content box width the pagination side measured) for a "same width,
-  // does text wrap/flow the same way" comparison to mean anything at all.
-  expect(
-    milkdownParsed.rootWidth,
-    '.ProseMirror content box must render at the same 624px width as .pagedjs_area for this to be a fair comparison'
-  ).toBe(624)
-
-  // --- The actual per-block comparison, recorded in full ------------------
-  const rows = paginationResult.blocks.map((pagBlock, i) => {
-    const mdBlock = milkdownParsed.blocks[i]
-    const tagsMatch = mdBlock ? pagBlock.tag === mdBlock.tag : false
-    const delta = mdBlock ? Math.abs(pagBlock.relativeTop - mdBlock.relativeTop) : null
-    const withinTolerance = delta !== null && delta <= TOLERANCE_PX
-    return {
-      index: i,
-      paginationTag: pagBlock.tag,
-      paginationText: pagBlock.text,
-      paginationTop: Number(pagBlock.relativeTop.toFixed(3)),
-      milkdownTag: mdBlock?.tag ?? '(missing)',
-      milkdownText: mdBlock?.text ?? '(missing)',
-      milkdownTop: mdBlock ? Number(mdBlock.relativeTop.toFixed(3)) : null,
-      deltaPx: delta !== null ? Number(delta.toFixed(3)) : null,
-      tagsMatch,
-      withinTolerance
+    const mismatches = rows.filter((r) => !r.tagsMatch || !r.withinTolerance)
+    if (mismatches.length > 0) {
+      console.log(
+        `\n${mismatches.length}/${rows.length} block(s) mismatched -- see ` +
+          `docs/superpowers/plans/2026-07-28-phase1-findings.md (Gate 3 section) ` +
+          `for the per-block hypothesis of why.`
+      )
     }
-  })
 
-  // This table IS the recorded finding this gate exists to produce; see
-  // docs/superpowers/plans/2026-07-28-phase1-findings.md (Gate 3 section)
-  // for the committed copy of a real run's output.
-  console.log('\nGate 3 per-block layout comparison (tolerance: ' + TOLERANCE_PX + 'px):')
-  console.table(rows)
-
-  const mismatches = rows.filter((r) => !r.tagsMatch || !r.withinTolerance)
-  if (mismatches.length > 0) {
-    console.log(
-      `\n${mismatches.length}/${rows.length} block(s) mismatched -- see ` +
-        `docs/superpowers/plans/2026-07-28-phase1-findings.md (Gate 3 section) ` +
-        `for the per-block hypothesis of why.`
-    )
-  }
-
-  expect(
-    milkdownParsed.blocks.length,
-    "Milkdown should mount the same 8 top-level blocks mixed.md's body produces via markdownToHtml"
-  ).toBe(paginationResult.blocks.length)
-
-  for (const row of rows) {
     expect(
-      row.tagsMatch,
-      `block ${row.index}: expected matching tag names (pagination=${row.paginationTag}, milkdown=${row.milkdownTag})`
-    ).toBe(true)
-  }
+      milkdownParsed.blocks.length,
+      "Milkdown should mount the same 8 top-level blocks mixed.md's body produces via markdownToHtml"
+    ).toBe(paginationResult.blocks.length)
 
-  // This is the gate's real question -- left as a genuine assertion, not
-  // downgraded to a soft log, so a real regression (or a real finding of
-  // non-parity) fails the test rather than passing silently. If this
-  // fails, that IS the valuable finding this gate exists to produce -- see
-  // docs/superpowers/plans/2026-07-28-phase1-findings.md (Gate 3 section)
-  // for the interpretation, not a tolerance widened after the fact to make
-  // it pass.
-  for (const row of rows) {
-    expect(
-      row.deltaPx,
-      `block ${row.index} (${row.paginationTag} "${row.paginationText}"): pagination top=${row.paginationTop}px, milkdown top=${row.milkdownTop}px`
-    ).toBeLessThanOrEqual(TOLERANCE_PX)
+    for (const row of rows) {
+      expect(
+        row.tagsMatch,
+        `block ${row.index}: expected matching tag names (pagination=${row.paginationTag}, milkdown=${row.milkdownTag})`
+      ).toBe(true)
+    }
+
+    // This is the gate's real question -- left as a genuine assertion, not
+    // downgraded to a soft log, so a real regression (or a real finding of
+    // non-parity) fails the test rather than passing silently. If this
+    // fails, that IS the valuable finding this gate exists to produce -- see
+    // docs/superpowers/plans/2026-07-28-phase1-findings.md (Gate 3 section)
+    // for the interpretation, not a tolerance widened after the fact to make
+    // it pass.
+    for (const row of rows) {
+      expect(
+        row.deltaPx,
+        `block ${row.index} (${row.paginationTag} "${row.paginationText}"): pagination top=${row.paginationTop}px, milkdown top=${row.milkdownTop}px`
+      ).toBeLessThanOrEqual(TOLERANCE_PX)
+    }
+  } finally {
+    await close()
   }
 })

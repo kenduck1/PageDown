@@ -18,16 +18,15 @@ import { launchIsolatedApp } from './electron-launch'
 // Testing section, for why a bare launch silently reads/writes the
 // developer's real userData directory.
 //
-// close() is wrapped in try/finally (via the bounded safeClose below),
-// following gate14-autosave-version-history.spec.ts's own established
-// template for this -- CLAUDE.md documents that most gate files still use a
-// bare, unwrapped close() (a known, accepted gap) and that a test throwing
-// before reaching that call leaks a live multi-process Electron tree. Also
-// per gate14's own header comment, `_electron`'s app.close() (and even
-// locating the main window) can hang for 60s+ under real host load on this
-// development machine -- safeClose races close() against a bounded timeout
-// and force-kills the process tree on expiry rather than trusting a
-// possibly-wedged shutdown path.
+// close() is wrapped in try/finally, so a thrown assertion or a timeout
+// still tears the app and its temp userData directory down -- a test that
+// throws before reaching close() otherwise leaks a live multi-process
+// Electron tree AND a temp directory. The BOUNDING half of that (racing
+// app.close() against a deadline and SIGKILLing the process tree on expiry,
+// because `_electron`'s app.close() can hang for 60s+ under real host load)
+// used to be a per-file `safeClose` copied into this and ~14 other gates; it
+// now lives once inside launchIsolatedApp's own returned close(), so every
+// gate gets it for free. Call sites only need the try/finally.
 //
 // ASSERTION MECHANISM -- the bounded judgment call this task's own brief
 // names explicitly. A WebContentsView isn't a top-level window, so
@@ -93,37 +92,6 @@ async function getMainWindow(app: ElectronApplication): Promise<Page> {
     await new Promise((resolve) => setTimeout(resolve, 200))
   }
   throw new Error('Timed out locating the main app-shell window (only found the sandboxed one)')
-}
-
-const CLOSE_TIMEOUT_MS = 15_000
-
-// Bounded close(), matching gate14-autosave-version-history.spec.ts's own
-// safeClose almost verbatim -- see that file's header comment for the full
-// measured rationale (repeated launch/close cycles under host load can hang
-// indefinitely at app.close()). Races close() against CLOSE_TIMEOUT_MS and
-// SIGKILLs the process tree directly on expiry, since launchIsolatedApp's
-// own close() may never reach its rm() cleanup call if it's stuck awaiting
-// app.close().
-async function safeClose(app: ElectronApplication, close: () => Promise<void>): Promise<void> {
-  const closeOutcome = close().then(
-    () => 'closed' as const,
-    () => 'closed' as const
-  )
-  const outcome = await Promise.race([
-    closeOutcome,
-    new Promise<'timeout'>((resolve) => setTimeout(() => resolve('timeout'), CLOSE_TIMEOUT_MS))
-  ])
-  if (outcome === 'timeout') {
-    try {
-      // SIGKILL, not the default SIGTERM -- a hung app.close() means the
-      // main process's own graceful-shutdown path is itself what isn't
-      // completing, so a signal it could catch/defer is the wrong tool.
-      app.process().kill('SIGKILL')
-    } catch {
-      // Best-effort -- if the process is already gone, there's nothing more
-      // to do.
-    }
-  }
 }
 
 interface SplitPreviewProbe {
@@ -346,6 +314,6 @@ test('Gate 15: typing in Split mode’s left pane produces a real, correctly-pos
       })
       .toBeNull()
   } finally {
-    if (app && close) await safeClose(app, close)
+    if (app && close) await close()
   }
 })

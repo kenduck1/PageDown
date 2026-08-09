@@ -28,25 +28,6 @@ import { LETTER_GEOMETRY, DEFAULT_STYLE } from './gate-geometry'
 // CLAUDE.md's Testing section. Re-run the specific failing test in isolation
 // before assuming a regression.
 
-async function safeClose(app: ElectronApplication, close: () => Promise<void>): Promise<void> {
-  const CLOSE_TIMEOUT_MS = 20_000
-  const closeOutcome = close().then(
-    () => 'closed' as const,
-    () => 'closed' as const
-  )
-  const outcome = await Promise.race([
-    closeOutcome,
-    new Promise<'timeout'>((resolve) => setTimeout(() => resolve('timeout'), CLOSE_TIMEOUT_MS))
-  ])
-  if (outcome === 'timeout') {
-    try {
-      app.process().kill('SIGKILL')
-    } catch {
-      // Best-effort: already gone.
-    }
-  }
-}
-
 // Same positive file:// match as gate9/gate10/gate11/gate17/gate20 -- this
 // app launches a second, sandboxed window with no contextBridge access.
 async function getMainWindow(app: ElectronApplication): Promise<Page> {
@@ -120,7 +101,7 @@ test('Gate 27: adding and resolving a comment through the real UI persists and u
   test.setTimeout(90_000)
 
   const fixture = await openFixtureDocument('# Gate 27 Fixture\n\nOriginal marked sentence.\n')
-  const { app, close, win, fixtureDir, fixturePath, restoreRecents } = fixture
+  const { close, win, fixtureDir, fixturePath, restoreRecents } = fixture
 
   try {
     const paragraph = win.locator('.milkdown-mount .ProseMirror p')
@@ -211,78 +192,80 @@ test('Gate 27: adding and resolving a comment through the real UI persists and u
   } finally {
     await restoreRecents()
     await rm(fixtureDir, { recursive: true, force: true })
-    await safeClose(app, close)
+    await close()
   }
 })
 
 test('Gate 27: a comment is invisible in the sandboxed pagination preview and never leaks into exported PDF text', async () => {
   const { app, close } = await launchIsolatedApp(['.'])
 
-  const dataAttr = encodeCommentMeta({
-    author: 'Kai',
-    text: 'needs a citation',
-    createdAt: '2026-08-09T06:00:00Z'
-  })
-  const markdown = `# Gate 27 Preview Check\n\nBefore. <!--comment id="c1" data="${dataAttr}"-->the marked phrase<!--/comment id="c1"-->. After.\n`
-  const { html } = markdownToHtml(markdown)
+  try {
+    const dataAttr = encodeCommentMeta({
+      author: 'Kai',
+      text: 'needs a citation',
+      createdAt: '2026-08-09T06:00:00Z'
+    })
+    const markdown = `# Gate 27 Preview Check\n\nBefore. <!--comment id="c1" data="${dataAttr}"-->the marked phrase<!--/comment id="c1"-->. After.\n`
+    const { html } = markdownToHtml(markdown)
 
-  const result = await app.evaluate(
-    async ({ BaseWindow }, { html, geometry, documentStyle }) => {
-      const bridge = (
-        globalThis as unknown as {
-          __pagedownPhase0: {
-            createPaginationHarness: (typeof import('../src/main/pagination-window'))['createPaginationHarness']
-            exportToPdf: (typeof import('../src/export/export-pdf'))['exportToPdf']
+    const result = await app.evaluate(
+      async ({ BaseWindow }, { html, geometry, documentStyle }) => {
+        const bridge = (
+          globalThis as unknown as {
+            __pagedownPhase0: {
+              createPaginationHarness: (typeof import('../src/main/pagination-window'))['createPaginationHarness']
+              exportToPdf: (typeof import('../src/export/export-pdf'))['exportToPdf']
+            }
           }
+        ).__pagedownPhase0
+        const win = new BaseWindow({ show: false })
+        const harness = await bridge.createPaginationHarness(win)
+        const sendResult = await harness.sendDocument(html, geometry, documentStyle)
+
+        const bodyText: string = await harness.view.webContents.executeJavaScript(
+          'document.body.textContent'
+        )
+        const commentTraceCount = await harness.view.webContents.executeJavaScript(`
+          document.querySelectorAll('.pagedown-comment-mark, [data-comment-id]').length
+        `)
+
+        const pdfBuffer = await bridge.exportToPdf(harness)
+
+        return {
+          sendResult,
+          bodyText,
+          commentTraceCount,
+          pdfBuffer: Array.from(new Uint8Array(pdfBuffer))
         }
-      ).__pagedownPhase0
-      const win = new BaseWindow({ show: false })
-      const harness = await bridge.createPaginationHarness(win)
-      const sendResult = await harness.sendDocument(html, geometry, documentStyle)
+      },
+      { html, geometry: LETTER_GEOMETRY, documentStyle: DEFAULT_STYLE }
+    )
 
-      const bodyText: string = await harness.view.webContents.executeJavaScript(
-        'document.body.textContent'
-      )
-      const commentTraceCount = await harness.view.webContents.executeJavaScript(`
-        document.querySelectorAll('.pagedown-comment-mark, [data-comment-id]').length
-      `)
+    expect(result.sendResult.ready).toBe(true)
+    // The marked TEXT survives, completely ordinary -- proving the comment-
+    // to-hast passthrough handler didn't drop content, only its own marker
+    // structure.
+    expect(result.bodyText).toContain('the marked phrase')
+    // Zero structural trace of the comment anywhere in the sandboxed DOM.
+    expect(result.commentTraceCount).toBe(0)
+    expect(result.bodyText).not.toContain('<!--comment')
+    expect(result.bodyText).not.toContain('needs a citation')
 
-      const pdfBuffer = await bridge.exportToPdf(harness)
+    const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs')
+    const pdfBuffer = Buffer.from(result.pdfBuffer)
+    const loadingTask = pdfjs.getDocument({ data: new Uint8Array(pdfBuffer) })
+    const pdfDoc = await loadingTask.promise
+    let extractedText = ''
+    for (let i = 1; i <= pdfDoc.numPages; i++) {
+      const page = await pdfDoc.getPage(i)
+      const textContent = await page.getTextContent()
+      extractedText += textContent.items.map((item) => ('str' in item ? item.str : '')).join('')
+    }
 
-      return {
-        sendResult,
-        bodyText,
-        commentTraceCount,
-        pdfBuffer: Array.from(new Uint8Array(pdfBuffer))
-      }
-    },
-    { html, geometry: LETTER_GEOMETRY, documentStyle: DEFAULT_STYLE }
-  )
-
-  expect(result.sendResult.ready).toBe(true)
-  // The marked TEXT survives, completely ordinary -- proving the comment-
-  // to-hast passthrough handler didn't drop content, only its own marker
-  // structure.
-  expect(result.bodyText).toContain('the marked phrase')
-  // Zero structural trace of the comment anywhere in the sandboxed DOM.
-  expect(result.commentTraceCount).toBe(0)
-  expect(result.bodyText).not.toContain('<!--comment')
-  expect(result.bodyText).not.toContain('needs a citation')
-
-  const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs')
-  const pdfBuffer = Buffer.from(result.pdfBuffer)
-  const loadingTask = pdfjs.getDocument({ data: new Uint8Array(pdfBuffer) })
-  const pdfDoc = await loadingTask.promise
-  let extractedText = ''
-  for (let i = 1; i <= pdfDoc.numPages; i++) {
-    const page = await pdfDoc.getPage(i)
-    const textContent = await page.getTextContent()
-    extractedText += textContent.items.map((item) => ('str' in item ? item.str : '')).join('')
+    expect(extractedText).toContain('the marked phrase')
+    expect(extractedText).not.toContain('<!--comment')
+    expect(extractedText).not.toContain('needs a citation')
+  } finally {
+    await close()
   }
-
-  expect(extractedText).toContain('the marked phrase')
-  expect(extractedText).not.toContain('<!--comment')
-  expect(extractedText).not.toContain('needs a citation')
-
-  await close()
 })

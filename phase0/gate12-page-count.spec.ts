@@ -87,7 +87,10 @@ test.describe('Gate 12: real page counts via the dedicated getPageCount harness'
   })
 
   test.afterAll(async () => {
-    await close()
+    // Guarded: if beforeAll's launchIsolatedApp itself threw, `close` was
+    // never assigned, and an unguarded call here would mask that real
+    // failure with a TypeError.
+    if (close) await close()
   })
 
   test('a trivial one-paragraph document paginates to exactly 1 page', async () => {

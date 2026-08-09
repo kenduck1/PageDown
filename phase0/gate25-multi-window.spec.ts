@@ -17,26 +17,6 @@ import { mergeRecentFiles, readRecentFiles, writeRecentFiles } from '../src/main
 // the harness-teardown-only-on-last-window-close fix can only be proven
 // against the real, multi-process running app.
 
-const CLOSE_TIMEOUT_MS = 20_000
-
-async function safeClose(app: ElectronApplication, close: () => Promise<void>): Promise<void> {
-  const closeOutcome = close().then(
-    () => 'closed' as const,
-    () => 'closed' as const
-  )
-  const outcome = await Promise.race([
-    closeOutcome,
-    new Promise<'timeout'>((resolve) => setTimeout(() => resolve('timeout'), CLOSE_TIMEOUT_MS))
-  ])
-  if (outcome === 'timeout') {
-    try {
-      app.process().kill('SIGKILL')
-    } catch {
-      // Best-effort; the process may already be gone.
-    }
-  }
-}
-
 const GET_MAIN_WINDOW_TIMEOUT_MS = 60_000
 
 // Every `file://` window currently open, domcontentloaded-settled -- unlike
@@ -166,6 +146,6 @@ test('Gate 25: Open in New Window creates a genuinely independent second window,
     expect(pageCountResult).toEqual({ pageCount: 1 })
   } finally {
     if (fixtureDir) await rm(fixtureDir, { recursive: true, force: true })
-    if (app && close) await safeClose(app, close)
+    if (app && close) await close()
   }
 })

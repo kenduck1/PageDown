@@ -5,64 +5,12 @@ import { join } from 'node:path'
 import { mergeRecentFiles, readRecentFiles, writeRecentFiles } from '../src/main/recent-files'
 import { launchIsolatedApp } from './electron-launch'
 
-// Gate 17 -- Find & Replace, end to end against the REAL built app.
-//
-// This gate exists because every renderer-side assertion in the Find &
-// Replace sub-project runs under jsdom, which has no layout engine and
-// dispatches no real OS key events. A jsdom test can assert that a component
-// received a decoration class, but it structurally cannot assert that:
-//
-//   (1) a real Cmd/Ctrl+F keystroke reaches the app at all (the shortcut is a
-//       bare `window` keydown listener -- see useFindShortcuts.ts's own
-//       module comment for why there is no Electron application Menu to hang
-//       a real accelerator off yet),
-//   (2) the highlight decorations Milkdown's find plugin emits actually PAINT
-//       -- i.e. occupy real, non-zero pixels on screen, with the active match
-//       visually distinguished from the rest,
-//   (3) the real <textarea> in Source mode genuinely moves its own native
-//       selection to each match.
-//
-// Those three are exactly what's asserted below. Everything else about the
-// feature (match semantics, the store's cursor arithmetic, replace ordering,
-// mark preservation) is already covered by real unit tests and is
-// deliberately NOT re-asserted here.
-//
-// Uses launchIsolatedApp (phase0/electron-launch.ts), never a bare
-// _electron.launch() -- a hard rule in this repo, see CLAUDE.md's Testing
-// section for the real breakage that caused. close() is wrapped in
-// try/finally via the bounded safeClose below, following gate15's own
-// template.
-const CLOSE_TIMEOUT_MS = 20_000
-
 // The word this gate searches for. Deliberately appears a known number of
 // times in the fixture below, and deliberately is NOT a substring of any
 // other word there -- so a whole-word bug can't silently change the count
 // this gate pins.
 const NEEDLE = 'alpha'
 const NEEDLE_COUNT = 3
-
-// Bounded close(), copied from gate15-split-mode.spec.ts (which took it from
-// gate14) -- see those files for the measured rationale: repeated
-// launch/close cycles under host load can hang indefinitely at app.close(),
-// and launchIsolatedApp's own close() may then never reach its temp-directory
-// rm() either.
-async function safeClose(app: ElectronApplication, close: () => Promise<void>): Promise<void> {
-  const closeOutcome = close().then(
-    () => 'closed' as const,
-    () => 'closed' as const
-  )
-  const outcome = await Promise.race([
-    closeOutcome,
-    new Promise<'timeout'>((resolve) => setTimeout(() => resolve('timeout'), CLOSE_TIMEOUT_MS))
-  ])
-  if (outcome === 'timeout') {
-    try {
-      app.process().kill('SIGKILL')
-    } catch {
-      // Best-effort: already gone.
-    }
-  }
-}
 
 // Same helper (and same reasoning) as gate9/gate10/gate11: this app launches a
 // SECOND window at startup whose page loads under the sandboxed
@@ -148,7 +96,7 @@ test('Gate 17: a real Cmd/Ctrl+F paints real find highlights in the Format-mode 
   const fixture = await openFixtureDocument(
     `# Gate 17 Fixture\n\nFirst ${NEEDLE} here.\n\nSecond ${NEEDLE} and third ${NEEDLE}.\n`
   )
-  const { app, close, win, fixtureDir, restoreRecents } = fixture
+  const { close, win, fixtureDir, restoreRecents } = fixture
 
   try {
     // A REAL accelerator through Chromium's own input pipeline. The find bar
@@ -193,7 +141,7 @@ test('Gate 17: a real Cmd/Ctrl+F paints real find highlights in the Format-mode 
   } finally {
     await restoreRecents()
     await rm(fixtureDir, { recursive: true, force: true })
-    await safeClose(app, close)
+    await close()
   }
 })
 
@@ -203,7 +151,7 @@ test('Gate 17: Replace all rewrites the real document and clears every highlight
   const fixture = await openFixtureDocument(
     `# Gate 17 Fixture\n\nFirst ${NEEDLE} here.\n\nSecond ${NEEDLE} and third ${NEEDLE}.\n`
   )
-  const { app, close, win, fixtureDir, restoreRecents } = fixture
+  const { close, win, fixtureDir, restoreRecents } = fixture
 
   try {
     await win.keyboard.press(FIND_ACCELERATOR)
@@ -233,7 +181,7 @@ test('Gate 17: Replace all rewrites the real document and clears every highlight
   } finally {
     await restoreRecents()
     await rm(fixtureDir, { recursive: true, force: true })
-    await safeClose(app, close)
+    await close()
   }
 })
 
@@ -242,7 +190,7 @@ test('Gate 17: Source mode find moves the real textarea selection to each match'
 
   const body = `# Gate 17 Fixture\n\nFirst ${NEEDLE} here.\n\nSecond ${NEEDLE} and third ${NEEDLE}.\n`
   const fixture = await openFixtureDocument(body)
-  const { app, close, win, fixtureDir, restoreRecents } = fixture
+  const { close, win, fixtureDir, restoreRecents } = fixture
 
   try {
     // Switch to Source mode through the real toolbar segmented control.
@@ -296,6 +244,6 @@ test('Gate 17: Source mode find moves the real textarea selection to each match'
   } finally {
     await restoreRecents()
     await rm(fixtureDir, { recursive: true, force: true })
-    await safeClose(app, close)
+    await close()
   }
 })

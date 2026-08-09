@@ -55,96 +55,76 @@ async function getMainWindow(app: ElectronApplication): Promise<Page> {
   throw new Error('Timed out locating the main app-shell window (only found the sandboxed one)')
 }
 
-const CLOSE_TIMEOUT_MS = 15_000
-
-// Bounded close(), matching gate15-split-mode.spec.ts / gate16-page-geometry.
-// spec.ts. CLAUDE.md records that the tests already in THIS file use a bare,
-// unwrapped close() -- a known, accepted gap -- and that repeated
-// launch/close cycles under host load can hang indefinitely at app.close(),
-// leaking a live 6+-process Electron tree. Retrofitting the pre-existing
-// tests here is out of this task's scope, but the A4 test added at the
-// bottom of this file uses this rather than copying the unsafe pattern.
-async function safeClose(app: ElectronApplication, close: () => Promise<void>): Promise<void> {
-  const closeOutcome = close().then(
-    () => 'closed' as const,
-    () => 'closed' as const
-  )
-  const outcome = await Promise.race([
-    closeOutcome,
-    new Promise<'timeout'>((resolve) => setTimeout(() => resolve('timeout'), CLOSE_TIMEOUT_MS))
-  ])
-  if (outcome === 'timeout') {
-    try {
-      app.process().kill('SIGKILL')
-    } catch {
-      // Best-effort; the process may already be gone.
-    }
-  }
-}
-
 const SAMPLE_MARKDOWN = '# Gate 13 Export\n\nA real paragraph of exported content.\n'
 
 test('Gate 13: window.api.exportPdf writes a real PDF file to the chosen path', async () => {
   test.setTimeout(60_000)
 
   const { app, close } = await launchIsolatedApp(['.'])
-  const win = await getMainWindow(app)
-  await win.waitForFunction(() => (window as unknown as { api?: unknown }).api !== undefined)
-
-  const fixtureDir = await mkdtemp(join(tmpdir(), 'pagedown-gate13-'))
-  const targetPath = join(fixtureDir, 'gate13-export.pdf')
 
   try {
-    // Real `dialog` module, real `showSaveDialog` override -- see this
-    // file's own module comment for why this is the one piece that has to
-    // be faked (a real native Save dialog can't be driven headlessly) and
-    // why `app.evaluate()` is a safe way to reach `dialog` directly.
-    await app.evaluate(({ dialog }, filePath) => {
-      dialog.showSaveDialog = (() =>
-        Promise.resolve({ canceled: false, filePath })) as typeof dialog.showSaveDialog
-    }, targetPath)
+    const win = await getMainWindow(app)
+    await win.waitForFunction(() => (window as unknown as { api?: unknown }).api !== undefined)
 
-    const result = await win.evaluate((content) => {
-      const api = (window as unknown as { api: { exportPdf: (c: string) => Promise<unknown> } }).api
-      return api.exportPdf(content)
-    }, SAMPLE_MARKDOWN)
+    const fixtureDir = await mkdtemp(join(tmpdir(), 'pagedown-gate13-'))
+    const targetPath = join(fixtureDir, 'gate13-export.pdf')
 
-    expect(result).toEqual({ filePath: targetPath })
+    try {
+      // Real `dialog` module, real `showSaveDialog` override -- see this
+      // file's own module comment for why this is the one piece that has to
+      // be faked (a real native Save dialog can't be driven headlessly) and
+      // why `app.evaluate()` is a safe way to reach `dialog` directly.
+      await app.evaluate(({ dialog }, filePath) => {
+        dialog.showSaveDialog = (() =>
+          Promise.resolve({ canceled: false, filePath })) as typeof dialog.showSaveDialog
+      }, targetPath)
 
-    const stats = await stat(targetPath)
-    expect(stats.size).toBeGreaterThan(0)
+      const result = await win.evaluate((content) => {
+        const api = (window as unknown as { api: { exportPdf: (c: string) => Promise<unknown> } })
+          .api
+        return api.exportPdf(content)
+      }, SAMPLE_MARKDOWN)
 
-    const buffer = await readFile(targetPath)
-    // The real PDF magic bytes -- the minimum bar for "this is genuinely a
-    // PDF file," not just a non-empty file written to the right path.
-    expect(buffer.subarray(0, 5).toString('latin1')).toBe('%PDF-')
+      expect(result).toEqual({ filePath: targetPath })
+
+      const stats = await stat(targetPath)
+      expect(stats.size).toBeGreaterThan(0)
+
+      const buffer = await readFile(targetPath)
+      // The real PDF magic bytes -- the minimum bar for "this is genuinely a
+      // PDF file," not just a non-empty file written to the right path.
+      expect(buffer.subarray(0, 5).toString('latin1')).toBe('%PDF-')
+    } finally {
+      await rm(fixtureDir, { recursive: true, force: true })
+    }
   } finally {
-    await rm(fixtureDir, { recursive: true, force: true })
+    await close()
   }
-
-  await close()
 })
 
 test('Gate 13: window.api.exportPdf resolves to null (writes nothing) when the Save dialog is cancelled', async () => {
   test.setTimeout(60_000)
 
   const { app, close } = await launchIsolatedApp(['.'])
-  const win = await getMainWindow(app)
-  await win.waitForFunction(() => (window as unknown as { api?: unknown }).api !== undefined)
 
-  await app.evaluate(({ dialog }) => {
-    dialog.showSaveDialog = (() =>
-      Promise.resolve({ canceled: true, filePath: '' })) as typeof dialog.showSaveDialog
-  })
+  try {
+    const win = await getMainWindow(app)
+    await win.waitForFunction(() => (window as unknown as { api?: unknown }).api !== undefined)
 
-  const result = await win.evaluate((content) => {
-    const api = (window as unknown as { api: { exportPdf: (c: string) => Promise<unknown> } }).api
-    return api.exportPdf(content)
-  }, SAMPLE_MARKDOWN)
+    await app.evaluate(({ dialog }) => {
+      dialog.showSaveDialog = (() =>
+        Promise.resolve({ canceled: true, filePath: '' })) as typeof dialog.showSaveDialog
+    })
 
-  expect(result).toBeNull()
+    const result = await win.evaluate((content) => {
+      const api = (window as unknown as { api: { exportPdf: (c: string) => Promise<unknown> } }).api
+      return api.exportPdf(content)
+    }, SAMPLE_MARKDOWN)
 
-  await close()
+    expect(result).toBeNull()
+  } finally {
+    await close()
+  }
 })
 
 // Fix-round regression guard. The ORIGINAL src/main/pdf-exporter.ts
@@ -167,72 +147,75 @@ test('Gate 13: exporting the same multi-paragraph document repeatedly in one app
   test.setTimeout(90_000)
 
   const { app, close } = await launchIsolatedApp(['.'])
-  const win = await getMainWindow(app)
-  await win.waitForFunction(() => (window as unknown as { api?: unknown }).api !== undefined)
-
-  const fixtureDir = await mkdtemp(join(tmpdir(), 'pagedown-gate13-repeat-'))
 
   try {
-    // A real 60-paragraph document -- the same size the fix-round review
-    // used to originally measure and verify this regression.
-    const paragraphs = Array.from(
-      { length: 60 },
-      (_, i) =>
-        `Paragraph ${i + 1}. ${'Real export-timing regression-guard filler text. '.repeat(8)}`
-    )
-    const content = `# Gate 13 Repeated Export\n\n${paragraphs.join('\n\n')}\n`
+    const win = await getMainWindow(app)
+    await win.waitForFunction(() => (window as unknown as { api?: unknown }).api !== undefined)
 
-    const durationsMs: number[] = []
-    for (let i = 0; i < 3; i++) {
-      const targetPath = join(fixtureDir, `export-${i}.pdf`)
-      await app.evaluate(({ dialog }, filePath) => {
-        dialog.showSaveDialog = (() =>
-          Promise.resolve({ canceled: false, filePath })) as typeof dialog.showSaveDialog
-      }, targetPath)
+    const fixtureDir = await mkdtemp(join(tmpdir(), 'pagedown-gate13-repeat-'))
 
-      const start = Date.now()
-      const result = await win.evaluate((c) => {
-        const api = (window as unknown as { api: { exportPdf: (x: string) => Promise<unknown> } })
-          .api
-        return api.exportPdf(c)
-      }, content)
-      durationsMs.push(Date.now() - start)
+    try {
+      // A real 60-paragraph document -- the same size the fix-round review
+      // used to originally measure and verify this regression.
+      const paragraphs = Array.from(
+        { length: 60 },
+        (_, i) =>
+          `Paragraph ${i + 1}. ${'Real export-timing regression-guard filler text. '.repeat(8)}`
+      )
+      const content = `# Gate 13 Repeated Export\n\n${paragraphs.join('\n\n')}\n`
 
-      expect(result).toEqual({ filePath: targetPath })
-      const buffer = await readFile(targetPath)
-      expect(buffer.subarray(0, 5).toString('latin1')).toBe('%PDF-')
-    }
+      const durationsMs: number[] = []
+      for (let i = 0; i < 3; i++) {
+        const targetPath = join(fixtureDir, `export-${i}.pdf`)
+        await app.evaluate(({ dialog }, filePath) => {
+          dialog.showSaveDialog = (() =>
+            Promise.resolve({ canceled: false, filePath })) as typeof dialog.showSaveDialog
+        }, targetPath)
 
-    console.log('Gate 13 repeated-export timings (ms):', durationsMs)
+        const start = Date.now()
+        const result = await win.evaluate((c) => {
+          const api = (window as unknown as { api: { exportPdf: (x: string) => Promise<unknown> } })
+            .api
+          return api.exportPdf(c)
+        }, content)
+        durationsMs.push(Date.now() - start)
 
-    // Generous regression guard, not a tight performance bound: a later
-    // export must not balloon to several times the first export's
-    // duration, which is exactly the ~12x-slowdown signature the original
-    // memoized-harness bug produced. `Math.max(..., 2000)` keeps this from
-    // being flaky against a fast, low-millisecond first export on a quick
-    // machine, where ordinary run-to-run noise alone could otherwise exceed
-    // a small multiplier, while staying tight enough to actually catch a
-    // regression: a healthy first export measures ~390-450ms in this
-    // environment, so the 2000ms floor still leaves ~5x headroom over that
-    // steady state (fix-round finding: a 5000ms floor was tried first and
-    // found to be too loose -- it let a real, measured partial-fix
-    // regression slip through silently. See this test's own history in
-    // GA_TRACK_2_REPORT.md's fix-round addenda for the exact numbers: an
-    // earlier "fresh harness, but still attached to the real mainWindow"
-    // fix attempt for this same bug measured 488/3584/4392ms -- a genuine
-    // ~9x degradation -- and every one of those values was still under a
-    // 5000ms floor, so that guard would NOT have caught a regression back
-    // to that exact bug shape. Re-verified against the 2000ms floor: the
-    // same 3584ms/4392ms values now correctly exceed it.).
-    const [first, ...rest] = durationsMs
-    for (const later of rest) {
-      expect(later).toBeLessThan(Math.max(first * 5, 2000))
+        expect(result).toEqual({ filePath: targetPath })
+        const buffer = await readFile(targetPath)
+        expect(buffer.subarray(0, 5).toString('latin1')).toBe('%PDF-')
+      }
+
+      console.log('Gate 13 repeated-export timings (ms):', durationsMs)
+
+      // Generous regression guard, not a tight performance bound: a later
+      // export must not balloon to several times the first export's
+      // duration, which is exactly the ~12x-slowdown signature the original
+      // memoized-harness bug produced. `Math.max(..., 2000)` keeps this from
+      // being flaky against a fast, low-millisecond first export on a quick
+      // machine, where ordinary run-to-run noise alone could otherwise exceed
+      // a small multiplier, while staying tight enough to actually catch a
+      // regression: a healthy first export measures ~390-450ms in this
+      // environment, so the 2000ms floor still leaves ~5x headroom over that
+      // steady state (fix-round finding: a 5000ms floor was tried first and
+      // found to be too loose -- it let a real, measured partial-fix
+      // regression slip through silently. See this test's own history in
+      // GA_TRACK_2_REPORT.md's fix-round addenda for the exact numbers: an
+      // earlier "fresh harness, but still attached to the real mainWindow"
+      // fix attempt for this same bug measured 488/3584/4392ms -- a genuine
+      // ~9x degradation -- and every one of those values was still under a
+      // 5000ms floor, so that guard would NOT have caught a regression back
+      // to that exact bug shape. Re-verified against the 2000ms floor: the
+      // same 3584ms/4392ms values now correctly exceed it.).
+      const [first, ...rest] = durationsMs
+      for (const later of rest) {
+        expect(later).toBeLessThan(Math.max(first * 5, 2000))
+      }
+    } finally {
+      await rm(fixtureDir, { recursive: true, force: true })
     }
   } finally {
-    await rm(fixtureDir, { recursive: true, force: true })
+    await close()
   }
-
-  await close()
 })
 
 // Follow-up to the local-asset-loading plan (docs/superpowers/plans/
@@ -270,105 +253,116 @@ test('Gate 13: a local relative image reference in the document actually loads i
   test.setTimeout(60_000)
 
   const { app, close } = await launchIsolatedApp(['.'])
-  const win = await getMainWindow(app)
-  await win.waitForFunction(() => (window as unknown as { api?: unknown }).api !== undefined)
-  const userDataDir = await app.evaluate(({ app: electronApp }) => electronApp.getPath('userData'))
-
-  const fixtureDir = await mkdtemp(join(tmpdir(), 'pagedown-gate13-asset-'))
-  const docPath = join(fixtureDir, 'doc.md')
-  const targetPath = join(fixtureDir, 'export-with-image.pdf')
 
   try {
-    await writeFixtureFile(join(fixtureDir, 'figures', 'gate13-chart.png'), ONE_PX_PNG)
-    const content = '# Gate 13 Local Image\n\n![chart](./figures/gate13-chart.png)\n\nBody text.\n'
-    await writeFixtureFile(docPath, content)
-    await seedRecentFile(userDataDir, docPath)
-
-    await app.evaluate(({ dialog }, filePath) => {
-      dialog.showSaveDialog = (() =>
-        Promise.resolve({ canceled: false, filePath })) as typeof dialog.showSaveDialog
-    }, targetPath)
-
-    const result = await win.evaluate(
-      ({ c, p }) => {
-        const api = (
-          window as unknown as {
-            api: { exportPdf: (c: string, p: string | null) => Promise<unknown> }
-          }
-        ).api
-        return api.exportPdf(c, p)
-      },
-      { c: content, p: docPath }
+    const win = await getMainWindow(app)
+    await win.waitForFunction(() => (window as unknown as { api?: unknown }).api !== undefined)
+    const userDataDir = await app.evaluate(({ app: electronApp }) =>
+      electronApp.getPath('userData')
     )
 
-    expect(result).toEqual({ filePath: targetPath })
+    const fixtureDir = await mkdtemp(join(tmpdir(), 'pagedown-gate13-asset-'))
+    const docPath = join(fixtureDir, 'doc.md')
+    const targetPath = join(fixtureDir, 'export-with-image.pdf')
 
-    const boxes = await readImageBoxes(app, 'gate13-chart.png')
-    const loaded = boxes.find((box) => box.src.includes('gate13-chart.png'))
-    expect(loaded).toBeDefined()
-    expect(loaded?.naturalWidth).toBe(1)
-    expect(loaded?.naturalHeight).toBe(1)
+    try {
+      await writeFixtureFile(join(fixtureDir, 'figures', 'gate13-chart.png'), ONE_PX_PNG)
+      const content =
+        '# Gate 13 Local Image\n\n![chart](./figures/gate13-chart.png)\n\nBody text.\n'
+      await writeFixtureFile(docPath, content)
+      await seedRecentFile(userDataDir, docPath)
 
-    const buffer = await readFile(targetPath)
-    expect(buffer.subarray(0, 5).toString('latin1')).toBe('%PDF-')
+      await app.evaluate(({ dialog }, filePath) => {
+        dialog.showSaveDialog = (() =>
+          Promise.resolve({ canceled: false, filePath })) as typeof dialog.showSaveDialog
+      }, targetPath)
+
+      const result = await win.evaluate(
+        ({ c, p }) => {
+          const api = (
+            window as unknown as {
+              api: { exportPdf: (c: string, p: string | null) => Promise<unknown> }
+            }
+          ).api
+          return api.exportPdf(c, p)
+        },
+        { c: content, p: docPath }
+      )
+
+      expect(result).toEqual({ filePath: targetPath })
+
+      const boxes = await readImageBoxes(app, 'gate13-chart.png')
+      const loaded = boxes.find((box) => box.src.includes('gate13-chart.png'))
+      expect(loaded).toBeDefined()
+      expect(loaded?.naturalWidth).toBe(1)
+      expect(loaded?.naturalHeight).toBe(1)
+
+      const buffer = await readFile(targetPath)
+      expect(buffer.subarray(0, 5).toString('latin1')).toBe('%PDF-')
+    } finally {
+      await rm(fixtureDir, { recursive: true, force: true })
+    }
   } finally {
-    await rm(fixtureDir, { recursive: true, force: true })
+    await close()
   }
-
-  await close()
 })
 
 test("Gate 13: a local image reference using ../ escaping the exported document's directory does NOT load", async () => {
   test.setTimeout(60_000)
 
   const { app, close } = await launchIsolatedApp(['.'])
-  const win = await getMainWindow(app)
-  await win.waitForFunction(() => (window as unknown as { api?: unknown }).api !== undefined)
-  const userDataDir = await app.evaluate(({ app: electronApp }) => electronApp.getPath('userData'))
-
-  const fixtureRoot = await mkdtemp(join(tmpdir(), 'pagedown-gate13-escape-'))
-  const docDir = join(fixtureRoot, 'doc')
-  const docPath = join(docDir, 'doc.md')
-  const targetPath = join(fixtureRoot, 'export-escape.pdf')
 
   try {
-    // The out-of-tree file lives OUTSIDE docDir -- a real, different-sized
-    // (2x2 vs. the in-tree 1x1) image, so "denied" and "wrong file served"
-    // are distinguishable outcomes, not just "something rendered."
-    await writeFixtureFile(join(fixtureRoot, 'secret.png'), TWO_PX_PNG)
-    const content = '# Gate 13 Traversal\n\n![escape](../secret.png)\n\nBody text.\n'
-    await writeFixtureFile(docPath, content)
-    await seedRecentFile(userDataDir, docPath)
-
-    await app.evaluate(({ dialog }, filePath) => {
-      dialog.showSaveDialog = (() =>
-        Promise.resolve({ canceled: false, filePath })) as typeof dialog.showSaveDialog
-    }, targetPath)
-
-    const result = await win.evaluate(
-      ({ c, p }) => {
-        const api = (
-          window as unknown as {
-            api: { exportPdf: (c: string, p: string | null) => Promise<unknown> }
-          }
-        ).api
-        return api.exportPdf(c, p)
-      },
-      { c: content, p: docPath }
+    const win = await getMainWindow(app)
+    await win.waitForFunction(() => (window as unknown as { api?: unknown }).api !== undefined)
+    const userDataDir = await app.evaluate(({ app: electronApp }) =>
+      electronApp.getPath('userData')
     )
 
-    expect(result).toEqual({ filePath: targetPath })
+    const fixtureRoot = await mkdtemp(join(tmpdir(), 'pagedown-gate13-escape-'))
+    const docDir = join(fixtureRoot, 'doc')
+    const docPath = join(docDir, 'doc.md')
+    const targetPath = join(fixtureRoot, 'export-escape.pdf')
 
-    const boxes = await readImageBoxes(app, 'secret.png')
-    const denied = boxes.find((box) => box.src.includes('secret.png'))
-    expect(denied).toBeDefined()
-    expect(denied?.naturalWidth).toBe(0)
-    expect(denied?.naturalHeight).toBe(0)
+    try {
+      // The out-of-tree file lives OUTSIDE docDir -- a real, different-sized
+      // (2x2 vs. the in-tree 1x1) image, so "denied" and "wrong file served"
+      // are distinguishable outcomes, not just "something rendered."
+      await writeFixtureFile(join(fixtureRoot, 'secret.png'), TWO_PX_PNG)
+      const content = '# Gate 13 Traversal\n\n![escape](../secret.png)\n\nBody text.\n'
+      await writeFixtureFile(docPath, content)
+      await seedRecentFile(userDataDir, docPath)
+
+      await app.evaluate(({ dialog }, filePath) => {
+        dialog.showSaveDialog = (() =>
+          Promise.resolve({ canceled: false, filePath })) as typeof dialog.showSaveDialog
+      }, targetPath)
+
+      const result = await win.evaluate(
+        ({ c, p }) => {
+          const api = (
+            window as unknown as {
+              api: { exportPdf: (c: string, p: string | null) => Promise<unknown> }
+            }
+          ).api
+          return api.exportPdf(c, p)
+        },
+        { c: content, p: docPath }
+      )
+
+      expect(result).toEqual({ filePath: targetPath })
+
+      const boxes = await readImageBoxes(app, 'secret.png')
+      const denied = boxes.find((box) => box.src.includes('secret.png'))
+      expect(denied).toBeDefined()
+      expect(denied?.naturalWidth).toBe(0)
+      expect(denied?.naturalHeight).toBe(0)
+    } finally {
+      await rm(fixtureRoot, { recursive: true, force: true })
+    }
   } finally {
-    await rm(fixtureRoot, { recursive: true, force: true })
+    await close()
   }
-
-  await close()
 })
 
 // Page Geometry Wiring (Task 6). Every other test in this file exports a
@@ -500,6 +494,6 @@ test('Gate 13: a document whose frontmatter sets A4 exports a genuinely A4-sized
     await copyFile(targetPath, join(__dirname, 'results', 'gate13-a4-export.pdf'))
   } finally {
     if (fixtureDir) await rm(fixtureDir, { recursive: true, force: true })
-    if (app && close) await safeClose(app, close)
+    if (app && close) await close()
   }
 })

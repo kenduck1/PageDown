@@ -5,38 +5,6 @@ import { join } from 'node:path'
 import { mergeRecentFiles, readRecentFiles, writeRecentFiles } from '../src/main/recent-files'
 import { launchIsolatedApp } from './electron-launch'
 
-// Gate 20 -- Format mode's undo/redo keyboard shortcuts, end to end against
-// the REAL built app.
-//
-// This gate exists for the exact reason gate17-find-replace.spec.ts's own
-// header names: jsdom dispatches no real OS key events, and this project
-// confirmed that gap directly rather than assuming it -- a throwaway
-// diagnostic test dispatching a real fireEvent.keyDown at a mounted
-// ProseMirror view's own DOM node, using a STOCK, pre-existing Milkdown
-// shortcut (Mod-b for bold) as the control, failed to trigger it in this
-// project's jsdom test environment. commands.test.ts (src/renderer/src/
-// milkdown/) covers the COMMAND half (undoCommand/redoCommand's own
-// callbacks genuinely revert/reapply an edit when invoked directly) --
-// this gate covers the keyboard-DISPATCH half that requires real Chromium.
-async function safeClose(app: ElectronApplication, close: () => Promise<void>): Promise<void> {
-  const CLOSE_TIMEOUT_MS = 20_000
-  const closeOutcome = close().then(
-    () => 'closed' as const,
-    () => 'closed' as const
-  )
-  const outcome = await Promise.race([
-    closeOutcome,
-    new Promise<'timeout'>((resolve) => setTimeout(() => resolve('timeout'), CLOSE_TIMEOUT_MS))
-  ])
-  if (outcome === 'timeout') {
-    try {
-      app.process().kill('SIGKILL')
-    } catch {
-      // Best-effort: already gone.
-    }
-  }
-}
-
 // Same helper (and same reasoning) as gate9/gate10/gate11/gate17: this app
 // launches a SECOND window at startup whose page loads under the sandboxed
 // pagedown-render:// scheme with zero contextBridge access. Matched by a
@@ -112,7 +80,7 @@ test('Gate 20: Mod-Z undoes and Mod-Shift-Z redoes a real Format-mode edit', asy
   test.setTimeout(90_000)
 
   const fixture = await openFixtureDocument('# Gate 20 Fixture\n\nOriginal text.\n')
-  const { app, close, win, fixtureDir, restoreRecents } = fixture
+  const { close, win, fixtureDir, restoreRecents } = fixture
 
   try {
     const paragraph = win.locator('.milkdown-mount .ProseMirror p')
@@ -135,6 +103,6 @@ test('Gate 20: Mod-Z undoes and Mod-Shift-Z redoes a real Format-mode edit', asy
   } finally {
     await restoreRecents()
     await rm(fixtureDir, { recursive: true, force: true })
-    await safeClose(app, close)
+    await close()
   }
 })

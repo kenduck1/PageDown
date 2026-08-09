@@ -72,151 +72,153 @@ test('Gate 10: editor/paginator layout parity for the real mounted Milkdown canv
 
   const { app, close } = await launchIsolatedApp(['out/main/index.js'])
 
-  // --- Pagination side: real harness, same document -----------------------
-  // No type annotation on the destructured Electron-namespace param -- it's
-  // inferred from ElectronApplication.evaluate()'s own signature, matching
-  // phase1/gate3-layout-parity.spec.ts's identical, already-working pattern.
-  // @playwright/test does not export Electron's own `BaseWindow` type, so
-  // importing one to annotate this would not resolve.
-  await app.evaluate(async ({ BaseWindow }) => {
-    const bridge = (
-      globalThis as unknown as {
-        __pagedownPhase0: {
-          createPaginationHarness: typeof import('../src/main/pagination-window').createPaginationHarness
-        }
-      }
-    ).__pagedownPhase0
-    const win = new BaseWindow({ show: false })
-    ;(globalThis as unknown as { __gate10Harness: unknown }).__gate10Harness =
-      await bridge.createPaginationHarness(win)
-    return true
-  })
-
-  const { html } = markdownToHtml(REPORT_TEMPLATE)
-
-  const paginationResult = (await app.evaluate(
-    async (_electronNS, { html, geometry, documentStyle }) => {
-      const harness = (
+  try {
+    // --- Pagination side: real harness, same document -----------------------
+    // No type annotation on the destructured Electron-namespace param -- it's
+    // inferred from ElectronApplication.evaluate()'s own signature, matching
+    // phase1/gate3-layout-parity.spec.ts's identical, already-working pattern.
+    // @playwright/test does not export Electron's own `BaseWindow` type, so
+    // importing one to annotate this would not resolve.
+    await app.evaluate(async ({ BaseWindow }) => {
+      const bridge = (
         globalThis as unknown as {
-          __gate10Harness: import('../src/main/pagination-window').PaginationHarness
+          __pagedownPhase0: {
+            createPaginationHarness: typeof import('../src/main/pagination-window').createPaginationHarness
+          }
         }
-      ).__gate10Harness
-      const sendResult = await harness.sendDocument(html, geometry, documentStyle)
-
-      const raw = (await harness.view.webContents.executeJavaScript(`
-      (function () {
-        var area = document.querySelector('.pagedjs_area')
-        if (!area) return JSON.stringify({ error: 'no .pagedjs_area found' })
-        var areaTop = area.getBoundingClientRect().top
-        var blocks = Array.prototype.slice.call(area.querySelectorAll(':scope > .pagedjs_page_content > div > *'))
-        var out = blocks.map(function (el) {
-          var r = el.getBoundingClientRect()
-          return { tag: el.tagName, text: String(el.textContent || '').trim().slice(0, 50), relativeTop: r.top - areaTop }
-        })
-        return JSON.stringify(out)
-      })()
-    `)) as string
-
-      return { sendResult, blocks: JSON.parse(raw) as BlockMeasurement[] }
-    },
-    { html, geometry: LETTER_GEOMETRY, documentStyle: DEFAULT_STYLE }
-  )) as { sendResult: { pageCount: number }; blocks: BlockMeasurement[] }
-
-  expect(
-    paginationResult.sendResult.pageCount,
-    'REPORT_TEMPLATE is expected to fit on a single page at Letter/1in-margin geometry'
-  ).toBe(1)
-
-  // --- Milkdown side: the REAL app, real UI interaction --------------------
-  const win = await getMainWindow(app)
-  await win.waitForFunction(() => (window as unknown as { api?: unknown }).api !== undefined)
-
-  await win.getByRole('button', { name: /report/i }).click()
-
-  const milkdownParsed = await win.evaluate(async () => {
-    await new Promise<void>((resolve) => {
-      const check = (): void => {
-        if (document.querySelector('.milkdown-mount .ProseMirror')) resolve()
-        else requestAnimationFrame(check)
-      }
-      check()
+      ).__pagedownPhase0
+      const win = new BaseWindow({ show: false })
+      ;(globalThis as unknown as { __gate10Harness: unknown }).__gate10Harness =
+        await bridge.createPaginationHarness(win)
+      return true
     })
-    // Two animation-frame ticks after mount is detected, matching every
-    // other paint-dependent measurement in this codebase (thumbnail
-    // capture, Phase 1 Gate 3) -- the mount being present in the DOM does
-    // not guarantee its layout has settled to final values yet.
-    await new Promise<void>((resolve) =>
-      requestAnimationFrame(() => requestAnimationFrame(() => resolve()))
-    )
 
-    const editorRoot = document.querySelector('.milkdown-mount .ProseMirror')
-    if (!editorRoot) return { error: 'no .ProseMirror element found' }
-    const rect = editorRoot.getBoundingClientRect()
-    const blocks = Array.from(editorRoot.children).map((el) => {
-      const r = el.getBoundingClientRect()
-      return {
-        tag: el.tagName,
-        text: (el.textContent || '').trim().slice(0, 50),
-        relativeTop: r.top - rect.top
-      }
-    })
-    return { rootWidth: rect.width, blocks }
-  })
+    const { html } = markdownToHtml(REPORT_TEMPLATE)
 
-  if ('error' in milkdownParsed) {
-    throw new Error(milkdownParsed.error)
-  }
+    const paginationResult = (await app.evaluate(
+      async (_electronNS, { html, geometry, documentStyle }) => {
+        const harness = (
+          globalThis as unknown as {
+            __gate10Harness: import('../src/main/pagination-window').PaginationHarness
+          }
+        ).__gate10Harness
+        const sendResult = await harness.sendDocument(html, geometry, documentStyle)
 
-  await close()
+        const raw = (await harness.view.webContents.executeJavaScript(`
+        (function () {
+          var area = document.querySelector('.pagedjs_area')
+          if (!area) return JSON.stringify({ error: 'no .pagedjs_area found' })
+          var areaTop = area.getBoundingClientRect().top
+          var blocks = Array.prototype.slice.call(area.querySelectorAll(':scope > .pagedjs_page_content > div > *'))
+          var out = blocks.map(function (el) {
+            var r = el.getBoundingClientRect()
+            return { tag: el.tagName, text: String(el.textContent || '').trim().slice(0, 50), relativeTop: r.top - areaTop }
+          })
+          return JSON.stringify(out)
+        })()
+      `)) as string
 
-  // --- Per-block comparison -------------------------------------------------
-  const rows = paginationResult.blocks.map((pagBlock, i) => {
-    const mdBlock = milkdownParsed.blocks[i]
-    const tagsMatch = mdBlock ? pagBlock.tag === mdBlock.tag : false
-    const delta = mdBlock ? Math.abs(pagBlock.relativeTop - mdBlock.relativeTop) : null
-    return {
-      index: i,
-      paginationTag: pagBlock.tag,
-      paginationText: pagBlock.text,
-      paginationTop: Number(pagBlock.relativeTop.toFixed(3)),
-      milkdownTag: mdBlock?.tag ?? '(missing)',
-      milkdownTop: mdBlock ? Number(mdBlock.relativeTop.toFixed(3)) : null,
-      deltaPx: delta !== null ? Number(delta.toFixed(3)) : null,
-      tagsMatch
-    }
-  })
+        return { sendResult, blocks: JSON.parse(raw) as BlockMeasurement[] }
+      },
+      { html, geometry: LETTER_GEOMETRY, documentStyle: DEFAULT_STYLE }
+    )) as { sendResult: { pageCount: number }; blocks: BlockMeasurement[] }
 
-  console.log(`\nGate 10 per-block layout comparison (tolerance: ${TOLERANCE_PX}px):`)
-  console.table(rows)
-  console.log(`Gate 10 Milkdown editing-root width: ${milkdownParsed.rootWidth}px`)
-
-  // The width half of parity, made explicit. Every delta compared below is a
-  // VERTICAL position, so all seven of them can agree perfectly while the two
-  // surfaces still wrap text at different line lengths -- a same-height,
-  // different-width layout is exactly what the pre-typography editor had (an
-  // unconstrained content width with no relationship to the page box at all).
-  // The measurement was already being taken here and simply never asserted;
-  // pinning it against the shared constant, rather than a literal 624,
-  // is what makes `src/typography/page-geometry.ts` the actual source of
-  // truth for both sides instead of just the pagination side.
-  expect(
-    milkdownParsed.rootWidth,
-    "the Milkdown editing root must be exactly as wide as the paginated page's content box"
-  ).toBe(CONTENT_WIDTH_PX)
-
-  expect(
-    milkdownParsed.blocks.length,
-    'expected the same top-level block count on both sides'
-  ).toBe(paginationResult.blocks.length)
-
-  for (const row of rows) {
-    expect(row.tagsMatch, `block ${row.index}: tag mismatch`).toBe(true)
-  }
-
-  for (const row of rows) {
     expect(
-      row.deltaPx,
-      `block ${row.index} (${row.paginationTag} "${row.paginationText}"): pagination top=${row.paginationTop}px, milkdown top=${row.milkdownTop}px`
-    ).toBeLessThanOrEqual(TOLERANCE_PX)
+      paginationResult.sendResult.pageCount,
+      'REPORT_TEMPLATE is expected to fit on a single page at Letter/1in-margin geometry'
+    ).toBe(1)
+
+    // --- Milkdown side: the REAL app, real UI interaction --------------------
+    const win = await getMainWindow(app)
+    await win.waitForFunction(() => (window as unknown as { api?: unknown }).api !== undefined)
+
+    await win.getByRole('button', { name: /report/i }).click()
+
+    const milkdownParsed = await win.evaluate(async () => {
+      await new Promise<void>((resolve) => {
+        const check = (): void => {
+          if (document.querySelector('.milkdown-mount .ProseMirror')) resolve()
+          else requestAnimationFrame(check)
+        }
+        check()
+      })
+      // Two animation-frame ticks after mount is detected, matching every
+      // other paint-dependent measurement in this codebase (thumbnail
+      // capture, Phase 1 Gate 3) -- the mount being present in the DOM does
+      // not guarantee its layout has settled to final values yet.
+      await new Promise<void>((resolve) =>
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve()))
+      )
+
+      const editorRoot = document.querySelector('.milkdown-mount .ProseMirror')
+      if (!editorRoot) return { error: 'no .ProseMirror element found' }
+      const rect = editorRoot.getBoundingClientRect()
+      const blocks = Array.from(editorRoot.children).map((el) => {
+        const r = el.getBoundingClientRect()
+        return {
+          tag: el.tagName,
+          text: (el.textContent || '').trim().slice(0, 50),
+          relativeTop: r.top - rect.top
+        }
+      })
+      return { rootWidth: rect.width, blocks }
+    })
+
+    if ('error' in milkdownParsed) {
+      throw new Error(milkdownParsed.error)
+    }
+
+    // --- Per-block comparison -------------------------------------------------
+    const rows = paginationResult.blocks.map((pagBlock, i) => {
+      const mdBlock = milkdownParsed.blocks[i]
+      const tagsMatch = mdBlock ? pagBlock.tag === mdBlock.tag : false
+      const delta = mdBlock ? Math.abs(pagBlock.relativeTop - mdBlock.relativeTop) : null
+      return {
+        index: i,
+        paginationTag: pagBlock.tag,
+        paginationText: pagBlock.text,
+        paginationTop: Number(pagBlock.relativeTop.toFixed(3)),
+        milkdownTag: mdBlock?.tag ?? '(missing)',
+        milkdownTop: mdBlock ? Number(mdBlock.relativeTop.toFixed(3)) : null,
+        deltaPx: delta !== null ? Number(delta.toFixed(3)) : null,
+        tagsMatch
+      }
+    })
+
+    console.log(`\nGate 10 per-block layout comparison (tolerance: ${TOLERANCE_PX}px):`)
+    console.table(rows)
+    console.log(`Gate 10 Milkdown editing-root width: ${milkdownParsed.rootWidth}px`)
+
+    // The width half of parity, made explicit. Every delta compared below is a
+    // VERTICAL position, so all seven of them can agree perfectly while the two
+    // surfaces still wrap text at different line lengths -- a same-height,
+    // different-width layout is exactly what the pre-typography editor had (an
+    // unconstrained content width with no relationship to the page box at all).
+    // The measurement was already being taken here and simply never asserted;
+    // pinning it against the shared constant, rather than a literal 624,
+    // is what makes `src/typography/page-geometry.ts` the actual source of
+    // truth for both sides instead of just the pagination side.
+    expect(
+      milkdownParsed.rootWidth,
+      "the Milkdown editing root must be exactly as wide as the paginated page's content box"
+    ).toBe(CONTENT_WIDTH_PX)
+
+    expect(
+      milkdownParsed.blocks.length,
+      'expected the same top-level block count on both sides'
+    ).toBe(paginationResult.blocks.length)
+
+    for (const row of rows) {
+      expect(row.tagsMatch, `block ${row.index}: tag mismatch`).toBe(true)
+    }
+
+    for (const row of rows) {
+      expect(
+        row.deltaPx,
+        `block ${row.index} (${row.paginationTag} "${row.paginationText}"): pagination top=${row.paginationTop}px, milkdown top=${row.milkdownTop}px`
+      ).toBeLessThanOrEqual(TOLERANCE_PX)
+    }
+  } finally {
+    await close()
   }
 })
