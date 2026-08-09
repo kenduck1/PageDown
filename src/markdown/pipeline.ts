@@ -146,9 +146,73 @@ function rewriteLocalImageSrcs(tree: HastRoot, assetToken: string): void {
   })
 }
 
+// Design doc Security section: "Remote images blocked by default per
+// document, with an explicit ... Load / Keep blocked prompt." `http(s)` is
+// already in hast-util-sanitize's OWN default `protocols.src` allowlist
+// (confirmed by reading its schema directly), so a remote `img src` survives
+// sanitize() completely untouched with no rewrite needed at all -- this
+// function is the actual per-document enforcement point, not the sandboxed
+// context's CSP. The CSP (see pagination-window.ts's CSP_POLICY_TEMPLATE) is
+// widened to permit `https:`/`http:` `img-src` ONCE, for every document,
+// because it cannot vary per-document within one long-lived harness's
+// lifetime (Split mode's harness renders many different documents across its
+// one lifetime with one CSP fixed at creation) -- so it is deliberately a
+// coarse backstop, not the enforcement mechanism. The real, per-document
+// decision is made here: a caller that hasn't been granted consent for THIS
+// specific render never gets a live remote `src` in its HTML at all, so
+// nothing for the (permanently widened) CSP to even allow.
+//
+// **The scheme test is anchored at the COLON, not at `http://`, and that is a
+// real bypass this function shipped with before review caught it — do not
+// "simplify" it back to `startsWith('http://')`.** `micromark-util-sanitize-uri`
+// and `hast-util-sanitize`'s own `safeProtocol` BOTH validate only the substring
+// before the colon (confirmed by reading each directly); neither requires the
+// `//` that normally follows. So `![x](http:evil.com/tracker.png)` reaches this
+// function with `src` intact, and a `startsWith('http://')` test does not match
+// it. That URL is not malformed: per the WHATWG URL spec's "special authority
+// ignore slashes state", a SPECIAL scheme (`http`/`https`) enters authority
+// parsing regardless of how many slashes follow the colon, so every conformant
+// parser — Chromium's included — normalizes it to `http://evil.com/tracker.png`
+// and genuinely issues the request. Verified directly: `new URL('http:evil.com/
+// x.png').href` is `http://evil.com/x.png`. The leading-`//` alternative is
+// matched too (protocol-relative): it resolves against whatever scheme the
+// consuming context uses, which is architecture-dependent rather than reliably
+// inert, so it is cheaper to strip than to reason about per surface.
+const REMOTE_SRC_PATTERN = /^\s*(?:https?:|\/\/)/i
+
+function applyRemoteImagePolicy(tree: HastRoot, allowRemoteImages: boolean): void {
+  visit(tree, 'element', (node) => {
+    // `srcSet` is stripped from EVERY element, UNCONDITIONALLY — not gated on
+    // consent the way `src` is, and not limited to `img`. Two independent
+    // reasons, both verified rather than assumed. (1) `hast-util-sanitize`'s
+    // default schema allows `source[srcSet]` with NO entry in its `protocols`
+    // map at all (its `protocols` covers only `cite`/`href`/`longDesc`/`src`),
+    // so unlike `src` there is no scheme allowlist behind it — a `<picture>
+    // <source srcset="https://evil.com/x.png">` written as raw HTML survived
+    // sanitize AND this function completely untouched, confirmed empirically.
+    // (2) Nothing in this app's Markdown pipeline ever PRODUCES a `srcSet` or a
+    // `<picture>`/`<source>`; they can only come from raw HTML in a document
+    // this codebase treats as untrusted, so there is no legitimate authoring
+    // use case to preserve. Honoring it even WITH consent would mean honoring
+    // an attribute carrying no protocol restriction whatsoever, which is why
+    // this is not merely `if (!allowRemoteImages)`. Note `img[srcSet]` is
+    // already dropped by sanitize's own attribute allowlist today; including it
+    // here is deliberate defense against a future schema change, not
+    // redundancy that can be trimmed.
+    delete node.properties.srcSet
+    if (allowRemoteImages) return
+    if (node.tagName !== 'img') return
+    const src = node.properties.src
+    if (typeof src !== 'string') return
+    if (REMOTE_SRC_PATTERN.test(src)) {
+      delete node.properties.src
+    }
+  })
+}
+
 export function markdownToHtml(
   source: string,
-  options?: { assetToken?: string }
+  options?: { assetToken?: string; allowRemoteImages?: boolean }
 ): { html: string; sourceMap: SourceMap } {
   // unified's `.parse()` only performs the parse phase — it does NOT run
   // attached transformers (remarkPagebreak's tree mutation only executes
@@ -286,6 +350,19 @@ export function markdownToHtml(
   if (options?.assetToken) {
     rewriteLocalImageSrcs(sanitized, options.assetToken)
   }
+
+  // Same "after sanitize" ordering requirement as rewriteLocalImageSrcs
+  // above, for the same reason: nothing about this needs to run before
+  // sanitize(), and running after means it also catches a remote `<img>`
+  // written directly as raw HTML in the document's own source, not just one
+  // produced from `![]()` syntax -- by this point in the pipeline both have
+  // already been merged into the same flat hast tree with no way (or need)
+  // to tell them apart.
+  // Called UNCONDITIONALLY, with consent passed in rather than gating the call
+  // -- the `srcSet` half of this policy applies even when remote images ARE
+  // allowed (see the function's own comment for why an attribute with no
+  // protocol allowlist behind it can never be safely honored).
+  applyRemoteImagePolicy(sanitized, options?.allowRemoteImages === true)
 
   // Deliberately runs AFTER sanitize(), not before it — the same ordering
   // rewriteLocalImageSrcs uses above, for an analogous reason: the classes

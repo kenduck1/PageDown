@@ -192,7 +192,8 @@ const EXPORT_PAGINATION_TIMEOUT_MS = 30_000
 export async function exportDocumentToPdf(
   win: BrowserWindow,
   content: string,
-  documentPath?: string
+  documentPath?: string,
+  allowRemoteImages = false
 ): Promise<{ filePath: string } | null> {
   const result = await dialog.showSaveDialog(win, {
     filters: [{ name: 'PDF', extensions: ['pdf'] }],
@@ -222,7 +223,7 @@ export async function exportDocumentToPdf(
       // design and a document with no known path must load no local assets.
       const assetToken = documentDir ? registerAssetRoot(documentDir) : undefined
       try {
-        const { html } = markdownToHtml(content, { assetToken })
+        const { html } = markdownToHtml(content, { assetToken, allowRemoteImages })
         await harness.sendDocument(html, geometry, documentStyle, EXPORT_PAGINATION_TIMEOUT_MS)
         return exportToPdf(harness)
       } finally {

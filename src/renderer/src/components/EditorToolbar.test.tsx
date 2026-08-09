@@ -446,7 +446,7 @@ describe('EditorToolbar', () => {
     await user.click(screen.getByRole('button', { name: /Export PDF/ }))
 
     await waitFor(() => {
-      expect(window.api.exportPdf).toHaveBeenCalledWith('# Real document content', null)
+      expect(window.api.exportPdf).toHaveBeenCalledWith('# Real document content', null, false)
     })
   })
 
@@ -466,7 +466,11 @@ describe('EditorToolbar', () => {
     await user.click(screen.getByRole('button', { name: /Export PDF/ }))
 
     await waitFor(() => {
-      expect(window.api.exportPdf).toHaveBeenCalledWith('# Doc', '/Users/someone/notes/report.md')
+      expect(window.api.exportPdf).toHaveBeenCalledWith(
+        '# Doc',
+        '/Users/someone/notes/report.md',
+        false
+      )
     })
   })
 
@@ -526,7 +530,8 @@ describe('EditorToolbar', () => {
     await waitFor(() => {
       expect(window.api.print).toHaveBeenCalledWith(
         '# Real document content',
-        '/Users/someone/notes/report.md'
+        '/Users/someone/notes/report.md',
+        false
       )
     })
   })

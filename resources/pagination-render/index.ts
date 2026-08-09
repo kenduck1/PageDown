@@ -364,13 +364,18 @@ ${documentTypographyCss}
 // `%%{init: {"themeCSS": "..."}}%%` and have that CSS text end up inside
 // the theme `<style>` block this shim then nonces on Mermaid's behalf.
 // Bounded, not unrestricted: this is CSS only (script-src is completely
-// unaffected — nothing here ever nonces a <script>), `stripExternalCssRefs`
+// unaffected — nothing here ever nonces a <script>), and `stripExternalCssRefs`
 // (Task 8 / Gate 3) already strips `@import`/external `url(...)` from
-// exactly this text before it reaches the nonced style block, and
-// `connect-src 'none'` / `img-src 'self' data:` / `default-src 'self'`
-// still block any other egress path a raw CSS injection could otherwise
-// exploit (font/background `url()` fetches, etc. — the same class of
-// attack `stripExternalCssRefs` targets). This is also, per the design
+// exactly this text before it reaches the nonced style block, unconditionally
+// — this is now the SOLE defense against this specific vector (a CSS
+// `background`/`url()` fetch as a tracking-pixel-style beacon), not backed
+// up by `img-src` the way an earlier version of this comment claimed:
+// img-src now permits `https:`/`http:` unconditionally as a permanent
+// backstop for the remote-image-consent feature (see pagination-window.ts's
+// CSP_POLICY_TEMPLATE), so it no longer blocks this class of request on its
+// own. `connect-src 'none'` / `default-src 'self'` are unaffected and still
+// block every OTHER egress path a raw CSS injection could exploit (font
+// fetches, `@font-face src`, etc.). This is also, per the design
 // doc's own Mermaid section, the PRESCRIBED mechanism (render once, strip
 // dangerous refs, re-attach with the document's nonce) — not a new gap
 // introduced by accident, but its actual blast radius (arbitrary

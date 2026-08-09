@@ -89,7 +89,7 @@ describe('usePageCount', () => {
     await vi.advanceTimersByTimeAsync(500)
 
     expect(window.api.getPageCount).toHaveBeenCalledTimes(1)
-    expect(window.api.getPageCount).toHaveBeenCalledWith('abc', null)
+    expect(window.api.getPageCount).toHaveBeenCalledWith('abc', null, false)
   })
 
   it("forwards the document's file path, so local asset references can resolve", async () => {
@@ -98,7 +98,7 @@ describe('usePageCount', () => {
     const { result } = renderHook(() => usePageCount('# Doc', '/docs/report.md', 0))
     await waitFor(() => expect(result.current.loading).toBe(false))
 
-    expect(window.api.getPageCount).toHaveBeenCalledWith('# Doc', '/docs/report.md')
+    expect(window.api.getPageCount).toHaveBeenCalledWith('# Doc', '/docs/report.md', false)
   })
 
   it('re-fetches when only the file path changes', async () => {
@@ -119,8 +119,34 @@ describe('usePageCount', () => {
     rerender({ path: '/b/doc.md' })
     await waitFor(() => expect(result.current.pageCount).toBe(9))
 
-    expect(window.api.getPageCount).toHaveBeenNthCalledWith(1, 'same', '/a/doc.md')
-    expect(window.api.getPageCount).toHaveBeenNthCalledWith(2, 'same', '/b/doc.md')
+    expect(window.api.getPageCount).toHaveBeenNthCalledWith(1, 'same', '/a/doc.md', false)
+    expect(window.api.getPageCount).toHaveBeenNthCalledWith(2, 'same', '/b/doc.md', false)
+  })
+
+  it('re-fetches when only the remote-image consent decision changes', async () => {
+    // The same class of bug the path case above guards, on a second axis: a
+    // document with remote images genuinely paginates differently once those
+    // images actually load, and clicking "Load" in the consent banner moves
+    // neither `content` nor `filePath`. Without `allowRemoteImages` in this
+    // hook's own dependency array the status bar would keep showing the
+    // pre-consent count until some unrelated edit happened to invalidate it
+    // -- and the main process's own cache (page-count-generator.ts's
+    // `lastAllowRemoteImages`) would return the stale value even then.
+    vi.mocked(window.api.getPageCount)
+      .mockResolvedValueOnce({ pageCount: 1 })
+      .mockResolvedValueOnce({ pageCount: 4 })
+
+    const { result, rerender } = renderHook(
+      ({ allow }) => usePageCount('same', '/a/doc.md', 0, allow),
+      { initialProps: { allow: false } }
+    )
+    await waitFor(() => expect(result.current.pageCount).toBe(1))
+
+    rerender({ allow: true })
+    await waitFor(() => expect(result.current.pageCount).toBe(4))
+
+    expect(window.api.getPageCount).toHaveBeenNthCalledWith(1, 'same', '/a/doc.md', false)
+    expect(window.api.getPageCount).toHaveBeenNthCalledWith(2, 'same', '/a/doc.md', true)
   })
 
   it('re-fetches when content changes after the debounce settles', async () => {

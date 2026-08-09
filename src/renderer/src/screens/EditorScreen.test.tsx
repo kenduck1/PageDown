@@ -350,14 +350,16 @@ describe('EditorScreen', () => {
       filePath: '/tmp/report.md',
       content: '# Discarded edit',
       isDirty: true,
-      mtimeMs: null
+      mtimeMs: null,
+      remoteImagesAllowed: null
     }
     const other = {
       id: 'tab-other',
       filePath: '/tmp/other.md',
       content: '# Other document',
       isDirty: false,
-      mtimeMs: null
+      mtimeMs: null,
+      remoteImagesAllowed: null
     }
     useAppStore.setState({ screen: 'editor' })
     useDocumentStore.setState({
@@ -654,14 +656,16 @@ describe('EditorScreen', () => {
       filePath: '/tmp/a.md',
       content: '# A dirty edit',
       isDirty: true,
-      mtimeMs: null
+      mtimeMs: null,
+      remoteImagesAllowed: null
     }
     const tabB = {
       id: 'tab-b',
       filePath: '/tmp/b.md',
       content: '# B untouched',
       isDirty: false,
-      mtimeMs: null
+      mtimeMs: null,
+      remoteImagesAllowed: null
     }
     useDocumentStore.setState({
       tabs: [tabA, tabB],
@@ -815,14 +819,16 @@ describe('EditorScreen', () => {
         filePath: '/tmp/a.md',
         content: '# A dirty edit',
         isDirty: true,
-        mtimeMs: null
+        mtimeMs: null,
+        remoteImagesAllowed: null
       }
       const tabB = {
         id: 'tab-b',
         filePath: '/tmp/b.md',
         content: '# B clean',
         isDirty: false,
-        mtimeMs: null
+        mtimeMs: null,
+        remoteImagesAllowed: null
       }
       useDocumentStore.setState({
         tabs: [tabA, tabB],

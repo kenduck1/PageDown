@@ -37,9 +37,24 @@
     script-src deliberately still has NO 'unsafe-inline'/nonce -- that's the
     actual XSS-relevant vector (arbitrary script execution), and Gate 5's
     "CSP blocks inline script execution" regression test
-    (phase0/gate5-sandbox.spec.ts) still passes unmodified. img-src 'self'
-    data: and connect-src 'none' are also unchanged, so even an inline style
-    that somehow did get through has no network path out for exfiltration.
+    (phase0/gate5-sandbox.spec.ts) still passes unmodified. connect-src
+    'none' is also unchanged, so even an inline style that somehow did get
+    through has no scripted network path out for exfiltration.
+
+    img-src now also permits https:/http:, added for the remote-image-
+    consent feature (design doc Security section: "Remote images blocked by
+    default per document, with an explicit ... Load / Keep blocked prompt").
+    This is a coarse, PERMANENT backstop, not the actual per-document
+    enforcement -- it cannot vary per document within one long-lived
+    harness's lifetime (Split mode's harness renders many different
+    documents, one CSP fixed at creation). The real per-document decision is
+    made in src/markdown/pipeline.ts's stripRemoteImageSrcs: a caller that
+    hasn't been granted consent for a given render never gets a live remote
+    `src` in its HTML at all, so there is nothing here for the CSP to even
+    allow. `<img>` network fetches are governed by img-src independently of
+    connect-src (which stays 'none', governing script-initiated fetch/XHR/
+    WebSocket) -- so this still permits no NEW scripted network capability,
+    only passive image loads, and only for content that reaches this stage.
 
     font-src data: was added by the Document Typography sub-project to
     allow a build-time-embedded, base64-encoded font (never user/document-
@@ -53,7 +68,7 @@
     that point would otherwise run under no CSP at all. Keep both copies of
     this policy string in sync if either ever changes.
   -->
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'nonce-%%CSP_STYLE_NONCE%%'; script-src 'self'; img-src 'self' data:; font-src data:; connect-src 'none';">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'nonce-%%CSP_STYLE_NONCE%%'; script-src 'self'; img-src 'self' data: https: http:; font-src data:; connect-src 'none';">
   <meta name="csp-style-nonce" content="%%CSP_STYLE_NONCE%%">
   <title>PageDown Pagination Render Context</title>
 </head>

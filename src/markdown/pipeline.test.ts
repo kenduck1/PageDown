@@ -308,8 +308,11 @@ describe('markdownToHtml — local asset src rewriting', () => {
     expect(html).toContain('src="./figures/chart.png"')
   })
 
-  it('does not rewrite a remote http(s) image src even when assetToken is provided', () => {
-    const { html } = markdownToHtml('![x](https://example.com/a.png)', { assetToken: 'abc123' })
+  it('does not rewrite a remote http(s) image src into __asset__, even when assetToken is provided and allowRemoteImages is true', () => {
+    const { html } = markdownToHtml('![x](https://example.com/a.png)', {
+      assetToken: 'abc123',
+      allowRemoteImages: true
+    })
     expect(html).toContain('src="https://example.com/a.png"')
     expect(html).not.toContain('__asset__')
   })
@@ -408,5 +411,86 @@ describe('markdownToHtml — local asset src rewriting', () => {
     })
     expect(html).not.toContain('FORGED')
     expect(html).not.toContain('src=')
+  })
+})
+
+describe('markdownToHtml — remote image consent (allowRemoteImages)', () => {
+  it('strips a remote http(s) image src by default (allowRemoteImages omitted) -- blocked by default, per the design doc', () => {
+    const { html } = markdownToHtml('![x](https://example.com/a.png)')
+    expect(html).toContain('<img alt="x">')
+    expect(html).not.toContain('src="https://example.com/a.png"')
+  })
+
+  it('strips a remote http(s) image src when allowRemoteImages is explicitly false', () => {
+    const { html } = markdownToHtml('![x](https://example.com/a.png)', { allowRemoteImages: false })
+    expect(html).not.toContain('src="https://example.com/a.png"')
+  })
+
+  it('leaves a remote http(s) image src intact when allowRemoteImages is true', () => {
+    const { html } = markdownToHtml('![x](https://example.com/a.png)', { allowRemoteImages: true })
+    expect(html).toContain('src="https://example.com/a.png"')
+  })
+
+  it('strips a remote src written as raw HTML too, not just Markdown image syntax', () => {
+    const { html } = markdownToHtml('<img src="http://example.com/pixel.gif">')
+    expect(html).not.toContain('src="http://example.com/pixel.gif"')
+  })
+
+  it('does not strip a local relative image src -- only http(s) is gated by allowRemoteImages', () => {
+    const { html } = markdownToHtml('![chart](./figures/chart.png)', { assetToken: 'abc123' })
+    expect(html).toContain(
+      'src="pagedown-render://render/__asset__/abc123/' +
+        encodeURIComponent('./figures/chart.png') +
+        '"'
+    )
+  })
+
+  it('does not affect a data: image src either way', () => {
+    const withoutConsent = markdownToHtml('![x](data:image/png;base64,abc)').html
+    const withConsent = markdownToHtml('![x](data:image/png;base64,abc)', {
+      allowRemoteImages: true
+    }).html
+    // Both strip it -- data: was never in hast-util-sanitize's allowed
+    // protocols list to begin with, unrelated to this feature.
+    expect(withoutConsent).not.toContain('src="data:image/png;base64,abc"')
+    expect(withConsent).not.toContain('src="data:image/png;base64,abc"')
+  })
+
+  // Both of the following were REAL, confirmed bypasses that this feature
+  // shipped with until review caught them -- each defeated the whole feature,
+  // and each fired regardless of the consent flag's value. They are pinned
+  // here because neither is intuitive enough to survive a future refactor of
+  // applyRemoteImagePolicy on reasoning alone.
+  it('strips an http(s) src with NO slashes after the colon -- a real, fetchable remote URL', () => {
+    // micromark's sanitize-uri and hast-util-sanitize's safeProtocol BOTH
+    // validate only the substring before the colon; neither requires `//`.
+    // Per the WHATWG URL spec's "special authority ignore slashes state" a
+    // special scheme enters authority parsing regardless of slash count, so
+    // this normalizes to http://evil.com/tracker.png and genuinely fetches.
+    // A `startsWith('http://')` test does not match it.
+    expect(new URL('http:evil.com/tracker.png').href).toBe('http://evil.com/tracker.png')
+    const html = markdownToHtml('![x](http:evil.com/tracker.png)').html
+    expect(html).not.toContain('evil.com')
+    const oneSlash = markdownToHtml('![x](http:/evil.com/tracker.png)').html
+    expect(oneSlash).not.toContain('evil.com')
+  })
+
+  it('strips a protocol-relative //host image src', () => {
+    expect(markdownToHtml('![x](//evil.com/tracker.png)').html).not.toContain('evil.com')
+  })
+
+  it('strips srcset from <picture><source> UNCONDITIONALLY, even with consent granted', () => {
+    // hast-util-sanitize allows source[srcSet] with NO protocol allowlist
+    // behind it, so unlike `src` there is no scheme restriction to fall back
+    // on -- which is why this is not gated on consent the way `src` is.
+    const raw = '<picture><source srcset="https://evil.com/track.png"><img src="a.png"></picture>'
+    expect(markdownToHtml(raw).html).not.toContain('evil.com')
+    expect(markdownToHtml(raw, { allowRemoteImages: true }).html).not.toContain('evil.com')
+  })
+
+  it('still renders the <picture> fallback img itself -- the strip is srcset-scoped', () => {
+    // Guards against over-correcting the fix into "drop the whole element."
+    const raw = '<picture><source srcset="https://evil.com/t.png"><img src="local.png"></picture>'
+    expect(markdownToHtml(raw).html).toContain('<img')
   })
 })

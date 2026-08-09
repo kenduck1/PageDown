@@ -45,7 +45,16 @@ export interface SplitPreviewHarness {
   // internally (`resolveDocumentStyle`, see this function's own body) rather
   // than taken from the caller, since this harness's whole point is that its
   // caller only ever has raw Markdown, never an already-resolved PageConfig.
-  sendDocument(content: string, filePath: string | null): Promise<PaginationResult>
+  // allowRemoteImages defaults to false (blocked) if omitted -- see this
+  // function's own body and src/markdown/pipeline.ts's stripRemoteImageSrcs
+  // for the actual enforcement. Threaded from the renderer's own per-tab
+  // consent decision (documentStore's remoteImagesAllowed), never inferred
+  // here.
+  sendDocument(
+    content: string,
+    filePath: string | null,
+    allowRemoteImages?: boolean
+  ): Promise<PaginationResult>
   // Converts `cssBounds` (the renderer's own getBoundingClientRect()-shaped
   // rectangle for the right-hand preview pane) via toViewBounds (Task 1,
   // renamed from toPhysicalBounds in the final whole-branch review -- see
@@ -165,6 +174,7 @@ export async function createSplitPreviewHarness(
   async function sendDocument(
     content: string,
     filePath: string | null,
+    allowRemoteImages: boolean = false,
     timeoutMs: number = DEFAULT_SEND_DOCUMENT_TIMEOUT_MS
   ): Promise<PaginationResult> {
     if (destroyed) {
@@ -184,7 +194,7 @@ export async function createSplitPreviewHarness(
     const documentDir = filePath ? dirname(filePath) : null
     const assetToken = documentDir ? registerAssetRoot(documentDir) : undefined
     try {
-      const { html } = markdownToHtml(content, { assetToken })
+      const { html } = markdownToHtml(content, { assetToken, allowRemoteImages })
       // The live preview has to show the document's OWN page geometry (Page
       // Geometry Wiring) -- Split mode is the one surface where the user
       // watches page size/orientation/margin changes take effect, so a fixed
