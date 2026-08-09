@@ -82,7 +82,10 @@ test.beforeAll(async () => {
 })
 
 test.afterAll(async () => {
-  await close()
+  // Guarded: if beforeAll's launchIsolatedApp itself threw, `close` was
+  // never assigned, and an unguarded call here would mask that real
+  // failure with a TypeError.
+  if (close) await close()
 })
 
 test('Gate 9: concurrent getTemplateThumbnail calls all succeed (no harness race)', async () => {

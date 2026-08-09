@@ -28,26 +28,6 @@ import { launchIsolatedApp } from './electron-launch'
 // config from the persistence test is what the frontmatter test checks),
 // the same structure Gate 14/Gate 19 use for the same reason.
 
-const CLOSE_TIMEOUT_MS = 20_000
-
-async function safeClose(app: ElectronApplication, close: () => Promise<void>): Promise<void> {
-  const closeOutcome = close().then(
-    () => 'closed' as const,
-    () => 'closed' as const
-  )
-  const outcome = await Promise.race([
-    closeOutcome,
-    new Promise<'timeout'>((resolve) => setTimeout(() => resolve('timeout'), CLOSE_TIMEOUT_MS))
-  ])
-  if (outcome === 'timeout') {
-    try {
-      app.process().kill('SIGKILL')
-    } catch {
-      // Best-effort; the process may already be gone.
-    }
-  }
-}
-
 const GET_MAIN_WINDOW_TIMEOUT_MS = 60_000
 
 // Same positive `file://` filter every other gate's getMainWindow uses --
@@ -90,7 +70,7 @@ test.beforeAll(async () => {
 })
 
 test.afterAll(async () => {
-  if (app && close) await safeClose(app, close)
+  if (app && close) await close()
 })
 
 test.describe('Gate 21: Settings/Preferences + spellcheck', () => {

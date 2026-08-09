@@ -86,301 +86,274 @@ interface MathElementInfo {
 
 test('Gate 26: math equations render as real, non-zero-size KaTeX output, currency prose is left alone, and CSP stays enforced', async () => {
   const { app, close } = await launchIsolatedApp(['.'])
-  const { html } = markdownToHtml(MATH_MARKDOWN)
 
-  const result = await app.evaluate(
-    async ({ BaseWindow }, { html, geometry, documentStyle }) => {
-      const bridge = (
-        globalThis as unknown as {
-          __pagedownPhase0: {
-            createPaginationHarness: (typeof import('../src/main/pagination-window'))['createPaginationHarness']
+  try {
+    const { html } = markdownToHtml(MATH_MARKDOWN)
+
+    const result = await app.evaluate(
+      async ({ BaseWindow }, { html, geometry, documentStyle }) => {
+        const bridge = (
+          globalThis as unknown as {
+            __pagedownPhase0: {
+              createPaginationHarness: (typeof import('../src/main/pagination-window'))['createPaginationHarness']
+            }
           }
-        }
-      ).__pagedownPhase0
-      const win = new BaseWindow({ show: false })
-      const harness = await bridge.createPaginationHarness(win)
+        ).__pagedownPhase0
+        const win = new BaseWindow({ show: false })
+        const harness = await bridge.createPaginationHarness(win)
 
-      const consoleMessages: string[] = []
-      harness.view.webContents.on('console-message', (event) => {
-        consoleMessages.push(event.message)
-      })
-
-      const sendResult = await harness.sendDocument(html, geometry, documentStyle)
-
-      const mathElements: MathElementInfo[] = await harness.view.webContents.executeJavaScript(`
-        Array.from(document.querySelectorAll('.pagedown-math-inline, .pagedown-math-block')).map(el => {
-          const rect = el.getBoundingClientRect()
-          return {
-            className: el.className,
-            width: rect.width,
-            height: rect.height,
-            hasKatexClass: !!el.querySelector('.katex')
-          }
+        const consoleMessages: string[] = []
+        harness.view.webContents.on('console-message', (event) => {
+          consoleMessages.push(event.message)
         })
-      `)
 
-      // Same nonce/hoisting proof Gate 3 runs for Mermaid, scoped to the
-      // math wrappers specifically — see nonce-style-hoisting.ts's own
-      // comment for why KaTeX's inline styles are load-bearing (fraction
-      // bars, exponent stacking) rather than decorative, unlike Mermaid's.
-      const nonceCheck = await harness.view.webContents.executeJavaScript(`
-        (() => {
-          const meta = document.querySelector('meta[name="csp-style-nonce"]')
-          const nonce = meta ? meta.getAttribute('content') : null
-          // ':is(...)' — NOT '.pagedown-math-inline, .pagedown-math-block'
-          // concatenated directly with a trailing combinator. A comma-
-          // separated selector LIST with a suffix appended as a plain
-          // string only applies that suffix to the LAST alternative ('A, B
-          // X' parses as the two selectors 'A' and 'B X'), so 'A' would
-          // match bare wrapper elements with no [style]/style requirement
-          // at all — caught by a throwaway diagnostic script during this
-          // gate's own development, which is exactly why this comment is
-          // here now: it silently reported a false-positive leftover
-          // style="" attribute (actually just the wrapper span itself,
-          // matched with zero style-attribute filtering) before the fix.
-          // ':is()' correctly applies the descendant combinator to BOTH
-          // alternatives as one group.
-          const scope = ':is(.pagedown-math-inline, .pagedown-math-block)'
-          const styleAttrCount = document.querySelectorAll(scope + ' [style]').length
-          const styles = Array.from(document.querySelectorAll(scope + ' style'))
-          return { nonce, styleAttrCount, styleNonces: styles.map(s => s.nonce), styleCount: styles.length }
-        })()
-      `)
+        const sendResult = await harness.sendDocument(html, geometry, documentStyle)
 
-      // The whole-page text, to confirm the currency amounts survive as
-      // literal text (never swallowed into a math span) and that "50K"/
-      // "120K"/"5" never appear INSIDE a math wrapper.
-      const bodyText: string = await harness.view.webContents.executeJavaScript(
-        'document.body.textContent'
-      )
-      const currencyInsideMath: boolean = await harness.view.webContents.executeJavaScript(`
-        Array.from(document.querySelectorAll('.pagedown-math-inline, .pagedown-math-block'))
-          .some(el => el.textContent.includes('50K') || el.textContent.includes('120K'))
-      `)
+        const mathElements: MathElementInfo[] = await harness.view.webContents.executeJavaScript(`
+          Array.from(document.querySelectorAll('.pagedown-math-inline, .pagedown-math-block')).map(el => {
+            const rect = el.getBoundingClientRect()
+            return {
+              className: el.className,
+              width: rect.width,
+              height: rect.height,
+              hasKatexClass: !!el.querySelector('.katex')
+            }
+          })
+        `)
 
-      // Negative control, same shape as Gate 3's own: CSP must still block a
-      // genuine injection attempt after this render pass's own
-      // document.createElement-heavy code path (katex-render.ts,
-      // nonce-style-hoisting.ts). Snapshotting the count first isolates
-      // this from KaTeX's own harmless internal noise, if any (unlike
-      // Mermaid, KaTeX renders via renderToString with no live DOM painting
-      // of its own, so none is expected here — see the assertion below).
-      const consoleMessagesBeforeInjection = consoleMessages.length
-      await harness.sendDocument(
-        '<img src="this-file-does-not-exist.png" onerror="window.__pwned = true">',
-        geometry,
-        documentStyle
-      )
-      await new Promise((resolve) => setTimeout(resolve, 500))
-      const pwned = await harness.view.webContents.executeJavaScript(`typeof (window).__pwned`)
-      const injectionViolationCount = consoleMessages
-        .slice(consoleMessagesBeforeInjection)
-        .filter((m) => /content security policy|refused to/i.test(m)).length
+        // Same nonce/hoisting proof Gate 3 runs for Mermaid, scoped to the
+        // math wrappers specifically — see nonce-style-hoisting.ts's own
+        // comment for why KaTeX's inline styles are load-bearing (fraction
+        // bars, exponent stacking) rather than decorative, unlike Mermaid's.
+        const nonceCheck = await harness.view.webContents.executeJavaScript(`
+          (() => {
+            const meta = document.querySelector('meta[name="csp-style-nonce"]')
+            const nonce = meta ? meta.getAttribute('content') : null
+            // ':is(...)' — NOT '.pagedown-math-inline, .pagedown-math-block'
+            // concatenated directly with a trailing combinator. A comma-
+            // separated selector LIST with a suffix appended as a plain
+            // string only applies that suffix to the LAST alternative ('A, B
+            // X' parses as the two selectors 'A' and 'B X'), so 'A' would
+            // match bare wrapper elements with no [style]/style requirement
+            // at all — caught by a throwaway diagnostic script during this
+            // gate's own development, which is exactly why this comment is
+            // here now: it silently reported a false-positive leftover
+            // style="" attribute (actually just the wrapper span itself,
+            // matched with zero style-attribute filtering) before the fix.
+            // ':is()' correctly applies the descendant combinator to BOTH
+            // alternatives as one group.
+            const scope = ':is(.pagedown-math-inline, .pagedown-math-block)'
+            const styleAttrCount = document.querySelectorAll(scope + ' [style]').length
+            const styles = Array.from(document.querySelectorAll(scope + ' style'))
+            return { nonce, styleAttrCount, styleNonces: styles.map(s => s.nonce), styleCount: styles.length }
+          })()
+        `)
 
-      return {
-        sendResult,
-        mathElements,
-        nonceCheck,
-        bodyText,
-        currencyInsideMath,
-        consoleMessages,
-        pwned,
-        injectionViolationCount
-      }
-    },
-    { html, geometry: LETTER_GEOMETRY, documentStyle: DEFAULT_STYLE }
-  )
+        // The whole-page text, to confirm the currency amounts survive as
+        // literal text (never swallowed into a math span) and that "50K"/
+        // "120K"/"5" never appear INSIDE a math wrapper.
+        const bodyText: string = await harness.view.webContents.executeJavaScript(
+          'document.body.textContent'
+        )
+        const currencyInsideMath: boolean = await harness.view.webContents.executeJavaScript(`
+          Array.from(document.querySelectorAll('.pagedown-math-inline, .pagedown-math-block'))
+            .some(el => el.textContent.includes('50K') || el.textContent.includes('120K'))
+        `)
 
-  console.log('Gate 26 math elements:', JSON.stringify(result.mathElements))
-  console.log('Gate 26 nonce check:', JSON.stringify(result.nonceCheck))
+        // Negative control, same shape as Gate 3's own: CSP must still block a
+        // genuine injection attempt after this render pass's own
+        // document.createElement-heavy code path (katex-render.ts,
+        // nonce-style-hoisting.ts). Snapshotting the count first isolates
+        // this from KaTeX's own harmless internal noise, if any (unlike
+        // Mermaid, KaTeX renders via renderToString with no live DOM painting
+        // of its own, so none is expected here — see the assertion below).
+        const consoleMessagesBeforeInjection = consoleMessages.length
+        await harness.sendDocument(
+          '<img src="this-file-does-not-exist.png" onerror="window.__pwned = true">',
+          geometry,
+          documentStyle
+        )
+        await new Promise((resolve) => setTimeout(resolve, 500))
+        const pwned = await harness.view.webContents.executeJavaScript(`typeof (window).__pwned`)
+        const injectionViolationCount = consoleMessages
+          .slice(consoleMessagesBeforeInjection)
+          .filter((m) => /content security policy|refused to/i.test(m)).length
 
-  expect(result.sendResult.ready).toBe(true)
+        return {
+          sendResult,
+          mathElements,
+          nonceCheck,
+          bodyText,
+          currencyInsideMath,
+          consoleMessages,
+          pwned,
+          injectionViolationCount
+        }
+      },
+      { html, geometry: LETTER_GEOMETRY, documentStyle: DEFAULT_STYLE }
+    )
 
-  // Exactly 1 block equation + 1 inline equation, per MATH_MARKDOWN above —
-  // pinned exactly (not just `.length > 0`), matching Gate 3's own "pinned
-  // set of distinct diagrams" precedent, so a regression that silently
-  // drops or duplicates an equation is caught.
-  expect(result.mathElements).toHaveLength(2)
-  const blockCount = result.mathElements.filter((el) =>
-    el.className.includes('pagedown-math-block')
-  ).length
-  const inlineCount = result.mathElements.filter((el) =>
-    el.className.includes('pagedown-math-inline')
-  ).length
-  expect(blockCount).toBe(1)
-  expect(inlineCount).toBe(1)
+    console.log('Gate 26 math elements:', JSON.stringify(result.mathElements))
+    console.log('Gate 26 nonce check:', JSON.stringify(result.nonceCheck))
 
-  // The real signal Gate 3 exists to produce for diagrams, mirrored here for
-  // equations: no element reports a zero-size box (a silent KaTeX
-  // render/layout failure), and every one contains KaTeX's own real
-  // `.katex` class (proving renderToString's actual output landed, not a
-  // fallback/error placeholder).
-  for (const el of result.mathElements) {
-    expect(el.width, `${el.className} reported zero width`).toBeGreaterThan(0)
-    expect(el.height, `${el.className} reported zero height`).toBeGreaterThan(0)
-    expect(el.hasKatexClass, `${el.className} missing real KaTeX output`).toBe(true)
-  }
+    expect(result.sendResult.ready).toBe(true)
 
-  // Currency false-positive proof, end to end (not just the pipeline.test.ts
-  // unit-level proof) — the dollar amounts must survive as literal page
-  // text and must never end up inside a math wrapper.
-  expect(result.bodyText).toContain('$50K')
-  expect(result.bodyText).toContain('$120K')
-  expect(result.currencyInsideMath).toBe(false)
+    // Exactly 1 block equation + 1 inline equation, per MATH_MARKDOWN above —
+    // pinned exactly (not just `.length > 0`), matching Gate 3's own "pinned
+    // set of distinct diagrams" precedent, so a regression that silently
+    // drops or duplicates an equation is caught.
+    expect(result.mathElements).toHaveLength(2)
+    const blockCount = result.mathElements.filter((el) =>
+      el.className.includes('pagedown-math-block')
+    ).length
+    const inlineCount = result.mathElements.filter((el) =>
+      el.className.includes('pagedown-math-inline')
+    ).length
+    expect(blockCount).toBe(1)
+    expect(inlineCount).toBe(1)
 
-  // CSP-nonce/hoisting proof: zero lingering style="" attributes anywhere
-  // under a math wrapper (hoistInlineStyleAttributes moved every one out),
-  // and any retained <style> element carries this render's real nonce.
-  expect(result.nonceCheck.styleAttrCount).toBe(0)
-  if (result.nonceCheck.styleCount > 0) {
-    expect(result.nonceCheck.nonce).toBeTruthy()
-    for (const styleNonce of result.nonceCheck.styleNonces) {
-      expect(styleNonce).toBe(result.nonceCheck.nonce)
+    // The real signal Gate 3 exists to produce for diagrams, mirrored here for
+    // equations: no element reports a zero-size box (a silent KaTeX
+    // render/layout failure), and every one contains KaTeX's own real
+    // `.katex` class (proving renderToString's actual output landed, not a
+    // fallback/error placeholder).
+    for (const el of result.mathElements) {
+      expect(el.width, `${el.className} reported zero width`).toBeGreaterThan(0)
+      expect(el.height, `${el.className} reported zero height`).toBeGreaterThan(0)
+      expect(el.hasKatexClass, `${el.className} missing real KaTeX output`).toBe(true)
     }
+
+    // Currency false-positive proof, end to end (not just the pipeline.test.ts
+    // unit-level proof) — the dollar amounts must survive as literal page
+    // text and must never end up inside a math wrapper.
+    expect(result.bodyText).toContain('$50K')
+    expect(result.bodyText).toContain('$120K')
+    expect(result.currencyInsideMath).toBe(false)
+
+    // CSP-nonce/hoisting proof: zero lingering style="" attributes anywhere
+    // under a math wrapper (hoistInlineStyleAttributes moved every one out),
+    // and any retained <style> element carries this render's real nonce.
+    expect(result.nonceCheck.styleAttrCount).toBe(0)
+    if (result.nonceCheck.styleCount > 0) {
+      expect(result.nonceCheck.nonce).toBeTruthy()
+      for (const styleNonce of result.nonceCheck.styleNonces) {
+        expect(styleNonce).toBe(result.nonceCheck.nonce)
+      }
+    }
+
+    // CSP-negative case: injection still blocked on the same harness right
+    // after math rendering, same double-check shape as Gate 3 (payload never
+    // executed AND a real, attributable violation was logged for it).
+    expect(result.pwned).toBe('undefined')
+    expect(result.injectionViolationCount).toBeGreaterThan(0)
+  } finally {
+    await close()
   }
-
-  // CSP-negative case: injection still blocked on the same harness right
-  // after math rendering, same double-check shape as Gate 3 (payload never
-  // executed AND a real, attributable violation was logged for it).
-  expect(result.pwned).toBe('undefined')
-  expect(result.injectionViolationCount).toBeGreaterThan(0)
-
-  await close()
 })
 
 test('Gate 26: KaTeX font-face CSS is only registered in document.fonts when the document actually contains math', async () => {
   const { app, close } = await launchIsolatedApp(['.'])
-  const { html: mathHtml } = markdownToHtml(MATH_MARKDOWN)
-  const { html: noMathHtml } = markdownToHtml(NO_MATH_MARKDOWN)
 
-  const result = await app.evaluate(
-    async ({ BaseWindow }, { mathHtml, noMathHtml, geometry, documentStyle }) => {
-      const bridge = (
-        globalThis as unknown as {
-          __pagedownPhase0: {
-            createPaginationHarness: (typeof import('../src/main/pagination-window'))['createPaginationHarness']
+  try {
+    const { html: mathHtml } = markdownToHtml(MATH_MARKDOWN)
+    const { html: noMathHtml } = markdownToHtml(NO_MATH_MARKDOWN)
+
+    const result = await app.evaluate(
+      async ({ BaseWindow }, { mathHtml, noMathHtml, geometry, documentStyle }) => {
+        const bridge = (
+          globalThis as unknown as {
+            __pagedownPhase0: {
+              createPaginationHarness: (typeof import('../src/main/pagination-window'))['createPaginationHarness']
+            }
           }
-        }
-      ).__pagedownPhase0
-      const win = new BaseWindow({ show: false })
-      const harness = await bridge.createPaginationHarness(win)
+        ).__pagedownPhase0
+        const win = new BaseWindow({ show: false })
+        const harness = await bridge.createPaginationHarness(win)
 
-      await harness.sendDocument(noMathHtml, geometry, documentStyle)
-      const familiesWithoutMath: string[] = await harness.view.webContents.executeJavaScript(
-        `Array.from(document.fonts).map(f => f.family)`
-      )
+        await harness.sendDocument(noMathHtml, geometry, documentStyle)
+        const familiesWithoutMath: string[] = await harness.view.webContents.executeJavaScript(
+          `Array.from(document.fonts).map(f => f.family)`
+        )
 
-      // Same long-lived harness, second request — proves the gating is a
-      // real PER-REQUEST decision (buildDocumentStylesheet's `hasMath`
-      // parameter), not something baked in once at harness-creation time.
-      await harness.sendDocument(mathHtml, geometry, documentStyle)
-      const familiesWithMath: string[] = await harness.view.webContents.executeJavaScript(
-        `Array.from(document.fonts).map(f => f.family)`
-      )
+        // Same long-lived harness, second request — proves the gating is a
+        // real PER-REQUEST decision (buildDocumentStylesheet's `hasMath`
+        // parameter), not something baked in once at harness-creation time.
+        await harness.sendDocument(mathHtml, geometry, documentStyle)
+        const familiesWithMath: string[] = await harness.view.webContents.executeJavaScript(
+          `Array.from(document.fonts).map(f => f.family)`
+        )
 
-      return { familiesWithoutMath, familiesWithMath }
-    },
-    { mathHtml, noMathHtml, geometry: LETTER_GEOMETRY, documentStyle: DEFAULT_STYLE }
-  )
+        return { familiesWithoutMath, familiesWithMath }
+      },
+      { mathHtml, noMathHtml, geometry: LETTER_GEOMETRY, documentStyle: DEFAULT_STYLE }
+    )
 
-  console.log('Gate 26 fonts without math:', JSON.stringify(result.familiesWithoutMath))
-  console.log('Gate 26 fonts with math:', JSON.stringify(result.familiesWithMath))
+    console.log('Gate 26 fonts without math:', JSON.stringify(result.familiesWithoutMath))
+    console.log('Gate 26 fonts with math:', JSON.stringify(result.familiesWithMath))
 
-  // Real, load-bearing check, not a micro-optimization proof for its own
-  // sake: see buildKatexFontFaceCss's own comment (katex-render.ts) for why
-  // registering all 20 KaTeX fonts unconditionally would cost a real,
-  // awaited decode on EVERY render via Paged.js's Chunker.loadFonts(), even
-  // for documents with no math at all.
-  expect(result.familiesWithoutMath.some((f) => f.includes('KaTeX'))).toBe(false)
-  expect(result.familiesWithMath.some((f) => f.includes('KaTeX_Main'))).toBe(true)
-
-  await close()
+    // Real, load-bearing check, not a micro-optimization proof for its own
+    // sake: see buildKatexFontFaceCss's own comment (katex-render.ts) for why
+    // registering all 20 KaTeX fonts unconditionally would cost a real,
+    // awaited decode on EVERY render via Paged.js's Chunker.loadFonts(), even
+    // for documents with no math at all.
+    expect(result.familiesWithoutMath.some((f) => f.includes('KaTeX'))).toBe(false)
+    expect(result.familiesWithMath.some((f) => f.includes('KaTeX_Main'))).toBe(true)
+  } finally {
+    await close()
+  }
 })
 
 test('Gate 26: a malformed/hostile equation degrades gracefully and cannot inject a live link or crash the render', async () => {
   const { app, close } = await launchIsolatedApp(['.'])
-  // \href is one of the commands KaTeX's own `trust` option gates (default,
-  // and explicit here, `trust: false` — see katex-render.ts's own
-  // KATEX_RENDER_OPTIONS comment). Malformed LaTeX (unbalanced braces) is
-  // included in the SAME document to prove one broken equation doesn't
-  // abort the whole render (throwOnError: false).
-  const hostileMarkdown =
-    '# Hostile Math\n\n' +
-    'Link attempt: $$\\href{javascript:alert(1)}{click}$$\n\n' +
-    'Malformed: $$\\frac{1{2}$$\n\n' +
-    'Still here.\n'
-  const { html } = markdownToHtml(hostileMarkdown)
 
-  const result = await app.evaluate(
-    async ({ BaseWindow }, { html, geometry, documentStyle }) => {
-      const bridge = (
-        globalThis as unknown as {
-          __pagedownPhase0: {
-            createPaginationHarness: (typeof import('../src/main/pagination-window'))['createPaginationHarness']
+  try {
+    // \href is one of the commands KaTeX's own `trust` option gates (default,
+    // and explicit here, `trust: false` — see katex-render.ts's own
+    // KATEX_RENDER_OPTIONS comment). Malformed LaTeX (unbalanced braces) is
+    // included in the SAME document to prove one broken equation doesn't
+    // abort the whole render (throwOnError: false).
+    const hostileMarkdown =
+      '# Hostile Math\n\n' +
+      'Link attempt: $$\\href{javascript:alert(1)}{click}$$\n\n' +
+      'Malformed: $$\\frac{1{2}$$\n\n' +
+      'Still here.\n'
+    const { html } = markdownToHtml(hostileMarkdown)
+
+    const result = await app.evaluate(
+      async ({ BaseWindow }, { html, geometry, documentStyle }) => {
+        const bridge = (
+          globalThis as unknown as {
+            __pagedownPhase0: {
+              createPaginationHarness: (typeof import('../src/main/pagination-window'))['createPaginationHarness']
+            }
           }
-        }
-      ).__pagedownPhase0
-      const win = new BaseWindow({ show: false })
-      const harness = await bridge.createPaginationHarness(win)
-      const sendResult = await harness.sendDocument(html, geometry, documentStyle)
-      const dangerousHrefCount = await harness.view.webContents.executeJavaScript(
-        `document.querySelectorAll('a[href*="javascript:"]').length`
-      )
-      const bodyText: string = await harness.view.webContents.executeJavaScript(
-        'document.body.textContent'
-      )
-      return { sendResult, dangerousHrefCount, bodyText }
-    },
-    { html, geometry: LETTER_GEOMETRY, documentStyle: DEFAULT_STYLE }
-  )
+        ).__pagedownPhase0
+        const win = new BaseWindow({ show: false })
+        const harness = await bridge.createPaginationHarness(win)
+        const sendResult = await harness.sendDocument(html, geometry, documentStyle)
+        const dangerousHrefCount = await harness.view.webContents.executeJavaScript(
+          `document.querySelectorAll('a[href*="javascript:"]').length`
+        )
+        const bodyText: string = await harness.view.webContents.executeJavaScript(
+          'document.body.textContent'
+        )
+        return { sendResult, dangerousHrefCount, bodyText }
+      },
+      { html, geometry: LETTER_GEOMETRY, documentStyle: DEFAULT_STYLE }
+    )
 
-  // The render must complete at all (throwOnError: false + this file's own
-  // defensive catch in renderMathPlaceholder) rather than time out/error.
-  expect(result.sendResult.ready).toBe(true)
-  // trust: false must leave no real javascript: URL anywhere in the DOM.
-  expect(result.dangerousHrefCount).toBe(0)
-  // The rest of the document must still be present — one hostile/malformed
-  // equation must not blank out everything after it.
-  expect(result.bodyText).toContain('Still here.')
-
-  await close()
-})
-
-// --- Real compiled out/main/index.js proof --------------------------------
-//
-// Every test above launches THIS spec file's own `markdownToHtml` import,
-// compiled by Playwright's own TS transform, which resolves ESM/`.default`
-// correctly regardless of how a dependency is packaged (see CLAUDE.md's
-// "Build quirk #2") — exactly the same gap Gate 22 documents for
-// rehype-highlight. `remark-math`/`mdast-util-math`/`micromark-extension-math`
-// were added to electron.vite.config.ts's `externalizeDeps.exclude` list
-// specifically so Rollup BUNDLES them (letting tree-shaking drop the unused
-// `mathHtml`/`katex` re-export chain — see that list's own comment) instead
-// of leaving a raw `require()` a real Node runtime would evaluate
-// differently. That risk is only genuinely proven safe once the REAL
-// compiled `out/main/index.js` parses real math syntax through a real
-// file-open flow — mirroring Gate 22's exact template (safeClose,
-// getMainWindow, a real recent-files-seeded fixture, Split mode, a polling
-// probe into the real sandboxed WebContentsView).
-const CLOSE_TIMEOUT_MS = 20_000
-
-async function safeClose(app: ElectronApplication, close: () => Promise<void>): Promise<void> {
-  const closeOutcome = close().then(
-    () => 'closed' as const,
-    () => 'closed' as const
-  )
-  const outcome = await Promise.race([
-    closeOutcome,
-    new Promise<'timeout'>((resolve) => setTimeout(() => resolve('timeout'), CLOSE_TIMEOUT_MS))
-  ])
-  if (outcome === 'timeout') {
-    try {
-      app.process().kill('SIGKILL')
-    } catch {
-      // Best-effort; the process may already be gone.
-    }
+    // The render must complete at all (throwOnError: false + this file's own
+    // defensive catch in renderMathPlaceholder) rather than time out/error.
+    expect(result.sendResult.ready).toBe(true)
+    // trust: false must leave no real javascript: URL anywhere in the DOM.
+    expect(result.dangerousHrefCount).toBe(0)
+    // The rest of the document must still be present — one hostile/malformed
+    // equation must not blank out everything after it.
+    expect(result.bodyText).toContain('Still here.')
+  } finally {
+    await close()
   }
-}
+})
 
 const GET_MAIN_WINDOW_TIMEOUT_MS = 60_000
 
@@ -518,6 +491,6 @@ test('Gate 26: the real compiled out/main/index.js parses math syntax and the re
     )
   } finally {
     if (fixtureDir) await rm(fixtureDir, { recursive: true, force: true })
-    await safeClose(app, close)
+    await close()
   }
 })

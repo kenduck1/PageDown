@@ -15,26 +15,6 @@ import { launchIsolatedApp } from './electron-launch'
 // document content (the page card, the Milkdown canvas) genuinely does
 // NOT -- the print-fidelity guarantee this whole app exists for.
 
-const CLOSE_TIMEOUT_MS = 20_000
-
-async function safeClose(app: ElectronApplication, close: () => Promise<void>): Promise<void> {
-  const closeOutcome = close().then(
-    () => 'closed' as const,
-    () => 'closed' as const
-  )
-  const outcome = await Promise.race([
-    closeOutcome,
-    new Promise<'timeout'>((resolve) => setTimeout(() => resolve('timeout'), CLOSE_TIMEOUT_MS))
-  ])
-  if (outcome === 'timeout') {
-    try {
-      app.process().kill('SIGKILL')
-    } catch {
-      // Best-effort; the process may already be gone.
-    }
-  }
-}
-
 const GET_MAIN_WINDOW_TIMEOUT_MS = 60_000
 
 async function getMainWindow(application: ElectronApplication): Promise<Page> {
@@ -130,6 +110,6 @@ test('Gate 24: switching to Dark genuinely repaints the chrome while the documen
     console.log('Gate 24 editor toolbar bg (app in Dark):', toolbarBg)
     expect(toolbarBg).not.toBe('rgb(255, 255, 255)')
   } finally {
-    if (app && close) await safeClose(app, close)
+    if (app && close) await close()
   }
 })
