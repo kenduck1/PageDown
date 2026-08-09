@@ -70,6 +70,7 @@ export interface FileApi {
   getPageCount: (content: string, filePath?: string | null) => Promise<{ pageCount: number }>
   confirmDiscardChanges: () => Promise<'save' | 'discard' | 'cancel'>
   exportPdf: (content: string, filePath?: string | null) => Promise<{ filePath: string } | null>
+  print: (content: string, filePath?: string | null) => Promise<{ cancelled: boolean }>
   autosaveSnapshot: (content: string, filePath: string) => Promise<void>
   getVersionHistory: (filePath: string) => Promise<SnapshotMeta[]>
   restoreVersionContent: (filePath: string, snapshotId: string) => Promise<string | null>

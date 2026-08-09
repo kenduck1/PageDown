@@ -24,6 +24,10 @@ const api = {
   // document is correct and denies all local assets in the export.
   exportPdf: (content: string, filePath: string | null = null) =>
     ipcRenderer.invoke('file:exportPdf', content, filePath),
+  // Same optional/validated filePath treatment as exportPdf immediately
+  // above -- see that entry's own comment.
+  print: (content: string, filePath: string | null = null) =>
+    ipcRenderer.invoke('file:print', content, filePath),
   autosaveSnapshot: (content: string, filePath: string) =>
     ipcRenderer.invoke('file:autosaveSnapshot', content, filePath),
   getVersionHistory: (filePath: string) => ipcRenderer.invoke('file:getVersionHistory', filePath),

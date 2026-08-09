@@ -15,6 +15,7 @@ import { getThumbnail, destroyThumbnailHarness } from './thumbnail-generator'
 import { getPageCount, destroyPageCountHarness } from './page-count-generator'
 import { createSplitPreviewHarness, type SplitPreviewHarness } from './split-preview-window'
 import { exportDocumentToPdf } from './pdf-exporter'
+import { printDocument } from './print-exporter'
 import {
   openFileDialog,
   readFileByPath,
@@ -633,6 +634,17 @@ app.whenReady().then(() => {
       return exportDocumentToPdf(mainWindow, content, documentPath)
     }
   )
+
+  // Real native print plumbing (see src/main/print-exporter.ts). Same
+  // renderer-supplied-source-path treatment as file:exportPdf just above --
+  // drop-not-throw on an unknown path, since printing never strictly needs
+  // it either (only local image references would resolve to nothing).
+  ipcMain.handle('file:print', async (_event, content: string, filePath: string | null = null) => {
+    const userDataDir = app.getPath('userData')
+    const documentPath =
+      filePath && (await isKnownPath(userDataDir, filePath)) ? filePath : undefined
+    return printDocument(content, documentPath)
+  })
 
   // Phase 0 spike wiring: prove the sandboxed pagination render harness
   // (Gate 5, see src/main/pagination-window.ts) constructs successfully

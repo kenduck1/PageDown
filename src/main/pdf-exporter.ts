@@ -62,7 +62,14 @@ import { resolveDocumentStyle } from '../typography/document-style'
 // ~12x-slower steady state pushed it past sendDocument's timeout, surfacing
 // to the user as a raw "Pagination harness timed out waiting for a result"
 // IPC error.
-async function withFreshHarness<T>(
+// Exported for print-exporter.ts (src/main/print-exporter.ts), which needs
+// the EXACT same dedicated-hidden-window-per-call fix -- printing shares the
+// same underlying pagination-harness/printToPDF-adjacent Chromium print
+// pipeline, so it is exposed to the identical "harness reused/attached to
+// mainWindow degrades ~12x after the first call" bug this function's own
+// long comment documents. Duplicating this function instead of exporting it
+// would risk the two copies drifting apart on a fix like this one.
+export async function withFreshHarness<T>(
   geometry: PageGeometry,
   task: (harness: PaginationHarness) => Promise<T>
 ): Promise<T> {
@@ -124,9 +131,15 @@ async function withFreshHarness<T>(
 // concurrently for no benefit -- only one PDF can be mid-save via one
 // native Save dialog at a time anyway, so there's nothing to gain from
 // letting exports overlap and real memory/CPU cost to letting them.
+// `enqueueExport` (below) is shared with print-exporter.ts on purpose, not
+// given a separate queue per export TYPE -- only one native dialog (Save, or
+// the OS print dialog) can be open at a time either way, and letting a print
+// job and a PDF export spin up dedicated harness windows concurrently would
+// cost real memory/CPU for no benefit, exactly like letting two PDF exports
+// overlap would.
 let exportQueue: Promise<unknown> = Promise.resolve()
 
-function enqueueExport<T>(task: () => Promise<T>): Promise<T> {
+export function enqueueExport<T>(task: () => Promise<T>): Promise<T> {
   const result = exportQueue.then(task)
   // Chain the queue's tail through a value- and rejection-swallowing
   // continuation, not `result` directly -- otherwise one rejected export
