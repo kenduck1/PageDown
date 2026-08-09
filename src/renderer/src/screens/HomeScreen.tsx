@@ -7,6 +7,10 @@ import { formatRelativeTime } from '../lib/formatRelativeTime'
 import { RESUME_TEMPLATE } from '../templates/resume.md'
 import { LETTER_TEMPLATE } from '../templates/letter.md'
 import { REPORT_TEMPLATE } from '../templates/report.md'
+import { COVER_LETTER_TEMPLATE } from '../templates/cover-letter.md'
+import { MEETING_NOTES_TEMPLATE } from '../templates/meeting-notes.md'
+import { INVOICE_TEMPLATE } from '../templates/invoice.md'
+import { NEWSLETTER_TEMPLATE } from '../templates/newsletter.md'
 import type { RecentFileEntry } from '../../../preload/index.d'
 import { applyPageConfig } from '../../../markdown/page-config'
 import { replaceRawFrontmatter } from '../../../markdown/frontmatter-splice'
@@ -22,7 +26,26 @@ const TEMPLATES: Template[] = [
   { id: 'blank', title: 'Blank', subtitle: 'Start from scratch' },
   { id: 'resume', title: 'Résumé', subtitle: 'One-page résumé', content: RESUME_TEMPLATE },
   { id: 'letter', title: 'Letter', subtitle: 'Formal letter', content: LETTER_TEMPLATE },
-  { id: 'report', title: 'Report', subtitle: 'Report with a table', content: REPORT_TEMPLATE }
+  { id: 'report', title: 'Report', subtitle: 'Report with a table', content: REPORT_TEMPLATE },
+  {
+    id: 'cover-letter',
+    title: 'Cover Letter',
+    subtitle: 'Job application letter',
+    content: COVER_LETTER_TEMPLATE
+  },
+  {
+    id: 'meeting-notes',
+    title: 'Meeting Notes',
+    subtitle: 'Agenda and action items',
+    content: MEETING_NOTES_TEMPLATE
+  },
+  { id: 'invoice', title: 'Invoice', subtitle: 'Itemized invoice', content: INVOICE_TEMPLATE },
+  {
+    id: 'newsletter',
+    title: 'Newsletter',
+    subtitle: 'Multi-section newsletter',
+    content: NEWSLETTER_TEMPLATE
+  }
 ]
 
 function TemplateCard({
@@ -96,6 +119,7 @@ function HomeScreen(): React.JSX.Element {
   const preferences = usePreferencesStore((state) => state.preferences)
 
   const [recentFiles, setRecentFiles] = useState<RecentFileEntry[]>([])
+  const [recentFilter, setRecentFilter] = useState('')
   const templatesSectionRef = useRef<HTMLElement>(null)
   const recentSectionRef = useRef<HTMLElement>(null)
 
@@ -138,6 +162,17 @@ function HomeScreen(): React.JSX.Element {
     const loaded = await openPath(filePath)
     if (loaded) goEditor()
   }
+
+  // Matches against the same basename RecentRow itself displays (not the
+  // full path) -- filtering on a directory segment the user never sees
+  // would be confusing when it silently included or excluded a row.
+  const trimmedFilter = recentFilter.trim().toLowerCase()
+  const filteredRecentFiles = trimmedFilter
+    ? recentFiles.filter((entry) => {
+        const filename = entry.filePath.split(/[/\\]/).pop() ?? entry.filePath
+        return filename.toLowerCase().includes(trimmedFilter)
+      })
+    : recentFiles
 
   return (
     <div className="flex h-full bg-chrome-light font-sans text-text-primary">
@@ -189,7 +224,7 @@ function HomeScreen(): React.JSX.Element {
           <h2 className="mb-3 text-11 font-bold uppercase tracking-[.05em] text-text-secondary">
             Start new
           </h2>
-          <div className="flex gap-4">
+          <div className="flex flex-wrap gap-4">
             {TEMPLATES.map((template) => (
               <TemplateCard
                 key={template.id}
@@ -201,14 +236,30 @@ function HomeScreen(): React.JSX.Element {
         </section>
 
         <section ref={recentSectionRef}>
-          <h2 className="mb-3 text-11 font-bold uppercase tracking-[.05em] text-text-secondary">
-            Recent
-          </h2>
+          <div className="mb-3 flex items-center justify-between gap-4">
+            <h2 className="text-11 font-bold uppercase tracking-[.05em] text-text-secondary">
+              Recent
+            </h2>
+            {recentFiles.length > 0 && (
+              <input
+                type="text"
+                value={recentFilter}
+                onChange={(e) => setRecentFilter(e.target.value)}
+                placeholder="Filter by filename…"
+                aria-label="Filter recent documents"
+                className="w-48 rounded-sm border border-border-subtle bg-page px-2 py-1 text-11-5 text-text-primary placeholder:text-text-tertiary"
+              />
+            )}
+          </div>
           {recentFiles.length === 0 ? (
             <p className="text-13 text-text-tertiary">No recent documents yet</p>
+          ) : filteredRecentFiles.length === 0 ? (
+            <p className="text-13 text-text-tertiary">
+              No recent documents match &ldquo;{recentFilter.trim()}&rdquo;
+            </p>
           ) : (
             <div className="flex flex-col">
-              {recentFiles.map((entry) => (
+              {filteredRecentFiles.map((entry) => (
                 <RecentRow
                   key={entry.filePath}
                   entry={entry}
