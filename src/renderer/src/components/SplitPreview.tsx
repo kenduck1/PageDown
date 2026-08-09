@@ -4,17 +4,42 @@ import type { PageNavState } from '../../../pagination/page-nav'
 interface SplitPreviewProps {
   content: string
   filePath: string | null
-  // Final whole-branch review finding (Important, I2): a WebContentsView
-  // composites above ALL DOM unconditionally, so the native preview view
-  // was painting over Page Setup's modal -- including its own right-aligned
-  // Apply/Cancel buttons, which fall inside the preview pane's on-screen
-  // rectangle at this app's default window width. No setVisible primitive
-  // exists on the preload surface (and building one wasn't worth it for
-  // this), but reporting a zero-size rectangle through the EXISTING
-  // setSplitPreviewBounds call removes the view from the modal's way with
-  // no new IPC, no harness teardown, and no re-layout -- see the bounds
-  // effect below.
-  pageSetupOpen: boolean
+  /**
+   * True while ANY full-screen DOM overlay is open on top of the editor.
+   *
+   * Final whole-branch review finding (Important, I2): a WebContentsView
+   * composites above ALL DOM unconditionally, so the native preview view was
+   * painting over Page Setup's modal -- including its own right-aligned
+   * Apply/Cancel buttons, which fall inside the preview pane's on-screen
+   * rectangle at this app's default window width. No setVisible primitive
+   * exists on the preload surface (and building one wasn't worth it for
+   * this), but reporting a zero-size rectangle through the EXISTING
+   * setSplitPreviewBounds call removes the view from the overlay's way with
+   * no new IPC, no harness teardown, and no re-layout -- see the bounds
+   * effect below.
+   *
+   * This was originally a single-purpose `pageSetupOpen` boolean, and that
+   * narrowness was itself a shipped bug: ShortcutsHelpModal is the exact same
+   * `fixed inset-0 z-50` full-screen shape and got no such treatment, so in
+   * Split mode at the default window size the preview overlapped it by
+   * x:561 y:123 w:149 h:476 -- 13 of its 25 <kbd> key chips intersected the
+   * native view and 12 were entirely hidden behind it, leaving the user
+   * reading shortcut DESCRIPTIONS with the KEYS invisible. Generalized rather
+   * than given a second boolean so the next full-screen overlay is one `||`
+   * at the single call site (EditorScreen), not another prop plumbed through
+   * here.
+   *
+   * Scope is deliberately "full-screen DOM overlay," not "any floating UI":
+   * Toast (`fixed left-1/2 top-3`) is small, top-center, pointer-events-none,
+   * and sits well above the preview's own top edge (which starts below the
+   * title bar + tab bar + toolbar, and only ever moves DOWN as layout rows
+   * open) -- so it cannot be occluded, and zero-sizing the preview for its
+   * ~3s lifetime would blank the pane on every mode switch, a worse bug than
+   * the one being fixed. Every other in-app panel (FindBar, CommentComposer,
+   * LinkComposer, RemoteImageBanner) is a layout row precisely so that it
+   * never needs this treatment at all.
+   */
+  overlayOpen: boolean
   /**
    * The page the app wants shown, 1-based. Changing this scrolls the preview.
    * The value that comes BACK through onPageChange is authoritative -- the
@@ -55,7 +80,7 @@ const POLL_MS = 400
 function SplitPreview({
   content,
   filePath,
-  pageSetupOpen,
+  overlayOpen,
   targetPage,
   onPageChange,
   remoteImagesAllowed
@@ -101,14 +126,14 @@ function SplitPreview({
     const el = placeholderRef.current
     if (!el) return
     const reportBounds = (): void => {
-      // Zero-size while Page Setup is open (I2, see the prop's own doc
-      // comment above) -- ResizeObserver/'resize' don't fire just because
-      // the modal opened or closed (the placeholder's own box hasn't
-      // changed), which is exactly why this effect also depends on
-      // `pageSetupOpen` below: re-running it on every open/close transition
-      // re-invokes reportBounds with the current value, both hiding the view
-      // on open and restoring its real rectangle on close.
-      const rect = pageSetupOpen ? { x: 0, y: 0, width: 0, height: 0 } : el.getBoundingClientRect()
+      // Zero-size while a full-screen overlay is open (I2, see the prop's own
+      // doc comment above) -- ResizeObserver/'resize' don't fire just because
+      // a modal opened or closed (the placeholder's own box hasn't changed),
+      // which is exactly why this effect also depends on `overlayOpen` below:
+      // re-running it on every open/close transition re-invokes reportBounds
+      // with the current value, both hiding the view on open and restoring
+      // its real rectangle on close.
+      const rect = overlayOpen ? { x: 0, y: 0, width: 0, height: 0 } : el.getBoundingClientRect()
       // Plain CSS-pixel values -- do NOT multiply by devicePixelRatio. Task 3
       // settled this empirically: Electron's WebContentsView#setBounds takes
       // device-independent pixels, and multiplying here would render the
@@ -136,7 +161,7 @@ function SplitPreview({
       observer.disconnect()
       window.removeEventListener('resize', reportBounds)
     }
-  }, [pageSetupOpen])
+  }, [overlayOpen])
 
   useEffect(() => {
     window.api

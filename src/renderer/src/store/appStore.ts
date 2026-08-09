@@ -18,6 +18,18 @@ interface AppStateValues {
   pageSetupOpen: boolean
   shortcutsHelpOpen: boolean
   commentComposerOpen: boolean
+  // Drives LinkComposer, the layout row that replaced the toolbar's old
+  // `window.prompt('Link URL')` call. That prompt did not merely return null
+  // in Electron -- it THREW ("prompt() is not supported.", measured directly
+  // in the real built app), so Insert link was completely dead: no dialog, no
+  // link, and nothing surfaced anywhere (the renderer has no global error
+  // handler and no ErrorBoundary, and documentStore.error was never touched).
+  // Modeled on commentComposerOpen directly above rather than kept as
+  // EditorToolbar-local useState, because the composer itself is rendered by
+  // EditorScreen (it must be a LAYOUT ROW in that screen's row stack, see
+  // LinkComposer.tsx) while the button that opens it lives in EditorToolbar --
+  // two different components, so the flag has to live somewhere both can see.
+  linkComposerOpen: boolean
   homeActiveSection: HomeActiveSection
   currentPage: number
 }
@@ -36,6 +48,8 @@ interface AppState extends AppStateValues {
   closeShortcutsHelp: () => void
   openCommentComposer: () => void
   closeCommentComposer: () => void
+  openLinkComposer: () => void
+  closeLinkComposer: () => void
   setHomeActiveSection: (section: HomeActiveSection) => void
   setCurrentPage: (page: number) => void
 }
@@ -49,6 +63,7 @@ export const initialAppState: AppStateValues = {
   pageSetupOpen: false,
   shortcutsHelpOpen: false,
   commentComposerOpen: false,
+  linkComposerOpen: false,
   homeActiveSection: 'recent',
   currentPage: 1
 }
@@ -73,6 +88,8 @@ export const useAppStore = create<AppState>()((set) => ({
   closeShortcutsHelp: () => set({ shortcutsHelpOpen: false }),
   openCommentComposer: () => set({ commentComposerOpen: true }),
   closeCommentComposer: () => set({ commentComposerOpen: false }),
+  openLinkComposer: () => set({ linkComposerOpen: true }),
+  closeLinkComposer: () => set({ linkComposerOpen: false }),
   setHomeActiveSection: (section) => set({ homeActiveSection: section }),
   setCurrentPage: (page) =>
     set((state) => (Number.isFinite(page) ? { currentPage: Math.max(1, Math.floor(page)) } : state))
