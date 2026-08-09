@@ -146,6 +146,37 @@ describe('markdownToHtml', () => {
   })
 })
 
+describe('markdownToHtml — code block syntax highlighting', () => {
+  it('highlights a labeled fenced code block with real token spans', () => {
+    const { html } = markdownToHtml('```js\nconst x = 1;\n```')
+    expect(html).toContain('class="hljs language-js"')
+    expect(html).toContain('hljs-keyword')
+  })
+
+  it('does not highlight a fenced code block with no language info string', () => {
+    const { html } = markdownToHtml('```\nplain text\n```')
+    expect(html).not.toContain('hljs')
+    expect(html).toContain('plain text')
+  })
+
+  it('does not highlight inline code (no fence, no language)', () => {
+    const { html } = markdownToHtml('Some `inline code` in a sentence.')
+    expect(html).not.toContain('hljs')
+    expect(html).toContain('<code>inline code</code>')
+  })
+
+  it('runs highlighting after sanitize, so it never needs a schema exception', () => {
+    // A raw-HTML script tag inside what LOOKS like a code fence in markdown
+    // source is still just literal text content once fenced -- confirms
+    // highlighting doesn't reintroduce anything sanitize() already strips
+    // elsewhere in the document.
+    const { html } = markdownToHtml('<script>alert(1)</script>\n\n```js\nconst safe = true;\n```')
+    expect(html).not.toContain('<script')
+    expect(html).not.toContain('alert(1)')
+    expect(html).toContain('hljs-keyword')
+  })
+})
+
 describe('markdownToHtml — footnotes', () => {
   it('renders a footnote reference and its definition into a real footnotes section', () => {
     const { html } = markdownToHtml(

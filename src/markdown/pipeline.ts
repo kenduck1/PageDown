@@ -4,6 +4,7 @@ import remarkParse from 'remark-parse'
 import remarkGfm from 'remark-gfm'
 import remarkFrontmatter from 'remark-frontmatter'
 import remarkRehype from 'remark-rehype'
+import rehypeHighlight from 'rehype-highlight'
 import rehypeStringify from 'rehype-stringify'
 import { raw } from 'hast-util-raw'
 import { sanitize, defaultSchema } from 'hast-util-sanitize'
@@ -255,9 +256,27 @@ export function markdownToHtml(
     rewriteLocalImageSrcs(sanitized, options.assetToken)
   }
 
+  // Deliberately runs AFTER sanitize(), not before it — the same ordering
+  // rewriteLocalImageSrcs uses above, for an analogous reason: the classes
+  // rehype-highlight adds (`hljs`, `hljs-keyword`, ...) never need to
+  // survive a sanitize pass, because none runs after this point. This also
+  // means the sanitize schema above needed NO changes to allow highlighting
+  // — a smaller, more conservative change than expanding its class
+  // allowlist would have been. Only highlights a fenced code block that
+  // already carries a `language-*` class (remark-rehype's own default `code`
+  // handler adds that from the fence's info string, e.g. ```js) — plain,
+  // unlabeled code blocks are deliberately left untouched (rehype-highlight's
+  // own default: no `detect: true` here), matching how GitHub itself only
+  // highlights when a language is given rather than guessing one. The
+  // default 37-language "common" bundle (js/ts/python/css/html/json/bash/...)
+  // is used as-is rather than the full ~190-grammar set, keeping the
+  // sandboxed render context's bundle size down for a document-editor's
+  // realistic language mix.
+  const highlighted = unified().use(rehypeHighlight).runSync(sanitized) as HastRoot
+
   const html = unified()
     .use(rehypeStringify)
-    .stringify(sanitized)
+    .stringify(highlighted)
     .replaceAll(tokenClassName, PAGEBREAK_CLASS)
 
   return { html, sourceMap }

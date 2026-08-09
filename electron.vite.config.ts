@@ -59,6 +59,7 @@ export default defineConfig({
           'remark-rehype',
           'remark-stringify',
           'rehype-stringify',
+          'rehype-highlight',
           'hast-util-sanitize',
           'hast-util-raw',
           'unist-util-visit',

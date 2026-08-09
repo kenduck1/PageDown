@@ -53,6 +53,7 @@
     "mermaid": "11.4.1",
     "micromark-util-decode-numeric-character-reference": "^2.0.2",
     "pagedjs": "0.4.3",
+    "rehype-highlight": "^7.0.2",
     "rehype-stringify": "^10.0.1",
     "remark-frontmatter": "^5.0.0",
     "remark-gfm": "^4.0.1",
