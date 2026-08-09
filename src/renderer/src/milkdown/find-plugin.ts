@@ -50,6 +50,14 @@ export function collectTextRuns(doc: ProseNode): Array<{ text: string; pos: numb
       if (child.isText && child.text) {
         const childPos = pos + 1 + offset
         const run = currentIndex >= 0 ? runs[currentIndex] : undefined
+        // Deliberately defensive, not reachable today: currentIndex resets to
+        // -1 at every non-text child (below), so `run` is only ever defined
+        // here immediately after the PRECEDING child extended it -- and
+        // ProseMirror's own sequential text-node offsets guarantee
+        // run.pos + run.text.length already equals childPos in that case.
+        // Kept as an explicit check rather than an unconditional merge in
+        // case that offset guarantee is ever violated by a future
+        // ProseMirror internals change.
         if (run && run.pos + run.text.length === childPos) {
           run.text += child.text
         } else {
@@ -88,26 +96,14 @@ function buildDecorations(
   if (matches.length === 0) return DecorationSet.empty
   return DecorationSet.create(
     doc,
-    matches.map((match, index) => {
-      const attrs = {
+    matches.map((match, index) =>
+      Decoration.inline(match.from, match.to, {
         class:
           index === activeIndex
             ? 'pagedown-find-match pagedown-find-match-active'
             : 'pagedown-find-match'
-      }
-      // Decoration.inline's signature is (from, to, attrs, spec) -- `attrs`
-      // becomes real DOM attributes on the painted <span> (this is what
-      // actually applies the CSS classes above), but `spec` is a SEPARATE,
-      // optional 4th argument, retrievable later via `Decoration#spec`, that
-      // ProseMirror does NOT mirror `attrs` into: confirmed by reading
-      // prosemirror-view's own source, `spec` defaults to a fixed shared
-      // empty object (`noSpec`) whenever the 4th argument is omitted. Passing
-      // the same object as both is what lets code introspect which class a
-      // decoration carries without a real paint pass -- load-bearing for
-      // this file's own test ('decorates every match and marks the active
-      // one'), not decorative.
-      return Decoration.inline(match.from, match.to, attrs, attrs)
-    })
+      })
+    )
   )
 }
 
