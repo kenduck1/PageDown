@@ -37,6 +37,7 @@
   --color-find-match: #fdf0b4;
   --color-find-match-active: #f7c948;
   --color-comment-mark: #e3d6fb;
+  --color-slash-query: #d9e6fb;
 
   /* Font families */
   --font-sans: -apple-system, 'Segoe UI', system-ui, sans-serif;
@@ -118,6 +119,7 @@
   --color-find-match: #6b5b1a;
   --color-find-match-active: #a3860f;
   --color-comment-mark: #4a3d66;
+  --color-slash-query: #2c3f5e;
 }
 
 @utility text-eyebrow {
@@ -229,5 +231,24 @@
     background: var(--color-comment-mark);
     border-radius: 2px;
     cursor: pointer;
+  }
+
+  /* The typed "/query" itself while a slash-command session is open --
+     an EDITOR-ONLY affordance, same rule and same reason as
+     .pagedown-find-match/.pagedown-comment-mark right above: this text is
+     live, in-progress command input (deleted the instant an item is chosen,
+     or reverts to plain prose on Escape), never real document content, so it
+     must never reach the paginated preview or an exported PDF -- exactly why
+     this rule lives here (src/renderer/src/milkdown/slash-plugin.ts is the
+     one place that ever emits the class) rather than in
+     src/typography/document-typography.css, which is shared with the
+     sandboxed pagination render context. A third, distinct hue (light blue)
+     from find's yellow and comments' violet: this marks something about to
+     be REPLACED, not something that persists like a found match or a
+     comment, so all three affordances stay visually distinguishable from one
+     another even when they happen to overlap the same text. */
+  .milkdown-mount .ProseMirror .pagedown-slash-query {
+    background: var(--color-slash-query);
+    border-radius: 2px;
   }
 }

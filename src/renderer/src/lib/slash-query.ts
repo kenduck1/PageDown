@@ -19,7 +19,15 @@ export interface SlashTrigger {
 // feature ships (see slash-filter.ts's callers) while still bailing out of
 // what would otherwise be an unbounded scan the moment the user is
 // obviously typing prose rather than picking a command.
-const MAX_QUERY_LENGTH = 24
+//
+// Exported (not just used internally) because slash-plugin.ts's own live
+// session -- which tracks the query by anchor position rather than by
+// re-scanning text on every keystroke (see that file's own comment for why)
+// -- needs the SAME bound to decide when an already-open session's query has
+// grown too long to still be a command, and a second, hand-copied `24`
+// literal there would be exactly the kind of magic-number drift this
+// codebase's own review process flags.
+export const MAX_QUERY_LENGTH = 24
 
 const WHITESPACE = /\s/
 
