@@ -529,6 +529,68 @@ describe('EditorToolbar', () => {
     })
   })
 
+  describe('Follow toggle', () => {
+    it('is absent outside Split(format) -- plain format/source, and Split(source)', () => {
+      const ref = createRef<MilkdownEditorHandle>()
+      useAppStore.setState({ viewMode: 'format' })
+      const { rerender } = render(<EditorToolbar editorRef={ref} />)
+      expect(screen.queryByRole('button', { name: 'Follow' })).not.toBeInTheDocument()
+
+      useAppStore.setState({ viewMode: 'source' })
+      rerender(<EditorToolbar editorRef={ref} />)
+      expect(screen.queryByRole('button', { name: 'Follow' })).not.toBeInTheDocument()
+
+      // Split mode alone is not enough -- Follow's own arithmetic is keyed
+      // to the Milkdown page card's content height, which a Source-mode
+      // left pane has no relationship to (see EditorToolbar.tsx's own
+      // comment on this toggle).
+      useAppStore.setState({ viewMode: 'split', splitLeftMode: 'source' })
+      rerender(<EditorToolbar editorRef={ref} />)
+      expect(screen.queryByRole('button', { name: 'Follow' })).not.toBeInTheDocument()
+    })
+
+    it('is present, reflects splitFollowEnabled, and defaults ON in Split(format)', () => {
+      const ref = createRef<MilkdownEditorHandle>()
+      useAppStore.setState({ viewMode: 'split', splitLeftMode: 'format' })
+      render(<EditorToolbar editorRef={ref} />)
+
+      expect(useAppStore.getState().splitFollowEnabled).toBe(true)
+      expect(screen.getByRole('button', { name: 'Follow' })).toHaveAttribute('aria-pressed', 'true')
+    })
+
+    it('clicking the toggle calls toggleSplitFollow, flipping splitFollowEnabled', async () => {
+      const ref = createRef<MilkdownEditorHandle>()
+      useAppStore.setState({ viewMode: 'split', splitLeftMode: 'format' })
+      const user = userEvent.setup()
+      render(<EditorToolbar editorRef={ref} />)
+
+      await user.click(screen.getByRole('button', { name: 'Follow' }))
+      expect(useAppStore.getState().splitFollowEnabled).toBe(false)
+      expect(screen.getByRole('button', { name: 'Follow' })).toHaveAttribute(
+        'aria-pressed',
+        'false'
+      )
+
+      await user.click(screen.getByRole('button', { name: 'Follow' }))
+      expect(useAppStore.getState().splitFollowEnabled).toBe(true)
+    })
+
+    it('never says "Sync" anywhere in its own label or title', () => {
+      // Copy-guidance regression: this feature is page-granularity and can
+      // drift, and the transport is request/response polling, not a live
+      // pixel-synced two-pane view -- "Sync" would overclaim both. See
+      // docs/superpowers/plans/2026-08-09-design-doc-gap-audit.md's
+      // "Follow, not Sync" recommendation.
+      const ref = createRef<MilkdownEditorHandle>()
+      useAppStore.setState({ viewMode: 'split', splitLeftMode: 'format' })
+      render(<EditorToolbar editorRef={ref} />)
+
+      const toggle = screen.getByRole('button', { name: 'Follow' })
+      expect(toggle.textContent?.toLowerCase()).not.toContain('sync')
+      expect(toggle.getAttribute('title')?.toLowerCase()).not.toContain('sync')
+    })
+  })
+
   it('The page-setup button calls useAppStore.openPageSetup', async () => {
     const ref = createRef<MilkdownEditorHandle>()
     const user = userEvent.setup()

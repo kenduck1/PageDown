@@ -111,4 +111,17 @@ describe('useAppStore', () => {
     useAppStore.getState().setCurrentPage(Number.NaN)
     expect(useAppStore.getState().currentPage).toBe(6)
   })
+
+  it('starts with Split-mode Follow enabled', () => {
+    expect(useAppStore.getState().splitFollowEnabled).toBe(true)
+  })
+
+  it('toggleSplitFollow flips splitFollowEnabled without touching other state', () => {
+    useAppStore.getState().setViewMode('split')
+    useAppStore.getState().toggleSplitFollow()
+    expect(useAppStore.getState().splitFollowEnabled).toBe(false)
+    expect(useAppStore.getState().viewMode).toBe('split')
+    useAppStore.getState().toggleSplitFollow()
+    expect(useAppStore.getState().splitFollowEnabled).toBe(true)
+  })
 })

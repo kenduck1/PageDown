@@ -25,6 +25,7 @@ import { extractOutline } from '../lib/extractOutline'
 import { isFormatEditing, isSourceEditing } from '../lib/editing-surface'
 import { usePageCount } from '../hooks/usePageCount'
 import { useAutosave } from '../hooks/useAutosave'
+import { useSplitFollowScroll } from '../hooks/useSplitFollowScroll'
 import { useFindController } from '../hooks/useFindController'
 import { useFindShortcuts, openFindFromShortcut } from '../hooks/useFindShortcuts'
 import { useSlashMenu } from '../hooks/useSlashMenu'
@@ -74,6 +75,7 @@ function EditorScreen(): React.JSX.Element {
   const setSplitRatio = useAppStore((state) => state.setSplitRatio)
   const currentPage = useAppStore((state) => state.currentPage)
   const setCurrentPage = useAppStore((state) => state.setCurrentPage)
+  const splitFollowEnabled = useAppStore((state) => state.splitFollowEnabled)
   const sidebarVisible = useAppStore((state) => state.sidebarVisible)
   const toggleSidebar = useAppStore((state) => state.toggleSidebar)
   const filePath = useDocumentStore((state) => state.filePath)
@@ -1048,6 +1050,29 @@ function EditorScreen(): React.JSX.Element {
   // document's typography any more than they can about its page box.
   const documentStyle = useMemo(() => resolveDocumentStyle(pageConfig), [pageConfig])
 
+  // Split-mode "Follow" (docs/superpowers/plans/
+  // 2026-08-09-design-doc-gap-audit.md's "Follow, not Sync" recommendation):
+  // scrolling the editor pane estimates a page from that scroll offset and
+  // feeds it into handleNavigateToPage below -- the SAME page-navigation
+  // path the status bar's chevrons and the Pages sidebar already use. See
+  // useSplitFollowScroll.ts's own module comment for the full mechanism and
+  // why zero new IPC is needed.
+  //
+  // `splitLeftMode === 'format'` is required, not just `viewMode ===
+  // 'split'`: `pageGeometry.contentHeightPx` is the Milkdown page card's own
+  // content-box height (Gate 10's 0.000px parity target against the
+  // paginated preview), which has no relationship to a plain <textarea>'s
+  // scroll position in Source mode's left pane -- see the hook's own
+  // `enabled` doc comment for why this is checked explicitly rather than
+  // relied upon only being reachable by construction.
+  const splitFollowScroll = useSplitFollowScroll({
+    enabled: splitFollowEnabled && viewMode === 'split' && splitLeftMode === 'format',
+    scrollElementRef: editorPaneRef,
+    contentHeightPx: pageGeometry.contentHeightPx,
+    pageCount,
+    onNavigate: handleNavigateToPage
+  })
+
   const handleApplyPageConfig = (config: PageConfig): void => {
     const newRawYaml = applyPageConfig(extractRawFrontmatter(content), config)
     // replaceContent (not updateContent): this edit originates outside the
@@ -1547,7 +1572,17 @@ function EditorScreen(): React.JSX.Element {
                   // two in src/renderer/src.
                   overlayOpen={pageSetupOpen || shortcutsHelpOpen}
                   targetPage={effectiveCurrentPage}
-                  onPageChange={(state) => setCurrentPage(state.currentPage)}
+                  onPageChange={(state) => {
+                    setCurrentPage(state.currentPage)
+                    // Any confirmation here (poll, click-nav, or Follow's
+                    // own request) proves -- via the harness queue's FIFO
+                    // ordering -- that whatever Follow last dispatched has
+                    // already drained, so this clears its in-flight guard
+                    // early rather than making it always wait out its own
+                    // bounded safety timeout. See useSplitFollowScroll.ts's
+                    // notifySettled doc comment.
+                    splitFollowScroll.notifySettled()
+                  }}
                   remoteImagesAllowed={remoteImagesAllowed === true}
                   onRenderError={setSplitPreviewError}
                 />

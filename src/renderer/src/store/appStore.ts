@@ -39,6 +39,23 @@ interface AppStateValues {
   // never asked to hide would be a regression, and the menu item's own
   // checkmark-free label reads as an action either way.
   sidebarVisible: boolean
+  // Split-mode "Follow": while true (and only while viewMode === 'split' AND
+  // splitLeftMode === 'format' -- see EditorScreen's own gating, this field
+  // stays a plain unconditional preference so its state survives leaving and
+  // re-entering Split mode), scrolling the editor pane estimates a page from
+  // that scroll offset and feeds it into the same page-navigation path the
+  // status bar's chevrons already use. Defaults to true: this is the "why
+  // else would you open Split mode" default per the design recon (docs/
+  // superpowers/plans/2026-08-09-design-doc-gap-audit.md's "Follow, not
+  // Sync" section), but a toggle exists (not always-on with no escape
+  // hatch) because the preview is ALSO independently, deliberately
+  // scrollable on its own -- CLAUDE.md's Page Navigation section documents
+  // real manual-scroll tracking (the 400ms poll) as load-bearing precisely
+  // because glancing at a different page while continuing to edit elsewhere
+  // is an established, real workflow this app already protects. An
+  // always-on Follow with no toggle would fight that workflow on every
+  // single editor scroll tick with no way out.
+  splitFollowEnabled: boolean
 }
 
 interface AppState extends AppStateValues {
@@ -60,6 +77,7 @@ interface AppState extends AppStateValues {
   setHomeActiveSection: (section: HomeActiveSection) => void
   setCurrentPage: (page: number) => void
   toggleSidebar: () => void
+  toggleSplitFollow: () => void
 }
 
 export const initialAppState: AppStateValues = {
@@ -74,7 +92,8 @@ export const initialAppState: AppStateValues = {
   linkComposerOpen: false,
   homeActiveSection: 'recent',
   currentPage: 1,
-  sidebarVisible: true
+  sidebarVisible: true,
+  splitFollowEnabled: true
 }
 
 function clampSplitRatio(percent: number): number {
@@ -104,5 +123,6 @@ export const useAppStore = create<AppState>()((set) => ({
     set((state) =>
       Number.isFinite(page) ? { currentPage: Math.max(1, Math.floor(page)) } : state
     ),
-  toggleSidebar: () => set((state) => ({ sidebarVisible: !state.sidebarVisible }))
+  toggleSidebar: () => set((state) => ({ sidebarVisible: !state.sidebarVisible })),
+  toggleSplitFollow: () => set((state) => ({ splitFollowEnabled: !state.splitFollowEnabled }))
 }))

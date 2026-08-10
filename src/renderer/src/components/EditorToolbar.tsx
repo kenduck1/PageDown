@@ -179,6 +179,8 @@ function EditorToolbar({
   const setViewMode = useAppStore((state) => state.setViewMode)
   const splitLeftMode = useAppStore((state) => state.splitLeftMode)
   const setSplitLeftMode = useAppStore((state) => state.setSplitLeftMode)
+  const splitFollowEnabled = useAppStore((state) => state.splitFollowEnabled)
+  const toggleSplitFollow = useAppStore((state) => state.toggleSplitFollow)
   const openPageSetup = useAppStore((state) => state.openPageSetup)
   const openShortcutsHelp = useAppStore((state) => state.openShortcutsHelp)
   const openCommentComposer = useAppStore((state) => state.openCommentComposer)
@@ -1003,6 +1005,52 @@ function EditorToolbar({
                   {label}
                 </button>
               ))}
+            </div>
+          )}
+
+          {/* Split-mode "Follow" toggle -- visible only alongside the
+          Format/Source split-left-pane toggle immediately above, and for
+          the SAME reason it's gated on splitLeftMode === 'format' too, not
+          just viewMode === 'split': Follow's own arithmetic
+          (useSplitFollowScroll.ts, src/pagination/page-nav.ts's
+          estimatePageFromScrollOffset) is keyed to the Milkdown page card's
+          content-box height, which has no relationship to a plain
+          <textarea>'s scroll position in Source mode's left pane -- showing
+          a toggle that does nothing there would be worse than not showing
+          it. Default ON (appStore's initialAppState), not always-on with no
+          escape hatch: the preview is ALSO independently, deliberately
+          scrollable on its own (CLAUDE.md's Page Navigation section
+          documents the 400ms poll's manual-scroll tracking as load-bearing
+          for exactly this reason), so a user glancing at a different page
+          while continuing to edit elsewhere needs a way to stop Follow from
+          fighting that. Named "Follow", never "Sync", in this visible label
+          AND its title -- see docs/superpowers/plans/
+          2026-08-09-design-doc-gap-audit.md's "Follow, not Sync"
+          recommendation: this is page-granularity and can drift, and the
+          transport is request/response polling, not a live pixel-synced
+          two-pane view -- "Sync" would overclaim both.
+
+          A single button, not a two-option segmented group like the toggle
+          above it (there is no second, equally-valid choice to show side by
+          side for a plain on/off preference), but kept in the SAME
+          rounded-md bg-chrome-dark p-0.5 wrapper/button styling so it reads
+          as "another control from this same family" rather than a visually
+          unrelated new pattern. */}
+          {viewMode === 'split' && splitLeftMode === 'format' && (
+            <div className="flex items-center gap-0.5 rounded-md bg-chrome-dark p-0.5">
+              <button
+                type="button"
+                aria-pressed={splitFollowEnabled}
+                title="Follow: scroll the preview to roughly match your position in the editor (page-granularity, can drift on documents with heavy break-avoidance)"
+                onClick={toggleSplitFollow}
+                className={`rounded-sm px-2.5 py-1 text-12-5 ${
+                  splitFollowEnabled
+                    ? 'bg-page text-text-primary shadow-flat'
+                    : 'text-text-secondary hover:text-text-primary'
+                }`}
+              >
+                Follow
+              </button>
             </div>
           )}
 
