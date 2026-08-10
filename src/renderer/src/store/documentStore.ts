@@ -49,6 +49,17 @@ interface DocumentStateValues {
   // error to a tab would be unobservable complexity. Revisit if a future
   // feature needs a background tab to carry its own error.
   error: string | null
+  // In-flight guards for the two long-running, dialog-opening document
+  // operations. In the STORE rather than in EditorToolbar's own useState
+  // (where they used to live) because there are now two independent triggers
+  // for each -- the toolbar button and the File menu item -- and a guard held
+  // by one of them cannot stop a double-run started from the other. Also
+  // closes the CLAUDE.md deviation EditorToolbar.tsx's own header comment
+  // records ("should add a real `exportPdf` action to documentStore.ts and
+  // have this component call that instead"): screen components should call
+  // store actions, never window.api directly.
+  isExporting: boolean
+  isPrinting: boolean
   // Bumped on every action that changes *what* is displayed for reasons
   // other than an in-place edit -- new tab opened, tab switched, active tab
   // closed -- so EditorScreen's `key={revision}` remounts MilkdownEditor
@@ -75,6 +86,24 @@ interface DocumentState extends DocumentStateValues {
   openFile: () => Promise<boolean>
   openPath: (filePath: string) => Promise<boolean>
   save: () => Promise<void>
+  // Save As: writes the active tab to a path the user picks in a real native
+  // dialog, regardless of whether it already has one. Shares runSave's whole
+  // body with save() -- the only differences are that it passes a null target
+  // path (which is what makes file-io.ts's saveFile open its Save dialog) and
+  // a null mtime baseline. See runSave's own comment for why null is right
+  // for the baseline too, rather than merely convenient.
+  saveAs: () => Promise<void>
+  // Export/Print, moved here from EditorToolbar's local handlers so the
+  // toolbar button and the File menu item run ONE implementation behind ONE
+  // in-flight guard. Neither ever rejects: a failure lands in `error` as a
+  // friendly message (never the raw IPC error string, which Electron wraps as
+  // `Error invoking remote method 'file:exportPdf': ...`), and a cancelled
+  // print dialog is the user's own choice, not a failure, so it is not an
+  // error either. Success deliberately does NOT clear `error` -- an unrelated
+  // failed Save from moments earlier must not vanish because an export
+  // succeeded.
+  exportPdf: () => Promise<void>
+  print: () => Promise<void>
   // Reads the ACTIVE tab's own filePath internally (same rationale as
   // save() capturing it before its own await -- see that action's comment)
   // rather than requiring the caller to look it up, since callers here are
@@ -234,6 +263,8 @@ const initialTab = createBlankTab()
 export const initialDocumentState: DocumentStateValues = {
   ...activeMirror(initialTab),
   error: null,
+  isExporting: false,
+  isPrinting: false,
   revision: 0,
   tabs: [initialTab],
   activeTabId: initialTab.id
@@ -265,6 +296,115 @@ function readFileAsBase64(file: File): Promise<string> {
     reader.onerror = () => reject(reader.error ?? new Error('Failed to read dropped file'))
     reader.readAsDataURL(file)
   })
+}
+
+// The one implementation behind both save() and saveAs(). A module-level
+// function reaching the store through useDocumentStore.getState()/setState()
+// -- rather than a helper defined inside create()'s own callback -- purely to
+// keep this diff to what actually changed: wrapping the store literal in a
+// block to host a closure would have re-indented every action in the file for
+// no behavioural reason. The two accessors are identical to the `get`/`set`
+// the actions themselves receive.
+//
+// `forceSaveAs` changes exactly two arguments, and both matter:
+//   - a null target path is what makes file-io.ts's saveFile open a real
+//     native Save dialog instead of writing to the current path;
+//   - a null mtime baseline suppresses the external-change conflict check,
+//     which is correct rather than merely convenient: the check asks "has THE
+//     FILE THIS DOCUMENT CAME FROM changed under us," and a Save-As target is
+//     a path the user is about to choose in a dialog, which this app has no
+//     baseline for at all. Passing the OLD file's mtime would compare a
+//     baseline for one file against the mtime of a different one. This
+//     mirrors saveFileToKnownOrChosenPath's own existing Save-As fallback,
+//     which already passes null for the same reason.
+async function runSave(forceSaveAs: boolean): Promise<void> {
+  // Capture WHICH tab is being saved synchronously, before the `await`
+  // below -- window.api.saveFile is a real IPC round trip, and the user
+  // can switch tabs via the always-visible EditorTabBar during that gap.
+  // The `setState()` callback further down used to read `state.activeTabId`
+  // at RESOLVE time instead, which is the same race class
+  // replaceContentForTab was introduced to close for restore: it would
+  // silently mark whichever tab is active WHEN THE WRITE FINISHES as
+  // saved/clean, not the tab whose content was actually written to disk
+  // -- corrupting an unrelated background tab's isDirty/filePath while
+  // leaving the tab that was truly saved still marked dirty.
+  const { content, filePath, activeTabId: tabId, mtimeMs } = useDocumentStore.getState()
+  try {
+    const result = await window.api.saveFile(
+      forceSaveAs ? null : filePath,
+      content,
+      forceSaveAs ? null : mtimeMs
+    )
+    if (result) {
+      if (result.reloadedContent !== undefined) {
+        // The main process detected the file changed on disk since this
+        // tab's own mtimeMs baseline, and the user chose "Reload" in the
+        // resulting native dialog -- nothing was written. Adopt what's
+        // actually on disk as this tab's content instead of what the user
+        // was about to save, matching Reload's own stated meaning ("load
+        // the file as it is on disk now"). Bumping revision only when this
+        // is still the active tab mirrors replaceContentForTab's own
+        // guard: MilkdownEditor is uncontrolled after mount, so a
+        // Format-mode canvas showing this tab needs a fresh key to pick up
+        // content that changed outside its own onChange path.
+        const reloadedContent = result.reloadedContent
+        useDocumentStore.setState((state) => {
+          const tabs = state.tabs.map((tab) =>
+            tab.id === tabId
+              ? { ...tab, content: reloadedContent, isDirty: false, mtimeMs: result.mtimeMs }
+              : tab
+          )
+          if (tabId !== state.activeTabId) return { tabs, error: null }
+          return {
+            tabs,
+            content: reloadedContent,
+            isDirty: false,
+            mtimeMs: result.mtimeMs,
+            error: null,
+            revision: state.revision + 1
+          }
+        })
+        return
+      }
+      useDocumentStore.setState((state) => {
+        const tabs = state.tabs.map((tab) =>
+          tab.id === tabId
+            ? { ...tab, filePath: result.filePath, isDirty: false, mtimeMs: result.mtimeMs }
+            : tab
+        )
+        // Only refresh the top-level mirror fields when the SAVED tab is
+        // still the active one -- same guard as updateContentForTab/
+        // replaceContentForTab. If the user switched tabs during the
+        // `await` above, `tabs` still picks up the saved tab's new
+        // filePath/isDirty (so switching back to it later shows the
+        // correct saved state), but nothing about what's CURRENTLY on
+        // screen changed, so the mirror fields (and the currently
+        // displayed tab's own state) are left alone. `error` stays
+        // unconditionally cleared either way -- it's deliberately a
+        // global, not per-tab, field (see its own doc comment above),
+        // and a just-succeeded save clearing a stale global error is
+        // reasonable regardless of which tab it belonged to.
+        if (tabId !== state.activeTabId) return { tabs, error: null }
+        return {
+          tabs,
+          filePath: result.filePath,
+          isDirty: false,
+          mtimeMs: result.mtimeMs,
+          error: null
+        }
+      })
+      // Best-effort -- see version-history's own "never blocks a real
+      // Save" invariant. This call happens AFTER the real save already
+      // succeeded and the store has already been updated above, so even a
+      // rejected promise here (autosaveSnapshot's own IPC handler already
+      // swallows failures and never rejects, but this stays fire-and-
+      // forget regardless) can never undo or fail the Save the user just
+      // performed.
+      void window.api.autosaveSnapshot(content, result.filePath)
+    }
+  } catch (err) {
+    useDocumentStore.setState({ error: errorMessage(err) })
+  }
 }
 
 export const useDocumentStore = create<DocumentState>()((set, get) => ({
@@ -375,89 +515,43 @@ export const useDocumentStore = create<DocumentState>()((set, get) => ({
       return false
     }
   },
-  save: async () => {
-    // Capture WHICH tab is being saved synchronously, before the `await`
-    // below -- window.api.saveFile is a real IPC round trip, and the user
-    // can switch tabs via the always-visible EditorTabBar during that gap.
-    // The `set()` callback further down used to read `state.activeTabId`
-    // at RESOLVE time instead, which is the same race class
-    // replaceContentForTab was introduced to close for restore: it would
-    // silently mark whichever tab is active WHEN THE WRITE FINISHES as
-    // saved/clean, not the tab whose content was actually written to disk
-    // -- corrupting an unrelated background tab's isDirty/filePath while
-    // leaving the tab that was truly saved still marked dirty.
-    const { content, filePath, activeTabId: tabId, mtimeMs } = get()
+  save: () => runSave(false),
+  saveAs: () => runSave(true),
+  exportPdf: async () => {
+    // Guard, set, and clear all read/write the STORE's own flag rather than a
+    // component's local state -- see the isExporting field's own comment for
+    // why that move was required rather than tidier.
+    if (get().isExporting) return
+    set({ isExporting: true })
+    const { content, filePath, remoteImagesAllowed } = get()
     try {
-      const result = await window.api.saveFile(filePath, content, mtimeMs)
-      if (result) {
-        if (result.reloadedContent !== undefined) {
-          // The main process detected the file changed on disk since this
-          // tab's own mtimeMs baseline, and the user chose "Reload" in the
-          // resulting native dialog -- nothing was written. Adopt what's
-          // actually on disk as this tab's content instead of what the user
-          // was about to save, matching Reload's own stated meaning ("load
-          // the file as it is on disk now"). Bumping revision only when this
-          // is still the active tab mirrors replaceContentForTab's own
-          // guard: MilkdownEditor is uncontrolled after mount, so a
-          // Format-mode canvas showing this tab needs a fresh key to pick up
-          // content that changed outside its own onChange path.
-          const reloadedContent = result.reloadedContent
-          set((state) => {
-            const tabs = state.tabs.map((tab) =>
-              tab.id === tabId
-                ? { ...tab, content: reloadedContent, isDirty: false, mtimeMs: result.mtimeMs }
-                : tab
-            )
-            if (tabId !== state.activeTabId) return { tabs, error: null }
-            return {
-              tabs,
-              content: reloadedContent,
-              isDirty: false,
-              mtimeMs: result.mtimeMs,
-              error: null,
-              revision: state.revision + 1
-            }
-          })
-          return
-        }
-        set((state) => {
-          const tabs = state.tabs.map((tab) =>
-            tab.id === tabId
-              ? { ...tab, filePath: result.filePath, isDirty: false, mtimeMs: result.mtimeMs }
-              : tab
-          )
-          // Only refresh the top-level mirror fields when the SAVED tab is
-          // still the active one -- same guard as updateContentForTab/
-          // replaceContentForTab. If the user switched tabs during the
-          // `await` above, `tabs` still picks up the saved tab's new
-          // filePath/isDirty (so switching back to it later shows the
-          // correct saved state), but nothing about what's CURRENTLY on
-          // screen changed, so the mirror fields (and the currently
-          // displayed tab's own state) are left alone. `error` stays
-          // unconditionally cleared either way -- it's deliberately a
-          // global, not per-tab, field (see its own doc comment above),
-          // and a just-succeeded save clearing a stale global error is
-          // reasonable regardless of which tab it belonged to.
-          if (tabId !== state.activeTabId) return { tabs, error: null }
-          return {
-            tabs,
-            filePath: result.filePath,
-            isDirty: false,
-            mtimeMs: result.mtimeMs,
-            error: null
-          }
-        })
-        // Best-effort -- see version-history's own "never blocks a real
-        // Save" invariant. This call happens AFTER the real save already
-        // succeeded and the store has already been updated above, so even a
-        // rejected promise here (autosaveSnapshot's own IPC handler already
-        // swallows failures and never rejects, but this stays fire-and-
-        // forget regardless) can never undo or fail the Save the user just
-        // performed.
-        void window.api.autosaveSnapshot(content, result.filePath)
-      }
+      // filePath is what resolves local image references in the exported PDF
+      // against the document's own directory (src/main/pdf-exporter.ts) --
+      // null (an unsaved document) correctly denies all local assets.
+      await window.api.exportPdf(content, filePath, remoteImagesAllowed === true)
     } catch (err) {
-      set({ error: errorMessage(err) })
+      // Log the real error for diagnosis, but never put a raw IPC error
+      // string in front of the user.
+      console.error('Failed to export PDF', err)
+      set({ error: 'Failed to export PDF. Please try again.' })
+    } finally {
+      set({ isExporting: false })
+    }
+  },
+  print: async () => {
+    if (get().isPrinting) return
+    set({ isPrinting: true })
+    const { content, filePath, remoteImagesAllowed } = get()
+    try {
+      // A cancelled OS print dialog resolves { cancelled: true } rather than
+      // rejecting (see print-exporter.ts's PRINT_CANCELLED_REASON handling),
+      // so cancelling never lands in the error banner.
+      await window.api.print(content, filePath, remoteImagesAllowed === true)
+    } catch (err) {
+      console.error('Failed to print', err)
+      set({ error: 'Failed to print. Please try again.' })
+    } finally {
+      set({ isPrinting: false })
     }
   },
   saveDroppedImage: async (file) => {

@@ -1,4 +1,16 @@
 import { ElectronAPI } from '@electron-toolkit/preload'
+// The ONE cross-directory import in this file, and the exception proves the
+// rule the local copies below are justified by: every other shared shape here
+// (RecentFileEntry, Preferences, SplitPreviewResult, PageNavState) is
+// re-declared locally because its real definition lives in `src/main/**`,
+// which is outside tsconfig.web.json's program and transitively imports
+// Electron. `src/menu/*` is neither -- it is a deliberately dependency-free
+// contract module shared by main, preload and renderer alike (same shape as
+// `src/typography/*`, which the renderer already imports directly), so
+// duplicating it here would create exactly the silent-drift risk those local
+// copies otherwise accept as a cost.
+import type { MenuCommand } from '../menu/commands'
+import type { WindowUiState } from '../menu/window-state'
 
 export interface RecentFileEntry {
   filePath: string
@@ -143,6 +155,15 @@ export interface FileApi {
     suggestedFilename: string
   ) => Promise<{ relativePath: string } | { error: string }>
   openInNewWindow: (filePath?: string | null) => Promise<void>
+  // Subscribes to native application-menu commands. Returns an unsubscribe
+  // function the caller MUST invoke on unmount -- see the preload
+  // implementation's own comment for why an unsubscribe function (rather than
+  // an `offMenuCommand`) is the only shape that can actually work across
+  // contextBridge.
+  onMenuCommand: (callback: (command: MenuCommand, payload?: string) => void) => () => void
+  // Reports this window's own menu-relevant/title-relevant state to the main
+  // process. Fire-and-forget, like setSplitPreviewBounds.
+  setWindowState: (state: WindowUiState) => void
 }
 
 declare global {

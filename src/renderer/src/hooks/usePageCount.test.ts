@@ -26,7 +26,15 @@ beforeEach(() => {
     scrollSplitPreviewToPage: vi.fn(),
     getSplitPreviewPage: vi.fn(),
     saveDroppedImage: vi.fn(),
-    openInNewWindow: vi.fn()
+    openInNewWindow: vi.fn(),
+    // The application menu's two channels. Both are stubbed in every
+    // window.api fixture because window.api is a fully-typed FileApi here --
+    // a missing method is a compile error, not just a runtime one.
+    // onMenuCommand must return a real unsubscribe FUNCTION: App.tsx and
+    // EditorScreen both call it from an effect cleanup, and a bare vi.fn()
+    // returning undefined would throw on unmount.
+    onMenuCommand: vi.fn().mockReturnValue(() => {}),
+    setWindowState: vi.fn()
   }
 })
 

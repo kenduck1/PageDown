@@ -14,15 +14,15 @@ import type { SelectionSnapshot } from '../milkdown/selection-plugin'
 // up to real mode-switching -- see this component's own `onSetViewMode` prop
 // below and EditorScreen.tsx's `handleSetViewMode`.
 //
-// KNOWN CLAUDE.md DEVIATION, still outstanding: this component calls
-// `window.api.exportPdf` and `useDocumentStore.setState` directly (see
-// handleExportPdf below) rather than through a documentStore action, which
-// CLAUDE.md's State Management section requires ("screen components should
-// call its actions, never window.api directly"). `documentStore.ts` is not
-// off-limits any longer (the concurrent track that once owned it finished
-// long ago) -- this simply hasn't been cleaned up yet. Whoever picks this up
-// should add a real `exportPdf` action to documentStore.ts and have this
-// component call that instead.
+// The CLAUDE.md deviation this comment used to record -- "calls
+// `window.api.exportPdf` and `useDocumentStore.setState` directly rather than
+// through a documentStore action" -- is CLOSED as of the application-menu
+// sub-project, in exactly the way it prescribed: `exportPdf`/`print` are real
+// documentStore actions now, and this component calls them. That was not
+// merely overdue tidying; the menu gave each operation a SECOND trigger
+// (File > Export as PDF / Print), and an in-flight guard living in this
+// component's own useState could not have stopped a double-run started from
+// the menu.
 export interface EditorToolbarProps {
   editorRef: RefObject<MilkdownEditorHandle | null>
   // Optional: when provided, mode-switch clicks call this INSTEAD of the
@@ -196,13 +196,16 @@ function EditorToolbar({
   // this was the one place still trying to.
   const isSourceMode = isSourceEditing(viewMode, splitLeftMode)
   const content = useDocumentStore((state) => state.content)
-  const filePath = useDocumentStore((state) => state.filePath)
-  const remoteImagesAllowed = useDocumentStore((state) => state.remoteImagesAllowed)
   const findOpen = useFindStore((state) => state.isOpen)
   const openFind = useFindStore((state) => state.openFind)
   const closeFind = useFindStore((state) => state.closeFind)
-  const [isExporting, setIsExporting] = useState(false)
-  const [isPrinting, setIsPrinting] = useState(false)
+  // Both the flags and the actions now come from the store -- see this
+  // component's own header comment, and documentStore's isExporting field,
+  // for why a component-local useState guard stopped being sufficient.
+  const isExporting = useDocumentStore((state) => state.isExporting)
+  const isPrinting = useDocumentStore((state) => state.isPrinting)
+  const exportPdf = useDocumentStore((state) => state.exportPdf)
+  const print = useDocumentStore((state) => state.print)
   // The document's own current font family, for the controlled select
   // below. resolvePageConfig does a real YAML parse, so it is memoized on
   // `content` for the same reason EditorScreen memoizes its own copy.
@@ -365,55 +368,11 @@ function EditorToolbar({
     editorRef.current?.toggleHeading(Number(value) as 1 | 2 | 3)
   }
 
-  const handleExportPdf = async (): Promise<void> => {
-    if (isExporting) return
-    setIsExporting(true)
-    try {
-      // filePath is what resolves local image references in the exported
-      // PDF against the document's own directory (src/main/pdf-exporter.ts)
-      // -- omitting it (an unsaved document) correctly denies all local
-      // assets, matching usePageCount's own filePath forwarding.
-      await window.api.exportPdf(content, filePath, remoteImagesAllowed === true)
-      // Deliberately does NOT touch documentStore.error on success. An
-      // earlier version cleared it unconditionally here (`setState({ error:
-      // null })`), which silently discarded any unrelated, pre-existing
-      // error message that had nothing to do with this export (fix-round
-      // review finding) -- e.g. a failed Save from moments earlier would
-      // vanish from the error banner the instant an unrelated export
-      // succeeded.
-    } catch (err) {
-      // Log the real error for diagnosis, but don't put a raw IPC error
-      // string in front of the user (fix-round review finding) -- Electron
-      // wraps a thrown main-process error as something like `Error invoking
-      // remote method 'file:exportPdf': Error: <original message>`, which
-      // is not a message a user should have to parse.
-      console.error('Failed to export PDF', err)
-      useDocumentStore.setState({ error: 'Failed to export PDF. Please try again.' })
-    } finally {
-      setIsExporting(false)
-    }
-  }
-
-  // Mirrors handleExportPdf's own structure exactly -- same filePath
-  // forwarding (denies local assets for an unsaved document), same
-  // don't-clear-unrelated-errors-on-success discipline, same
-  // don't-surface-a-raw-IPC-error-string handling. The one real behavioral
-  // difference: a cancelled OS print dialog resolves `{ cancelled: true }`
-  // rather than rejecting (see print-exporter.ts's own PRINT_CANCELLED_REASON
-  // handling) -- cancelling is the user's own choice, not a failure, so it
-  // must not land in the error banner either.
-  const handlePrint = async (): Promise<void> => {
-    if (isPrinting) return
-    setIsPrinting(true)
-    try {
-      await window.api.print(content, filePath, remoteImagesAllowed === true)
-    } catch (err) {
-      console.error('Failed to print', err)
-      useDocumentStore.setState({ error: 'Failed to print. Please try again.' })
-    } finally {
-      setIsPrinting(false)
-    }
-  }
+  // Export/Print's own logic (filePath forwarding for local-asset
+  // resolution, the in-flight guard, friendly-not-raw error text, treating a
+  // cancelled print dialog as a non-failure) all moved into documentStore's
+  // exportPdf/print actions verbatim -- see this component's header comment.
+  // The buttons below call them directly.
 
   return (
     <div
@@ -963,7 +922,7 @@ function EditorToolbar({
 
         <ToolbarIconButton
           label={isPrinting ? 'Printing…' : 'Print'}
-          onClick={() => void handlePrint()}
+          onClick={() => void print()}
           disabled={isPrinting}
         >
           <Icon strokeWidth={1.7}>
@@ -975,7 +934,7 @@ function EditorToolbar({
 
         <button
           type="button"
-          onClick={() => void handleExportPdf()}
+          onClick={() => void exportPdf()}
           disabled={isExporting}
           className="flex h-8 items-center gap-1.5 rounded-md bg-accent px-3.5 text-12-5 font-semibold text-on-accent transition-colors hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-60"
         >
