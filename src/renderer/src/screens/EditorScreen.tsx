@@ -16,6 +16,7 @@ import CommentComposer from '../components/CommentComposer'
 import LinkComposer from '../components/LinkComposer'
 import RemoteImageBanner from '../components/RemoteImageBanner'
 import SelectionBubble from '../components/SelectionBubble'
+import SlashMenu from '../components/SlashMenu'
 import Toast from '../components/Toast'
 import { intersectRect, sameRect, type Rect } from '../lib/floating-position'
 import type { SelectionSnapshot } from '../milkdown/selection-plugin'
@@ -25,6 +26,7 @@ import { usePageCount } from '../hooks/usePageCount'
 import { useAutosave } from '../hooks/useAutosave'
 import { useFindController } from '../hooks/useFindController'
 import { useFindShortcuts } from '../hooks/useFindShortcuts'
+import { useSlashMenu } from '../hooks/useSlashMenu'
 import { extractRawFrontmatter, replaceRawFrontmatter } from '../../../markdown/frontmatter-splice'
 import {
   resolvePageConfig,
@@ -145,6 +147,15 @@ function EditorScreen(): React.JSX.Element {
     },
     [measureSelectionGeometry]
   )
+  // The slash-menu controller (hooks/useSlashMenu.ts) -- owns its own
+  // ephemeral state, its own capture-phase scroll listener, and the
+  // onChoose/onHover bridge into the live Milkdown editor, so this screen
+  // only has to wire its three inputs (editorRef, and the same
+  // canvasRef/editorPaneRef the selection bubble's own safe-rect
+  // intersection already uses) and render the result. See that hook's own
+  // header comment for why it owns the listener itself rather than
+  // delegating back up through a callback the way SelectionBubble does.
+  const slashMenu = useSlashMenu({ editorRef, canvasRef, editorPaneRef })
   const showUndoBarrierToast = (): void => {
     toastIdRef.current += 1
     setToast({ id: toastIdRef.current, message: UNDO_BARRIER_TOAST_MESSAGE })
@@ -240,6 +251,20 @@ function EditorScreen(): React.JSX.Element {
     const handleKeyDown = (event: KeyboardEvent): void => {
       if ((event.metaKey || event.ctrlKey) && event.key === '/') {
         event.preventDefault()
+        // Slash menu (Task 5 addition): ShortcutsHelpModal renders no
+        // autofocus element (confirmed by reading it -- unlike
+        // CommentComposer/LinkComposer, both of which do), so opening it via
+        // this bare keydown listener does NOT blur the ProseMirror editor
+        // DOM node the way clicking a real toolbar button would -- and the
+        // slash plugin's own auto-close only fires on that blur (or on
+        // Escape, or on the selection leaving the tracked range). Without
+        // this call, a slash session left open when Mod-/ fires would stay
+        // open (and focused) underneath the newly-opened modal. Every OTHER
+        // overlay this screen can open (Page Setup, Find, Comment/Link
+        // composers) already blurs the editor on its own -- this is the one
+        // real gap, and the reason MilkdownEditorHandle.closeSlashMenu()
+        // exists at all (see its own doc comment in editor-commands.ts).
+        editorRef.current?.closeSlashMenu()
         openShortcutsHelp()
       }
     }
@@ -1149,6 +1174,7 @@ function EditorScreen(): React.JSX.Element {
         onFindMatchesChanged={findController.handleFormatMatches}
         onDropImage={saveDroppedImage}
         onSelectionChanged={handleSelectionChanged}
+        onSlashStateChanged={slashMenu.handleSlashStateChanged}
       />
     </div>
   )
@@ -1377,6 +1403,26 @@ function EditorScreen(): React.JSX.Element {
           insertLink: openLinkComposer,
           addComment: openCommentComposer
         }}
+      />
+      {/* Same "render unconditionally at EditorScreen root" convention as
+      SelectionBubble immediately above -- the component's own `items.length
+      > 0 && anchor != null && safe != null` check (SlashMenu.tsx) decides
+      visibility, so this screen doesn't need a second, parallel `slashMenu.state
+      && (...)` gate here. No `suppressed` prop, unlike SelectionBubble: every
+      overlay that could otherwise occlude/conflict with an open session
+      (Page Setup, Comment/Link composers) already blurs the editor on open,
+      which the slash plugin's own blur handler already closes the session
+      for -- the one real exception (ShortcutsHelpModal's Mod-/, which does
+      NOT blur) is closed explicitly via closeSlashMenu() in that shortcut's
+      own handler above, rather than by adding a suppressed prop this
+      component doesn't otherwise need. */}
+      <SlashMenu
+        items={slashMenu.state?.items ?? []}
+        activeIndex={slashMenu.state?.activeIndex ?? 0}
+        anchor={slashMenu.state?.rects.anchor ?? null}
+        safe={slashMenu.state?.rects.safe ?? null}
+        onChoose={slashMenu.onChoose}
+        onHover={slashMenu.onHover}
       />
       {toast && <Toast key={toast.id} message={toast.message} onDismiss={() => setToast(null)} />}
     </div>

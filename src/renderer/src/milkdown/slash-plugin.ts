@@ -544,6 +544,40 @@ export function closeSlashIn(view: EditorView): void {
   view.dispatch(view.state.tr.setMeta(slashPluginKey, { type: 'close' } satisfies SlashMeta))
 }
 
+// Moves activeIndex directly to `index` -- the SAME meta-only dispatch
+// handleKeyDown's own ArrowDown/ArrowUp branch already issues internally
+// (see the 'setActiveIndex' case above), factored out into a real exported
+// entry point so an external caller (Task 5's useSlashMenu, backing
+// SlashMenu's onHover) can reach it without a second, duplicate meta shape
+// of its own. Pointer hover has to move THIS SAME plugin-owned pointer, not
+// a parallel React-only one -- see this file's own header comment for why
+// activeIndex lives here at all: handleKeyDown must move it synchronously on
+// every ArrowDown/Up regardless, and a hover-only copy in React would let
+// the two disagree about which item is "active" the next time a key moves it.
+// No-ops when nothing is open (mirrors closeSlashIn's own guard) OR when
+// `index` already equals the session's own activeIndex -- SlashMenu's own
+// onMouseEnter fires on every hover, and this dedupe is what keeps a
+// re-hover of the already-active item from dispatching a transaction (and
+// therefore an onStateChanged round trip) for genuinely nothing. Does NOT
+// clamp/validate `index` against itemCount -- unlike the internal
+// handleKeyDown branch, which always computes an in-range value via its own
+// wraparound arithmetic, this is a raw external setter, and its one real
+// caller (SlashMenu's own onHover) can only ever pass an index into the
+// array it is currently rendering -- which is built from the exact same
+// enabledSlashItems formula the plugin's own itemCount is computed from (see
+// slash-items.ts's own enabledSlashItems doc comment), so the two counts
+// cannot disagree.
+export function setActiveSlashIndexIn(view: EditorView, index: number): void {
+  const session = slashPluginKey.getState(view.state)?.session
+  if (!session || session.activeIndex === index) return
+  view.dispatch(
+    view.state.tr.setMeta(slashPluginKey, {
+      type: 'setActiveIndex',
+      activeIndex: index
+    } satisfies SlashMeta)
+  )
+}
+
 // Deletes exactly `[from, to)` -- the "/query" text -- then calls `run`.
 // Two dispatches, not one: ProseMirror dispatch is synchronous (this
 // codebase already relies on that property -- see editor-commands.ts's own

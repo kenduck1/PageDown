@@ -8,7 +8,7 @@ import type { Editor } from '@milkdown/core'
 import { createTestEditor } from './test-editor'
 import { EDITOR_COMMAND_PLUGINS, isInsideTableCell, insertMathBlockCommand } from './commands'
 import { EDITOR_SCHEMA_PLUGINS } from './plugins'
-import { SLASH_ITEMS, type SlashItem } from './slash-items'
+import { SLASH_ITEMS, enabledSlashItems, type SlashItem } from './slash-items'
 import { filterSlashItems } from '../lib/slash-filter'
 
 const PLUGINS = [...EDITOR_SCHEMA_PLUGINS.flat(), ...EDITOR_COMMAND_PLUGINS]
@@ -313,5 +313,59 @@ describe('content-preserving items: real, informative dry runs, no destructive-g
     expect(editor.action((ctx: Ctx) => itemById('blockquote').isEnabled(ctx, view.state))).toBe(
       false
     )
+  })
+})
+
+// enabledSlashItems (Task 5, wiring) -- the ONE formula MilkdownEditor.tsx's
+// countMatching closure and editor-commands.ts's getSlashItems must both be
+// built from (see this function's own doc comment for the exact desync it
+// prevents). Tested here, alongside the catalogue it wraps, rather than in a
+// separate file: it has no independent logic of its own to isolate --
+// it IS filterSlashItems + isEnabled, composed -- so these tests exist to
+// pin that composition, not to re-test either half again.
+describe('enabledSlashItems: the one formula countMatching and getSlashItems must share', () => {
+  it('against a paragraph containing only "/" (a genuinely open, empty-query session), returns every item filterSlashItems would for an empty query', async () => {
+    // isTargetBlockEmptyAfterQueryRemoved (slash-items.ts) re-derives the
+    // trigger via findSlashTrigger against the LIVE document -- it requires
+    // an actual "/" to be present, matching how isEnabled is only ever
+    // really asked this while a session is genuinely open (see that
+    // function's own doc comment). A literally-empty paragraph with no "/"
+    // at all is a DIFFERENT case (findSlashTrigger finds no trigger and it
+    // conservatively refuses) -- not the scenario this test means to cover.
+    const editor = await createTestEditor('/', PLUGINS)
+    const view = editor.action((ctx) => ctx.get(editorViewCtx)) as EditorView
+    selectAt(view, 1)
+    const enabled = editor.action((ctx: Ctx) => enabledSlashItems(ctx, view.state, ''))
+    // The block is empty both before AND after removing the query -- so
+    // math-block/mermaid-diagram are enabled too, and nothing in this
+    // scenario disables anything else. Order must match filterSlashItems'
+    // own pass-through order for an empty query, not just the same SET of
+    // ids.
+    expect(enabled.map((item) => item.id)).toEqual(SLASH_ITEMS.map((item) => item.id))
+  })
+
+  it('filters by query exactly like filterSlashItems alone, e.g. "head" -> only the three headings', async () => {
+    const editor = await createTestEditor('/head', PLUGINS)
+    const view = editor.action((ctx) => ctx.get(editorViewCtx)) as EditorView
+    selectAt(view, 5)
+    const enabled = editor.action((ctx: Ctx) => enabledSlashItems(ctx, view.state, 'head'))
+    expect(enabled.map((item) => item.id)).toEqual(['heading-1', 'heading-2', 'heading-3'])
+  })
+
+  it('reproduces the HARD REQUIREMENT scenario: 11 items, not 13 -- filterSlashItems alone would over-report by exactly the 2 block-replacing items', async () => {
+    // Byte-for-byte the same fixture as the "math-block / mermaid-diagram"
+    // describe block above -- this is the exact scenario fix round 1 of the
+    // item-catalogue task (I3) pinned as the real, measured "13 counted vs
+    // 11 rendered" desync this function exists to make structurally
+    // impossible to reintroduce.
+    const editor = await createTestEditor('Important prose here /and more text', PLUGINS)
+    const view = editor.action((ctx) => ctx.get(editorViewCtx)) as EditorView
+    selectAt(view, 'Important prose here /'.length)
+    const queryOnlyCount = filterSlashItems(SLASH_ITEMS, '').length
+    const enabled = editor.action((ctx: Ctx) => enabledSlashItems(ctx, view.state, ''))
+    expect(queryOnlyCount).toBe(13)
+    expect(enabled.length).toBe(11)
+    expect(enabled.some((item) => item.id === 'math-block')).toBe(false)
+    expect(enabled.some((item) => item.id === 'mermaid-diagram')).toBe(false)
   })
 })

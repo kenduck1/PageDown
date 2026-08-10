@@ -53,7 +53,11 @@ const { mockEditorHandle, findMatchesListeners } = vi.hoisted(() => ({
     getSelectedText: vi.fn(() => ''),
     getSelectionRect: vi.fn(() => null),
     addComment: vi.fn(() => true),
-    resolveComment: vi.fn()
+    resolveComment: vi.fn(),
+    runSlashItem: vi.fn(),
+    closeSlashMenu: vi.fn(),
+    getSlashItems: vi.fn(() => []),
+    setActiveSlashIndex: vi.fn()
   },
   // Captures whatever onFindMatchesChanged EditorScreen most recently passed
   // to MilkdownEditor, so a test can invoke it directly to simulate

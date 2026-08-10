@@ -36,7 +36,11 @@ function createFakeEditorHandle(): MilkdownEditorHandle {
     getSelectedText: vi.fn(() => ''),
     getSelectionRect: vi.fn(() => null),
     addComment: vi.fn(() => true),
-    resolveComment: vi.fn()
+    resolveComment: vi.fn(),
+    runSlashItem: vi.fn(),
+    closeSlashMenu: vi.fn(),
+    getSlashItems: vi.fn(() => []),
+    setActiveSlashIndex: vi.fn()
   }
 }
 

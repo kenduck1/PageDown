@@ -59,7 +59,11 @@ const mockEditorHandle = vi.hoisted(() => ({
   getSelectedText: vi.fn(() => ''),
   getSelectionRect: vi.fn(() => ({ left: 300, top: 300, right: 400, bottom: 318 })),
   addComment: vi.fn(() => true),
-  resolveComment: vi.fn()
+  resolveComment: vi.fn(),
+  runSlashItem: vi.fn(),
+  closeSlashMenu: vi.fn(),
+  getSlashItems: vi.fn(() => []),
+  setActiveSlashIndex: vi.fn()
 }))
 
 const { snapshotToFire } = vi.hoisted(() => ({

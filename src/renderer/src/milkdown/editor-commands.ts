@@ -26,6 +26,8 @@ import {
   type FindStateInput
 } from './find-plugin'
 import { findAncestorListType, readSelectionRect } from './selection-plugin'
+import { slashPluginKey, closeSlashIn, runSlashItemIn, setActiveSlashIndexIn } from './slash-plugin'
+import { SLASH_ITEMS, enabledSlashItems, type SlashItem } from './slash-items'
 import type { Rect } from '../lib/floating-position'
 
 // This is a separate file from MilkdownEditor.tsx (fix-round change) purely
@@ -209,6 +211,53 @@ export interface EditorCommands {
   // resolveCommentCommand (commands.ts) -- removes every mark instance for
   // the given comment id, anywhere in the document.
   resolveComment: (id: string) => void
+  // Runs the slash-menu item with this `id` (slash-items.ts's SLASH_ITEMS)
+  // against the LIVE session (slash-plugin.ts's own slashPluginKey state) --
+  // reads anchorPos/queryEnd fresh at call time rather than accepting them
+  // as parameters, so a caller (SlashMenu's onChoose, via
+  // hooks/useSlashMenu.ts) can never pass a range computed before some other
+  // edit landed. session.queryEnd is used as the delete range's own `to`
+  // rather than re-deriving `anchorPos + 1 + query.length` by hand --
+  // they're always equal (both are set from the SAME selection.from inside
+  // slash-plugin.ts's own tryOpen/advanceSession), and reusing the field
+  // avoids a second, hand-copied formula that could silently drift from
+  // buildDecorations' identical one. A no-op (mutates nothing) when no
+  // session is open or `id` doesn't match a real item -- defensive, matching
+  // every other optional-chained handle method's "never throw" contract; not
+  // expected to be reachable in practice, since the palette only ever
+  // renders ids from this SAME catalogue.
+  runSlashItem: (id: string) => void
+  // Closes the current slash-menu session, if one is open, WITHOUT touching
+  // the "/query" text itself -- the exact closeSlashIn (slash-plugin.ts) the
+  // plugin's own Escape/blur handling already calls internally. Exposed on
+  // the handle for the one real gap those two don't cover: a keyboard-only
+  // overlay trigger (EditorScreen's Mod-/ opening ShortcutsHelpModal) fires
+  // from a bare `window` listener with no click on any focusable element, so
+  // nothing blurs the editor DOM node and the plugin's own blur-close never
+  // runs -- see EditorScreen.tsx's own shortcuts-help keydown effect for the
+  // one real call site this exists for today.
+  closeSlashMenu: () => void
+  // The catalogue's own currently-offered item list for `query`, evaluated
+  // against the LIVE document state via slash-items.ts's enabledSlashItems
+  // -- the EXACT formula MilkdownEditor.tsx's own countMatching closure
+  // (constructed in its mount effect, fed into createSlashPlugin) also uses,
+  // so the two structurally cannot disagree about how many items exist (see
+  // slash-plugin.ts's own CountMatching doc comment for the real "13 counted
+  // vs 11 rendered" desync fix round 1 of the item-catalogue task found and
+  // closed -- this is what stops Task 5's own wiring from reintroducing it).
+  // Returns [] before the editor has finished constructing, matching
+  // getSelectedText's own empty-string fallback for the identical reason.
+  getSlashItems: (query: string) => SlashItem[]
+  // Moves the slash session's activeIndex directly to `index` -- backs
+  // SlashMenu's onHover (pointer hover should move the highlight, and a
+  // SUBSEQUENT ArrowDown/Up should continue from there, not from wherever
+  // the keyboard last left it, matching ordinary command-palette UX).
+  // setActiveSlashIndexIn (slash-plugin.ts) is the exact dispatch
+  // handleKeyDown's own ArrowDown/Up branch already uses internally,
+  // exported so this is the SAME mechanism moving the SAME plugin-owned
+  // pointer -- not a second, React-local copy that could disagree with it
+  // the next time a key press moves the index instead of a hover.
+  setActiveSlashIndex: (index: number) => void
 }
 
 // Builds the real formatting-toolbar command surface for a live Editor
@@ -392,6 +441,39 @@ export function buildEditorCommands(editor: Editor): EditorCommands {
     },
     resolveComment: (id) => {
       editor.action(callCommand(resolveCommentCommand.key, id))
+    },
+    runSlashItem: (id) => {
+      editor.action((ctx) => {
+        const view = ctx.get(editorViewCtx)
+        const session = slashPluginKey.getState(view.state)?.session
+        if (!session) return
+        const item = SLASH_ITEMS.find((candidate) => candidate.id === id)
+        if (!item) return
+        // Two dispatches, not one -- see runSlashItemIn's own doc comment
+        // (slash-plugin.ts) for why that's correct rather than an oversight:
+        // ProseMirror dispatch is synchronous, so `item.run(ctx)` reads the
+        // state the delete's own dispatch just produced.
+        runSlashItemIn(view, session.anchorPos, session.queryEnd, () => item.run(ctx))
+      })
+    },
+    closeSlashMenu: () => {
+      editor.action((ctx) => {
+        closeSlashIn(ctx.get(editorViewCtx))
+      })
+    },
+    getSlashItems: (query) => {
+      // Same "assign inside editor.action, return after" shape as
+      // getSelectedText/getSelectionRect above.
+      let items: SlashItem[] = []
+      editor.action((ctx) => {
+        items = enabledSlashItems(ctx, ctx.get(editorViewCtx).state, query)
+      })
+      return items
+    },
+    setActiveSlashIndex: (index) => {
+      editor.action((ctx) => {
+        setActiveSlashIndexIn(ctx.get(editorViewCtx), index)
+      })
     }
   }
 }
