@@ -19,6 +19,7 @@ const FULL_CONFIG: PageConfig = {
   customWidth: 7.5,
   customHeight: 9.25,
   fontFamily: 'inter',
+  fontSize: 12,
   pageNumberFormat: 'roman',
   theme: 'report',
   direction: 'rtl'
@@ -43,6 +44,7 @@ const FULL_RAW = [
   'customWidth: 7.5',
   'customHeight: 9.25',
   'fontFamily: inter',
+  'fontSize: 12',
   'pageNumberFormat: roman',
   'theme: report',
   'direction: rtl'

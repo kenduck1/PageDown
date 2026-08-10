@@ -1,11 +1,84 @@
 import { describe, it, expect } from 'vitest'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import {
   resolveDocumentStyle,
   buildRunningContentCss,
+  documentStyleClasses,
   escapeCssString,
   DEFAULT_DOCUMENT_STYLE
 } from './document-style'
-import { DEFAULT_PAGE_CONFIG } from '../markdown/page-config'
+import { DEFAULT_PAGE_CONFIG, PAGE_FONT_SIZES } from '../markdown/page-config'
+
+// documentStyleClasses is the ONE list both rendering surfaces build their
+// `.pagedown-document` class attribute from (MilkdownEditor.tsx's mount div,
+// and the sandboxed context's <body> in
+// resources/pagination-render/index.ts). It used to be two hand-copied
+// template literals; the body-size class added by the capability-gap pass
+// would have been a third pair of places to forget.
+describe('documentStyleClasses', () => {
+  it('always emits a theme and a font class', () => {
+    expect(documentStyleClasses(DEFAULT_DOCUMENT_STYLE)).toEqual([
+      'pagedown-theme-default',
+      'pagedown-font-source-serif-4'
+    ])
+  })
+
+  it('emits NO size class for the default size', () => {
+    const classes = documentStyleClasses({ ...DEFAULT_DOCUMENT_STYLE, fontSize: 'default' })
+    expect(classes.some((name) => name.startsWith('pagedown-size-'))).toBe(false)
+  })
+
+  it('emits a size class for an explicit size', () => {
+    expect(documentStyleClasses({ ...DEFAULT_DOCUMENT_STYLE, fontSize: 12 })).toContain(
+      'pagedown-size-12'
+    )
+  })
+
+  // The silent-no-op guard. A PageFontSize with no matching CSS class would
+  // parse, round-trip through YAML, set a class on both surfaces and change
+  // absolutely nothing on either -- exactly the failure mode the `var(--...)`
+  // cross-check in document-typography.test.ts exists to catch for custom
+  // properties. Reading the real stylesheet is the only way to know.
+  it('every offered size has real rules in the shared stylesheet', () => {
+    const css = readFileSync(
+      join(__dirname, '..', '..', 'src', 'typography', 'document-typography.css'),
+      'utf8'
+    )
+    for (const size of PAGE_FONT_SIZES) {
+      const selector = `.pagedown-document.pagedown-size-${size}`
+      expect(css, `document-typography.css must style ${selector}`).toContain(`${selector} {`)
+      // Not just the root rule: `table`/`th` must be restated too, or a direct
+      // `.pagedown-document table` match in the base file wins over
+      // inheritance and a header cell renders larger than the body cell beside
+      // it -- the exact trap the theme block already documents.
+      expect(css, `${selector} must restate th`).toContain(`${selector} th`)
+      expect(css, `${selector} must restate table`).toContain(`${selector} table`)
+    }
+  })
+
+  it('the proportional heading ramp covers h1-h6 for every size class', () => {
+    const css = readFileSync(
+      join(__dirname, '..', '..', 'src', 'typography', 'document-typography.css'),
+      'utf8'
+    )
+    for (const tag of ['h1', 'h2', 'h3', 'h4', 'h5', 'h6']) {
+      expect(css).toContain(`.pagedown-document[class*='pagedown-size-'] ${tag} {`)
+    }
+  })
+
+  // Source ORDER, not specificity, is what makes an explicit body size beat
+  // the theme's own implied one -- both are (0,2,1) on the element selectors.
+  it('places the size block AFTER the theme block in the stylesheet', () => {
+    const css = readFileSync(
+      join(__dirname, '..', '..', 'src', 'typography', 'document-typography.css'),
+      'utf8'
+    )
+    expect(css.indexOf('.pagedown-document.pagedown-size-')).toBeGreaterThan(
+      css.lastIndexOf('.pagedown-document.pagedown-theme-')
+    )
+  })
+})
 
 describe('escapeCssString', () => {
   it('escapes a double quote so it cannot terminate the CSS string', () => {
