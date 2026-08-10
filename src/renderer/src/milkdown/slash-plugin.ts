@@ -143,6 +143,32 @@ const EMPTY_STATE: SlashPluginState = { session: null, decorations: DecorationSe
 // not this regex.
 const WHITESPACE = /\s/
 
+// Leaf-text stand-in for tryOpen's own textBetween call below ONLY --
+// advanceSession's own call already passes a bare '\n' for every leaf
+// (see its own comment for why that one call is different: it scans the
+// WHOLE DOCUMENT, where a real block boundary is a genuine possibility).
+// Every non-text inline atom maps to '￼' (OBJECT REPLACEMENT CHARACTER,
+// non-whitespace -- correct for e.g. an image, so a "/" typed immediately
+// after one is treated as "preceded by non-whitespace," the same way
+// "and/or" is) EXCEPT a hardbreak, which maps to '\n' instead, matching
+// that node's own declared semantics
+// (@milkdown/preset-commonmark's hardbreakSchema sets `leafText: () =>
+// '\n'` on its own node spec).
+//
+// Fix round (final review): before this fix, tryOpen passed the bare '￼'
+// literal for EVERY leaf, hardbreak included. Measured: insert a hardbreak
+// (Shift-Enter), then type "/" right after it -- findSlashTrigger's own
+// backward scan (slash-query.ts) requires the "/" to be preceded by
+// whitespace or the start of the block, and '￼' is deliberately
+// non-whitespace, so a "/" immediately after a hardbreak read as mid-word
+// (the same rule that correctly rejects "and/or") and no session opened at
+// all, silently -- even though a hardbreak reads visually as "the start of
+// a new line," exactly the gesture this feature's own trigger rule means to
+// welcome.
+function slashLeafText(leafNode: ProseNode): string {
+  return leafNode.type.name === 'hardbreak' ? '\n' : '￼'
+}
+
 // Meta shapes this plugin's own state.apply reads via tr.getMeta(key).
 // Private to this module -- every external caller goes through the
 // EditorView-taking helpers at the bottom of this file (openSlashSessionAt /
@@ -328,12 +354,10 @@ function tryOpen(
   // stored marks overriding it.
   if (inlineCodeType && inlineCodeType.isInSet(newState.storedMarks || $from.marks())) return prev
 
-  // '￼' (OBJECT REPLACEMENT CHARACTER) as the leaf-text stand-in for a
-  // non-text inline atom (e.g. an image): non-whitespace, so a "/" typed
-  // immediately after one is correctly treated as "preceded by a non-
-  // whitespace character" and rejected by findSlashTrigger, the same way
-  // "and/or" is -- not as "start of block."
-  const textBeforeCursor = $from.parent.textBetween(0, $from.parentOffset, '￼', '￼')
+  // slashLeafText (this file's own header, just above WHITESPACE) maps a
+  // hardbreak to '\n' and every other leaf (e.g. an image) to '￼' -- see
+  // its own doc comment for the real, measured bug this fixes.
+  const textBeforeCursor = $from.parent.textBetween(0, $from.parentOffset, '￼', slashLeafText)
   const trigger = findSlashTrigger(textBeforeCursor)
   if (!trigger) return prev
 
@@ -627,12 +651,19 @@ export function createSlashPlugin(
 // typing "/" produces (a single-step, single-character ReplaceStep), so it
 // opens a session through the SAME tryOpen path a real keystroke does rather
 // than a parallel "force open" code path that could silently drift from what
-// typing actually does. Mirrors find-plugin.ts's applyFindState in spirit
-// (a single EditorView-taking entry point usable by both tests and any
-// future production caller) but not in shape -- there is deliberately no
-// "set the session to arbitrary state" helper, because a session's shape
-// (anchorPos, query) must always be derived from real document content via
-// tryOpen/advanceSession, never asserted from outside.
+// typing actually does. Mirrors find-plugin.ts's applyFindState in shape (a
+// single EditorView-taking entry point) but NOT in role -- unlike
+// applyFindState, which is a genuine production entry point (MilkdownEditor's
+// find command surface calls it for real), this is a TEST SEAM ONLY: there is
+// no production caller anywhere in this codebase (a real "/" always arrives
+// via a genuine keystroke, which tryOpen already handles directly), and none
+// is expected -- deliberately no "set the session to arbitrary state" helper
+// exists either, because a session's shape (anchorPos, query) must always be
+// derived from real document content via tryOpen/advanceSession, never
+// asserted from outside. Exported, and used throughout this file's own test
+// suite plus MilkdownEditor.test.tsx's SLASH_PLUGINS-based tests, purely so
+// those tests can open a session without simulating a real DOM keydown for
+// every single case.
 //
 // Explicitly sets the selection to right after the inserted "/", rather than
 // trusting Transaction.insertText's own default -- a real, caught bug, not

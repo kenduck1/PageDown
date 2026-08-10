@@ -244,6 +244,72 @@ describe('table / horizontal-rule: refused inside a table cell (measured table-c
   })
 })
 
+// Final whole-branch review, item 3: math-block/mermaid-diagram's own
+// isTargetBlockEmptyAfterQueryRemoved gate has NO idea about table cells --
+// it only asks "would the block be empty," and a cell's own rigid,
+// single-child 'paragraph' content model (same one table/horizontal-rule's
+// describe block above documents) means an EMPTY cell satisfies that gate
+// just as cleanly as an empty top-level paragraph does. Measured: an empty
+// cell's "/" session opened with itemCount: 1, Math block its SOLE entry --
+// non-destructive (writes a raw, byte-stable `$$` block into the cell's own
+// markdown source), but junk output, and the only item the palette ever
+// offered there. The fix mirrors table/horizontal-rule/page-break's own
+// established isInsideTableCell gate exactly, just composed with the
+// existing emptiness check rather than replacing it.
+describe('math-block / mermaid-diagram: ALSO refused inside a table cell, even an EMPTY one (final review, item 3)', () => {
+  const source = '| a | b |\n| --- | --- |\n| x | y |\n'
+
+  // Deletes the cell's own single "x" character and types "/" in its place
+  // -- a real keystroke-shaped trigger, byte-for-byte the same "genuinely
+  // empty except for the query" convention every OTHER test in this file's
+  // "block-replacing items refuse a non-empty block" describe block already
+  // uses (see e.g. its own "math-block: ENABLED when the paragraph is
+  // genuinely empty except for the query" test above) -- just inside a table
+  // cell's own paragraph instead of a top-level one.
+  async function editorWithEmptyCellAndSlash(): Promise<{ editor: Editor; view: EditorView }> {
+    const editor = await createTestEditor(source, PLUGINS)
+    const view = editor.action((ctx) => ctx.get(editorViewCtx)) as EditorView
+    let cellTextStart: number | null = null
+    view.state.doc.descendants((node, pos) => {
+      if (node.isText && node.text === 'x') cellTextStart = pos
+      return true
+    })
+    const tr = view.state.tr
+      .delete(cellTextStart!, cellTextStart! + 1)
+      .insertText('/', cellTextStart!)
+    view.dispatch(tr.setSelection(TextSelection.create(tr.doc, cellTextStart! + 1)))
+    return { editor, view }
+  }
+
+  it('math-block: disabled inside an EMPTY table cell', async () => {
+    const { editor, view } = await editorWithEmptyCellAndSlash()
+    const enabled = editor.action((ctx: Ctx) => itemById('math-block').isEnabled(ctx, view.state))
+    expect(enabled).toBe(false)
+
+    // Prove the gate is load-bearing here too, not decorative: with
+    // isInsideTableCell removed from the formula, isTargetBlockEmptyAfterQueryRemoved
+    // ALONE reports this cell as safe (its own paragraph genuinely has no
+    // content besides the query) -- exactly the finding this test pins.
+    const emptinessAlone = editor.action((ctx: Ctx) =>
+      // Re-derive the SAME check math-block/mermaid-diagram's own isEnabled
+      // composes with isInsideTableCell, called here in isolation via the
+      // command's own dry run (which has no table-cell awareness at all --
+      // see this file's "table / horizontal-rule" describe block above for
+      // why insertMathBlockCommand's dry run alone can't catch this either).
+      ctx.get(commandsCtx).get(insertMathBlockCommand.key)(undefined)(view.state)
+    )
+    expect(emptinessAlone).toBe(true)
+  })
+
+  it('mermaid-diagram: disabled inside an EMPTY table cell, same reasoning as math-block', async () => {
+    const { editor, view } = await editorWithEmptyCellAndSlash()
+    const enabled = editor.action((ctx: Ctx) =>
+      itemById('mermaid-diagram').isEnabled(ctx, view.state)
+    )
+    expect(enabled).toBe(false)
+  })
+})
+
 describe('page-break: honest dry run (the other required fix from this task)', () => {
   it('enabled in a plain paragraph', async () => {
     const editor = await createTestEditor('Hello world', PLUGINS)

@@ -1,6 +1,8 @@
 import { editorViewCtx, type Editor } from '@milkdown/core'
+import type { Ctx } from '@milkdown/ctx'
 import { callCommand } from '@milkdown/utils'
 import { NodeSelection, Selection, TextSelection } from '@milkdown/prose/state'
+import type { EditorView } from '@milkdown/prose/view'
 import {
   toggleStrongCommand,
   toggleEmphasisCommand,
@@ -265,6 +267,51 @@ export interface EditorCommands {
   setActiveSlashIndex: (index: number) => void
 }
 
+// Selector for chooseSlashItem below: the KEYBOARD path (MilkdownEditor.tsx's
+// slashProse onChooseActive, fired from Enter/Tab) resolves against the
+// session's own plugin-owned activeIndex; the CLICK/imperative-handle path
+// (runSlashItem below, called from SlashMenu's onChoose) resolves against a
+// stable item id. Both selectors resolve into the SAME enabled-and-filtered
+// list -- see chooseSlashItem's own doc comment for why that must be true.
+export type SlashItemSelector = { index: number } | { id: string }
+
+// THE single formula standing between the user and silent data loss from a
+// block-replacing item (math-block/mermaid-diagram, see slash-items.ts's
+// isTargetBlockEmptyAfterQueryRemoved) chosen against an unsafe target block.
+// Reads the LIVE session (slashPluginKey.getState(view.state)), re-derives
+// the CURRENTLY-ENABLED item list fresh via enabledSlashItems -- the
+// isEnabled-aware subset, never the full unfiltered SLASH_ITEMS -- resolves
+// one item against `selector`, and runs it via runSlashItemIn (delete the
+// "/query" text, then run the item, as two synchronous dispatches).
+//
+// Fix round (final review, items 1+2): previously duplicated verbatim in TWO
+// places -- MilkdownEditor.tsx's slashProse onChooseActive closure (the
+// keyboard path) and this file's own runSlashItem (the click path). They
+// differed only in how they picked an item out of the identical enabled
+// list, and that duplication was not merely untidy: the KEYBOARD copy had
+// ZERO regression coverage of its own safety gate until this fix round
+// (MilkdownEditor.test.tsx's mid-paragraph "math-block disabled" test only
+// ever exercised the id-based CLICK path) -- a mutation swapping
+// enabledSlashItems(ctx, view.state, session.query) for the raw, unfiltered
+// filterSlashItems(SLASH_ITEMS, session.query) in the keyboard copy alone
+// left every test in this codebase AND Gate 29 green, and would have shipped
+// a real, reachable "type /m mid-paragraph, press Enter, lose the paragraph
+// to a math placeholder" bug. Extracting this one function -- used by BOTH
+// paths now -- makes that formula structurally impossible to drift apart,
+// the identical "one formula, not two copies" reasoning slash-items.ts's own
+// enabledSlashItems doc comment gives for its own extraction.
+export function chooseSlashItem(ctx: Ctx, view: EditorView, selector: SlashItemSelector): void {
+  const session = slashPluginKey.getState(view.state)?.session
+  if (!session) return
+  const items = enabledSlashItems(ctx, view.state, session.query)
+  const item =
+    'index' in selector
+      ? items[selector.index]
+      : items.find((candidate) => candidate.id === selector.id)
+  if (!item) return
+  runSlashItemIn(view, session.anchorPos, session.queryEnd, () => item.run(ctx))
+}
+
 // Builds the real formatting-toolbar command surface for a live Editor
 // instance -- a standalone, exported function (fix-round change)
 // specifically so tests can call the exact same implementation the mounted
@@ -448,31 +495,17 @@ export function buildEditorCommands(editor: Editor): EditorCommands {
       editor.action(callCommand(resolveCommentCommand.key, id))
     },
     runSlashItem: (id) => {
+      // Delegates to chooseSlashItem (this file, above) with an id selector
+      // -- fix round (final review, item 2): this used to inline its own
+      // copy of "read the live session, re-derive enabledSlashItems, resolve
+      // one item, runSlashItemIn," duplicated verbatim (differing only in
+      // selector) with MilkdownEditor.tsx's keyboard-path closure. See
+      // chooseSlashItem's own doc comment for why that duplication mattered
+      // (fix round 1, IMPORTANT I2's own "PUBLIC method, must never run a
+      // currently-disabled item" reasoning still applies -- it's just
+      // enforced by the shared function now, not a local copy).
       editor.action((ctx) => {
-        const view = ctx.get(editorViewCtx)
-        const session = slashPluginKey.getState(view.state)?.session
-        if (!session) return
-        // Fix round 1, IMPORTANT I2: looked up against the ENABLED list
-        // (enabledSlashItems, re-derived fresh against the live
-        // view.state/session.query), NOT the full, unfiltered SLASH_ITEMS.
-        // This is a PUBLIC method on MilkdownEditorHandle, reachable from
-        // anywhere holding the ref -- looking id up in the full catalogue
-        // would let a caller run a currently-disabled item (most acutely,
-        // math-block/mermaid-diagram outside the narrow window where
-        // they're safe) with no gate at all. The palette's own click/
-        // keyboard paths already only ever offer an id from this SAME
-        // enabled list (see this file's own getSlashItems doc comment), so
-        // this re-derivation costs nothing for the real UI paths and closes
-        // the gap for any other caller.
-        const item = enabledSlashItems(ctx, view.state, session.query).find(
-          (candidate) => candidate.id === id
-        )
-        if (!item) return
-        // Two dispatches, not one -- see runSlashItemIn's own doc comment
-        // (slash-plugin.ts) for why that's correct rather than an oversight:
-        // ProseMirror dispatch is synchronous, so `item.run(ctx)` reads the
-        // state the delete's own dispatch just produced.
-        runSlashItemIn(view, session.anchorPos, session.queryEnd, () => item.run(ctx))
+        chooseSlashItem(ctx, ctx.get(editorViewCtx), { id })
       })
     },
     closeSlashMenu: () => {

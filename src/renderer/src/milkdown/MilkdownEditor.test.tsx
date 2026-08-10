@@ -18,14 +18,9 @@ import { EDITOR_SCHEMA_PLUGINS } from './plugins'
 import { EDITOR_COMMAND_PLUGINS } from './commands'
 import { createTestEditor } from './test-editor'
 import MilkdownEditor, { type MilkdownEditorHandle } from './MilkdownEditor'
-import { buildEditorCommands } from './editor-commands'
+import { buildEditorCommands, chooseSlashItem } from './editor-commands'
 import { createFindPlugin } from './find-plugin'
-import {
-  createSlashPlugin,
-  openSlashSessionAt,
-  runSlashItemIn,
-  slashPluginKey
-} from './slash-plugin'
+import { createSlashPlugin, openSlashSessionAt, slashPluginKey } from './slash-plugin'
 import { enabledSlashItems } from './slash-items'
 import { computePageGeometry } from '../../../typography/page-geometry'
 import { DEFAULT_DOCUMENT_STYLE } from '../../../typography/document-style'
@@ -126,15 +121,21 @@ describe('MilkdownEditorHandle commands needing a real ranged selection — wire
 
   // Same per-mount construction as FIND_PLUGINS above, for the slash plugin
   // -- and built with the EXACT closure shape MilkdownEditor.tsx's own mount
-  // effect uses (a real ctx-closing countMatching AND onChooseActive built
-  // from enabledSlashItems/runSlashItemIn, fix round 1's CRITICAL C1 fix),
+  // effect uses (a real ctx-closing countMatching, and onChooseActive
+  // delegating to chooseSlashItem, editor-commands.ts -- fix round 1's
+  // CRITICAL C1 fix, consolidated in the final review's fix round, item 2),
   // not a synthetic stand-in the way slash-plugin.test.ts's own `() =>
   // PLENTY`/`noop` closures are. That's the whole point of this constant
   // existing here rather than only in slash-plugin.test.ts: it proves the
-  // REAL wiring (the formulas MilkdownEditor.tsx actually constructs), the
-  // same way buildEditorCommands itself is used directly above rather than a
+  // REAL wiring (the formulas MilkdownEditor.tsx actually constructs, now
+  // including chooseSlashItem's own shared safety gate), the same way
+  // buildEditorCommands itself is used directly above rather than a
   // hand-rolled stand-in (see this describe block's own header comment for
-  // that precedent).
+  // that precedent). Using the SAME exported chooseSlashItem the production
+  // component now calls (rather than re-inlining the old copy here) is what
+  // makes the mid-paragraph safety-gate regression test below a genuine test
+  // of the shipped keyboard path, not a parallel implementation that could
+  // silently drift from it.
   const SLASH_PLUGINS = [
     ...PLUGINS,
     $prose((ctx) =>
@@ -142,14 +143,7 @@ describe('MilkdownEditorHandle commands needing a real ranged selection — wire
         () => {},
         (query, state) => enabledSlashItems(ctx, state, query).length,
         (activeIndex) => {
-          const view = ctx.get(editorViewCtx)
-          const session = slashPluginKey.getState(view.state)?.session
-          if (!session) return
-          const items = enabledSlashItems(ctx, view.state, session.query)
-          const item = items[activeIndex]
-          if (item) {
-            runSlashItemIn(view, session.anchorPos, session.queryEnd, () => item.run(ctx))
-          }
+          chooseSlashItem(ctx, ctx.get(editorViewCtx), { index: activeIndex })
         }
       )
     )
@@ -622,6 +616,56 @@ describe('MilkdownEditorHandle commands needing a real ranged selection — wire
     view.dispatch(view.state.tr.insertText('task', view.state.selection.from))
     fireEvent.keyDown(view.dom, { key: 'Tab' })
     expect(editor.action(getMarkdown())).toBe('- [ ] Buy milk\n')
+  })
+
+  // === Final whole-branch review, item 1 -- the KEYBOARD choose path's own
+  // safety gate had ZERO regression coverage before this test. ===
+  // MilkdownEditor.tsx's slashProse onChooseActive closure (now
+  // chooseSlashItem, editor-commands.ts, shared with the click path's
+  // runSlashItem) resolves activeIndex against enabledSlashItems -- the
+  // isEnabled-aware, FILTERED list -- never the raw
+  // filterSlashItems(SLASH_ITEMS, query) result. Those two lists genuinely
+  // disagree at index 0 for the exact scenario below: query 'm' against a
+  // NON-EMPTY paragraph (real prose on both sides of the "/m") puts
+  // math-block/mermaid-diagram FIRST in the unfiltered list (both labels
+  // start with 'm'), but BOTH are disabled here
+  // (isTargetBlockEmptyAfterQueryRemoved is false -- removing "/m" would
+  // still leave "Important prose here and more text" behind), so the
+  // isEnabled-aware list is [numbered-list, heading-2, heading-3, table]
+  // instead -- a completely different item at index 0.
+  //
+  // Mutation-verified, per this task's own instructions: temporarily
+  // replacing chooseSlashItem's `enabledSlashItems(ctx, view.state,
+  // session.query)` call with a raw `filterSlashItems(SLASH_ITEMS,
+  // session.query)` call left this test as the ONLY failure across the
+  // entire suite (147 tests otherwise green, confirming the review's own
+  // measurement) -- it failed with the mutant's actual output containing
+  // `$$` (a destroyed paragraph) instead of the numbered list. Restoring the
+  // real implementation makes it pass again. Gate 29 cannot catch this
+  // mutation at all: it only ever types into an EMPTY paragraph, where the
+  // enabled and unfiltered lists happen to agree at every index.
+  it('a real Enter keydown against a mid-paragraph, NON-EMPTY-block session chooses the ENABLED item at activeIndex, never a disabled block-replacing one', async () => {
+    const editor = await createTestEditor('Important prose here and more text', SLASH_PLUGINS)
+    currentEditor = editor
+    const view = editor.action((ctx) => ctx.get(editorViewCtx))
+    // Opens right before "and" (real prose on both sides -- mid-paragraph,
+    // not start-of-block), then types "m" as the query -- byte-for-byte the
+    // design doc's own "Important prose here [caret] and more text"
+    // scenario this task's brief measured.
+    openSlashSessionAt(view, 1 + 'Important prose here '.length)
+    view.dispatch(view.state.tr.insertText('m', view.state.selection.from))
+    // Sanity check on the SCENARIO itself (not yet the fix): activeIndex
+    // defaults to 0 on open, and the unfiltered filterSlashItems(SLASH_ITEMS,
+    // 'm') result -- what a mutated, non-isEnabled-aware lookup would use --
+    // puts math-block at index 0 (its label starts with 'm'). If this
+    // session didn't genuinely offer a DIFFERENT item at index 0, the
+    // assertions below would pass for the wrong reason.
+    expect(slashPluginKey.getState(view.state)?.session?.activeIndex).toBe(0)
+    fireEvent.keyDown(view.dom, { key: 'Enter' })
+    const markdown = editor.action(getMarkdown())
+    expect(markdown).not.toContain('$$')
+    expect(markdown).toContain('Important prose here and more text')
+    expect(markdown.trimStart()).toMatch(/^1\.\s/)
   })
 })
 
