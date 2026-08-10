@@ -94,7 +94,9 @@ describe('LinkComposer', () => {
     useAppStore.setState({ linkComposerOpen: true })
     const onInsertLink = vi.fn()
     const user = userEvent.setup()
-    const { rerender } = render(<LinkComposer initialHref="" onRemoveLink={vi.fn()} onInsertLink={onInsertLink} />)
+    const { rerender } = render(
+      <LinkComposer initialHref="" onRemoveLink={vi.fn()} onInsertLink={onInsertLink} />
+    )
 
     await user.type(screen.getByRole('textbox', { name: 'Link URL' }), 'https://example.com')
     await user.click(screen.getByRole('button', { name: 'Cancel' }))
@@ -120,5 +122,81 @@ describe('LinkComposer', () => {
 
     expect(onInsertLink).not.toHaveBeenCalled()
     expect(useAppStore.getState().linkComposerOpen).toBe(false)
+  })
+})
+
+// Editing an EXISTING link -- the capability-gap pass. Before it, this row's
+// URL field seeded from `useState('')` and never looked at the document, so
+// there was no way to see (let alone correct) the URL of a link you already
+// had; and submitting a "correction" over already-linked text ran toggleMark's
+// REMOVE branch and destroyed the link outright.
+describe('LinkComposer editing an existing link', () => {
+  it('prefills the field with the existing href', () => {
+    useAppStore.setState({ linkComposerOpen: true })
+    render(
+      <LinkComposer
+        initialHref="https://old.example.com"
+        onRemoveLink={vi.fn()}
+        onInsertLink={vi.fn()}
+      />
+    )
+    expect(screen.getByRole('textbox', { name: 'Link URL' })).toHaveValue('https://old.example.com')
+  })
+
+  // The component never unmounts (EditorScreen renders it unconditionally and
+  // it returns null while closed), so a `useState(initialHref)` initialiser
+  // would run exactly once, for the very first document, forever. Reopening
+  // with a different href is the case that proves the open-time sync works.
+  it('re-seeds on every open, not only on first mount', async () => {
+    const user = userEvent.setup()
+    const { rerender } = render(
+      <LinkComposer initialHref="" onRemoveLink={vi.fn()} onInsertLink={vi.fn()} />
+    )
+
+    useAppStore.setState({ linkComposerOpen: true })
+    rerender(
+      <LinkComposer
+        initialHref="https://one.example.com"
+        onRemoveLink={vi.fn()}
+        onInsertLink={vi.fn()}
+      />
+    )
+    expect(screen.getByRole('textbox', { name: 'Link URL' })).toHaveValue('https://one.example.com')
+
+    await user.click(screen.getByRole('button', { name: 'Cancel' }))
+    useAppStore.setState({ linkComposerOpen: true })
+    rerender(
+      <LinkComposer
+        initialHref="https://two.example.com"
+        onRemoveLink={vi.fn()}
+        onInsertLink={vi.fn()}
+      />
+    )
+    expect(screen.getByRole('textbox', { name: 'Link URL' })).toHaveValue('https://two.example.com')
+  })
+
+  it('reads Update rather than Insert, and offers Remove link', async () => {
+    useAppStore.setState({ linkComposerOpen: true })
+    const onRemoveLink = vi.fn()
+    const user = userEvent.setup()
+    render(
+      <LinkComposer
+        initialHref="https://old.example.com"
+        onRemoveLink={onRemoveLink}
+        onInsertLink={vi.fn()}
+      />
+    )
+
+    expect(screen.getByRole('button', { name: 'Update' })).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Remove link' }))
+    expect(onRemoveLink).toHaveBeenCalledTimes(1)
+    expect(useAppStore.getState().linkComposerOpen).toBe(false)
+  })
+
+  it('offers no Remove link when there is no link to remove', () => {
+    useAppStore.setState({ linkComposerOpen: true })
+    render(<LinkComposer initialHref="" onRemoveLink={vi.fn()} onInsertLink={vi.fn()} />)
+    expect(screen.queryByRole('button', { name: 'Remove link' })).toBeNull()
+    expect(screen.getByRole('button', { name: 'Insert' })).toBeInTheDocument()
   })
 })

@@ -41,7 +41,12 @@ import {
   replaceAllMatchesIn,
   type FindStateInput
 } from './find-plugin'
-import { findAncestorListType, markActive, readSelectionRect, readTableRect } from './selection-plugin'
+import {
+  findAncestorListType,
+  markActive,
+  readSelectionRect,
+  readTableRect
+} from './selection-plugin'
 import { slashPluginKey, closeSlashIn, runSlashItemIn, setActiveSlashIndexIn } from './slash-plugin'
 import { enabledSlashItems, type SlashItem } from './slash-items'
 import type { Rect } from '../lib/floating-position'

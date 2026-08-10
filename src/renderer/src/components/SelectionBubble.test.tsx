@@ -269,3 +269,88 @@ describe('SelectionBubble re-measurement', () => {
     addSpy.mockRestore()
   })
 })
+
+// The bubble became CONTEXT-SENSITIVE in the capability-gap pass: it also
+// appears for a bare caret inside a table, because that is the only selection
+// a user editing a table has, and until then not one of
+// @milkdown/preset-gfm's fifteen table commands except "insert table" was
+// reachable from any surface in this app.
+const TABLE_CONTEXT = { tablePos: 4, column: 1, alignment: 'center' as const }
+
+describe('SelectionBubble table controls', () => {
+  it('shows no table controls when the selection is not in a table', () => {
+    renderBubble()
+    expect(screen.queryByRole('button', { name: 'Insert row below' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Delete column' })).toBeNull()
+  })
+
+  it('appears for a COLLAPSED selection inside a table (the caret case)', () => {
+    renderBubble({ snapshot: { ...SNAPSHOT, empty: true, table: TABLE_CONTEXT } })
+    expect(screen.getByRole('toolbar', { name: 'Text formatting' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Insert row below' })).toBeInTheDocument()
+  })
+
+  it('hides the FORMATTING controls for that caret case', () => {
+    // Bold/italic on a caret set a stored mark that only affects the next
+    // character typed, and a table cell's content model is the single rigid
+    // `paragraph`, so the heading buttons cannot apply inside one at all --
+    // both would render as controls that visibly do nothing, which is the
+    // exact class of thing this pass exists to remove.
+    renderBubble({ snapshot: { ...SNAPSHOT, empty: true, table: TABLE_CONTEXT } })
+    expect(screen.queryByRole('button', { name: 'Bold' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Heading 1' })).toBeNull()
+  })
+
+  it('shows BOTH groups for a ranged selection inside a table', () => {
+    renderBubble({ snapshot: { ...SNAPSHOT, table: TABLE_CONTEXT } })
+    expect(screen.getByRole('button', { name: 'Bold' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Delete row' })).toBeInTheDocument()
+  })
+
+  it('dispatches each table command', async () => {
+    const user = userEvent.setup()
+    const { commands } = renderBubble({
+      snapshot: { ...SNAPSHOT, empty: true, table: TABLE_CONTEXT }
+    })
+    await user.click(screen.getByRole('button', { name: 'Insert row above' }))
+    await user.click(screen.getByRole('button', { name: 'Insert row below' }))
+    await user.click(screen.getByRole('button', { name: 'Insert column left' }))
+    await user.click(screen.getByRole('button', { name: 'Insert column right' }))
+    await user.click(screen.getByRole('button', { name: 'Delete row' }))
+    await user.click(screen.getByRole('button', { name: 'Delete column' }))
+    await user.click(screen.getByRole('button', { name: 'Delete table' }))
+    await user.click(screen.getByRole('button', { name: 'Align column right' }))
+    expect(commands.addRowBefore).toHaveBeenCalledTimes(1)
+    expect(commands.addRowAfter).toHaveBeenCalledTimes(1)
+    expect(commands.addColumnBefore).toHaveBeenCalledTimes(1)
+    expect(commands.addColumnAfter).toHaveBeenCalledTimes(1)
+    expect(commands.deleteRow).toHaveBeenCalledTimes(1)
+    expect(commands.deleteColumn).toHaveBeenCalledTimes(1)
+    expect(commands.deleteTable).toHaveBeenCalledTimes(1)
+    expect(commands.setColumnAlignment).toHaveBeenCalledWith('right')
+  })
+
+  it('marks the column’s CURRENT alignment as pressed, and only that one', () => {
+    renderBubble({ snapshot: { ...SNAPSHOT, empty: true, table: TABLE_CONTEXT } })
+    expect(screen.getByRole('button', { name: 'Align column center' })).toHaveAttribute(
+      'aria-pressed',
+      'true'
+    )
+    expect(screen.getByRole('button', { name: 'Align column left' })).toHaveAttribute(
+      'aria-pressed',
+      'false'
+    )
+  })
+})
+
+describe('SelectionBubble link controls', () => {
+  it('offers Remove link only when the selection actually carries a link', async () => {
+    const user = userEvent.setup()
+    const { commands, rerender } = renderBubble()
+    expect(screen.queryByRole('button', { name: 'Remove link' })).toBeNull()
+
+    rerender({ snapshot: { ...SNAPSHOT, marks: { ...SNAPSHOT.marks, link: true } } })
+    await user.click(screen.getByRole('button', { name: 'Remove link' }))
+    expect(commands.removeLink).toHaveBeenCalledTimes(1)
+  })
+})

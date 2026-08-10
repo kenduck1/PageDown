@@ -373,18 +373,27 @@ describe('EditorToolbar', () => {
       'Bulleted list',
       'Numbered list',
       'Insert link',
+      'Insert image',
       'Insert table',
-      'Insert page break'
+      'Insert page break',
+      'Checklist'
     ]
     editorRefBoundButtonNames.forEach((name) => {
       expect(screen.getByRole('button', { name })).toBeDisabled()
     })
     expect(screen.getByRole('combobox', { name: 'Paragraph style' })).toBeDisabled()
 
-    // Controls that do NOT touch editorRef -- an unwired placeholder button,
-    // and the view-mode switcher itself -- must stay enabled even in Source
-    // mode; only the editorRef-bound cluster is in scope for F2.
-    expect(screen.getByRole('button', { name: 'Underline' })).not.toBeDisabled()
+    // Controls that do NOT touch editorRef -- Find (which works on BOTH
+    // editing surfaces) and the view-mode switcher itself -- must stay enabled
+    // even in Source mode; only the editorRef-bound cluster is in scope.
+    //
+    // This used to assert on 'Underline', as an example of "a still-unwired
+    // placeholder button." Underline was REMOVED in the capability-gap pass
+    // (Markdown cannot express it and the sanitize schema strips the only HTML
+    // that could -- see EditorToolbar.tsx's own block comment), so the example
+    // is now a genuinely-wired control that is genuinely surface-independent,
+    // which is a better thing for this assertion to be pinning anyway.
+    expect(screen.getByRole('button', { name: 'Find' })).not.toBeDisabled()
     expect(screen.getByRole('button', { name: 'Source' })).not.toBeDisabled()
 
     useAppStore.setState({ viewMode: 'format' })
@@ -419,8 +428,10 @@ describe('EditorToolbar', () => {
       'Bulleted list',
       'Numbered list',
       'Insert link',
+      'Insert image',
       'Insert table',
-      'Insert page break'
+      'Insert page break',
+      'Checklist'
     ]
     editorRefBoundButtonNames.forEach((name) => {
       expect(screen.getByRole('button', { name })).toBeDisabled()
@@ -798,6 +809,138 @@ describe('EditorToolbar', () => {
       render(<EditorToolbar editorRef={ref} />)
 
       expect(screen.getByLabelText('Find')).toBeEnabled()
+    })
+  })
+
+  // The capability-gap pass, part C: six controls in this toolbar rendered at
+  // full opacity, took hover styling and keyboard focus, and did nothing at all
+  // when clicked. Three are now wired; three were removed because Markdown
+  // genuinely cannot express them (see EditorToolbar.tsx's own block comments).
+  describe('EditorToolbar formerly-dead controls', () => {
+    it('has no Underline, Text color or Split cell button any more', () => {
+      // Removing a control is better than shipping a dead one: a button that
+      // acknowledges a click and does nothing reads as BROKEN, not as unbuilt.
+      // Underline and text colour have no Markdown syntax and the pipeline's
+      // sanitize schema strips the only HTML that could carry them; split cell
+      // only means anything against merged cells, which GFM pipe tables cannot
+      // express at all.
+      const ref = createRef<MilkdownEditorHandle>()
+      render(<EditorToolbar editorRef={ref} />)
+      expect(screen.queryByRole('button', { name: 'Underline' })).toBeNull()
+      expect(screen.queryByRole('button', { name: 'Text color' })).toBeNull()
+      expect(screen.queryByRole('button', { name: 'Split cell' })).toBeNull()
+    })
+
+    it('Checklist dispatches toggleTaskList', async () => {
+      const user = userEvent.setup()
+      const handle = createFakeEditorHandle()
+      const ref = { current: handle }
+      render(<EditorToolbar editorRef={ref} />)
+
+      await user.click(screen.getByRole('button', { name: 'Checklist' }))
+      expect(handle.toggleTaskList).toHaveBeenCalledTimes(1)
+    })
+
+    it('Checklist reports its pressed state from taskList, not from bullet-list membership', () => {
+      const ref = createRef<MilkdownEditorHandle>()
+      const base = {
+        from: 1,
+        to: 1,
+        empty: true,
+        hasFocus: true,
+        nodeSelection: false,
+        marks: { bold: false, italic: false, inlineCode: false, link: false },
+        linkHref: null,
+        headingLevel: null,
+        table: null
+      }
+      // A plain bullet: Bulleted list pressed, Checklist NOT -- the distinction
+      // that makes `taskList` a separate snapshot field at all, since every task
+      // item is also a bullet_list item.
+      const { rerender } = render(
+        <EditorToolbar
+          editorRef={ref}
+          selection={{ ...base, listType: 'bullet_list', taskList: false }}
+        />
+      )
+      expect(screen.getByRole('button', { name: 'Checklist' })).toHaveAttribute(
+        'aria-pressed',
+        'false'
+      )
+      expect(screen.getByRole('button', { name: 'Bulleted list' })).toHaveAttribute(
+        'aria-pressed',
+        'true'
+      )
+
+      rerender(
+        <EditorToolbar
+          editorRef={ref}
+          selection={{ ...base, listType: 'bullet_list', taskList: true }}
+        />
+      )
+      expect(screen.getByRole('button', { name: 'Checklist' })).toHaveAttribute(
+        'aria-pressed',
+        'true'
+      )
+    })
+
+    it('Insert image opens a real file input and forwards the picked files', async () => {
+      const handle = createFakeEditorHandle()
+      const ref = { current: handle }
+      const { container } = render(<EditorToolbar editorRef={ref} />)
+
+      const input = container.querySelector('input[type="file"]') as HTMLInputElement
+      expect(input).not.toBeNull()
+      // A real OS picker cannot be driven from jsdom, so the click-through is
+      // asserted structurally (the button calls .click() on this input) and the
+      // forwarding is asserted by firing the input's own change event with real
+      // File objects -- which is exactly what Chromium delivers after a pick.
+      const clickSpy = vi.spyOn(input, 'click')
+      await userEvent.click(screen.getByRole('button', { name: 'Insert image' }))
+      expect(clickSpy).toHaveBeenCalledTimes(1)
+
+      const file = new File(['x'], 'photo.png', { type: 'image/png' })
+      await userEvent.upload(input, file)
+      expect(handle.insertImages).toHaveBeenCalledTimes(1)
+      expect(
+        (handle.insertImages as unknown as { mock: { calls: File[][][] } }).mock.calls[0][0][0].name
+      ).toBe('photo.png')
+      // Cleared so picking the SAME file twice still fires a change event.
+      expect(input.value).toBe('')
+    })
+
+    it('the Font size select shows the document’s real size and reports changes', async () => {
+      const user = userEvent.setup()
+      const ref = createRef<MilkdownEditorHandle>()
+      const onSetFontSize = vi.fn()
+      useDocumentStore.setState({ content: '---\nfontSize: 12\n---\n\n# Doc\n' })
+      render(<EditorToolbar editorRef={ref} onSetFontSize={onSetFontSize} />)
+
+      const select = screen.getByRole('combobox', { name: 'Font size' })
+      // This is the assertion the old control could never have passed: it had a
+      // hardcoded `defaultValue="11"` and no onChange at all, so it reported a
+      // size the document did not have and discarded every change.
+      expect(select).toHaveValue('12')
+      await user.selectOptions(select, '16')
+      expect(onSetFontSize).toHaveBeenCalledWith(16)
+    })
+
+    it('the Font size select offers a Default option that reports the string', async () => {
+      const user = userEvent.setup()
+      const ref = createRef<MilkdownEditorHandle>()
+      const onSetFontSize = vi.fn()
+      useDocumentStore.setState({ content: '---\nfontSize: 12\n---\n\n# Doc\n' })
+      render(<EditorToolbar editorRef={ref} onSetFontSize={onSetFontSize} />)
+
+      await user.selectOptions(screen.getByRole('combobox', { name: 'Font size' }), 'default')
+      expect(onSetFontSize).toHaveBeenCalledWith('default')
+    })
+
+    it('the Font size select falls back to Default for a document that sets none', () => {
+      const ref = createRef<MilkdownEditorHandle>()
+      useDocumentStore.setState({ content: '# Doc\n' })
+      render(<EditorToolbar editorRef={ref} />)
+      expect(screen.getByRole('combobox', { name: 'Font size' })).toHaveValue('default')
     })
   })
 })

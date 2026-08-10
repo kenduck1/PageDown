@@ -86,18 +86,18 @@ function setup(): {
     getSlashItems: vi.fn(() => [fakeItem('a'), fakeItem('b')]),
     runSlashItem: vi.fn(),
     insertImages: vi.fn(),
-  removeLink: vi.fn(),
-  toggleTaskList: vi.fn(),
-  addRowBefore: vi.fn(),
-  addRowAfter: vi.fn(),
-  addColumnBefore: vi.fn(),
-  addColumnAfter: vi.fn(),
-  deleteRow: vi.fn(),
-  deleteColumn: vi.fn(),
-  deleteTable: vi.fn(),
-  setColumnAlignment: vi.fn(),
-  getTableRect: vi.fn(() => null),
-  setActiveSlashIndex: vi.fn()
+    removeLink: vi.fn(),
+    toggleTaskList: vi.fn(),
+    addRowBefore: vi.fn(),
+    addRowAfter: vi.fn(),
+    addColumnBefore: vi.fn(),
+    addColumnAfter: vi.fn(),
+    deleteRow: vi.fn(),
+    deleteColumn: vi.fn(),
+    deleteTable: vi.fn(),
+    setColumnAlignment: vi.fn(),
+    getTableRect: vi.fn(() => null),
+    setActiveSlashIndex: vi.fn()
   }
   const canvas = document.createElement('div')
   const pane = document.createElement('div')
