@@ -1710,6 +1710,50 @@ describe('EditorScreen', () => {
       })
       expect(await screen.findByLabelText('Font family')).toHaveValue('inter')
     })
+
+    // Capability-gap pass. The size select had `defaultValue="11"` and no
+    // onChange whatsoever: it visibly moved to whatever was picked and changed
+    // nothing, while also reporting a size (11) the app never rendered at.
+    it('choosing a size in the toolbar writes fontSize into the document frontmatter', async () => {
+      const user = userEvent.setup()
+      useDocumentStore.setState({ filePath: '/tmp/report.md', content: '# Report\n\nBody' })
+      render(<EditorScreen />)
+
+      const select = await screen.findByLabelText('Font size')
+      expect(select).toHaveValue('default')
+
+      await user.selectOptions(select, '12')
+
+      await waitFor(() => {
+        expect(useDocumentStore.getState().content).toContain('fontSize: 12')
+      })
+      expect(await screen.findByLabelText('Font size')).toHaveValue('12')
+    })
+
+    it('an explicit size reaches the Milkdown canvas as a real class', async () => {
+      // Both rendering surfaces build their class list from the SAME
+      // documentStyleClasses helper, so proving it lands here proves the
+      // sandboxed paginator gets it too -- that shared list is exactly what
+      // stops the two diverging.
+      useDocumentStore.setState({
+        filePath: '/tmp/report.md',
+        content: '---\nfontSize: 16\n---\n\n# Report'
+      })
+      render(<EditorScreen />)
+
+      await screen.findByTestId('page-card')
+      const mount = document.querySelector('.milkdown-mount') as HTMLElement
+      expect(mount.className).toContain('pagedown-size-16')
+    })
+
+    it('emits NO size class for a document that sets no size', async () => {
+      useDocumentStore.setState({ filePath: '/tmp/report.md', content: '# Report' })
+      render(<EditorScreen />)
+
+      await screen.findByTestId('page-card')
+      const mount = document.querySelector('.milkdown-mount') as HTMLElement
+      expect(mount.className).not.toContain('pagedown-size-')
+    })
   })
 
   describe('page navigation', () => {

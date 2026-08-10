@@ -1,8 +1,9 @@
 import { forwardRef, useImperativeHandle } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, render, screen } from '@testing-library/react'
+import { act, cleanup, render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import type { MilkdownEditorHandle } from '../milkdown/MilkdownEditor'
+import type { SelectionSnapshot } from '../milkdown/selection-plugin'
 
 // End-to-end wiring coverage for Insert link: toolbar button -> LinkComposer
 // row -> editorRef.insertLink(href). Same module-mock pattern
@@ -64,13 +65,23 @@ const mockEditorHandle = vi.hoisted(() => ({
   setActiveSlashIndex: vi.fn()
 }))
 
+// Captures EditorScreen's own onSelectionChanged so a test can push a real
+// SelectionSnapshot through the same path the selection plugin uses -- jsdom's
+// Selection API does not drive ProseMirror at all, and the composer's prefill
+// is derived from that snapshot.
+const { selectionListener } = vi.hoisted(() => ({
+  selectionListener: { current: null as ((s: SelectionSnapshot | null) => void) | null }
+}))
+
 vi.mock('../milkdown/MilkdownEditor', () => ({
-  default: forwardRef<MilkdownEditorHandle, { content: string }>(
-    function FakeMilkdownEditor(props, ref) {
-      useImperativeHandle(ref, () => mockEditorHandle, [])
-      return <div data-testid="fake-milkdown-editor">{props.content}</div>
-    }
-  )
+  default: forwardRef<
+    MilkdownEditorHandle,
+    { content: string; onSelectionChanged?: (s: SelectionSnapshot | null) => void }
+  >(function FakeMilkdownEditor(props, ref) {
+    useImperativeHandle(ref, () => mockEditorHandle, [])
+    selectionListener.current = props.onSelectionChanged ?? null
+    return <div data-testid="fake-milkdown-editor">{props.content}</div>
+  })
 }))
 
 import EditorScreen from './EditorScreen'
@@ -207,5 +218,38 @@ describe('EditorScreen insert link', () => {
     // would need one of them, and would then need SplitPreview's zero-size
     // rectangle workaround the way both full-screen modals do.
     expect(row.className).not.toMatch(/\b(fixed|absolute)\b/)
+  })
+
+  // Capability-gap pass: the composer is prefilled from the LIVE selection
+  // snapshot's `linkHref`, which is what makes an existing link editable at
+  // all. Previously the field opened blank every time, so a user could not
+  // even see the URL they were about to (destructively) replace.
+  it('prefills the URL field from the selection’s existing link, and offers Remove link', async () => {
+    useDocumentStore.setState({ filePath: '/tmp/report.md', content: '# Report' })
+    const user = userEvent.setup()
+    render(<EditorScreen />)
+
+    // Fire a selection carrying a link, exactly as milkdown/selection-plugin
+    // reports one, then open the composer.
+    act(() => {
+      selectionListener.current?.({
+        from: 1,
+        to: 5,
+        empty: false,
+        hasFocus: true,
+        nodeSelection: false,
+        marks: { bold: false, italic: false, inlineCode: false, link: true },
+        linkHref: 'https://old.example.com',
+        headingLevel: null,
+        listType: null,
+        taskList: false,
+        table: null
+      })
+    })
+    await user.click(screen.getByRole('button', { name: 'Insert link' }))
+
+    expect(screen.getByRole('textbox', { name: 'Link URL' })).toHaveValue('https://old.example.com')
+    await user.click(screen.getByRole('button', { name: 'Remove link' }))
+    expect(mockEditorHandle.removeLink).toHaveBeenCalledTimes(1)
   })
 })

@@ -124,9 +124,7 @@ describe('insertLink', () => {
 
 describe('removeLink', () => {
   it('removes the whole link from a bare caret inside it', async () => {
-    const { commands, markdown, caretIn } = await harness(
-      'See [docs](https://example.com) here.\n'
-    )
+    const { commands, markdown, caretIn } = await harness('See [docs](https://example.com) here.\n')
     caretIn('docs')
     commands.removeLink()
     expect(markdown()).toBe('See docs here.\n')

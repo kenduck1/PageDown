@@ -77,7 +77,15 @@ const mockEditorHandle = vi.hoisted(() => ({
   deleteColumn: vi.fn(),
   deleteTable: vi.fn(),
   setColumnAlignment: vi.fn(),
-  getTableRect: vi.fn(() => null),
+  // Mirrors the real contract (readTableRect returns a rect ONLY for a
+  // collapsed selection inside a table), so the ranged-selection tests below
+  // still exercise the getSelectionRect fallback rather than silently taking
+  // this branch.
+  getTableRect: vi.fn(() =>
+    snapshotToFire.current?.empty && snapshotToFire.current.table
+      ? { left: 220, top: 200, right: 520, bottom: 320 }
+      : null
+  ),
   setActiveSlashIndex: vi.fn()
 }))
 
@@ -267,6 +275,52 @@ describe('EditorScreen selection bubble', () => {
 
     const bubble = screen.getByRole('toolbar', { name: 'Text formatting' })
     expect(screen.getByTestId('document-content').contains(bubble)).toBe(false)
+  })
+})
+
+// Capability-gap pass: the bubble is now context-sensitive, so this wiring
+// test covers the two things that only exist at THIS level -- that the caret's
+// enclosing table raises the bubble at all, and that its table buttons reach
+// the real editor handle.
+describe('EditorScreen selection bubble: table controls', () => {
+  const TABLE_CARET: SelectionSnapshot = {
+    ...RANGED_SNAPSHOT,
+    from: 7,
+    to: 7,
+    empty: true,
+    table: { tablePos: 0, column: 1, alignment: null }
+  }
+
+  it('raises the bubble for a bare caret inside a table and dispatches its commands', async () => {
+    const user = userEvent.setup()
+    render(<EditorScreen />)
+
+    snapshotToFire.current = TABLE_CARET
+    await user.click(screen.getByTestId('fire-selection'))
+
+    const bubble = screen.getByRole('toolbar', { name: 'Text formatting' })
+    await user.click(buttonIn(bubble, 'Insert row below'))
+    expect(mockEditorHandle.addRowAfter).toHaveBeenCalledTimes(1)
+
+    await user.click(buttonIn(bubble, 'Delete column'))
+    expect(mockEditorHandle.deleteColumn).toHaveBeenCalledTimes(1)
+
+    await user.click(buttonIn(bubble, 'Align column center'))
+    expect(mockEditorHandle.setColumnAlignment).toHaveBeenCalledWith('center')
+  })
+
+  it('anchors to the TABLE rect for that caret case, not to the caret box', async () => {
+    // getTableRect returns non-null only for a collapsed selection inside a
+    // table; EditorScreen must prefer it, because sameSnapshot ignores
+    // collapsed positions and so nothing would ever re-measure a caret anchor
+    // as the user types or tabs across the row.
+    const user = userEvent.setup()
+    render(<EditorScreen />)
+
+    snapshotToFire.current = TABLE_CARET
+    await user.click(screen.getByTestId('fire-selection'))
+
+    expect(mockEditorHandle.getTableRect).toHaveBeenCalled()
   })
 })
 
