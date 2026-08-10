@@ -51,6 +51,7 @@
 //   customWidth: 8.5            # inches; only meaningful when page: Custom
 //   customHeight: 11            # inches; only meaningful when page: Custom
 //   fontFamily: source-serif-4  # 'source-serif-4' | 'inter'
+//   fontSize: default           # 'default' | 9 | 10 | 11 | 12 | 14 | 16 | 18 (px)
 //   pageNumberFormat: decimal   # 'decimal' | 'roman'
 //   theme: default              # 'default' | 'resume' | 'letter' | 'report'
 //
@@ -170,6 +171,16 @@ export type Orientation = 'portrait' | 'landscape'
 export type PageNumberFormat = 'decimal' | 'roman'
 export type PageTheme = 'default' | 'resume' | 'letter' | 'report'
 export type PageFontFamily = 'source-serif-4' | 'inter'
+// Body text size, in CSS pixels, or 'default' -- meaning "whatever the
+// document's THEME says", which is the pre-existing behaviour and stays the
+// out-of-the-box one. A closed union rather than a free number for the same
+// reason `pageSize` is: this value comes from hand-editable frontmatter, which
+// this project treats as attacker-controllable, and a closed union means no
+// clamp is needed to keep an absurd value out of the emitted CSS (the sizes
+// map to a fixed set of hand-written classes -- see document-typography.css).
+// The seven values are exactly the ones the toolbar's own size dropdown has
+// offered since the design handoff; it simply had no `onChange` until now.
+export type PageFontSize = 'default' | 9 | 10 | 11 | 12 | 14 | 16 | 18
 export type TextDirection = 'ltr' | 'rtl'
 
 export interface PageMargins {
@@ -200,6 +211,7 @@ export interface PageConfig {
   customWidth: number
   customHeight: number
   fontFamily: PageFontFamily
+  fontSize: PageFontSize
   pageNumberFormat: PageNumberFormat
   theme: PageTheme
   // Basic RTL support, per the master design doc's own non-goals section:
@@ -231,6 +243,7 @@ export const DEFAULT_PAGE_CONFIG: PageConfig = {
   customWidth: 8.5,
   customHeight: 11,
   fontFamily: 'source-serif-4',
+  fontSize: 'default',
   pageNumberFormat: 'decimal',
   theme: 'default',
   direction: 'ltr'
@@ -241,6 +254,13 @@ const ORIENTATIONS: readonly Orientation[] = ['portrait', 'landscape']
 const PAGE_NUMBER_FORMATS: readonly PageNumberFormat[] = ['decimal', 'roman']
 const THEMES: readonly PageTheme[] = ['default', 'resume', 'letter', 'report']
 const FONT_FAMILIES: readonly PageFontFamily[] = ['source-serif-4', 'inter']
+// Kept in sync BY HAND with document-typography.css's own
+// `.pagedown-size-<n>` rules and EditorToolbar's dropdown. A value here with
+// no matching CSS class would parse and round-trip perfectly while changing
+// nothing on either surface -- the same silent-no-op failure mode the
+// `var(--...)` cross-check test exists to catch elsewhere, which is why
+// document-style.test.ts asserts this list against the stylesheet directly.
+export const PAGE_FONT_SIZES: readonly PageFontSize[] = [9, 10, 11, 12, 14, 16, 18]
 const TEXT_DIRECTIONS: readonly TextDirection[] = ['ltr', 'rtl']
 
 function isFiniteNumber(value: unknown): value is number {
@@ -352,6 +372,20 @@ export function extractPageConfig(rawFrontmatterYaml: string): Partial<PageConfi
     (FONT_FAMILIES as string[]).includes(parsed.fontFamily)
   ) {
     result.fontFamily = parsed.fontFamily as PageFontFamily
+  }
+
+  // Accepts both `fontSize: default` (js-yaml resolves an unquoted `default`
+  // to the STRING 'default', not to any special YAML value -- verified) and a
+  // bare number. Anything else -- a size not in the list, a string like
+  // '12px', a float -- is dropped so the caller's own default applies, exactly
+  // as every other owned key here behaves on a malformed value.
+  if (parsed.fontSize === 'default') {
+    result.fontSize = 'default'
+  } else if (
+    isFiniteNumber(parsed.fontSize) &&
+    (PAGE_FONT_SIZES as number[]).includes(parsed.fontSize)
+  ) {
+    result.fontSize = parsed.fontSize as PageFontSize
   }
 
   if (
@@ -511,6 +545,9 @@ function buildOwnedLines(updates: Partial<PageConfig>): OwnedLine[] {
   }
   if (updates.fontFamily !== undefined) {
     lines.push({ key: 'fontFamily', text: `fontFamily: ${updates.fontFamily}` })
+  }
+  if (updates.fontSize !== undefined) {
+    lines.push({ key: 'fontSize', text: `fontSize: ${updates.fontSize}` })
   }
   if (updates.pageNumberFormat !== undefined) {
     lines.push({ key: 'pageNumberFormat', text: `pageNumberFormat: ${updates.pageNumberFormat}` })

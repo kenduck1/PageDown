@@ -10,6 +10,7 @@
 import type {
   PageConfig,
   PageFontFamily,
+  PageFontSize,
   PageNumberFormat,
   PageRunningContent,
   PageTheme,
@@ -19,6 +20,16 @@ import type {
 export interface DocumentStyle {
   theme: PageTheme
   fontFamily: PageFontFamily
+  // Body text size in CSS pixels, or 'default' -- see PageFontSize. Applied
+  // the same way theme/fontFamily are: as one more class on each surface's own
+  // `.pagedown-document` element (`pagedown-size-<n>`), never as an inline
+  // style, so both surfaces read the identical rules out of the identical
+  // stylesheet. 'default' deliberately emits NO class at all, matching how
+  // `theme: 'default'` and `fontFamily: 'source-serif-4'` emit no rules -- the
+  // base stylesheet already IS the default, and a no-op override would risk
+  // Gate 10's 0.000px editor/paginator parity for the case nothing is supposed
+  // to change.
+  fontSize: PageFontSize
   // null means "do not render this band at all", collapsing showHeader/
   // showFooter here so no consumer has to distinguish "hidden" from "empty".
   header: PageRunningContent | null
@@ -31,6 +42,7 @@ export function resolveDocumentStyle(config: PageConfig): DocumentStyle {
   return {
     theme: config.theme,
     fontFamily: config.fontFamily,
+    fontSize: config.fontSize,
     header: config.showHeader ? config.header : null,
     footer: config.showFooter ? config.footer : null,
     pageNumberFormat: config.pageNumberFormat,
@@ -41,6 +53,7 @@ export function resolveDocumentStyle(config: PageConfig): DocumentStyle {
 export const DEFAULT_DOCUMENT_STYLE: DocumentStyle = {
   theme: 'default',
   fontFamily: 'source-serif-4',
+  fontSize: 'default',
   header: null,
   footer: { left: '', center: 'Page {n} of {total}', right: '' },
   pageNumberFormat: 'decimal',
@@ -128,6 +141,23 @@ function buildBand(
 // The returned string is spliced INSIDE the existing `@page { ... }` block in
 // resources/pagination-render/index.ts -- these are nested margin-box rules,
 // not standalone ones.
+/**
+ * The `.pagedown-document`-scoped classes a surface must carry for this style,
+ * beyond `pagedown-document` itself. ONE list, consumed by both surfaces (the
+ * Milkdown mount div in MilkdownEditor.tsx, and the sandboxed context's
+ * `<body>` in resources/pagination-render/index.ts), so a class added for one
+ * cannot be forgotten on the other -- which is exactly the divergence class
+ * this whole shared-typography design exists to prevent.
+ *
+ * 'default'/'source-serif-4' emit no class, matching the "no rules for the
+ * default" convention document-typography.css's own theme section documents.
+ */
+export function documentStyleClasses(style: DocumentStyle): string[] {
+  const classes = [`pagedown-theme-${style.theme}`, `pagedown-font-${style.fontFamily}`]
+  if (style.fontSize !== 'default') classes.push(`pagedown-size-${style.fontSize}`)
+  return classes
+}
+
 export function buildRunningContentCss(style: DocumentStyle): string {
   return [
     buildBand('top', style.header, style.pageNumberFormat),

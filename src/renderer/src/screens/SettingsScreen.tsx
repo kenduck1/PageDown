@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useAppStore } from '../store/appStore'
 import { usePreferencesStore } from '../store/preferencesStore'
 import type { Preferences, DefaultPageConfig } from '../../../preload/index.d'
@@ -62,6 +62,15 @@ function SettingsScreen(): React.JSX.Element {
     setLastSyncedAutosaveMs(preferences.autosaveIntervalMs)
     setAutosaveSecondsInput(String(Math.round(preferences.autosaveIntervalMs / 1000)))
   }
+
+  // A genuine one-shot async fetch (main process's app.getVersion(), which
+  // the renderer has no direct way to read), not a value mirrored from any
+  // store -- a plain effect is the right tool here, unlike the
+  // render-time-sync pattern the autosave buffer above needs.
+  const [appVersion, setAppVersion] = useState<string | null>(null)
+  useEffect(() => {
+    window.api.getAppVersion().then(setAppVersion)
+  }, [])
 
   // Genuinely possible (not just defensive): App.tsx's own getPreferences()
   // call may not have resolved yet if a user navigates here fast enough
@@ -279,6 +288,10 @@ function SettingsScreen(): React.JSX.Element {
             </select>
           </label>
         </section>
+
+        <footer className="pt-2 text-center text-11-5 text-text-tertiary">
+          PageDown{appVersion ? ` ${appVersion}` : ''}
+        </footer>
       </div>
     </div>
   )

@@ -37,7 +37,8 @@ import {
   resolvePageConfig,
   applyPageConfig,
   type PageConfig,
-  type PageFontFamily
+  type PageFontFamily,
+  type PageFontSize
 } from '../../../markdown/page-config'
 import { computePageGeometry } from '../../../typography/page-geometry'
 import { resolveDocumentStyle } from '../../../typography/document-style'
@@ -140,7 +141,14 @@ function EditorScreen(): React.JSX.Element {
   // to do with it, and branching here would just be a second, drifting copy of
   // those rules.
   const measureSelectionGeometry = useCallback((): void => {
-    const anchor = editorRef.current?.getSelectionRect() ?? null
+    // getTableRect FIRST, falling back to the selection rect. It returns
+    // non-null only for a COLLAPSED selection inside a table -- the one case
+    // where a caret-derived anchor cannot be kept fresh, because sameSnapshot
+    // deliberately ignores collapsed positions (that exemption is what stops
+    // typing costing a React render per character). See readTableRect's own
+    // doc comment for the full argument.
+    const commands = editorRef.current
+    const anchor = commands ? (commands.getTableRect() ?? commands.getSelectionRect()) : null
     setSelectionAnchor((prev) => (sameRect(prev, anchor) ? prev : anchor))
     const pane = editorPaneRef.current
     const canvas = canvasRef.current
@@ -858,6 +866,14 @@ function EditorScreen(): React.JSX.Element {
     editorRef.current?.insertLink(href)
   }
 
+  // The composer's "Remove link" button. Separate from handleInsertLink
+  // because it is a genuinely different command (unlinkCommand, which removes
+  // the mark across the WHOLE link rather than only the selected characters),
+  // not insertLink with an empty href.
+  const handleRemoveLink = (): void => {
+    editorRef.current?.removeLink()
+  }
+
   // authorName '' (the default -- no accounts system, see Preferences'
   // own comment) falls back to the literal label "You" here, matching
   // EditorComments.tsx's own identical fallback for DISPLAYING an existing
@@ -1016,6 +1032,19 @@ function EditorScreen(): React.JSX.Element {
     const newRawYaml = applyPageConfig(extractRawFrontmatter(content), {
       ...pageConfig,
       fontFamily
+    })
+    replaceContent(replaceRawFrontmatter(content, newRawYaml))
+  }
+
+  // The toolbar's body-size control -- the same frontmatter write path, and
+  // the same tradeoffs (bumps `revision`, so the editor remounts and the
+  // cursor position is lost), as handleSetFontFamily immediately above. Kept
+  // as a sibling rather than folded into one generic handler so each stays
+  // readable at its own call site; both are one-line spreads over pageConfig.
+  const handleSetFontSize = (fontSize: PageFontSize): void => {
+    const newRawYaml = applyPageConfig(extractRawFrontmatter(content), {
+      ...pageConfig,
+      fontSize
     })
     replaceContent(replaceRawFrontmatter(content, newRawYaml))
   }
@@ -1315,6 +1344,7 @@ function EditorScreen(): React.JSX.Element {
         editorRef={editorRef}
         onSetViewMode={handleSetViewMode}
         onSetFontFamily={handleSetFontFamily}
+        onSetFontSize={handleSetFontSize}
         // The same snapshot the selection bubble runs on, reused here so
         // Bold/Italic/list buttons show real pressed state instead of the
         // hardcoded `active={false}` they carried since the design handoff.
@@ -1344,7 +1374,18 @@ function EditorScreen(): React.JSX.Element {
       {/* Same layout-row placement/reasoning as FindBar/CommentComposer above
       -- see LinkComposer.tsx's own module comment, including why the
       window.prompt call this replaced could never have worked in Electron. */}
-      <LinkComposer onInsertLink={handleInsertLink} />
+      <LinkComposer
+        // Prefilled from the live selection snapshot, so editing an existing
+        // link starts from its real current URL rather than a blank field --
+        // half of the fix for the "correcting a link's URL DELETED the link"
+        // bug (EditorCommands.insertLink's update-vs-toggle branch is the
+        // other half). Empty string when the selection carries no link, which
+        // is also what switches the row between Insert and Update wording and
+        // decides whether "Remove link" is offered at all.
+        initialHref={selectionSnapshot?.linkHref ?? ''}
+        onInsertLink={handleInsertLink}
+        onRemoveLink={handleRemoveLink}
+      />
       {/* Same layout-row placement/reasoning as FindBar/CommentComposer above
       -- see RemoteImageBanner.tsx's own module comment. */}
       <RemoteImageBanner />
@@ -1520,7 +1561,19 @@ function EditorScreen(): React.JSX.Element {
           toggleHeading: (level) => editorRef.current?.toggleHeading(level),
           setParagraph: () => editorRef.current?.setParagraph(),
           insertLink: openLinkComposer,
-          addComment: openCommentComposer
+          addComment: openCommentComposer,
+          removeLink: () => editorRef.current?.removeLink(),
+          // Table structure editing. Same "dispatch through the SAME
+          // MilkdownEditorHandle methods, never a second command path" rule as
+          // the formatting commands above.
+          addRowBefore: () => editorRef.current?.addRowBefore(),
+          addRowAfter: () => editorRef.current?.addRowAfter(),
+          addColumnBefore: () => editorRef.current?.addColumnBefore(),
+          addColumnAfter: () => editorRef.current?.addColumnAfter(),
+          deleteRow: () => editorRef.current?.deleteRow(),
+          deleteColumn: () => editorRef.current?.deleteColumn(),
+          deleteTable: () => editorRef.current?.deleteTable(),
+          setColumnAlignment: (alignment) => editorRef.current?.setColumnAlignment(alignment)
         }}
       />
       {/* Same "render unconditionally at EditorScreen root" convention as
