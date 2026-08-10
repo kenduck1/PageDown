@@ -5,7 +5,13 @@ import { history, undo, redo } from '@milkdown/prose/history'
 import { wrapIn, setBlockType } from '@milkdown/prose/commands'
 import { Plugin, TextSelection } from '@milkdown/prose/state'
 import type { EditorState, Transaction } from '@milkdown/prose/state'
-import { deleteColumn, deleteRow, deleteTable, goToNextCell, isInTable } from '@milkdown/prose/tables'
+import {
+  deleteColumn,
+  deleteRow,
+  deleteTable,
+  goToNextCell,
+  isInTable
+} from '@milkdown/prose/tables'
 import { Fragment } from '@milkdown/prose/model'
 import type { Mark } from '@milkdown/prose/model'
 import {
@@ -689,22 +695,18 @@ function buildTaskListTransaction(ctx: Ctx, state: EditorState): Transaction | n
   return captured
 }
 
-// The nearest ancestor list_item of the selection, when it is a real GFM task
-// item (`checked` non-null -- extendListItemSchemaForTask's own toMarkdown
-// runner only emits `- [ ] `/`- [x] ` syntax for a non-null value, so `null`
-// genuinely means "an ordinary bullet", not "an unchecked task").
-function findTaskListItem(
-  ctx: Ctx,
-  state: EditorState
-): { pos: number; node: ProseNodeLike } | null {
+// The nearest ancestor list_item of the selection, whether or not it is a task
+// item. `checked` distinguishes the two: null (or absent) is an ordinary
+// bullet, false/true is an unchecked/checked task -- that is
+// extendListItemSchemaForTask's own convention, whose toMarkdown runner only
+// emits `- [ ] `/`- [x] ` syntax for a non-null value.
+function findListItem(ctx: Ctx, state: EditorState): { pos: number; node: ProseNodeLike } | null {
   const itemType = listItemSchema.type(ctx)
   const $from = state.selection.$from
   for (let depth = $from.depth; depth > 0; depth--) {
     const node = $from.node(depth)
     if (node.type !== itemType) continue
-    return node.attrs.checked === null || node.attrs.checked === undefined
-      ? null
-      : { pos: $from.before(depth), node }
+    return { pos: $from.before(depth), node }
   }
   return null
 }
@@ -728,11 +730,18 @@ interface ProseNodeLike {
 export const toggleTaskListCommand = $command(
   'ToggleTaskList',
   (ctx) => () => (state, dispatch) => {
-    const existing = findTaskListItem(ctx, state)
+    // ALREADY IN A LIST -- including a plain, non-task bullet. Flipping
+    // `checked` in place is the whole operation here; wrapping again (which
+    // buildTaskListTransaction would do) produces a NESTED list, which is not
+    // what a Checklist toggle means and was a real failure caught by this
+    // command's own test, not by inspection.
+    const existing = findListItem(ctx, state)
     if (existing) {
+      const isTask =
+        existing.node.attrs.checked !== null && existing.node.attrs.checked !== undefined
       const tr = state.tr.setNodeMarkup(existing.pos, undefined, {
         ...existing.node.attrs,
-        checked: null
+        checked: isTask ? null : false
       })
       dispatch?.(tr)
       return true
