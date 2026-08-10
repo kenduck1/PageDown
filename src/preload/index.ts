@@ -20,6 +20,12 @@ const api = {
   saveFile: (filePath: string | null, content: string, expectedMtimeMs: number | null = null) =>
     ipcRenderer.invoke('file:save', filePath, content, expectedMtimeMs),
   getRecentFiles: () => ipcRenderer.invoke('file:getRecents'),
+  // Product-completeness audit 0.6. Both only ever narrow the isKnownPath
+  // allowlist (see the main-process handlers' own comments) -- removeRecent
+  // returns the resulting list so HomeScreen can update its own state
+  // straight from the response instead of a second getRecentFiles round trip.
+  removeRecentFile: (filePath: string) => ipcRenderer.invoke('file:removeRecent', filePath),
+  clearRecentFiles: () => ipcRenderer.invoke('file:clearRecents'),
   getThumbnail: (filePath: string) => ipcRenderer.invoke('file:getThumbnail', filePath),
   getTemplateThumbnail: (content: string) => ipcRenderer.invoke('template:getThumbnail', content),
   // `filePath` is optional and used ONLY to resolve the document's local

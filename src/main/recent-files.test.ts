@@ -2,7 +2,15 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { isKnownPath, mergeRecentFiles, readRecentFiles, writeRecentFiles } from './recent-files'
+import {
+  isKnownPath,
+  mergeRecentFiles,
+  readRecentFiles,
+  writeRecentFiles,
+  removeRecentFile,
+  clearRecentFiles,
+  readRecentFilesWithStatus
+} from './recent-files'
 import { drainConfigWarnings, resetConfigWarningsForTest } from './config-warnings'
 
 describe('mergeRecentFiles', () => {
@@ -128,6 +136,121 @@ describe('isKnownPath', () => {
       const { writeFile } = await import('node:fs/promises')
       await writeFile(join(dir, 'recent-files.json'), '[{"filePath":"/a.md"}]', 'utf8')
       expect(await isKnownPath(dir, '/a.md')).toBe(false)
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+})
+
+// Product-completeness audit 0.6: "a dead recents row cannot be removed" --
+// removeRecentFile/clearRecentFiles are the fix. Both can only ever NARROW
+// the persisted list (isKnownPath's own allowlist) -- see their own comments
+// in recent-files.ts.
+describe('removeRecentFile', () => {
+  it('removes the matching entry and persists the result', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'pagedown-recent-files-'))
+    try {
+      await writeRecentFiles(dir, [
+        { filePath: '/a.md', editedAt: '2026-01-01T00:00:00.000Z' },
+        { filePath: '/b.md', editedAt: '2026-01-02T00:00:00.000Z' }
+      ])
+
+      const result = await removeRecentFile(dir, '/a.md')
+
+      expect(result).toEqual([{ filePath: '/b.md', editedAt: '2026-01-02T00:00:00.000Z' }])
+      // Persisted, not just returned -- a fresh read must see the same thing.
+      expect(await readRecentFiles(dir)).toEqual(result)
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('revokes isKnownPath access to the removed path without touching any other entry', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'pagedown-recent-files-'))
+    try {
+      await writeRecentFiles(dir, [
+        { filePath: '/a.md', editedAt: '2026-01-01T00:00:00.000Z' },
+        { filePath: '/b.md', editedAt: '2026-01-02T00:00:00.000Z' }
+      ])
+
+      await removeRecentFile(dir, '/a.md')
+
+      expect(await isKnownPath(dir, '/a.md')).toBe(false)
+      expect(await isKnownPath(dir, '/b.md')).toBe(true)
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('is a no-op (and does not write) when the path is not in the list', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'pagedown-recent-files-'))
+    try {
+      await writeRecentFiles(dir, [{ filePath: '/a.md', editedAt: '2026-01-01T00:00:00.000Z' }])
+
+      const result = await removeRecentFile(dir, '/does-not-exist.md')
+
+      expect(result).toEqual([{ filePath: '/a.md', editedAt: '2026-01-01T00:00:00.000Z' }])
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('returns an empty array when the list did not exist yet', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'pagedown-recent-files-'))
+    try {
+      expect(await removeRecentFile(dir, '/a.md')).toEqual([])
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+})
+
+describe('clearRecentFiles', () => {
+  it('wipes every entry and revokes isKnownPath access to all of them', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'pagedown-recent-files-'))
+    try {
+      await writeRecentFiles(dir, [
+        { filePath: '/a.md', editedAt: '2026-01-01T00:00:00.000Z' },
+        { filePath: '/b.md', editedAt: '2026-01-02T00:00:00.000Z' }
+      ])
+
+      await clearRecentFiles(dir)
+
+      expect(await readRecentFiles(dir)).toEqual([])
+      expect(await isKnownPath(dir, '/a.md')).toBe(false)
+      expect(await isKnownPath(dir, '/b.md')).toBe(false)
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+})
+
+describe('readRecentFilesWithStatus', () => {
+  it('marks an entry whose file is really there as exists: true, and a deleted one as exists: false', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'pagedown-recent-files-'))
+    try {
+      const realFile = join(dir, 'real.md')
+      await writeFile(realFile, '# Real', 'utf8')
+      await writeRecentFiles(dir, [
+        { filePath: realFile, editedAt: '2026-01-01T00:00:00.000Z' },
+        { filePath: join(dir, 'deleted.md'), editedAt: '2026-01-02T00:00:00.000Z' }
+      ])
+
+      const result = await readRecentFilesWithStatus(dir)
+
+      expect(result).toEqual([
+        { filePath: realFile, editedAt: '2026-01-01T00:00:00.000Z', exists: true },
+        { filePath: join(dir, 'deleted.md'), editedAt: '2026-01-02T00:00:00.000Z', exists: false }
+      ])
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('returns an empty array when no recents list exists yet', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'pagedown-recent-files-'))
+    try {
+      expect(await readRecentFilesWithStatus(dir)).toEqual([])
     } finally {
       await rm(dir, { recursive: true, force: true })
     }

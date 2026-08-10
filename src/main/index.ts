@@ -43,6 +43,8 @@ import {
   saveFileToKnownOrChosenPath,
   getRecentFiles,
   addRecentFile,
+  removeRecentFile,
+  clearRecentFiles,
   isKnownPath,
   confirmDiscardChanges,
   canonicalizeDocumentPath,
@@ -726,6 +728,29 @@ app.whenReady().then(async () => {
   )
 
   ipcMain.handle('file:getRecents', () => getRecentFiles(app.getPath('userData')))
+
+  // Product-completeness audit 0.6: "a dead recents row cannot be removed."
+  // Both handlers only ever NARROW the isKnownPath allowlist (recent-files.ts's
+  // removeRecentFile/clearRecentFiles can only drop entries, never add one --
+  // see their own comments) -- removing a path only revokes this app's own
+  // willingness to write there again via the fast (non-Save-As) path; it can
+  // never grant access to a new one. Both refresh the application menu's own
+  // File > Open Recent submenu for the same reason file:open/file:save
+  // already do (that submenu is built from this exact list) -- fire-and-
+  // forget, since a menu that's one entry behind must never block or fail an
+  // already-completed removal.
+  ipcMain.handle('file:removeRecent', async (_event, filePath: string) => {
+    const userDataDir = app.getPath('userData')
+    const updated = await removeRecentFile(userDataDir, filePath)
+    void refreshApplicationMenu()
+    return updated
+  })
+
+  ipcMain.handle('file:clearRecents', async () => {
+    const userDataDir = app.getPath('userData')
+    await clearRecentFiles(userDataDir)
+    void refreshApplicationMenu()
+  })
 
   // filePath is renderer-supplied (documentStore's own active-tab mirror) --
   // saveDroppedImage re-validates it via isKnownPath itself (same rule as

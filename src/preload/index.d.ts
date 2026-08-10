@@ -15,6 +15,11 @@ import type { WindowUiState } from '../menu/window-state'
 export interface RecentFileEntry {
   filePath: string
   editedAt: string
+  // Product-completeness audit 0.6: a real, freshly-checked (per getRecentFiles
+  // call, not cached) existence flag -- see recent-files.ts's own
+  // readRecentFilesWithStatus for what this costs and why it's computed
+  // there rather than per-row.
+  exists: boolean
 }
 
 export interface SnapshotMeta {
@@ -113,6 +118,12 @@ export interface FileApi {
     expectedMtimeMs?: number | null
   ) => Promise<{ filePath: string; mtimeMs: number; reloadedContent?: string } | null>
   getRecentFiles: () => Promise<RecentFileEntry[]>
+  // Product-completeness audit 0.6 ("Remove from recents" / "Clear recents").
+  // Both only ever narrow the isKnownPath allowlist -- see the main-process
+  // handlers' own comments in src/main/index.ts. removeRecentFile returns
+  // the resulting list so the caller can update its own state directly.
+  removeRecentFile: (filePath: string) => Promise<RecentFileEntry[]>
+  clearRecentFiles: () => Promise<void>
   getThumbnail: (filePath: string) => Promise<{ dataUrl: string; pageCount: number }>
   getTemplateThumbnail: (content: string) => Promise<{ dataUrl: string; pageCount: number }>
   // allowRemoteImages mirrors the active tab's own remote-image consent

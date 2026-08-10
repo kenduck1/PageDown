@@ -1,4 +1,4 @@
-import { readFile, writeFile, rename } from 'node:fs/promises'
+import { readFile, writeFile, rename, stat } from 'node:fs/promises'
 import { join } from 'node:path'
 import { recordConfigWarning } from './config-warnings'
 
@@ -101,4 +101,82 @@ export async function writeRecentFiles(
   const tempPath = `${finalPath}.tmp`
   await writeFile(tempPath, JSON.stringify(entries, null, 2), 'utf8')
   await rename(tempPath, finalPath)
+}
+
+// Product-completeness audit 0.6: "a dead recents row cannot be removed" --
+// there was previously no "Remove from recents" / "Clear recents" anywhere
+// in this codebase (grep: zero hits). Both operations live HERE, alongside
+// readRecentFiles/writeRecentFiles, rather than in file-io.ts, for the same
+// reason isKnownPath does: this module is deliberately Electron-free and
+// therefore directly unit-testable against a real temp directory.
+//
+// SECURITY, both functions: this list IS the isKnownPath allowlist (see that
+// function's own comment above) -- every renderer-supplied path this app
+// ever touches disk with is validated against it. Both operations below can
+// only ever NARROW the list (drop one entry, or drop all of them); neither
+// accepts, nor could be made to accept without changing its signature, a
+// path to ADD. Removing an entry therefore only ever REVOKES this app's own
+// willingness to write to that path again via saveFileToKnownOrChosenPath's
+// fast path -- it can never grant new access, and a user can always restore
+// access to a removed path by opening it again through a real native dialog.
+
+// Removes a single entry by exact filePath match and persists the result.
+// Returns the resulting list so the caller (the file:removeRecent IPC
+// handler) can hand it straight to the renderer without a second read.
+export async function removeRecentFile(
+  userDataDir: string,
+  filePath: string
+): Promise<RecentFileEntry[]> {
+  const existing = await readRecentFiles(userDataDir)
+  const updated = existing.filter((entry) => entry.filePath !== filePath)
+  // Skip the write when nothing actually changed -- removing a path that
+  // was already gone (a stale double-click, a race with another remove
+  // call) must not touch disk for no reason.
+  if (updated.length !== existing.length) {
+    await writeRecentFiles(userDataDir, updated)
+  }
+  return updated
+}
+
+// Wipes the entire allowlist. Takes no filePath argument at all -- unlike
+// removeRecentFile, there is no per-entry input here for a hostile or
+// malformed value to hide in.
+export async function clearRecentFiles(userDataDir: string): Promise<void> {
+  await writeRecentFiles(userDataDir, [])
+}
+
+export interface RecentFileEntryWithStatus extends RecentFileEntry {
+  // Whether this entry's file is still actually there, as of THIS read --
+  // not cached, not persisted (a file deleted a second after this read
+  // would still report true; that's fine, this is a display hint, not a
+  // security check -- isKnownPath's own allowlist semantics are completely
+  // unaffected by this field either way).
+  exists: boolean
+}
+
+// Enriches each entry with a real, freshly-checked existence flag -- product-
+// completeness audit 0.6's "mark rows whose file no longer exists" fix.
+// Deliberately a bare fs.stat, not readFileByPath/getThumbnail's full
+// open-and-render path: CLAUDE.md's own cost note on this app's recents rows
+// already flags that a thumbnail CACHE MISS costs a stat + a version-history
+// index read + a full snapshot-content read PER ROW -- so this must not add
+// a second per-row round trip on top of that. It doesn't: this is the ONE
+// place recents existence is checked, called once by the file:getRecents
+// handler (batched into the single call the Home screen already makes on
+// mount), and its own cost is exactly one extra `stat` per entry (capped at
+// mergeRecentFiles' maxEntries, 10) -- no content read, no version-history
+// touch, run in parallel via Promise.all rather than sequentially.
+export async function readRecentFilesWithStatus(
+  userDataDir: string
+): Promise<RecentFileEntryWithStatus[]> {
+  const entries = await readRecentFiles(userDataDir)
+  return Promise.all(
+    entries.map(async (entry) => ({
+      ...entry,
+      exists: await stat(entry.filePath).then(
+        () => true,
+        () => false
+      )
+    }))
+  )
 }

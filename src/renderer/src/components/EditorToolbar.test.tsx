@@ -69,6 +69,8 @@ beforeEach(() => {
     openPath: vi.fn(),
     saveFile: vi.fn(),
     getRecentFiles: vi.fn(),
+    removeRecentFile: vi.fn(),
+    clearRecentFiles: vi.fn(),
     getThumbnail: vi.fn(),
     getTemplateThumbnail: vi.fn(),
     getPageCount: vi.fn(),

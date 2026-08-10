@@ -14,6 +14,8 @@ beforeEach(() => {
     openPath: vi.fn(),
     saveFile: vi.fn(),
     getRecentFiles: vi.fn().mockResolvedValue([]),
+    removeRecentFile: vi.fn(),
+    clearRecentFiles: vi.fn(),
     getThumbnail: vi.fn().mockResolvedValue({ dataUrl: 'data:image/png;base64,x', pageCount: 1 }),
     getTemplateThumbnail: vi
       .fn()
@@ -168,7 +170,7 @@ describe('HomeScreen', () => {
 
   it('renders recent files and opens one on click', async () => {
     vi.mocked(window.api.getRecentFiles).mockResolvedValue([
-      { filePath: '/tmp/report.md', editedAt: new Date().toISOString() }
+      { filePath: '/tmp/report.md', editedAt: new Date().toISOString(), exists: true }
     ])
     vi.mocked(window.api.openPath).mockResolvedValue({
       filePath: '/tmp/report.md',
@@ -188,7 +190,7 @@ describe('HomeScreen', () => {
 
   it('"Open in new window" calls window.api.openInNewWindow with the file path, without navigating this window at all', async () => {
     vi.mocked(window.api.getRecentFiles).mockResolvedValue([
-      { filePath: '/tmp/report.md', editedAt: new Date().toISOString() }
+      { filePath: '/tmp/report.md', editedAt: new Date().toISOString(), exists: true }
     ])
     const user = userEvent.setup()
     render(<HomeScreen />)
@@ -204,10 +206,89 @@ describe('HomeScreen', () => {
     expect(useDocumentStore.getState().filePath).toBeNull()
   })
 
+  // Product-completeness audit 0.6: "Remove from recents" / "Clear recents".
+  it('"Remove from recents" removes just that row, without navigating or opening anything', async () => {
+    vi.mocked(window.api.getRecentFiles).mockResolvedValue([
+      { filePath: '/tmp/report.md', editedAt: new Date().toISOString(), exists: true },
+      { filePath: '/tmp/letter.md', editedAt: new Date().toISOString(), exists: true }
+    ])
+    vi.mocked(window.api.removeRecentFile).mockResolvedValue([
+      { filePath: '/tmp/letter.md', editedAt: new Date().toISOString(), exists: true }
+    ])
+    const user = userEvent.setup()
+    render(<HomeScreen />)
+
+    await screen.findByText('report.md')
+    const removeButtons = screen.getAllByRole('button', { name: 'Remove from recents' })
+    // Two rows -> two remove buttons; click the first (report.md, which
+    // renders first per the recents-list order returned above).
+    await user.click(removeButtons[0])
+
+    expect(window.api.removeRecentFile).toHaveBeenCalledWith('/tmp/report.md')
+    expect(await screen.findByText('letter.md')).toBeInTheDocument()
+    expect(screen.queryByText('report.md')).not.toBeInTheDocument()
+    // Removing a row is not opening it.
+    expect(window.api.openPath).not.toHaveBeenCalled()
+    expect(useAppStore.getState().screen).toBe('home')
+  })
+
+  it('"Clear all" clears every recent row and hides itself once the list is empty', async () => {
+    vi.mocked(window.api.getRecentFiles).mockResolvedValue([
+      { filePath: '/tmp/report.md', editedAt: new Date().toISOString(), exists: true },
+      { filePath: '/tmp/letter.md', editedAt: new Date().toISOString(), exists: true }
+    ])
+    vi.mocked(window.api.clearRecentFiles).mockResolvedValue(undefined)
+    const user = userEvent.setup()
+    render(<HomeScreen />)
+
+    await screen.findByText('report.md')
+    await user.click(screen.getByRole('button', { name: 'Clear all' }))
+
+    expect(window.api.clearRecentFiles).toHaveBeenCalled()
+    expect(await screen.findByText('No recent documents yet')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Clear all' })).not.toBeInTheDocument()
+  })
+
+  it('does not render "Clear all" when there are no recent documents', async () => {
+    vi.mocked(window.api.getRecentFiles).mockResolvedValue([])
+    render(<HomeScreen />)
+
+    await screen.findByText('No recent documents yet')
+    expect(screen.queryByRole('button', { name: 'Clear all' })).not.toBeInTheDocument()
+  })
+
+  // Product-completeness audit 0.6: "mark rows whose file no longer exists."
+  it('marks a row whose file no longer exists as "File not found" instead of a page count, and skips its thumbnail fetch', async () => {
+    vi.mocked(window.api.getRecentFiles).mockResolvedValue([
+      { filePath: '/tmp/gone.md', editedAt: new Date().toISOString(), exists: false }
+    ])
+    render(<HomeScreen />)
+
+    expect(await screen.findByText('File not found')).toBeInTheDocument()
+    // The whole point of the `exists` flag is to avoid a doomed IPC round
+    // trip -- getThumbnail would only fail (ENOENT) for a row already known
+    // to be missing.
+    expect(window.api.getThumbnail).not.toHaveBeenCalled()
+  })
+
+  it('still shows the real page count for a row whose file exists', async () => {
+    vi.mocked(window.api.getRecentFiles).mockResolvedValue([
+      { filePath: '/tmp/report.md', editedAt: new Date().toISOString(), exists: true }
+    ])
+    vi.mocked(window.api.getThumbnail).mockResolvedValue({
+      dataUrl: 'data:image/png;base64,x',
+      pageCount: 3
+    })
+    render(<HomeScreen />)
+
+    expect(await screen.findByText('3 pages')).toBeInTheDocument()
+    expect(screen.queryByText('File not found')).not.toBeInTheDocument()
+  })
+
   it('filters recent documents by filename as the user types, and clearing the filter restores the full list', async () => {
     vi.mocked(window.api.getRecentFiles).mockResolvedValue([
-      { filePath: '/tmp/report.md', editedAt: new Date().toISOString() },
-      { filePath: '/tmp/letter.md', editedAt: new Date().toISOString() }
+      { filePath: '/tmp/report.md', editedAt: new Date().toISOString(), exists: true },
+      { filePath: '/tmp/letter.md', editedAt: new Date().toISOString(), exists: true }
     ])
     const user = userEvent.setup()
     render(<HomeScreen />)
@@ -228,7 +309,7 @@ describe('HomeScreen', () => {
 
   it('shows a real "no match" message when the filter matches nothing, instead of an empty list', async () => {
     vi.mocked(window.api.getRecentFiles).mockResolvedValue([
-      { filePath: '/tmp/report.md', editedAt: new Date().toISOString() }
+      { filePath: '/tmp/report.md', editedAt: new Date().toISOString(), exists: true }
     ])
     const user = userEvent.setup()
     render(<HomeScreen />)

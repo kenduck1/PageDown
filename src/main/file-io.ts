@@ -1,8 +1,14 @@
 import { dialog, type BrowserWindow } from 'electron'
 import { readFile, writeFile, stat, realpath } from 'node:fs/promises'
 import { dirname, basename, extname, join } from 'node:path'
-import { mergeRecentFiles, readRecentFiles, writeRecentFiles, isKnownPath } from './recent-files'
-import type { RecentFileEntry } from './recent-files'
+import {
+  mergeRecentFiles,
+  readRecentFiles,
+  writeRecentFiles,
+  isKnownPath,
+  readRecentFilesWithStatus
+} from './recent-files'
+import type { RecentFileEntryWithStatus } from './recent-files'
 import { getLatestSnapshot, MTIME_TOLERANCE_MS } from './version-history'
 // Reused rather than re-implemented -- pagination-window.ts already imports
 // `electron` at module scope (for WebContentsView/BaseWindow/session), but
@@ -14,7 +20,7 @@ import { sniffImageContentType } from './pagination-window'
 
 // Re-exported so src/main/index.ts imports every file-I/O primitive from one
 // place, matching its existing single-import pattern.
-export { isKnownPath } from './recent-files'
+export { isKnownPath, removeRecentFile, clearRecentFiles } from './recent-files'
 
 const MARKDOWN_FILTERS = [{ name: 'Markdown', extensions: ['md', 'markdown'] }]
 
@@ -346,8 +352,12 @@ export async function confirmDiscardChanges(
   return (['save', 'discard', 'cancel'] as const)[result.response]
 }
 
-export async function getRecentFiles(userDataDir: string): Promise<RecentFileEntry[]> {
-  return readRecentFiles(userDataDir)
+// Returns each entry enriched with a real, freshly-checked `exists` flag
+// (product-completeness audit 0.6) -- see readRecentFilesWithStatus's own
+// comment in recent-files.ts for why this is the one place that check
+// happens and what it costs.
+export async function getRecentFiles(userDataDir: string): Promise<RecentFileEntryWithStatus[]> {
+  return readRecentFilesWithStatus(userDataDir)
 }
 
 export async function addRecentFile(userDataDir: string, filePath: string): Promise<void> {

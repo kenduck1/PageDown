@@ -78,13 +78,26 @@ function TemplateCard({
 function RecentRow({
   entry,
   onSelect,
-  onOpenInNewWindow
+  onOpenInNewWindow,
+  onRemove
 }: {
   entry: RecentFileEntry
   onSelect: () => void
   onOpenInNewWindow: () => void
+  onRemove: () => void
 }): React.JSX.Element {
-  const thumbnail = useThumbnail(entry.filePath, () => window.api.getThumbnail(entry.filePath))
+  // Product-completeness audit 0.6: skip the thumbnail round trip entirely
+  // for a row already known to be missing -- getThumbnail would fail anyway
+  // (readFileByPath's own readFile throws ENOENT before it ever reaches
+  // thumbnail generation), so this doesn't just avoid a wasted IPC call, it
+  // avoids the exact per-row "stat + version-history index read + full
+  // snapshot read on cache miss" cost CLAUDE.md's own note on this file
+  // flags -- none of that runs for a row we already know is dead.
+  const thumbnail = useThumbnail(entry.filePath, () =>
+    entry.exists
+      ? window.api.getThumbnail(entry.filePath)
+      : Promise.resolve({ dataUrl: '', pageCount: 0 })
+  )
   const filename = entry.filePath.split(/[/\\]/).pop() ?? entry.filePath
 
   return (
@@ -93,7 +106,11 @@ function RecentRow({
     // nesting one <button> inside another is invalid HTML. The main open
     // action and the new-window action are now two sibling buttons inside
     // this wrapper instead.
-    <div className="flex w-full items-center gap-3 rounded-md px-2 py-2 hover:bg-accent/6">
+    <div
+      className={`flex w-full items-center gap-3 rounded-md px-2 py-2 hover:bg-accent/6 ${
+        entry.exists ? '' : 'opacity-60'
+      }`}
+    >
       <button onClick={onSelect} className="flex flex-1 items-center gap-3 text-left">
         <div className="h-[52px] w-[40px] flex-shrink-0 overflow-hidden rounded-sm bg-canvas">
           {thumbnail.dataUrl && (
@@ -102,7 +119,17 @@ function RecentRow({
         </div>
         <div className="flex flex-1 flex-col">
           <span className="text-13 font-semibold text-text-primary">{filename}</span>
-          <span className="text-11-5 text-text-tertiary">{thumbnail.pageCount ?? '—'} pages</span>
+          {/* Product-completeness audit 0.6: a deleted/moved file previously
+          rendered indistinguishably from a normal row (an empty thumbnail
+          and "-- pages", per that finding's own description) -- this is the
+          one visible marker replacing that. Clicking still works (main's
+          existing readFileByPath/openPath error path already surfaces a
+          real, if generic, error -- unchanged here), so this is a hint, not
+          a disabled state; "Remove from recents" (below) is the actual fix
+          for the row. */}
+          <span className="text-11-5 text-text-tertiary">
+            {entry.exists ? `${thumbnail.pageCount ?? '—'} pages` : 'File not found'}
+          </span>
         </div>
       </button>
       <span className="text-11-5 text-text-tertiary">{formatRelativeTime(entry.editedAt)}</span>
@@ -143,6 +170,31 @@ function RecentRow({
           <rect x="4" y="4" width="16" height="16" rx="2" />
           <path d="M14 4h6v6" />
           <path d="M20 4l-8 8" />
+        </svg>
+      </button>
+      {/* Same GENERIC-label reasoning as "Open in new window" above -- a
+      filename-including label here would collide with the same
+      new RegExp(filename) pattern those gate specs use against this row's
+      main open button. Always visible for the same discoverability reason
+      too, not hover-only. */}
+      <button
+        onClick={onRemove}
+        title="Remove from recents"
+        aria-label="Remove from recents"
+        className="flex-shrink-0 rounded-sm p-1.5 text-text-tertiary hover:bg-accent/9 hover:text-text-primary"
+      >
+        <svg
+          width="14"
+          height="14"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1.75"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          aria-hidden="true"
+        >
+          <path d="M4 4l16 16M20 4L4 20" />
         </svg>
       </button>
     </div>
@@ -198,6 +250,37 @@ function HomeScreen(): React.JSX.Element {
   // navigating away from this one.
   const handleOpenInNewWindow = (filePath: string): void => {
     void window.api.openInNewWindow(filePath)
+  }
+
+  // Product-completeness audit 0.6. Low-stakes, deliberately no confirmation
+  // dialog for either action: neither touches a real document or file on
+  // disk, only this app's own recents list -- and removing a path can never
+  // be a data-loss mistake the way discarding an edit is, since opening that
+  // file again via a real native dialog immediately re-adds it (isKnownPath
+  // never loses the ABILITY to open a file, only this app's own memory that
+  // it was opened recently). Sets state directly from each call's own
+  // response rather than a second getRecentFiles round trip.
+  const handleRemoveRecent = async (filePath: string): Promise<void> => {
+    try {
+      const updated = await window.api.removeRecentFile(filePath)
+      setRecentFiles(updated)
+    } catch (err) {
+      // Best-effort, matching this app's established "log and move on"
+      // treatment for non-critical persistence failures elsewhere (window
+      // bounds, recording a just-opened file, etc.) -- worst case here is a
+      // stale row survives, exactly today's pre-existing status quo, not a
+      // regression.
+      console.error('Failed to remove recent file', err)
+    }
+  }
+
+  const handleClearRecents = async (): Promise<void> => {
+    try {
+      await window.api.clearRecentFiles()
+      setRecentFiles([])
+    } catch (err) {
+      console.error('Failed to clear recent files', err)
+    }
   }
 
   // Matches against the same basename RecentRow itself displays (not the
@@ -278,14 +361,27 @@ function HomeScreen(): React.JSX.Element {
               Recent
             </h2>
             {recentFiles.length > 0 && (
-              <input
-                type="text"
-                value={recentFilter}
-                onChange={(e) => setRecentFilter(e.target.value)}
-                placeholder="Filter by filename…"
-                aria-label="Filter recent documents"
-                className="w-48 rounded-sm border border-border-subtle bg-page px-2 py-1 text-11-5 text-text-primary placeholder:text-text-tertiary"
-              />
+              <div className="flex items-center gap-3">
+                <input
+                  type="text"
+                  value={recentFilter}
+                  onChange={(e) => setRecentFilter(e.target.value)}
+                  placeholder="Filter by filename…"
+                  aria-label="Filter recent documents"
+                  className="w-48 rounded-sm border border-border-subtle bg-page px-2 py-1 text-11-5 text-text-primary placeholder:text-text-tertiary"
+                />
+                {/* Product-completeness audit 0.6's "Clear recents" fix.
+                Gated behind the same recentFiles.length > 0 check as the
+                filter input just above -- no point offering to clear an
+                already-empty list. No confirmation dialog -- see
+                handleClearRecents' own comment for why this is safe. */}
+                <button
+                  onClick={handleClearRecents}
+                  className="whitespace-nowrap text-11-5 text-text-tertiary hover:text-text-primary"
+                >
+                  Clear all
+                </button>
+              </div>
             )}
           </div>
           {recentFiles.length === 0 ? (
@@ -302,6 +398,7 @@ function HomeScreen(): React.JSX.Element {
                   entry={entry}
                   onSelect={() => handleOpenRecent(entry.filePath)}
                   onOpenInNewWindow={() => handleOpenInNewWindow(entry.filePath)}
+                  onRemove={() => handleRemoveRecent(entry.filePath)}
                 />
               ))}
             </div>
