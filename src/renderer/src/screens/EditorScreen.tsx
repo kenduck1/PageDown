@@ -25,8 +25,11 @@ import { isFormatEditing, isSourceEditing } from '../lib/editing-surface'
 import { usePageCount } from '../hooks/usePageCount'
 import { useAutosave } from '../hooks/useAutosave'
 import { useFindController } from '../hooks/useFindController'
-import { useFindShortcuts } from '../hooks/useFindShortcuts'
+import { useFindShortcuts, openFindFromShortcut } from '../hooks/useFindShortcuts'
 import { useSlashMenu } from '../hooks/useSlashMenu'
+import { useMenuCommands } from '../hooks/useMenuCommands'
+import { useFindStore } from '../store/findStore'
+import { DEFAULT_ZOOM, nextZoomLevel, previousZoomLevel } from '../lib/zoom-levels'
 import { extractRawFrontmatter, replaceRawFrontmatter } from '../../../markdown/frontmatter-splice'
 import {
   resolvePageConfig,
@@ -62,6 +65,8 @@ function EditorScreen(): React.JSX.Element {
   const setSplitRatio = useAppStore((state) => state.setSplitRatio)
   const currentPage = useAppStore((state) => state.currentPage)
   const setCurrentPage = useAppStore((state) => state.setCurrentPage)
+  const sidebarVisible = useAppStore((state) => state.sidebarVisible)
+  const toggleSidebar = useAppStore((state) => state.toggleSidebar)
   const filePath = useDocumentStore((state) => state.filePath)
   const content = useDocumentStore((state) => state.content)
   const remoteImagesAllowed = useDocumentStore((state) => state.remoteImagesAllowed)
@@ -75,6 +80,9 @@ function EditorScreen(): React.JSX.Element {
   const error = useDocumentStore((state) => state.error)
   const clearError = useDocumentStore((state) => state.clearError)
   const save = useDocumentStore((state) => state.save)
+  const saveAs = useDocumentStore((state) => state.saveAs)
+  const exportPdf = useDocumentStore((state) => state.exportPdf)
+  const print = useDocumentStore((state) => state.print)
   const saveDroppedImage = useDocumentStore((state) => state.saveDroppedImage)
   const editorRef = useRef<MilkdownEditorHandle>(null)
   // One ref is correct even though renderSourceEditor() (below) has two call
@@ -309,6 +317,13 @@ function EditorScreen(): React.JSX.Element {
     // it's always safe to call defensively here.
     editorRef.current?.flush()
     await save()
+  }
+
+  // Same flush-then-write contract as handleSave above -- Save As must not
+  // write a document that is 200ms stale any more than Save must.
+  const handleSaveAs = async (): Promise<void> => {
+    editorRef.current?.flush()
+    await saveAs()
   }
 
   // EditorToolbar's mode-switcher calls this instead of appStore's setViewMode
@@ -582,6 +597,61 @@ function EditorScreen(): React.JSX.Element {
     }
     setViewMode(mode)
   }
+
+  // Every application-menu command that only means something with a document
+  // on screen. Registered here rather than in App.tsx because each one needs
+  // something this screen owns and nothing above it can reach: the live
+  // MilkdownEditor handle (Save's flush), the find controller's
+  // getSelectedText/queryInputRef pair, this screen's own zoom state, and
+  // handleSetViewMode's flush/remount coordination.
+  //
+  // The three commands whose accelerators COLLIDE with this app's existing
+  // bare `window` keydown listeners (Cmd+F, Cmd+/) are the interesting ones:
+  // a menu accelerator on a non-role item is consumed by the menu, so those
+  // listeners no longer fire in the real app and these handlers are now the
+  // live path. Each therefore runs the SAME function the listener did, rather
+  // than a simplified version of it -- see openFindFromShortcut's own
+  // comment, and the closeSlashMenu() call below.
+  useMenuCommands({
+    'file:save': () => void handleSave(),
+    'file:saveAs': () => void handleSaveAs(),
+    // Straight to the store actions the toolbar buttons also call, so the two
+    // triggers share one in-flight guard (see documentStore's isExporting).
+    'file:exportPdf': () => void exportPdf(),
+    'file:print': () => void print(),
+    'edit:find': () =>
+      openFindFromShortcut(
+        { getSelectedText: findController.getSelectedText, queryInputRef: findQueryInputRef },
+        false
+      ),
+    // Next/Previous act on the find store directly and are deliberately NOT
+    // gated on the bar being open: findStore's goToNext/goToPrevious are
+    // already no-ops at zero matches, and a Find Next with a query still
+    // loaded from a closed bar advancing the match is what every editor does.
+    'edit:findNext': () => useFindStore.getState().goToNext(),
+    'edit:findPrevious': () => useFindStore.getState().goToPrevious(),
+    // handleSetViewMode, never the bare setViewMode -- the menu is just
+    // another way to press the toolbar's segmented control, and it needs the
+    // identical flush/remount coordination (and undo-barrier notice).
+    'view:format': () => handleSetViewMode('format'),
+    'view:split': () => handleSetViewMode('split'),
+    'view:source': () => handleSetViewMode('source'),
+    // Stepped through the SAME level list the status bar's zoom <select>
+    // renders -- an off-list value would blank that control (see
+    // lib/zoom-levels.ts).
+    'view:zoomIn': () => setZoom((current) => nextZoomLevel(current)),
+    'view:zoomOut': () => setZoom((current) => previousZoomLevel(current)),
+    'view:zoomReset': () => setZoom(DEFAULT_ZOOM),
+    'view:toggleSidebar': () => toggleSidebar(),
+    'app:shortcuts': () => {
+      // Same closeSlashMenu() call the Mod-/ keydown listener below makes,
+      // for the same reason -- ShortcutsHelpModal autofocuses nothing, so
+      // opening it does not blur the ProseMirror node, and the slash
+      // plugin's own auto-close only fires on that blur.
+      editorRef.current?.closeSlashMenu()
+      openShortcutsHelp()
+    }
+  })
 
   const handleGoHome = async (): Promise<void> => {
     if (!isDirty) {
@@ -1240,18 +1310,28 @@ function EditorScreen(): React.JSX.Element {
       -- see RemoteImageBanner.tsx's own module comment. */}
       <RemoteImageBanner />
       <div className="flex flex-1 overflow-hidden">
-        <EditorSidebar
-          content={content}
-          onSelectHeading={handleSelectHeading}
-          activeSourceOffset={activeSourceOffset}
-          pageCount={pageCount ?? undefined}
-          currentPage={effectiveCurrentPage}
-          onSelectPage={handleNavigateToPage}
-          filePath={filePath}
-          onRestoreVersion={handleRestoreVersion}
-          onSelectComment={handleSelectComment}
-          onResolveComment={handleResolveComment}
-        />
+        {/* Genuinely unmounted, not merely hidden, when View > Toggle Sidebar
+        turns it off -- which is also what makes it compose with Split mode for
+        free: removing the rail widens the content row, which moves
+        SplitPreview's placeholder, which fires its existing ResizeObserver,
+        which re-reports the native preview's bounds over the existing IPC. A
+        `display: none` rail would do the same, but would keep EditorOutline/
+        EditorComments re-parsing the document on every keystroke to render
+        something nobody can see. */}
+        {sidebarVisible && (
+          <EditorSidebar
+            content={content}
+            onSelectHeading={handleSelectHeading}
+            activeSourceOffset={activeSourceOffset}
+            pageCount={pageCount ?? undefined}
+            currentPage={effectiveCurrentPage}
+            onSelectPage={handleNavigateToPage}
+            filePath={filePath}
+            onRestoreVersion={handleRestoreVersion}
+            onSelectComment={handleSelectComment}
+            onResolveComment={handleResolveComment}
+          />
+        )}
         <div ref={canvasRef} data-testid="document-content" className="flex-1 overflow-hidden">
           {viewMode === 'split' ? (
             // Split mode's own two-pane row lives in a SEPARATE top-level

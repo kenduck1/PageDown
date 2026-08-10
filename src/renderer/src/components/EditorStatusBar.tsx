@@ -1,5 +1,10 @@
 import { useMemo, useState } from 'react'
 import { countWords } from '../lib/wordCount'
+// Moved out of this file and into lib/ so View > Zoom In/Out/Actual Size in
+// the application menu steps through the EXACT same levels this <select>
+// renders -- a zoom value not in this list makes the control render blank,
+// so the two surfaces have to share the list itself, not just a range.
+import { ZOOM_OPTIONS } from '../lib/zoom-levels'
 
 export interface EditorStatusBarProps {
   content: string
@@ -51,16 +56,6 @@ export interface EditorStatusBarProps {
   zoom: number
   onZoomChange: (zoom: number) => void
 }
-
-const ZOOM_OPTIONS: ReadonlyArray<{ label: string; value: number }> = [
-  { label: '50%', value: 0.5 },
-  { label: '75%', value: 0.75 },
-  { label: '90%', value: 0.9 },
-  { label: '100%', value: 1 },
-  { label: '125%', value: 1.25 },
-  { label: '150%', value: 1.5 },
-  { label: '200%', value: 2 }
-]
 
 function ChevronLeftIcon(): React.JSX.Element {
   return (

@@ -2,6 +2,8 @@ import { useEffect } from 'react'
 import { useAppStore } from './store/appStore'
 import { useDocumentStore } from './store/documentStore'
 import { usePreferencesStore } from './store/preferencesStore'
+import { useMenuCommands } from './hooks/useMenuCommands'
+import { useCreateDocument } from './hooks/useCreateDocument'
 import HomeScreen from './screens/HomeScreen'
 import EditorScreen from './screens/EditorScreen'
 import SettingsScreen from './screens/SettingsScreen'
@@ -9,8 +11,70 @@ import SettingsScreen from './screens/SettingsScreen'
 function App(): React.JSX.Element {
   const screen = useAppStore((state) => state.screen)
   const goEditor = useAppStore((state) => state.goEditor)
+  const goSettings = useAppStore((state) => state.goSettings)
+  const viewMode = useAppStore((state) => state.viewMode)
+  const filePath = useDocumentStore((state) => state.filePath)
+  const isDirty = useDocumentStore((state) => state.isDirty)
+  const openFile = useDocumentStore((state) => state.openFile)
+  const openPath = useDocumentStore((state) => state.openPath)
   const preferences = usePreferencesStore((state) => state.preferences)
   const setPreferences = usePreferencesStore((state) => state.setPreferences)
+  const createDocument = useCreateDocument()
+
+  // Reports this window's own state to the main process, which is the only
+  // place that can act on it: the real OS window title (plus macOS's
+  // "document edited" close-button dot) and the application menu's
+  // enablement/checkmarks. Lives HERE rather than in EditorScreen because
+  // half of it is about screens EditorScreen isn't mounted on -- navigating
+  // to Home has to clear the title back to a bare "PageDown" and disable the
+  // File menu's document items, and an effect inside EditorScreen cannot fire
+  // after EditorScreen unmounts.
+  //
+  // Per-window by construction: every window runs its own renderer, so each
+  // one reports only about itself, and the main process keys what it receives
+  // on `BrowserWindow.fromWebContents(event.sender)`.
+  //
+  // The basename is computed here, not in main, because this renderer already
+  // splits paths the same way for the tab bar and the Home screen's recent
+  // rows -- and doing it once here keeps the main process out of the business
+  // of guessing whether a path is POSIX or Windows.
+  useEffect(() => {
+    window.api.setWindowState({
+      documentOpen: screen === 'editor',
+      viewMode,
+      fileName: filePath ? (filePath.split(/[/\\]/).pop() ?? filePath) : null,
+      isDirty
+    })
+  }, [screen, viewMode, filePath, isDirty])
+
+  // The application-menu commands that are meaningful on EVERY screen, and
+  // therefore cannot live in EditorScreen (which is unmounted on Home and
+  // Settings). Everything document-scoped -- Save, Export, Find, view modes,
+  // zoom -- is handled by EditorScreen's own subscription instead; see
+  // useMenuCommands' own comment on why a partial handler map per call site
+  // beats one central switch.
+  useMenuCommands({
+    // The SAME shared implementation the Home screen's own "New document"
+    // button uses, so File > New honours the user's default page config
+    // rather than quietly producing a Letter document.
+    'file:new': () => createDocument(),
+    'file:open': () => {
+      void openFile().then((loaded) => {
+        if (loaded) goEditor()
+      })
+    },
+    // The path comes from the main process's own recent-files.json, and
+    // openPath re-validates it through the real file:openPath/isKnownPath
+    // check regardless -- exactly the same round trip clicking a Home-screen
+    // recent row performs, so this grants no additional disk access.
+    'file:openRecent': (payload) => {
+      if (!payload) return
+      void openPath(payload).then((loaded) => {
+        if (loaded) goEditor()
+      })
+    },
+    'app:preferences': () => goSettings()
+  })
 
   // Fetched once, here, rather than lazily by whichever screen first needs
   // them -- HomeScreen's own new-blank-document flow (Home Screen

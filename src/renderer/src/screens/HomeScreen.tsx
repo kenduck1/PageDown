@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
 import { useAppStore } from '../store/appStore'
 import { useDocumentStore } from '../store/documentStore'
-import { usePreferencesStore } from '../store/preferencesStore'
 import { useThumbnail } from '../hooks/useThumbnail'
+import { useCreateDocument } from '../hooks/useCreateDocument'
 import { formatRelativeTime } from '../lib/formatRelativeTime'
 import { RESUME_TEMPLATE } from '../templates/resume.md'
 import { LETTER_TEMPLATE } from '../templates/letter.md'
@@ -12,8 +12,6 @@ import { MEETING_NOTES_TEMPLATE } from '../templates/meeting-notes.md'
 import { INVOICE_TEMPLATE } from '../templates/invoice.md'
 import { NEWSLETTER_TEMPLATE } from '../templates/newsletter.md'
 import type { RecentFileEntry } from '../../../preload/index.d'
-import { applyPageConfig } from '../../../markdown/page-config'
-import { replaceRawFrontmatter } from '../../../markdown/frontmatter-splice'
 
 interface Template {
   id: string
@@ -156,12 +154,14 @@ function HomeScreen(): React.JSX.Element {
   const goSettings = useAppStore((state) => state.goSettings)
   const homeActiveSection = useAppStore((state) => state.homeActiveSection)
   const setHomeActiveSection = useAppStore((state) => state.setHomeActiveSection)
-  const newDocument = useDocumentStore((state) => state.newDocument)
   const openFile = useDocumentStore((state) => state.openFile)
   const openPath = useDocumentStore((state) => state.openPath)
   const error = useDocumentStore((state) => state.error)
   const clearError = useDocumentStore((state) => state.clearError)
-  const preferences = usePreferencesStore((state) => state.preferences)
+  // Shared with File > New in the application menu (App.tsx) -- see
+  // useCreateDocument's own comment for why this moved out of this component
+  // rather than being reimplemented for the menu.
+  const handleNewDocument = useCreateDocument()
 
   const [recentFiles, setRecentFiles] = useState<RecentFileEntry[]>([])
   const [recentFilter, setRecentFilter] = useState('')
@@ -171,26 +171,6 @@ function HomeScreen(): React.JSX.Element {
   useEffect(() => {
     window.api.getRecentFiles().then(setRecentFiles)
   }, [])
-
-  // Only the PLAIN blank "New Document" case (content === undefined) gets
-  // the user's own default page config applied -- a template already carries
-  // its own deliberate frontmatter (or deliberately none), and layering a
-  // global default on top would fight the template author's own choices
-  // rather than respect them. `preferences` can genuinely still be null
-  // here (App.tsx's own getPreferences() call hasn't resolved yet) --
-  // falling through to plain empty content in that case is correct, not a
-  // bug to guard against: it's exactly what "New Document" already did
-  // before this feature existed, so a slow/failed preferences fetch degrades
-  // to the pre-existing behavior rather than blocking document creation.
-  const handleNewDocument = (content?: string): void => {
-    if (content === undefined && preferences) {
-      const rawYaml = applyPageConfig('', preferences.defaultPageConfig)
-      newDocument(replaceRawFrontmatter('', rawYaml))
-    } else {
-      newDocument(content)
-    }
-    goEditor()
-  }
 
   const handleNavClick = (section: 'recent' | 'templates'): void => {
     setHomeActiveSection(section)

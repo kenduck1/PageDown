@@ -2,9 +2,19 @@
 // in this app right now -- every entry below was verified directly against
 // its own source before being listed here, not assumed from convention:
 //
-// - Find/Find & Replace/Escape: useFindShortcuts.ts's own bare `window`
-//   keydown listener (this app has no native OS menu with accelerators yet
-//   -- see that file's own module comment for why).
+// - Every "File"/"View" entry, plus Find/Find Next/Find Previous and
+//   Keyboard Shortcuts: real accelerators on real application-menu items
+//   (src/main/app-menu-template.ts). The claim this list used to make --
+//   "this app has no native OS menu with accelerators yet" -- is no longer
+//   true, and these entries were read straight off that template rather than
+//   assumed. Note two of them (Find, Keyboard Shortcuts) ALSO still have the
+//   bare `window` keydown listeners that were the only implementation before
+//   the menu existed; the menu accelerator is what actually fires in the real
+//   app now (it consumes the keystroke before the page sees it), which is why
+//   both paths deliberately run the same function.
+// - Find & Replace (Mod-Alt-F) and Escape-to-close: still ONLY
+//   useFindShortcuts.ts's bare `window` keydown listener -- neither is a menu
+//   item, so neither has an accelerator competing with it.
 // - Undo/Redo: src/renderer/src/milkdown/commands.ts's historyKeymap, a
 //   real $useKeymap() ProseMirror plugin this project added (previously,
 //   Format mode's toolbar Undo/Redo buttons worked but no keyboard shortcut
@@ -53,11 +63,41 @@ interface ShortcutCategory {
 
 const CATEGORIES: ShortcutCategory[] = [
   {
+    name: 'File',
+    shortcuts: [
+      { keys: `${MOD}N`, description: 'New document' },
+      { keys: `${MOD}O`, description: 'Open…' },
+      { keys: `${MOD}S`, description: 'Save' },
+      { keys: `${MOD}${SHIFT}S`, description: 'Save As…' },
+      // Deliberately NOT ⌘E, which @milkdown/preset-commonmark already binds
+      // to inline code -- see app-menu-template.ts's own note.
+      { keys: `${MOD}${SHIFT}E`, description: 'Export as PDF…' },
+      { keys: `${MOD}P`, description: 'Print…' },
+      { keys: `${MOD}W`, description: 'Close window' }
+    ]
+  },
+  {
     name: 'App',
     shortcuts: [
       { keys: `${MOD}F`, description: 'Find' },
       { keys: `${MOD}${ALT}F`, description: 'Find and Replace' },
-      { keys: 'Esc', description: 'Close Find (while open)' }
+      { keys: `${MOD}G`, description: 'Find next' },
+      { keys: `${MOD}${SHIFT}G`, description: 'Find previous' },
+      { keys: 'Esc', description: 'Close Find (while open)' },
+      { keys: `${MOD},`, description: 'Preferences' },
+      { keys: `${MOD}/`, description: 'Keyboard shortcuts (this window)' }
+    ]
+  },
+  {
+    name: 'View',
+    shortcuts: [
+      { keys: `${MOD}1`, description: 'Format view' },
+      { keys: `${MOD}2`, description: 'Split view' },
+      { keys: `${MOD}3`, description: 'Source view' },
+      { keys: `${MOD}+`, description: 'Zoom in' },
+      { keys: `${MOD}−`, description: 'Zoom out' },
+      { keys: `${MOD}0`, description: 'Actual size' },
+      { keys: `${MOD}\\`, description: 'Toggle sidebar' }
     ]
   },
   {

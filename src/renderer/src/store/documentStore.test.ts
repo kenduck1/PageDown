@@ -26,7 +26,15 @@ beforeEach(() => {
     scrollSplitPreviewToPage: vi.fn(),
     getSplitPreviewPage: vi.fn(),
     saveDroppedImage: vi.fn(),
-    openInNewWindow: vi.fn()
+    openInNewWindow: vi.fn(),
+    // The application menu's two channels. Both are stubbed in every
+    // window.api fixture because window.api is a fully-typed FileApi here --
+    // a missing method is a compile error, not just a runtime one.
+    // onMenuCommand must return a real unsubscribe FUNCTION: App.tsx and
+    // EditorScreen both call it from an effect cleanup, and a bare vi.fn()
+    // returning undefined would throw on unmount.
+    onMenuCommand: vi.fn().mockReturnValue(() => {}),
+    setWindowState: vi.fn()
   }
 })
 
@@ -613,6 +621,124 @@ describe('useDocumentStore tabs', () => {
     // clearError/error still a single flat field.
     useDocumentStore.setState({ error: 'x' })
     useDocumentStore.getState().clearError()
+    expect(useDocumentStore.getState().error).toBeNull()
+  })
+})
+
+describe('useDocumentStore saveAs', () => {
+  it('passes a null path and a null mtime baseline, which is what opens the Save dialog', async () => {
+    // Both nulls matter. The null PATH is what makes file-io.ts's saveFile
+    // show a native Save dialog rather than writing to the current file. The
+    // null BASELINE is not merely convenient: the external-change check asks
+    // "has the file this document came from changed under us," and a Save-As
+    // target is a path the user has not chosen yet -- comparing the OLD
+    // file's mtime against a DIFFERENT file's would be meaningless.
+    vi.mocked(window.api.saveFile).mockResolvedValue({ filePath: '/tmp/copy.md', mtimeMs: 42 })
+    useDocumentStore.setState({ filePath: '/tmp/original.md', content: '# Doc', mtimeMs: 1000 })
+
+    await useDocumentStore.getState().saveAs()
+
+    expect(window.api.saveFile).toHaveBeenCalledWith(null, '# Doc', null)
+  })
+
+  it('adopts the newly chosen path and clears the dirty flag', async () => {
+    vi.mocked(window.api.saveFile).mockResolvedValue({ filePath: '/tmp/copy.md', mtimeMs: 42 })
+    useDocumentStore.setState({ filePath: '/tmp/original.md', content: '# Doc', isDirty: true })
+
+    await useDocumentStore.getState().saveAs()
+
+    expect(useDocumentStore.getState().filePath).toBe('/tmp/copy.md')
+    expect(useDocumentStore.getState().isDirty).toBe(false)
+    expect(useDocumentStore.getState().mtimeMs).toBe(42)
+  })
+
+  it('changes nothing when the user cancels the dialog', async () => {
+    vi.mocked(window.api.saveFile).mockResolvedValue(null)
+    useDocumentStore.setState({ filePath: '/tmp/original.md', content: '# Doc', isDirty: true })
+
+    await useDocumentStore.getState().saveAs()
+
+    expect(useDocumentStore.getState().filePath).toBe('/tmp/original.md')
+    expect(useDocumentStore.getState().isDirty).toBe(true)
+  })
+})
+
+describe('useDocumentStore exportPdf/print', () => {
+  it('forwards content, path and the remote-image consent decision', async () => {
+    useDocumentStore.setState({
+      filePath: '/tmp/report.md',
+      content: '# Report',
+      remoteImagesAllowed: true
+    })
+
+    await useDocumentStore.getState().exportPdf()
+    await useDocumentStore.getState().print()
+
+    expect(window.api.exportPdf).toHaveBeenCalledWith('# Report', '/tmp/report.md', true)
+    expect(window.api.print).toHaveBeenCalledWith('# Report', '/tmp/report.md', true)
+  })
+
+  it('defaults an undecided consent to blocked', async () => {
+    // remoteImagesAllowed is `null` (undecided) for every freshly opened
+    // document, and undecided must be treated exactly like blocked.
+    useDocumentStore.setState({ filePath: null, content: '# Doc', remoteImagesAllowed: null })
+
+    await useDocumentStore.getState().exportPdf()
+
+    expect(window.api.exportPdf).toHaveBeenCalledWith('# Doc', null, false)
+  })
+
+  it('holds an in-flight guard IN THE STORE, so a second trigger cannot double-run it', async () => {
+    // The reason this moved out of EditorToolbar's own useState: Export now
+    // has two independent triggers (the toolbar button and File > Export as
+    // PDF), and a guard owned by one of them cannot see the other.
+    let resolveExport: (() => void) | undefined
+    vi.mocked(window.api.exportPdf).mockReturnValue(
+      new Promise((resolve) => {
+        resolveExport = () => resolve({ filePath: '/tmp/report.pdf' })
+      })
+    )
+    useDocumentStore.setState({ filePath: '/tmp/report.md', content: '# Report' })
+
+    const first = useDocumentStore.getState().exportPdf()
+    expect(useDocumentStore.getState().isExporting).toBe(true)
+    await useDocumentStore.getState().exportPdf()
+
+    expect(window.api.exportPdf).toHaveBeenCalledTimes(1)
+    resolveExport?.()
+    await first
+    expect(useDocumentStore.getState().isExporting).toBe(false)
+  })
+
+  it('surfaces a friendly message rather than the raw IPC error string', async () => {
+    // Electron wraps a thrown main-process error as `Error invoking remote
+    // method 'file:exportPdf': Error: <original>`, which is not something a
+    // user should have to parse.
+    vi.mocked(window.api.exportPdf).mockRejectedValue(
+      new Error("Error invoking remote method 'file:exportPdf': Error: disk full")
+    )
+    useDocumentStore.setState({ filePath: '/tmp/report.md', content: '# Report' })
+
+    await useDocumentStore.getState().exportPdf()
+
+    expect(useDocumentStore.getState().error).toBe('Failed to export PDF. Please try again.')
+    expect(useDocumentStore.getState().isExporting).toBe(false)
+  })
+
+  it('a successful export does NOT clear an unrelated pre-existing error', async () => {
+    useDocumentStore.setState({ content: '# Report', error: 'Failed to save. Disk full.' })
+
+    await useDocumentStore.getState().exportPdf()
+
+    expect(useDocumentStore.getState().error).toBe('Failed to save. Disk full.')
+  })
+
+  it('a cancelled print dialog is not an error', async () => {
+    vi.mocked(window.api.print).mockResolvedValue({ cancelled: true })
+    useDocumentStore.setState({ content: '# Report' })
+
+    await useDocumentStore.getState().print()
+
     expect(useDocumentStore.getState().error).toBeNull()
   })
 })
