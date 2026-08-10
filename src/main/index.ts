@@ -5,11 +5,23 @@ import {
   BrowserWindow,
   ipcMain,
   Menu,
+  screen,
   type MenuItemConstructorOptions
 } from 'electron'
 import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
+import {
+  DEFAULT_WINDOW_WIDTH,
+  DEFAULT_WINDOW_HEIGHT,
+  MIN_WINDOW_WIDTH,
+  MIN_WINDOW_HEIGHT,
+  readWindowState,
+  writeWindowState,
+  resolveInitialWindowBounds,
+  type WindowBounds,
+  type InitialWindowBounds
+} from './window-bounds'
 import { registerPaginationScheme } from './pagination-scheme'
 import {
   createPaginationHarness,
@@ -92,6 +104,18 @@ registerPaginationScheme()
 // Task 4 (Home Screen) adds `getThumbnail` for the same reason again:
 // phase0/gate8-thumbnail-generation.spec.ts needs to call it from inside
 // `app.evaluate()`'s bare V8 context, same as every other entry here.
+//
+// Gated behind `is.dev` (App identity/packaging cleanup pass): this object
+// exists purely for phase0/phase1 gate specs, which always launch the
+// unpackaged `out/` build directly (`_electron.launch(['out/main/index.js'])`,
+// never a real electron-builder package) — so `is.dev` (`!app.isPackaged`,
+// per @electron-toolkit/utils) is `true` for every one of them, and this
+// gating changes nothing about what any existing gate can reach. A real,
+// packaged end-user install has `app.isPackaged === true`, so the bridge
+// (and every main-process function it pins a reference to) is simply never
+// installed there — one fewer piece of test-only scaffolding shipped to
+// users. Do not remove the gate to "simplify": that is what makes this safe
+// to keep at all rather than deleting it and fixing ~15 gate files.
 declare global {
   var __pagedownPhase0:
     | {
@@ -105,14 +129,16 @@ declare global {
       }
     | undefined
 }
-globalThis.__pagedownPhase0 = {
-  createPaginationHarness,
-  paginateAndTime,
-  sendGate7Phase1,
-  sendGate7Phase2,
-  exportToPdf,
-  sendGate4HeaderFooterProbe,
-  getThumbnail
+if (is.dev) {
+  globalThis.__pagedownPhase0 = {
+    createPaginationHarness,
+    paginateAndTime,
+    sendGate7Phase1,
+    sendGate7Phase2,
+    exportToPdf,
+    sendGate4HeaderFooterProbe,
+    getThumbnail
+  }
 }
 
 // Split mode's own lazily-created harness instance and its serializing
@@ -398,6 +424,56 @@ function attachContextMenu(win: BrowserWindow): void {
   })
 }
 
+// Debounced, best-effort window-bounds persistence (App identity/packaging
+// cleanup pass) -- keyed process-wide, not per-window: there is exactly one
+// window-state.json, remembering whichever window was most recently
+// resized/moved. That is correct for this app's default single-window
+// usage and no worse than most single-file "remember my window"
+// implementations elsewhere; a real per-window scheme would need a keyed
+// store the same way Split mode's own per-window limitation (see CLAUDE.md's
+// "Multi-window support" section) was deliberately not built out either.
+// The short debounce avoids hammering disk on every drag-resize tick; the
+// 'close' listener wired below additionally flushes synchronously-read
+// bounds immediately, covering a resize-then-immediately-close sequence the
+// debounce would otherwise drop.
+let windowBoundsSaveTimer: ReturnType<typeof setTimeout> | null = null
+
+function scheduleWindowBoundsSave(bounds: WindowBounds): void {
+  if (windowBoundsSaveTimer) clearTimeout(windowBoundsSaveTimer)
+  windowBoundsSaveTimer = setTimeout(() => {
+    windowBoundsSaveTimer = null
+    void writeWindowState(app.getPath('userData'), bounds).catch((err) => {
+      console.error('Failed to save window bounds', err)
+    })
+  }, 400)
+}
+
+// A minimized window's getBounds() is unreliable across platforms (it can
+// report the pre-minimize size or a degenerate one) -- skipping the save
+// while minimized means the last SAVED bounds are always a real, restorable
+// on-screen size.
+function wireWindowBoundsPersistence(win: BrowserWindow): void {
+  const persist = (): void => {
+    if (win.isDestroyed() || win.isMinimized()) return
+    scheduleWindowBoundsSave(win.getBounds())
+  }
+  win.on('resize', persist)
+  win.on('move', persist)
+  win.on('close', () => {
+    if (windowBoundsSaveTimer) {
+      clearTimeout(windowBoundsSaveTimer)
+      windowBoundsSaveTimer = null
+    }
+    if (win.isDestroyed() || win.isMinimized()) return
+    // Fire-and-forget, matching this codebase's other best-effort
+    // persistence (autosave snapshots, etc.) -- must never delay or block
+    // the close guard registered separately below.
+    void writeWindowState(app.getPath('userData'), win.getBounds()).catch((err) => {
+      console.error('Failed to save window bounds on close', err)
+    })
+  })
+}
+
 // `openPath`, when given, is a document to load automatically once this
 // window's renderer boots -- App.tsx reads it back off its own
 // `window.location.search` (`?openPath=...`) and calls the SAME
@@ -407,11 +483,28 @@ function attachContextMenu(win: BrowserWindow): void {
 // passing a path through here grants no NEW disk access whatsoever, it
 // only chooses which document a fresh, already-fully-privileged window
 // attempts to open via an already-validated path.
-function createWindow(openPath?: string): BrowserWindow {
+//
+// `initialBounds`, when given, seeds the window's starting size/position --
+// used only by the very first window app.whenReady() creates, which awaits
+// a real disk read (readWindowState) plus resolveInitialWindowBounds's
+// on-screen check before this function is ever called. Every OTHER caller
+// (File > New/Open with no window focused, "Open in New Window", macOS
+// `activate` with zero windows open) omits it and gets the plain default
+// size, centered -- a deliberate, narrower scope than "every new window
+// remembers the last used size": those are in-session actions creating an
+// ADDITIONAL window, not the cold-launch restore this feature exists for.
+function createWindow(openPath?: string, initialBounds?: InitialWindowBounds): BrowserWindow {
+  const bounds = initialBounds ?? { width: DEFAULT_WINDOW_WIDTH, height: DEFAULT_WINDOW_HEIGHT }
   // Create the browser window.
   const win = new BrowserWindow({
-    width: 900,
-    height: 670,
+    ...bounds,
+    // Enforced by the OS on every resize, not just at launch -- below this,
+    // the toolbar's sticky left group crowds out the scrollable segment
+    // (see CLAUDE.md's Comments section on the "Add comment" button) and
+    // there is no longer enough vertical room for toolbar + status bar +
+    // a usable page sliver.
+    minWidth: MIN_WINDOW_WIDTH,
+    minHeight: MIN_WINDOW_HEIGHT,
     show: false,
     // `autoHideMenuBar: true` (the electron-vite template's own default) was
     // removed when this app gained a real application menu: on Windows/Linux
@@ -432,6 +525,7 @@ function createWindow(openPath?: string): BrowserWindow {
   })
 
   documentWindows.add(win)
+  wireWindowBoundsPersistence(win)
 
   // The cancelable half of the close guard (see the block above
   // `documentWindows` for the full rationale). `'close'` -- present tense,
@@ -547,9 +641,11 @@ function createWindow(openPath?: string): BrowserWindow {
 // This method will be called when Electron has finished
 // initialization and is ready to create browser windows.
 // Some APIs can only be used after this event occurs.
-app.whenReady().then(() => {
-  // Set app user model id for windows
-  electronApp.setAppUserModelId('com.electron')
+app.whenReady().then(async () => {
+  // Set app user model id for windows -- must match electron-builder.yml's
+  // own `appId` (com.pagedown.app), or Windows taskbar grouping/toast
+  // attribution silently splits from the installed app's real identity.
+  electronApp.setAppUserModelId('com.pagedown.app')
 
   // Default open or close DevTools by F12 in development
   // and ignore CommandOrControl + R in production.
@@ -557,9 +653,6 @@ app.whenReady().then(() => {
   app.on('browser-window-created', (_, window) => {
     optimizer.watchWindowShortcuts(window)
   })
-
-  // IPC test
-  ipcMain.on('ping', () => console.log('pong'))
 
   // Recording a recent file is a nicety, not part of the open/save contract:
   // addRecentFile can genuinely throw (disk full, permissions, removed userData
@@ -674,7 +767,28 @@ app.whenReady().then(() => {
   // preferences/recent-files file is surfaced exactly once per app run.
   ipcMain.handle('app:getStartupWarnings', () => drainConfigWarnings())
 
-  const mainWindow = createWindow()
+  // package.json's own `version` field -- app.getVersion() reads it directly
+  // in development and from the packaged app's metadata once built, so this
+  // is always the real shipped version, never a hand-maintained duplicate.
+  // Surfaced in the renderer purely for display (SettingsScreen's footer);
+  // nothing in this app branches on it.
+  ipcMain.handle('app:getVersion', () => app.getVersion())
+
+  // Window state persistence (App identity/packaging cleanup pass): restore
+  // the last saved size/position for the FIRST window this launch creates
+  // only -- see createWindow's own doc comment for why every other
+  // createWindow() call site deliberately does not repeat this read.
+  // resolveInitialWindowBounds drops the saved x/y (falling back to
+  // Electron's own default centering) if it no longer overlaps any
+  // currently-connected display, e.g. after an external monitor the window
+  // was last positioned on gets disconnected -- there is no OS-universal
+  // affordance to drag a fully off-screen window back.
+  const savedWindowBounds = await readWindowState(app.getPath('userData'))
+  const initialWindowBounds = resolveInitialWindowBounds(
+    savedWindowBounds,
+    screen.getAllDisplays().map((display) => display.workArea)
+  )
+  const mainWindow = createWindow(undefined, initialWindowBounds)
 
   // The real application menu. Before this, the app ran on ELECTRON'S OWN
   // default menu (Electron installs one when an app sets none) -- which is
@@ -1117,14 +1231,31 @@ app.whenReady().then(() => {
   // own UI — this is not part of the harness's real interface, just how
   // this spike attaches it for a visible-if-you-go-looking smoke check.
   // Real integration into app UI is out of scope for Task 3.
-  createPaginationHarness(mainWindow)
-    .then((harness) => {
-      harness.view.setBounds({ x: -9999, y: -9999, width: PAGE_WIDTH_PX, height: PAGE_HEIGHT_PX })
-      console.log('[phase0] pagination render harness ready:', harness.view.webContents.getURL())
-    })
-    .catch((err) => {
-      console.error('[phase0] failed to create pagination render harness', err)
-    })
+  //
+  // Gated behind `is.dev` for the same reason as the __pagedownPhase0
+  // bridge above: every phase0/phase1 gate spec launches the unpackaged
+  // `out/` build, where `is.dev` is `true` (`!app.isPackaged`), so no gate's
+  // behavior changes. A real packaged install (`is.dev === false`) no
+  // longer spins up this extra, permanently-off-screen sandboxed renderer
+  // process on every launch for a smoke check nothing in the shipped app
+  // consumes. `gate15`/`gate18`'s own `probeSplitPreviewView`/
+  // `probePageScroll` helpers document this view's existence in a comment,
+  // but disambiguate the real split-preview view from it purely via an
+  // on-screen-bounds filter (`bounds.x >= 0 && bounds.y >= 0`), which stays
+  // correct whether or not this off-screen view exists at all — confirmed
+  // by reading every assertion in both files: none counts
+  // `pagedown-render://` views, each only filters for one matching an
+  // on-screen rectangle.
+  if (is.dev) {
+    createPaginationHarness(mainWindow)
+      .then((harness) => {
+        harness.view.setBounds({ x: -9999, y: -9999, width: PAGE_WIDTH_PX, height: PAGE_HEIGHT_PX })
+        console.log('[phase0] pagination render harness ready:', harness.view.webContents.getURL())
+      })
+      .catch((err) => {
+        console.error('[phase0] failed to create pagination render harness', err)
+      })
+  }
 
   app.on('activate', function () {
     // On macOS it's common to re-create a window in the app when the
