@@ -322,15 +322,19 @@ export function buildAppMenuTemplate(params: AppMenuTemplateParams): MenuItemCon
       {
         label: 'Keyboard Shortcuts',
         accelerator: 'CmdOrCtrl+/',
-        // Gated on documentOpen for a concrete reason rather than by
-        // analogy with the File items: ShortcutsHelpModal is rendered by
-        // EditorScreen and by nothing else, so `app:shortcuts` genuinely has
-        // no handler anywhere while the user is on Home or Settings. An
-        // enabled item that silently does nothing is worse than a greyed one.
-        // (Making it work everywhere means hoisting the modal to App.tsx --
-        // a real, separate change, since EditorScreen would have to stop
-        // rendering it or two would appear at once.)
-        enabled: documentOpen,
+        // Deliberately NOT gated on documentOpen, unlike every File and View
+        // item. It used to be, for a concrete reason that has since been
+        // fixed: ShortcutsHelpModal was rendered by EditorScreen and by
+        // nothing else, so `app:shortcuts` genuinely had no handler while the
+        // user was on Home or Settings, and an enabled item that silently
+        // does nothing is worse than a greyed one. The modal is now hoisted
+        // to App.tsx (which also owns a screen-agnostic Mod-/ listener and
+        // registers `app:shortcuts` with useMenuCommands), so the handler
+        // exists on every screen -- which matters more here than for any
+        // other item, since this is the app's only in-product documentation
+        // and gating it made that documentation unreachable until the user
+        // was already inside a document.
+        enabled: true,
         click: clickCommand('app:shortcuts')
       },
       // macOS already carries About in the application menu below.
