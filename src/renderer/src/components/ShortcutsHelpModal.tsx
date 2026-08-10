@@ -1,3 +1,5 @@
+import { useModalDialog } from '../hooks/useModalDialog'
+
 // A real, honest reference of every keyboard shortcut that actually exists
 // in this app right now -- every entry below was verified directly against
 // its own source before being listed here, not assumed from convention:
@@ -151,6 +153,14 @@ export interface ShortcutsHelpModalProps {
 }
 
 function ShortcutsHelpModal({ open, onClose }: ShortcutsHelpModalProps): React.JSX.Element | null {
+  // Escape-to-close, a real focus trap, focus-in on open, and focus-restore
+  // on close -- see useModalDialog.ts's own header comment for why this was
+  // missing (aria-modal="true" was previously a false claim) and the
+  // reported symptom it fixes. Called unconditionally, before the `if
+  // (!open)` early return below, per the Rules of Hooks -- the hook itself
+  // no-ops internally whenever `open` is false.
+  const dialogRef = useModalDialog(open, onClose)
+
   if (!open) return null
 
   return (
@@ -160,9 +170,11 @@ function ShortcutsHelpModal({ open, onClose }: ShortcutsHelpModalProps): React.J
       data-testid="shortcuts-help-scrim"
     >
       <div
+        ref={dialogRef}
         role="dialog"
         aria-modal="true"
         aria-label="Keyboard shortcuts"
+        tabIndex={-1}
         onClick={(e) => e.stopPropagation()}
         className="flex max-h-[min(600px,88vh)] w-[520px] max-w-[92vw] flex-col overflow-hidden rounded-lg bg-page shadow-modal"
       >

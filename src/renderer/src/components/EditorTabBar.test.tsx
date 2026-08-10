@@ -1,6 +1,6 @@
 import { act } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, render, screen } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import EditorTabBar from './EditorTabBar'
 import { useDocumentStore, initialDocumentState } from '../store/documentStore'
@@ -180,5 +180,119 @@ describe('EditorTabBar', () => {
 
       expect(screen.queryByRole('img', { name: 'Unsaved changes' })).not.toBeInTheDocument()
     })
+  })
+
+  // Product-completeness audit, Tier 1 section 1.5: roving tabIndex was set
+  // up (tabIndex={isActive ? 0 : -1}) but nothing ever MOVED it -- a keyboard
+  // user could reach exactly one tab (the active one) no matter how many were
+  // open, and Enter/Space could only ever activate whatever already had
+  // focus. Arrow keys now move focus AND switch the active tab together
+  // (automatic activation -- see handleTabKeyDown's own comment for why that,
+  // not "focus-only", is the correct completion of THIS component's existing
+  // model).
+  describe('keyboard navigation across tabs', () => {
+    it('ArrowRight moves focus to, and activates, the next tab', () => {
+      useDocumentStore.getState().openTab('/tmp/a.md', '# A')
+      useDocumentStore.getState().openTab('/tmp/b.md', '# B')
+      render(<EditorTabBar />)
+
+      // b.md is active (and therefore the only tab in the roving Tab
+      // sequence) after the two opens above -- focus it directly, the way a
+      // real Tab keypress into the bar would have landed here.
+      const tabB = screen.getByRole('tab', { name: 'b.md' })
+      tabB.focus()
+      fireEvent.keyDown(tabB, { key: 'ArrowRight' })
+
+      // Wraps: b.md (index 1 of [Untitled, a.md, b.md]) -> Untitled (index 0).
+      const untitled = screen.getByRole('tab', { name: 'Untitled' })
+      expect(untitled).toHaveFocus()
+      expect(untitled).toHaveAttribute('aria-selected', 'true')
+      expect(untitled).toHaveAttribute('tabindex', '0')
+      expect(tabB).toHaveAttribute('aria-selected', 'false')
+      expect(tabB).toHaveAttribute('tabindex', '-1')
+      // The store's own activeTabId (an internal id, e.g. "tab-1" -- not the
+      // display label) actually moved too, not just the DOM attributes above.
+      // The blank/"Untitled" tab is the one with filePath === null.
+      const untitledId = useDocumentStore.getState().tabs.find((tab) => tab.filePath === null)?.id
+      expect(useDocumentStore.getState().activeTabId).toBe(untitledId)
+    })
+
+    it('ArrowLeft moves focus to, and activates, the previous tab, wrapping past the start', () => {
+      useDocumentStore.getState().openTab('/tmp/a.md', '# A')
+      useDocumentStore.getState().openTab('/tmp/b.md', '# B')
+      render(<EditorTabBar />)
+
+      const tabB = screen.getByRole('tab', { name: 'b.md' })
+      switchTabByClick(tabB)
+      // b.md is index 2 (last) of [Untitled, a.md, b.md] -- ArrowLeft should
+      // land on a.md, not wrap.
+      fireEvent.keyDown(tabB, { key: 'ArrowLeft' })
+
+      const tabA = screen.getByRole('tab', { name: 'a.md' })
+      expect(tabA).toHaveFocus()
+      expect(tabA).toHaveAttribute('aria-selected', 'true')
+    })
+
+    it('Home moves focus to, and activates, the first tab', () => {
+      useDocumentStore.getState().openTab('/tmp/a.md', '# A')
+      useDocumentStore.getState().openTab('/tmp/b.md', '# B')
+      render(<EditorTabBar />)
+
+      const tabB = screen.getByRole('tab', { name: 'b.md' })
+      tabB.focus()
+      fireEvent.keyDown(tabB, { key: 'Home' })
+
+      const untitled = screen.getByRole('tab', { name: 'Untitled' })
+      expect(untitled).toHaveFocus()
+      expect(untitled).toHaveAttribute('aria-selected', 'true')
+    })
+
+    it('End moves focus to, and activates, the last tab', () => {
+      useDocumentStore.getState().openTab('/tmp/a.md', '# A')
+      useDocumentStore.getState().openTab('/tmp/b.md', '# B')
+      render(<EditorTabBar />)
+
+      // Untitled (first) is the only one focusable/active right after setup
+      // above ends on b.md -- switch back to Untitled by click first so this
+      // test starts from a known, non-last tab.
+      const untitled = screen.getByRole('tab', { name: 'Untitled' })
+      switchTabByClick(untitled)
+      fireEvent.keyDown(untitled, { key: 'End' })
+
+      const tabB = screen.getByRole('tab', { name: 'b.md' })
+      expect(tabB).toHaveFocus()
+      expect(tabB).toHaveAttribute('aria-selected', 'true')
+    })
+
+    function switchTabByClick(tab: HTMLElement): void {
+      tab.focus()
+      fireEvent.click(tab)
+    }
+  })
+
+  // The other half of the same audit finding: a keyboard user tabbing
+  // through could already land on a BACKGROUND tab's close button (it has no
+  // tabIndex override, so it's in the normal Tab sequence regardless of the
+  // roving-tabindex scheme its parent tab div follows) while it was still
+  // opacity-0 -- reachable and activatable, but invisible. Asserted against
+  // the className string, not a real computed style: this project's Vitest
+  // config runs jsdom with no CSS pipeline (no `css: true`, no stylesheet
+  // import in test-setup.ts), so Tailwind's generated rules are never
+  // actually loaded into the test DOM -- getComputedStyle(...).opacity here
+  // would read the CSS-initial value (1) regardless of which utility classes
+  // are present, proving nothing. Same limitation CLAUDE.md documents for
+  // dark mode (gate24-dark-mode.spec.ts exists specifically because "jsdom
+  // can prove data-theme gets set, not that anything actually paints
+  // differently"); real paint verification for this fix would need the same
+  // kind of Playwright gate, not a unit test.
+  it("keeps focus:opacity-100 on an inactive tab's close button", () => {
+    useDocumentStore.getState().openTab('/tmp/a.md', '# A')
+    useDocumentStore.getState().openTab('/tmp/b.md', '# B')
+    render(<EditorTabBar />)
+
+    // a.md is the inactive (background) tab once b.md is opened second.
+    const closeA = screen.getByRole('button', { name: 'Close a.md' })
+    expect(closeA.className).toContain('opacity-0')
+    expect(closeA.className).toContain('focus:opacity-100')
   })
 })

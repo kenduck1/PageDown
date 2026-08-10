@@ -256,33 +256,36 @@ function EditorScreen(): React.JSX.Element {
   // `window` keydown listener pattern useFindShortcuts.ts established (see
   // that file's own module comment for why there's no real app Menu
   // accelerator yet), inline here rather than factored into its own hook
-  // file: unlike Find, this has no selection-seeding/focus-management logic
-  // to justify a separate module, just "open a modal." Mod-/ (not `?`
-  // alone, which would fire on every literal `/` a user types while
-  // editing) is the common convention this mirrors (VS Code, Linear, Slack,
-  // ...). Escape-to-close is NOT handled here -- the modal composes with the
-  // SAME scrim-click-to-close pattern PageSetupModal already uses, and
-  // ProseMirror already has meaning for a global Escape (nothing currently
-  // relies on it, but Find's own Escape handling is intentionally scoped to
-  // only fire `closeFind` while Find is open, matching this same
-  // one-listener-per-surface discipline rather than one shared catch-all).
+  // file: unlike Find, this has no selection-seeding logic to justify a
+  // separate module, just "open a modal." Mod-/ (not `?` alone, which would
+  // fire on every literal `/` a user types while editing) is the common
+  // convention this mirrors (VS Code, Linear, Slack, ...). Escape-to-close
+  // is NOT handled here -- both modals now own real Escape/focus-trap/
+  // focus-restore behavior via useModalDialog.ts (see its header comment),
+  // called from inside PageSetupModal/ShortcutsHelpModal themselves, which
+  // is also why a stray Escape here can never race the slash menu's own
+  // Escape handler (slash-plugin.ts's handleKeyDown, scoped to the
+  // ProseMirror view's own DOM node): useModalDialog's focus-in moves DOM
+  // focus into the modal the instant it opens, and the editor's
+  // contenteditable node cannot hold focus -- and therefore cannot be the
+  // target of a keydown -- while a modal does.
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent): void => {
       if ((event.metaKey || event.ctrlKey) && event.key === '/') {
         event.preventDefault()
-        // Slash menu (Task 5 addition): ShortcutsHelpModal renders no
-        // autofocus element (confirmed by reading it -- unlike
-        // CommentComposer/LinkComposer, both of which do), so opening it via
-        // this bare keydown listener does NOT blur the ProseMirror editor
-        // DOM node the way clicking a real toolbar button would -- and the
-        // slash plugin's own auto-close only fires on that blur (or on
-        // Escape, or on the selection leaving the tracked range). Without
-        // this call, a slash session left open when Mod-/ fires would stay
-        // open (and focused) underneath the newly-opened modal. Every OTHER
-        // overlay this screen can open (Page Setup, Find, Comment/Link
-        // composers) already blurs the editor on its own -- this is the one
-        // real gap, and the reason MilkdownEditorHandle.closeSlashMenu()
-        // exists at all (see its own doc comment in editor-commands.ts).
+        // Slash menu (Task 5 addition): closes any open slash session
+        // SYNCHRONOUSLY, in this same tick -- useModalDialog's own focus-in
+        // effect (ShortcutsHelpModal) also blurs the editor, which the slash
+        // plugin's own blur handler independently closes on, but that only
+        // runs after the modal's state update is committed and its effect
+        // fires, a render (or more) later. Without this explicit call, the
+        // slash menu would stay visibly open, rendered underneath the
+        // newly-opened modal, for that whole window. Calling it here too is
+        // therefore not redundant with the later blur -- it's what makes the
+        // close visually immediate -- and it's a documented no-op
+        // (closeSlashIn) if no session is open, so calling it unconditionally
+        // is free. See MilkdownEditorHandle.closeSlashMenu()'s own doc
+        // comment in editor-commands.ts.
         editorRef.current?.closeSlashMenu()
         openShortcutsHelp()
       }
@@ -668,9 +671,9 @@ function EditorScreen(): React.JSX.Element {
     'view:toggleSidebar': () => toggleSidebar(),
     'app:shortcuts': () => {
       // Same closeSlashMenu() call the Mod-/ keydown listener below makes,
-      // for the same reason -- ShortcutsHelpModal autofocuses nothing, so
-      // opening it does not blur the ProseMirror node, and the slash
-      // plugin's own auto-close only fires on that blur.
+      // for the same reason -- see that handler's own comment: this closes
+      // the slash session synchronously, a render sooner than
+      // useModalDialog's own focus-in-driven blur would.
       editorRef.current?.closeSlashMenu()
       openShortcutsHelp()
     }
@@ -1582,12 +1585,15 @@ function EditorScreen(): React.JSX.Element {
       visibility, so this screen doesn't need a second, parallel `slashMenu.state
       && (...)` gate here. No `suppressed` prop, unlike SelectionBubble: every
       overlay that could otherwise occlude/conflict with an open session
-      (Page Setup, Comment/Link composers) already blurs the editor on open,
-      which the slash plugin's own blur handler already closes the session
-      for -- the one real exception (ShortcutsHelpModal's Mod-/, which does
-      NOT blur) is closed explicitly via closeSlashMenu() in that shortcut's
-      own handler above, rather than by adding a suppressed prop this
-      component doesn't otherwise need. */}
+      (Page Setup, Comment/Link composers, and now ShortcutsHelpModal too,
+      via useModalDialog's focus-in) already blurs the editor on open, which
+      the slash plugin's own blur handler already closes the session for.
+      ShortcutsHelpModal's Mod-/ path additionally closes it explicitly via
+      closeSlashMenu() in that shortcut's own handler above, for the reason
+      documented there: useModalDialog's blur is real but lands a render
+      later, and the explicit call is what makes the close visually
+      immediate rather than adding a suppressed prop this component doesn't
+      otherwise need. */}
       <SlashMenu
         items={slashMenu.state?.items ?? []}
         activeIndex={slashMenu.state?.activeIndex ?? 0}

@@ -182,6 +182,32 @@ describe('PageSetupModal', () => {
     expect(onClose).not.toHaveBeenCalled()
   })
 
+  // Product-completeness audit, Tier 1 section 1.4 -- same gap, same fix
+  // (useModalDialog, shared with ShortcutsHelpModal), described at length in
+  // that other test file's own comment. This modal is the one the audit's
+  // concrete repro actually used (Page Setup was reachable with no keyboard
+  // escape at all before this fix).
+  it('pressing Escape calls onClose', async () => {
+    const onClose = vi.fn()
+    const user = userEvent.setup()
+    render(
+      <PageSetupModal open={true} initialConfig={CONFIG} onApply={vi.fn()} onClose={onClose} />
+    )
+
+    await user.keyboard('{Escape}')
+
+    expect(onClose).toHaveBeenCalledTimes(1)
+  })
+
+  it('moves focus into the dialog when it opens, rather than leaving it in the background', async () => {
+    render(
+      <PageSetupModal open={true} initialConfig={CONFIG} onApply={vi.fn()} onClose={vi.fn()} />
+    )
+
+    expect(screen.getByRole('dialog')).toContainElement(document.activeElement as HTMLElement)
+    expect(document.activeElement).not.toBe(document.body)
+  })
+
   it('re-seeds the draft from initialConfig each time the modal opens', async () => {
     const onApply = vi.fn()
     const user = userEvent.setup()

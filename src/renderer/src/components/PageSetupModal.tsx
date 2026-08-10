@@ -8,6 +8,7 @@ import type {
   PageSize,
   PageTheme
 } from '../../../markdown/page-config'
+import { useModalDialog } from '../hooks/useModalDialog'
 
 // A real, functional Page Setup dialog: every control here edits a local
 // in-modal draft of `PageConfig`, and Apply hands the finished draft back
@@ -326,6 +327,14 @@ function PageSetupModal({
   const [draft, setDraft] = useState<PageConfig>(initialConfig)
   const [prevOpen, setPrevOpen] = useState(open)
   const [prevInitialConfig, setPrevInitialConfig] = useState(initialConfig)
+  // Escape-to-close, a real focus trap, focus-in on open, and focus-restore
+  // on close -- see useModalDialog.ts's own header comment for what this
+  // fixes (aria-modal="true" was previously a false claim: the document
+  // behind the scrim stayed fully tabbable and Escape did nothing). Called
+  // unconditionally, before the `if (!open)` early return below, per the
+  // Rules of Hooks -- the hook itself no-ops internally whenever `open` is
+  // false.
+  const dialogRef = useModalDialog(open, onClose)
 
   // Re-seed the draft from `initialConfig` every time the modal opens (or
   // the caller hands it a different config while already open) -- this is
@@ -367,9 +376,11 @@ function PageSetupModal({
       data-testid="page-setup-scrim"
     >
       <div
+        ref={dialogRef}
         role="dialog"
         aria-modal="true"
         aria-label="Page setup"
+        tabIndex={-1}
         onClick={(e) => e.stopPropagation()}
         className="flex max-h-[min(660px,88vh)] w-[760px] max-w-[92vw] flex-col overflow-hidden rounded-lg bg-page shadow-modal"
       >
