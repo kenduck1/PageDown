@@ -1,5 +1,5 @@
 export const COVER_LETTER_TEMPLATE = `Alex Morgan
-alex.morgan@example.com
+[alex.morgan@example.com](mailto:alex.morgan@example.com)
 (555) 234-9876
 
 March 3, 2026
