@@ -8,6 +8,8 @@ beforeEach(() => {
     openPath: vi.fn(),
     saveFile: vi.fn(),
     getRecentFiles: vi.fn(),
+    removeRecentFile: vi.fn(),
+    clearRecentFiles: vi.fn(),
     getThumbnail: vi.fn(),
     getTemplateThumbnail: vi.fn(),
     getPageCount: vi.fn(),
@@ -450,6 +452,87 @@ describe('useDocumentStore tabs', () => {
       filePath: '/new.md',
       isDirty: false,
       error: null
+    })
+  })
+
+  // Product-completeness audit 0.5: opening a path already open in this
+  // window must FOCUS the existing tab, not create a duplicate -- see
+  // openTab's own implementation comment in documentStore.ts for the full
+  // reasoning (dirty-tab handling, raw-vs-canonical path comparison,
+  // why this is correctly scoped to one window/one store instance).
+  describe('openTab dedup on filePath (audit 0.5)', () => {
+    it('focuses the existing tab instead of appending a duplicate for an already-open path', () => {
+      useDocumentStore.getState().openTab('/dup.md', '# Original')
+      const originalTabId = useDocumentStore.getState().activeTabId
+      const tabCountBefore = useDocumentStore.getState().tabs.length
+
+      useDocumentStore.getState().openTab('/dup.md', '# Reopened copy')
+
+      const state = useDocumentStore.getState()
+      expect(state.tabs).toHaveLength(tabCountBefore)
+      expect(state.activeTabId).toBe(originalTabId)
+    })
+
+    it('preserves an existing DIRTY tabs unsaved content rather than overwriting it with the freshly-opened copy', () => {
+      useDocumentStore.getState().openTab('/dup.md', '# Original')
+      const originalTabId = useDocumentStore.getState().activeTabId
+      useDocumentStore.getState().updateContent('# Unsaved edit')
+      // Switch away so the dedup path exercises the "focus a BACKGROUND tab"
+      // branch, not just "re-open the already-active tab."
+      useDocumentStore.getState().openTab('/other.md', '# Other')
+
+      useDocumentStore.getState().openTab('/dup.md', '# Freshly read from disk')
+
+      const state = useDocumentStore.getState()
+      expect(state.activeTabId).toBe(originalTabId)
+      // The unsaved edit survives -- NOT silently replaced by the content
+      // this second "open" call was given.
+      expect(state.content).toBe('# Unsaved edit')
+      expect(state.isDirty).toBe(true)
+    })
+
+    it('reopening the path of the ALREADY-active tab is a no-op (no unnecessary remount)', () => {
+      useDocumentStore.getState().openTab('/dup.md', '# Original')
+      const before = useDocumentStore.getState()
+
+      useDocumentStore.getState().openTab('/dup.md', '# Irrelevant')
+
+      const state = useDocumentStore.getState()
+      expect(state.revision).toBe(before.revision)
+      expect(state.tabs).toHaveLength(before.tabs.length)
+    })
+
+    it('does NOT dedup two blank (filePath: null) tabs -- "New document" must keep allowing several', () => {
+      useDocumentStore.getState().openTab(null, '')
+      const countAfterFirst = useDocumentStore.getState().tabs.length
+
+      useDocumentStore.getState().openTab(null, '')
+
+      expect(useDocumentStore.getState().tabs).toHaveLength(countAfterFirst + 1)
+    })
+
+    it('openPath (the real File > Open Recent flow) focuses an already-open tab instead of duplicating it', async () => {
+      vi.mocked(window.api.openPath).mockResolvedValue({
+        filePath: '/dup.md',
+        content: '# From disk',
+        recoveredFromAutosave: false,
+        mtimeMs: 1000
+      })
+      await useDocumentStore.getState().openPath('/dup.md')
+      const originalTabId = useDocumentStore.getState().activeTabId
+      useDocumentStore.getState().updateContent('# Edited after first open')
+      const tabCountBefore = useDocumentStore.getState().tabs.length
+
+      // Simulate the user opening the SAME file a second time (e.g. clicking
+      // its Recent row again, or File > Open Recent) while it's already open
+      // and dirty.
+      await useDocumentStore.getState().openPath('/dup.md')
+
+      const state = useDocumentStore.getState()
+      expect(state.tabs).toHaveLength(tabCountBefore)
+      expect(state.activeTabId).toBe(originalTabId)
+      expect(state.content).toBe('# Edited after first open')
+      expect(state.isDirty).toBe(true)
     })
   })
 

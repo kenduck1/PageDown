@@ -101,6 +101,8 @@ beforeEach(() => {
     openPath: vi.fn(),
     saveFile: vi.fn().mockResolvedValue({ filePath: '/tmp/report.md', mtimeMs: 1000 }),
     getRecentFiles: vi.fn(),
+    removeRecentFile: vi.fn(),
+    clearRecentFiles: vi.fn(),
     getThumbnail: vi.fn(),
     getTemplateThumbnail: vi.fn(),
     getPageCount: vi.fn().mockResolvedValue({ pageCount: 1 }),

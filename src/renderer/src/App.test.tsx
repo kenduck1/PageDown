@@ -25,6 +25,8 @@ beforeEach(() => {
     openPath: vi.fn(),
     saveFile: vi.fn(),
     getRecentFiles: vi.fn().mockResolvedValue([]),
+    removeRecentFile: vi.fn(),
+    clearRecentFiles: vi.fn(),
     getThumbnail: vi.fn().mockResolvedValue({ dataUrl: 'data:image/png;base64,x', pageCount: 1 }),
     getTemplateThumbnail: vi
       .fn()

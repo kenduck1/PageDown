@@ -192,6 +192,13 @@ interface DocumentState extends DocumentStateValues {
   // document is the only caller that ever passes true. mtimeMs defaults to
   // null, same as loadDocument -- only openFile/openPath (real reads of an
   // existing file) ever pass a real value.
+  //
+  // DEDUPS on a non-null filePath already open in THIS window's tabs --
+  // focuses the existing tab (leaving its content/isDirty/mtimeMs untouched)
+  // instead of appending a second one for the same file. See this action's
+  // own implementation comment for the full reasoning (dirty-tab handling,
+  // raw-vs-canonical path comparison, why this can't and shouldn't reach
+  // across windows).
   openTab: (
     filePath: string | null,
     content: string,
@@ -409,8 +416,107 @@ async function runSave(forceSaveAs: boolean): Promise<void> {
 
 export const useDocumentStore = create<DocumentState>()((set, get) => ({
   ...initialDocumentState,
+  // Product-completeness audit 0.5: opening a path already open IN THIS
+  // WINDOW now focuses that existing tab instead of appending a duplicate --
+  // this is the behavior every tabbed editor has, and closes two real bugs a
+  // duplicate tab caused: the mtime-on-save conflict check only fires when
+  // two saves of the same path land >2s apart (MTIME_TOLERANCE_MS), so two
+  // tabs saving inside that window silently clobbered each other with no
+  // warning; and both tabs autosaved into the SAME path-keyed
+  // version-history directory (sha256 of the canonical path), interleaving
+  // snapshots from two independently-diverging in-memory documents and
+  // corrupting that file's whole recovery story.
+  //
+  // Guarded on `filePath !== null`: a null filePath means an untitled/blank
+  // tab, and this app deliberately allows any number of those side by side
+  // (EditorTabBar's own "+" button, and newDocument, both call
+  // openTab(null, ...) precisely to open ANOTHER blank tab) -- two blank
+  // tabs are two genuinely different, unrelated documents, not a duplicate
+  // of anything.
+  //
+  // DIRTY-TAB reasoning (the audit's own explicit question): the matched
+  // tab's content/isDirty/mtimeMs are left completely untouched -- the
+  // freshly-read `content`/`startDirty`/`mtimeMs` this call was given are
+  // simply discarded. Focusing (not reloading) is correct whether the
+  // existing tab is dirty or clean:
+  //   - DIRTY: the user's in-memory, unsaved edits are the thing this whole
+  //     audit finding exists to protect. Silently replacing them with
+  //     whatever is on disk right now (or a just-recovered autosave) would
+  //     itself BE a silent-data-loss bug of exactly the kind Tier 0 is
+  //     about, just moved one step earlier than the save-clobber it's
+  //     already known for.
+  //   - CLEAN: re-reading isn't needed for correctness either. If the file
+  //     changed on disk since this tab was opened, the EXISTING mtime
+  //     conflict check (file-io.ts's saveFile, keyed off the tab's own
+  //     mtimeMs baseline, left untouched here) still catches that the next
+  //     time this tab is saved -- Reload/Overwrite/Cancel. Leaving mtimeMs
+  //     alone is what keeps that baseline meaningful; overwriting it here
+  //     with "now" would make a genuinely-external change since the
+  //     original open silently invisible to that check.
+  //
+  // PATH-COMPARISON reasoning (the audit's other explicit question): this
+  // compares the raw `filePath` string, not a canonicalized (fs.realpath)
+  // form, even though canonicalizeDocumentPath (file-io.ts) exists in this
+  // codebase precisely because two spellings of one file are otherwise
+  // possible (see its own doc comment: a symlinked temp dir vs. its
+  // realpath). Deliberate, not an oversight:
+  //   - Every route BY WHICH this app lets a user "open a file again" is
+  //     app-mediated and echoes back a string this app itself already
+  //     recorded: a native Open dialog result (file:open), a Recent row or
+  //     the File > Open Recent submenu (both sourced from recent-files.json,
+  //     itself only ever populated from a prior dialog/openPath result), or
+  //     the `?openPath=` query param a second WINDOW is launched with (a
+  //     different window entirely -- see below). None of these re-derive or
+  //     retype a path; they all replay a string this app already has on
+  //     file. Two opens of the same real file through this app's own UI
+  //     therefore produce byte-identical strings in the overwhelming
+  //     majority of cases -- exactly the case 0.5 describes.
+  //   - The realpath-divergence case canonicalizeDocumentPath guards against
+  //     is, by CLAUDE.md's own account, a `mkdtemp(tmpdir())` TEST-fixture
+  //     artifact (macOS resolving /tmp to /private/tmp) -- not a spelling a
+  //     real user produces by hand through Finder/the native dialog twice.
+  //   - Canonicalizing here would need either a renderer->main IPC round
+  //     trip before every single open (this renderer has no fs access,
+  //     contextIsolation is on) -- adding real latency to a same-window,
+  //     should-be-instant tab-focus decision -- or threading a
+  //     `canonicalPath` field through OpenedFile/DocumentTab and keeping it
+  //     fresh across every write that can change a tab's filePath (Save-As
+  //     in particular), which is real, separate surface with its own new
+  //     staleness-bug risk (a canonicalPath computed once at open time and
+  //     never invalidated after a later Save-As would misdedupe), to close
+  //     a gap narrower than the one 0.5 is actually about.
+  //   - Residual, disclosed gap: two DIFFERENT spellings of the same real
+  //     file (a raw symlinked path vs. its resolved form) opened within one
+  //     window will NOT be deduped by this check. If that ever proves to
+  //     matter for real users, the fix is the same pattern version-history
+  //     already uses -- add a canonicalPath alongside filePath and keep it
+  //     current on every write, not just at open time.
+  //
+  // CROSS-WINDOW: deliberately NOT extended there. `state.tabs` here is
+  // this store's own in-memory array, and Zustand's `create()` produces a
+  // module-level singleton PER RENDERER PROCESS -- Multi-window support
+  // gives every window its own separate renderer process (and therefore its
+  // own separate instance of this whole module), so there is structurally
+  // no `state.tabs` from window B this check could ever see while running
+  // in window A. Two windows showing the same file is the case
+  // CLAUDE.md's "External file-change detection on Save" section already
+  // names as the intended job of the mtime-on-save conflict check, not
+  // something a tab-list dedup could reach across a process boundary to
+  // fix even if it tried.
   openTab: (filePath, content, startDirty = false, mtimeMs = null) =>
     set((state) => {
+      if (filePath !== null) {
+        const existing = state.tabs.find((tab) => tab.filePath === filePath)
+        if (existing) {
+          if (existing.id === state.activeTabId) return {}
+          return {
+            activeTabId: existing.id,
+            ...activeMirror(existing),
+            error: null,
+            revision: state.revision + 1
+          }
+        }
+      }
       const tab: DocumentTab = {
         id: generateTabId(),
         filePath,
@@ -481,6 +587,11 @@ export const useDocumentStore = create<DocumentState>()((set, get) => ({
   // active tab's content in place, matching real multi-document-app
   // behavior -- both are thin wrappers around openTab so there is exactly
   // one place ("what does opening a document do") to reason about.
+  // newDocument passes filePath: null through unchanged -- openTab's own
+  // dedup guard (below) only ever applies to a non-null filePath, so
+  // "New document" (and EditorTabBar's own "+" button, which also calls
+  // openTab(null, '')) keeps allowing any number of blank Untitled tabs,
+  // matching the pre-existing, still-correct behavior.
   newDocument: (initialContent = '') => get().openTab(null, initialContent),
   loadDocument: (filePath, content, startDirty = false, mtimeMs = null) =>
     get().openTab(filePath, content, startDirty, mtimeMs),
