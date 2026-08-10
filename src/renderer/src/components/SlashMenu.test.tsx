@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, render, screen } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import SlashMenu from './SlashMenu'
 import type { SlashItem } from '../milkdown/slash-items'
@@ -207,6 +207,25 @@ describe('SlashMenu interaction', () => {
     // not DOM/section position.
     await user.hover(screen.getByRole('option', { name: /Gamma/ }))
     expect(onHover).toHaveBeenCalledWith(0)
+  })
+
+  it('fix round 1, IMPORTANT I1: does NOT fire on a bare mouseenter with no actual pointer movement', () => {
+    // userEvent.hover() (the test immediately above) dispatches a REAL
+    // mousemove as part of its own pointer sequence, so that test alone
+    // cannot discriminate onMouseMove from onMouseEnter -- both would pass
+    // it. This test fires ONLY a raw mouseenter (via fireEvent, bypassing
+    // userEvent's fuller sequence), reproducing exactly the scenario the
+    // fix targets: the list scrolls underneath a STATIONARY cursor
+    // (activeOptionRef's own scrollIntoView, triggered by ArrowDown/Up),
+    // which fires a synthetic mouseenter/mouseover for whatever slid under
+    // the pointer but no real mousemove. Verified this genuinely
+    // discriminates the fix: reverting the component's own handler back to
+    // onMouseEnter makes this test fail (onHover IS called), confirming it
+    // isn't vacuous.
+    const items = makeItems()
+    const { onHover } = renderMenu({ items })
+    fireEvent.mouseEnter(screen.getByRole('option', { name: /Gamma/ }))
+    expect(onHover).not.toHaveBeenCalled()
   })
 
   it('never lets a mousedown steal focus from the editor', () => {

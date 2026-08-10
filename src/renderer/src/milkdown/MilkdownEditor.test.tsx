@@ -1,6 +1,6 @@
 import { describe, expect, it, afterEach, vi } from 'vitest'
 import { createRef } from 'react'
-import { cleanup, render, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, waitFor } from '@testing-library/react'
 import {
   Editor,
   rootCtx,
@@ -20,7 +20,12 @@ import { createTestEditor } from './test-editor'
 import MilkdownEditor, { type MilkdownEditorHandle } from './MilkdownEditor'
 import { buildEditorCommands } from './editor-commands'
 import { createFindPlugin } from './find-plugin'
-import { createSlashPlugin, openSlashSessionAt, slashPluginKey } from './slash-plugin'
+import {
+  createSlashPlugin,
+  openSlashSessionAt,
+  runSlashItemIn,
+  slashPluginKey
+} from './slash-plugin'
 import { enabledSlashItems } from './slash-items'
 import { computePageGeometry } from '../../../typography/page-geometry'
 import { DEFAULT_DOCUMENT_STYLE } from '../../../typography/document-style'
@@ -121,20 +126,31 @@ describe('MilkdownEditorHandle commands needing a real ranged selection — wire
 
   // Same per-mount construction as FIND_PLUGINS above, for the slash plugin
   // -- and built with the EXACT closure shape MilkdownEditor.tsx's own mount
-  // effect uses (a real ctx-closing countMatching built from
-  // enabledSlashItems), not a synthetic stand-in the way slash-plugin.test.ts's
-  // own `() => PLENTY` countMatching is. That's the whole point of this
-  // constant existing here rather than only in slash-plugin.test.ts: it
-  // proves the REAL wiring (the formula MilkdownEditor.tsx actually
-  // constructs), the same way buildEditorCommands itself is used directly
-  // above rather than a hand-rolled stand-in (see this describe block's own
-  // header comment for that precedent).
+  // effect uses (a real ctx-closing countMatching AND onChooseActive built
+  // from enabledSlashItems/runSlashItemIn, fix round 1's CRITICAL C1 fix),
+  // not a synthetic stand-in the way slash-plugin.test.ts's own `() =>
+  // PLENTY`/`noop` closures are. That's the whole point of this constant
+  // existing here rather than only in slash-plugin.test.ts: it proves the
+  // REAL wiring (the formulas MilkdownEditor.tsx actually constructs), the
+  // same way buildEditorCommands itself is used directly above rather than a
+  // hand-rolled stand-in (see this describe block's own header comment for
+  // that precedent).
   const SLASH_PLUGINS = [
     ...PLUGINS,
     $prose((ctx) =>
       createSlashPlugin(
         () => {},
-        (query, state) => enabledSlashItems(ctx, state, query).length
+        (query, state) => enabledSlashItems(ctx, state, query).length,
+        (activeIndex) => {
+          const view = ctx.get(editorViewCtx)
+          const session = slashPluginKey.getState(view.state)?.session
+          if (!session) return
+          const items = enabledSlashItems(ctx, view.state, session.query)
+          const item = items[activeIndex]
+          if (item) {
+            runSlashItemIn(view, session.anchorPos, session.queryEnd, () => item.run(ctx))
+          }
+        }
       )
     )
   ]
@@ -476,6 +492,29 @@ describe('MilkdownEditorHandle commands needing a real ranged selection — wire
     expect(editor.action(getMarkdown())).toBe(before)
   })
 
+  it('runSlashItem refuses a currently-DISABLED item by id, even though it is real -- fix round 1, IMPORTANT I2', async () => {
+    // "math-block" is a genuine id in the full SLASH_ITEMS catalogue, but
+    // disabled HERE: byte-for-byte the same HARD REQUIREMENT scenario
+    // slash-items.test.ts's own describe block pins (a "/" typed
+    // mid-paragraph, after the space before "and", with an empty query --
+    // the target block is non-empty once the query is removed). Before
+    // this fix, runSlashItem looked `id` up against the FULL, unfiltered
+    // catalogue (a bare SLASH_ITEMS.find), not the enabled subset -- so
+    // this exact call would have run math-block anyway, wiping "Important
+    // prose here" and " more text" outright. This is a PUBLIC handle
+    // method, reachable from anywhere holding the ref -- not just from the
+    // palette's own click/keyboard paths, which never offer a disabled id
+    // in the first place.
+    const editor = await createTestEditor('Important prose here and more text', SLASH_PLUGINS)
+    currentEditor = editor
+    const commands = buildEditorCommands(editor)
+    const view = editor.action((ctx) => ctx.get(editorViewCtx))
+    openSlashSessionAt(view, 1 + 'Important prose here '.length)
+    const before = editor.action(getMarkdown())
+    commands.runSlashItem('math-block')
+    expect(editor.action(getMarkdown())).toBe(before)
+  })
+
   it('closeSlashMenu closes an open session WITHOUT touching the "/query" text itself', async () => {
     const editor = await createTestEditor('', SLASH_PLUGINS)
     currentEditor = editor
@@ -522,6 +561,67 @@ describe('MilkdownEditorHandle commands needing a real ranged selection — wire
     expect(slashPluginKey.getState(view.state)?.session?.activeIndex).toBe(0)
     commands.setActiveSlashIndex(3)
     expect(slashPluginKey.getState(view.state)?.session?.activeIndex).toBe(3)
+  })
+
+  // === CRITICAL C1 regression, fix round 1 -- END TO END, not just the
+  // isolated plugin-level proof in slash-plugin.test.ts. ===
+  // Before this fix, the palette was mouse-only: the plugin swallowed
+  // Enter/Tab (preventDefault, so the underlying keymap never split the
+  // paragraph either) but nothing behind that swallow ever ran an item --
+  // typing "/", navigating with ArrowDown, and pressing Enter produced no
+  // block, no paragraph split, and no feedback of any kind. These tests
+  // drive REAL fireEvent.keyDown calls (task-3-report.md's own spike
+  // confirmed handleKeyDown genuinely receives them under jsdom) against
+  // SLASH_PLUGINS' own real onChooseActive closure -- the literal formula
+  // MilkdownEditor.tsx's mount effect constructs, not a synthetic stand-in
+  // -- so a wiring bug in that closure (a wrong ctx/view, a stale query, an
+  // off-by-one against activeIndex) would fail here even if the plugin's
+  // own unit tests (which only assert the CALLBACK fired, with a synthetic
+  // callback) still passed.
+  it('a real Enter keydown, with a session open, actually runs the highlighted item and closes the session', async () => {
+    const editor = await createTestEditor('Buy milk', SLASH_PLUGINS)
+    currentEditor = editor
+    const view = editor.action((ctx) => ctx.get(editorViewCtx))
+    // Same anchoring as the click-driven runSlashItem test above: opens
+    // right before "Buy milk", types "task" as the query, so exactly one
+    // item matches ("task-list") and the delete range leaves "Buy milk"
+    // intact for the command to wrap.
+    openSlashSessionAt(view, 1)
+    view.dispatch(view.state.tr.insertText('task', view.state.selection.from))
+    expect(slashPluginKey.getState(view.state)?.session?.itemCount).toBe(1)
+    fireEvent.keyDown(view.dom, { key: 'Enter' })
+    expect(editor.action(getMarkdown())).toBe('- [ ] Buy milk\n')
+    expect(slashPluginKey.getState(view.state)?.session).toBeNull()
+  })
+
+  it('ArrowDown navigation before a real Enter chooses the NAVIGATED item, not always the first match', async () => {
+    // Empty paragraph, empty query -> the full, unfiltered, isEnabled-aware
+    // catalogue, in SLASH_ITEMS' own declared order: heading-1(0),
+    // heading-2(1), heading-3(2), bullet-list(3), numbered-list(4),
+    // task-list(5), ... -- five ArrowDowns lands on task-list, distinctly
+    // identifiable in the output by its "[ ]" checkbox marker, which
+    // heading-1 (the item a hardcoded-to-0 bug would still run) never
+    // produces.
+    const editor = await createTestEditor('', SLASH_PLUGINS)
+    currentEditor = editor
+    const view = editor.action((ctx) => ctx.get(editorViewCtx))
+    openSlashSessionAt(view, 1)
+    for (let i = 0; i < 5; i++) {
+      fireEvent.keyDown(view.dom, { key: 'ArrowDown' })
+    }
+    expect(slashPluginKey.getState(view.state)?.session?.activeIndex).toBe(5)
+    fireEvent.keyDown(view.dom, { key: 'Enter' })
+    expect(editor.action(getMarkdown())).toContain('[ ]')
+  })
+
+  it('a real Tab keydown also runs the highlighted item, exactly like Enter', async () => {
+    const editor = await createTestEditor('Buy milk', SLASH_PLUGINS)
+    currentEditor = editor
+    const view = editor.action((ctx) => ctx.get(editorViewCtx))
+    openSlashSessionAt(view, 1)
+    view.dispatch(view.state.tr.insertText('task', view.state.selection.from))
+    fireEvent.keyDown(view.dom, { key: 'Tab' })
+    expect(editor.action(getMarkdown())).toBe('- [ ] Buy milk\n')
   })
 })
 

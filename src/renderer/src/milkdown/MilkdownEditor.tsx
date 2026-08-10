@@ -1,5 +1,11 @@
 import { forwardRef, useEffect, useImperativeHandle, useRef } from 'react'
-import { Editor, rootCtx, defaultValueCtx, remarkStringifyOptionsCtx } from '@milkdown/core'
+import {
+  Editor,
+  rootCtx,
+  defaultValueCtx,
+  remarkStringifyOptionsCtx,
+  editorViewCtx
+} from '@milkdown/core'
 import { listener, listenerCtx } from '@milkdown/plugin-listener'
 import { $prose, getMarkdown } from '@milkdown/utils'
 import { Plugin } from '@milkdown/prose/state'
@@ -10,7 +16,12 @@ import { buildEditorCommands, type EditorCommands } from './editor-commands'
 import { createFindPlugin } from './find-plugin'
 import { createDropImagePlugin } from './drop-image'
 import { createSelectionPlugin, type SelectionSnapshot } from './selection-plugin'
-import { createSlashPlugin, type SlashSession } from './slash-plugin'
+import {
+  createSlashPlugin,
+  runSlashItemIn,
+  slashPluginKey,
+  type SlashSession
+} from './slash-plugin'
 import { enabledSlashItems } from './slash-items'
 import type { PageGeometry } from '../../../typography/page-geometry'
 import type { DocumentStyle } from '../../../typography/document-style'
@@ -307,10 +318,33 @@ const MilkdownEditor = forwardRef<MilkdownEditorHandle, MilkdownEditorProps>(
       // free of any dependency on the item catalogue or on Ctx (see that
       // file's header) -- this closure is the seam where the two are wired
       // together, at construction time, outside that file.
+      //
+      // Fix round 1, CRITICAL C1: the third argument, onChooseActive, is
+      // what makes Enter/Tab actually choose an item -- see slash-plugin.ts's
+      // own OnChooseActive doc comment for the bug this closes (the palette
+      // was previously mouse-only: the plugin swallowed Enter/Tab with
+      // nothing behind them). Deliberately reads `session.query` and rebuilds
+      // `items` via enabledSlashItems FRESH here, in the SAME synchronous
+      // call the plugin invokes this from (itself inside handleKeyDown,
+      // called synchronously off a real DOM keydown) -- not from any
+      // React-mirrored copy of the query or the item list (useSlashMenu's own
+      // `state.items`), which could theoretically still be one render behind
+      // (React 18 does not flush state updates synchronously). Reading
+      // straight from the live view.state and re-deriving `items` the exact
+      // same way countMatching above does is what guarantees the index and
+      // the list it indexes into can never disagree.
       const slashProse = $prose((ctx) =>
         createSlashPlugin(
           (session) => onSlashStateChangedRef.current?.(session),
-          (query, state) => enabledSlashItems(ctx, state, query).length
+          (query, state) => enabledSlashItems(ctx, state, query).length,
+          (activeIndex) => {
+            const view = ctx.get(editorViewCtx)
+            const session = slashPluginKey.getState(view.state)?.session
+            if (!session) return
+            const items = enabledSlashItems(ctx, view.state, session.query)
+            const item = items[activeIndex]
+            if (item) runSlashItemIn(view, session.anchorPos, session.queryEnd, () => item.run(ctx))
+          }
         )
       )
 

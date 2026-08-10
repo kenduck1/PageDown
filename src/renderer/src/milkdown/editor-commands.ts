@@ -27,7 +27,7 @@ import {
 } from './find-plugin'
 import { findAncestorListType, readSelectionRect } from './selection-plugin'
 import { slashPluginKey, closeSlashIn, runSlashItemIn, setActiveSlashIndexIn } from './slash-plugin'
-import { SLASH_ITEMS, enabledSlashItems, type SlashItem } from './slash-items'
+import { enabledSlashItems, type SlashItem } from './slash-items'
 import type { Rect } from '../lib/floating-position'
 
 // This is a separate file from MilkdownEditor.tsx (fix-round change) purely
@@ -211,21 +211,26 @@ export interface EditorCommands {
   // resolveCommentCommand (commands.ts) -- removes every mark instance for
   // the given comment id, anywhere in the document.
   resolveComment: (id: string) => void
-  // Runs the slash-menu item with this `id` (slash-items.ts's SLASH_ITEMS)
-  // against the LIVE session (slash-plugin.ts's own slashPluginKey state) --
-  // reads anchorPos/queryEnd fresh at call time rather than accepting them
-  // as parameters, so a caller (SlashMenu's onChoose, via
-  // hooks/useSlashMenu.ts) can never pass a range computed before some other
-  // edit landed. session.queryEnd is used as the delete range's own `to`
-  // rather than re-deriving `anchorPos + 1 + query.length` by hand --
-  // they're always equal (both are set from the SAME selection.from inside
-  // slash-plugin.ts's own tryOpen/advanceSession), and reusing the field
-  // avoids a second, hand-copied formula that could silently drift from
-  // buildDecorations' identical one. A no-op (mutates nothing) when no
-  // session is open or `id` doesn't match a real item -- defensive, matching
-  // every other optional-chained handle method's "never throw" contract; not
-  // expected to be reachable in practice, since the palette only ever
-  // renders ids from this SAME catalogue.
+  // Runs the slash-menu item with this `id` against the LIVE session
+  // (slash-plugin.ts's own slashPluginKey state) -- reads anchorPos/queryEnd
+  // fresh at call time rather than accepting them as parameters, so a caller
+  // (SlashMenu's onChoose, via hooks/useSlashMenu.ts) can never pass a range
+  // computed before some other edit landed. session.queryEnd is used as the
+  // delete range's own `to` rather than re-deriving `anchorPos + 1 +
+  // query.length` by hand -- they're always equal (both are set from the
+  // SAME selection.from inside slash-plugin.ts's own tryOpen/advanceSession),
+  // and reusing the field avoids a second, hand-copied formula that could
+  // silently drift from buildDecorations' identical one.
+  //
+  // Fix round 1, IMPORTANT I2: `id` is looked up against
+  // slash-items.ts's enabledSlashItems(ctx, state, session.query) -- the
+  // CURRENTLY-ENABLED subset -- not the full, unfiltered SLASH_ITEMS. This
+  // is a PUBLIC method, reachable from anywhere holding the handle, so a
+  // stale/forged id for a currently-disabled item (most acutely,
+  // math-block/mermaid-diagram outside the narrow window where running them
+  // is safe) must be refused, not merely "not expected in practice." A
+  // no-op (mutates nothing) when no session is open or `id` doesn't resolve
+  // against that enabled list.
   runSlashItem: (id: string) => void
   // Closes the current slash-menu session, if one is open, WITHOUT touching
   // the "/query" text itself -- the exact closeSlashIn (slash-plugin.ts) the
@@ -447,7 +452,21 @@ export function buildEditorCommands(editor: Editor): EditorCommands {
         const view = ctx.get(editorViewCtx)
         const session = slashPluginKey.getState(view.state)?.session
         if (!session) return
-        const item = SLASH_ITEMS.find((candidate) => candidate.id === id)
+        // Fix round 1, IMPORTANT I2: looked up against the ENABLED list
+        // (enabledSlashItems, re-derived fresh against the live
+        // view.state/session.query), NOT the full, unfiltered SLASH_ITEMS.
+        // This is a PUBLIC method on MilkdownEditorHandle, reachable from
+        // anywhere holding the ref -- looking id up in the full catalogue
+        // would let a caller run a currently-disabled item (most acutely,
+        // math-block/mermaid-diagram outside the narrow window where
+        // they're safe) with no gate at all. The palette's own click/
+        // keyboard paths already only ever offer an id from this SAME
+        // enabled list (see this file's own getSlashItems doc comment), so
+        // this re-derivation costs nothing for the real UI paths and closes
+        // the gap for any other caller.
+        const item = enabledSlashItems(ctx, view.state, session.query).find(
+          (candidate) => candidate.id === id
+        )
         if (!item) return
         // Two dispatches, not one -- see runSlashItemIn's own doc comment
         // (slash-plugin.ts) for why that's correct rather than an oversight:
