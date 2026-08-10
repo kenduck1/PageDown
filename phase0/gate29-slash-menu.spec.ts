@@ -13,41 +13,54 @@ import { launchIsolatedApp } from './electron-launch'
 // Navigation colliding on 17 during parallel work -- this was checked, not
 // assumed).
 //
-// WHY THIS GATE MATTERS: the feature ships 1160 passing unit tests, but Task
+// WHY THIS GATE MATTERS: the feature ships 1160+ passing unit tests (1166 as
+// of the Gate 29 fix below -- check slash-plugin.test.ts's own current count
+// rather than trusting this number to stay in sync going forward), but Task
 // 5's own report is explicit that NONE of them drive a genuine keyboard "/"
-// keystroke through Chromium's real input pipeline -- `insertedSingleSlash`
-// (slash-plugin.ts) requires the transaction that opens a session to be
-// EXACTLY a single-character ReplaceStep inserting "/", and a synthesized
-// jsdom DOM-mutation cannot reliably reproduce that shape (confirmed by that
-// report's own probe: the edit lands, but no session opens). Only a real
-// browser's own native contenteditable input path proves this feature's
-// central trigger condition actually fires.
+// keystroke through Chromium's real
+// input pipeline -- `insertedSingleSlash` (slash-plugin.ts) decides whether
+// a session opens by inspecting the exact SHAPE of the transaction a real
+// keystroke produced, and a synthesized jsdom DOM-mutation cannot reliably
+// reproduce Chromium's own real contenteditable behavior (confirmed by that
+// report's own probe, and by this gate's own investigation below: jsdom can
+// simulate the shape of a transaction directly, but not the real browser
+// quirk -- nbsp<->space normalization -- that actually produces it). Only a
+// real browser's own native contenteditable input path proves this
+// feature's central trigger condition actually fires.
 //
-// A REAL, PREVIOUSLY UNKNOWN BROWSER-INTERACTION FINDING, surfaced by
-// building this gate (see this file's own "known limitation" note near the
-// bottom for the full writeup, and the Task 6 report for the investigation):
-// typing "/" immediately after a SPACE typed at the absolute end of an
-// existing line does NOT open a session in real Chromium, even though the
-// design doc's own "Open only when ... after whitespace" rule says it
-// should. Root cause: Chromium's contenteditable normalizes a genuinely
-// trailing space to a non-breaking space (`&nbsp;`), and typing the very
-// next character (here, "/") triggers Chromium to convert that nbsp BACK to
-// a plain space as part of the SAME DOM mutation that inserts the new
-// character -- so the resulting ProseMirror transaction is not a bare
-// single-character insert, and `insertedSingleSlash` correctly (per its own
-// literal contract) refuses to treat it as one. This is a real, disclosed
-// interaction between a Chromium editing quirk and this feature's
-// deliberately narrow transaction-shape check, not a bug in this gate's own
-// mechanics -- confirmed by isolating it against the mid-line case (typing
-// "/" right after an EXISTING space in the middle of a line, not one just
-// typed at a line's end, opens correctly every time) and the empty-paragraph
-// case (typing "/" as the first character of a block opens correctly every
-// time). Both of THOSE are what this gate exercises below; the trailing-
-// space-at-line-end case is a real, narrower gap this gate does not exercise
-// (see the note near the bottom) and does not fix -- fixing it would need a
-// deliberate design decision about how `insertedSingleSlash` should treat a
-// multi-character-but-net-single-visible-character DOM mutation, not a
-// one-line patch, and is out of this task's scope.
+// A REAL BROWSER-INTERACTION BUG, FOUND BY BUILDING THIS GATE, AND SINCE
+// FIXED (this paragraph itself was rewritten once that landed -- an earlier
+// version described this as a disclosed, unfixed gap this gate deliberately
+// did not exercise; that is no longer true, see below): typing "/"
+// immediately after a SPACE typed at the absolute end of an existing line
+// did NOT open a session in real Chromium, even though the design doc's own
+// "Open only when ... after whitespace" rule says it should -- the single
+// most common way a user actually invokes a slash menu ("...some text /"),
+// so this was a mainline failure, not an edge case. Root cause: Chromium's
+// contenteditable normalizes a genuinely trailing space to a non-breaking
+// space (`&nbsp;`), and typing the very next character (here, "/") triggers
+// Chromium to convert that nbsp BACK to a plain space as part of the SAME
+// DOM mutation that inserts the new character -- so the resulting
+// ProseMirror transaction carried an EXTRA, incidental step alongside the
+// real "/" insertion, and the ORIGINAL `insertedSingleSlash` (which required
+// the whole transaction to be exactly one single-character ReplaceStep)
+// correctly, per its own literal contract, refused to treat it as a trigger.
+// Fixed in `insertedSingleSlash` (slash-plugin.ts) by inspecting what the
+// transaction actually did around the cursor instead of how many steps it
+// took to do it -- see that function's own doc comment for the full
+// three-part check (the char before the cursor really is "/"; the whole
+// transaction's net text-length delta is exactly +1, so a real multi-
+// character paste is still rejected regardless of step count; and the
+// specific step that inserted the "/" maps forward to land exactly at the
+// cursor, ruling out a pure cursor move landing next to some OLDER,
+// pre-existing "/"). The "Gate 29 fix" block in the first test below is the
+// real, end-to-end proof this now works in actual Chromium, not just in the
+// unit tests slash-plugin.test.ts added alongside the same fix (which can
+// only simulate the SHAPE of the multi-step transaction, not prove Chromium
+// actually produces it -- jsdom has no real contenteditable/nbsp behavior to
+// reproduce). The mid-line case (typing "/" right after an EXISTING space in
+// the middle of a line) and the empty-paragraph case were never broken and
+// are exercised below too, unchanged.
 //
 // The four things asserted here, each structurally impossible under jsdom:
 //
@@ -285,6 +298,42 @@ test('Gate 29: a real / pops a real palette; ArrowDown x2 + Enter inserts the ri
     const andOrPara = win.locator('.milkdown-mount .ProseMirror p').filter({ hasText: 'and/or' })
     await expect(andOrPara).toHaveText('and/or')
 
+    // --- Gate 29 fix: "type text, then a trailing space, then /" now opens
+    // a session. This is THE end-to-end proof for the bug this file's own
+    // header describes at length -- a real, separately-typed space keystroke
+    // (not baked into the same `.type()` call as the preceding word, so it
+    // genuinely IS the last character on the line at the moment it lands,
+    // matching the real Chromium nbsp-normalization trigger) followed by a
+    // real, separate "/" keystroke. Before the fix in slash-plugin.ts's
+    // insertedSingleSlash, this exact gesture opened nothing at all -- the
+    // single most common way a user actually invokes a slash menu.
+    await win.keyboard.press('Enter')
+    await win.waitForTimeout(100)
+
+    await win.keyboard.type('trailing space test', { delay: 30 })
+    await win.waitForTimeout(100)
+    await win.keyboard.type(' ', { delay: 30 })
+    await win.waitForTimeout(150)
+    // Nothing has opened yet -- a bare trailing space alone is not a trigger.
+    await expect(listbox).toHaveCount(0)
+
+    await win.keyboard.type('/', { delay: 30 })
+    await win.waitForTimeout(300)
+    // THE HEADLINE: this stayed empty forever before the fix. A real
+    // Chromium keystroke sequence, previously swallowed by
+    // insertedSingleSlash's own literal single-step contract, now opens a
+    // real palette with at least one real option.
+    await expect(listbox).toBeVisible()
+    await expect(listbox.getByRole('option').first()).toBeVisible()
+
+    // Escape closes it cleanly, leaving the typed prose behind as ordinary
+    // content -- this test only needs to prove the palette OPENED, not
+    // exercise choosing an item again (the "/list" flow below already does
+    // that against the empty-paragraph trigger case).
+    await win.keyboard.press('Escape')
+    await win.waitForTimeout(100)
+    await expect(listbox).toHaveCount(0)
+
     // --- (1)/(2) Positive case: a fresh empty paragraph, a real query that
     // narrows the catalogue to exactly 3 items (all three "list" items --
     // none of which is a PREFIX match for "list", so slash-filter.ts's
@@ -423,12 +472,16 @@ test('Gate 29: in Split mode the palette is clamped clear of the real preview We
 
     // Click at a point within the paragraph's own (post-selection) bounding
     // box near its right portion, landing close to (but not necessarily
-    // exactly at) the position right before "width." -- the ONE
-    // whitespace-preceded position near the far end of this sentence, so a
-    // "/" typed there is guaranteed to open a session (unlike a position
-    // typed at the absolute end of the line, which this file's own header
-    // documents as a real, narrower Chromium contenteditable interaction
-    // this gate deliberately does not exercise).
+    // exactly at) the position right before "width." -- a whitespace-
+    // preceded position near the far end of this sentence, not the absolute
+    // end of the line. This is unrelated to the trailing-space bug this
+    // file's own header now describes as fixed (that case is covered by the
+    // first test's own dedicated "Gate 29 fix" block) -- it's simply the one
+    // position in this fixture's own geometry this test's positioning logic
+    // was built and measured against (see the MEASURED VALUES note above),
+    // and re-deriving a second geometry here for no reason would just be
+    // extra flakiness surface for this already-fiddly Split-mode positioning
+    // test to carry.
     const postSelectBox = await target.boundingBox()
     expect(postSelectBox).not.toBeNull()
     await target.click({
