@@ -13,7 +13,9 @@ import {
   resolveCommentCommand,
   insertTaskListCommand,
   insertMathBlockCommand,
-  insertMermaidBlockCommand
+  insertMermaidBlockCommand,
+  insertPagebreakCommand,
+  isInsideTableCell
 } from './commands'
 import { EDITOR_SCHEMA_PLUGINS } from './plugins'
 
@@ -258,5 +260,142 @@ describe('insertMermaidBlockCommand', () => {
     const output = editor.action(getMarkdown())
     expect(output).toBe('```mermaid\ngraph TD;\n  A-->B;\n```\n')
     expect(output).not.toContain('Hello world.')
+  })
+})
+
+// insertPagebreakCommand needs BOTH the pagebreak node's own SCHEMA
+// (EDITOR_SCHEMA_PLUGINS, per plugins.ts) and the command itself
+// (EDITOR_COMMAND_PLUGINS) -- unlike the task-list/math/mermaid describe
+// blocks above, which reuse pre-existing commonmark/gfm schema that
+// createTestEditor already mounts unconditionally. Same PLUGINS composition
+// as the 'comment mark commands' describe block above, re-declared locally
+// rather than hoisted to module scope, matching that block's own precedent.
+describe('insertPagebreakCommand', () => {
+  const PLUGINS = [...EDITOR_SCHEMA_PLUGINS.flat(), ...EDITOR_COMMAND_PLUGINS]
+
+  it('still inserts normally in a plain paragraph -- the fix must not regress the common case', async () => {
+    const editor = await createTestEditor('Hello world', PLUGINS)
+    const applied = editor.action((ctx) => ctx.get(commandsCtx).call(insertPagebreakCommand.key))
+    expect(applied).toBe(true)
+    expect(editor.action(getMarkdown())).toContain('<!-- pagebreak -->')
+  })
+
+  it('dry run (no dispatch) reports true for a plain paragraph -- was previously "always true" regardless of context, now happens to agree here', async () => {
+    const editor = await createTestEditor('Hello world', PLUGINS)
+    const view = editor.action((ctx) => ctx.get(editorViewCtx)) as EditorView
+    const dry = editor.action((ctx) => {
+      const command = ctx.get(commandsCtx).get(insertPagebreakCommand.key)(undefined)
+      return command(view.state)
+    })
+    expect(dry).toBe(true)
+    // A dry run must never mutate, same convention as every other command's
+    // own dry-run test in this file.
+    expect(editor.action(getMarkdown())).toBe('Hello world\n')
+  })
+
+  // The measured, real bug this test reproduces (see isInsideTableCell's own
+  // doc comment in commands.ts): a table cell's content model is exactly
+  // ONE required paragraph, no siblings allowed, so replaceSelectionWith's
+  // fitting algorithm doesn't refuse when it can't insert cleanly -- it
+  // restructures the enclosing table instead. Before the fix, both the dry
+  // run AND a real dispatch reported "true" here while silently corrupting
+  // the table (a second, spurious table appeared, and the sibling cell's own
+  // "y" content was replaced by an empty line). This is this command's own
+  // version of the slash-menu's Math/Mermaid "block-replacing" hazard --
+  // destructive, not just uninformative -- for a different container (an
+  // ancestor table) instead of the immediate block's own content.
+  it('refuses -- both dry run and real dispatch -- inside a table cell, leaving the table byte-for-byte untouched', async () => {
+    const source = '| a | b |\n| --- | --- |\n| x | y |\n'
+    const editor = await createTestEditor(source, PLUGINS)
+    const view = editor.action((ctx) => ctx.get(editorViewCtx)) as EditorView
+
+    let cellTextPos: number | null = null
+    view.state.doc.descendants((node, pos) => {
+      if (node.isText && node.text === 'x') cellTextPos = pos + 1
+      return true
+    })
+    expect(cellTextPos).not.toBeNull()
+    view.dispatch(view.state.tr.setSelection(TextSelection.create(view.state.doc, cellTextPos!)))
+
+    // Baseline BEFORE the (refused) command, not the hand-typed source
+    // string -- this project's pinned remark-stringify options normalize
+    // the table-divider row (`---` -> `-`) on parse/serialize regardless of
+    // this command, so comparing against `source` verbatim would fail on
+    // that unrelated normalization rather than on genuine table corruption.
+    const before = editor.action(getMarkdown())
+
+    const dry = editor.action((ctx) => {
+      const command = ctx.get(commandsCtx).get(insertPagebreakCommand.key)(undefined)
+      return command(view.state)
+    })
+    expect(dry).toBe(false)
+
+    const applied = editor.action((ctx) => ctx.get(commandsCtx).call(insertPagebreakCommand.key))
+    expect(applied).toBe(false)
+    expect(editor.action(getMarkdown())).toBe(before)
+  })
+
+  it('mid-paragraph in a plain top-level paragraph still splits cleanly -- pre-existing, collapsed-selection behavior, must not regress', async () => {
+    // Direct regression coverage for the block-splitting behavior this
+    // command's own top doc comment documents (collapsing to the selection's
+    // start specifically to preserve it) -- proven here with real content on
+    // BOTH sides of the insertion point, not just a collapsed-selection
+    // no-op.
+    const editor = await createTestEditor('Hello there world', PLUGINS)
+    const view = editor.action((ctx) => ctx.get(editorViewCtx)) as EditorView
+    const pos = 1 + 'Hello there'.length
+    view.dispatch(view.state.tr.setSelection(TextSelection.create(view.state.doc, pos)))
+    const applied = editor.action((ctx) => ctx.get(commandsCtx).call(insertPagebreakCommand.key))
+    expect(applied).toBe(true)
+    const output = editor.action(getMarkdown())
+    expect(output).toContain('Hello there')
+    expect(output).toContain('world')
+    expect(output).toContain('<!-- pagebreak -->')
+  })
+})
+
+// isInsideTableCell is exported specifically so slash-items.ts (Task 4's
+// palette catalogue) can apply the identical guard to insertTableCommand and
+// insertHrCommand -- neither of which is this project's own command body to
+// patch, but both of which share this exact failure mode (measured directly,
+// see commands.ts's own comment on isInsideTableCell). Tested directly here,
+// independent of insertPagebreakCommand's own integration test above, since
+// it is now a reusable unit with its own call sites.
+describe('isInsideTableCell', () => {
+  const PLUGINS = [...EDITOR_SCHEMA_PLUGINS.flat(), ...EDITOR_COMMAND_PLUGINS]
+
+  it('is false for a plain top-level paragraph', async () => {
+    const editor = await createTestEditor('Hello world', PLUGINS)
+    const view = editor.action((ctx) => ctx.get(editorViewCtx)) as EditorView
+    const result = editor.action((ctx) => isInsideTableCell(ctx, view.state))
+    expect(result).toBe(false)
+  })
+
+  it('is true for a cursor inside a table cell (body row)', async () => {
+    const source = '| a | b |\n| --- | --- |\n| x | y |\n'
+    const editor = await createTestEditor(source, PLUGINS)
+    const view = editor.action((ctx) => ctx.get(editorViewCtx)) as EditorView
+    let cellTextPos: number | null = null
+    view.state.doc.descendants((node, pos) => {
+      if (node.isText && node.text === 'x') cellTextPos = pos + 1
+      return true
+    })
+    view.dispatch(view.state.tr.setSelection(TextSelection.create(view.state.doc, cellTextPos!)))
+    const result = editor.action((ctx) => isInsideTableCell(ctx, view.state))
+    expect(result).toBe(true)
+  })
+
+  it('is true for a cursor inside a table HEADER cell too, not just a body cell', async () => {
+    const source = '| a | b |\n| --- | --- |\n| x | y |\n'
+    const editor = await createTestEditor(source, PLUGINS)
+    const view = editor.action((ctx) => ctx.get(editorViewCtx)) as EditorView
+    let cellTextPos: number | null = null
+    view.state.doc.descendants((node, pos) => {
+      if (node.isText && node.text === 'a') cellTextPos = pos + 1
+      return true
+    })
+    view.dispatch(view.state.tr.setSelection(TextSelection.create(view.state.doc, cellTextPos!)))
+    const result = editor.action((ctx) => isInsideTableCell(ctx, view.state))
+    expect(result).toBe(true)
   })
 })
