@@ -185,6 +185,138 @@ describe('slash-plugin: opening a session', () => {
     expect(session(view)).toBeNull()
   })
 
+  // === Gate 29 fix: the widened insertedSingleSlash, and what jsdom CAN and
+  // CANNOT prove about it ===
+  //
+  // jsdom cannot reproduce the actual Chromium DOM behavior that caused this
+  // bug (contenteditable silently converting a trailing space to `&nbsp;`
+  // then back again as part of the SAME mutation that inserts the next
+  // character -- see Gate 29's own header comment and this file's
+  // insertedSingleSlash for the full, measured writeup) -- there is no
+  // keyboard/DOM API this test file can drive that would make jsdom produce
+  // that transaction shape on its own the way real Chromium does. What CAN
+  // be proven here is the SHAPE of the fix: given a transaction matching
+  // what real Chromium was measured to produce (built directly), does the
+  // plugin's OWN logic correctly open a session? That is a real, direct test
+  // of insertedSingleSlash's new behavior, just not a test that the browser
+  // quirk itself exists -- that half is only provable against the real
+  // built app (phase0/gate29-slash-menu.spec.ts's own "trailing space" test,
+  // added alongside this fix).
+  //
+  // TWO ROUNDS of this fix, and the test below is what the SECOND one is
+  // pinned against -- worth recording plainly rather than only in
+  // slash-plugin.ts's own comment, since it's exactly the kind of thing a
+  // future reader would otherwise re-derive the hard way. The first attempt
+  // (still tested below, as "Gate 29 hypothetical shape") assumed Chromium
+  // would represent this as TWO separate steps: a length-preserving
+  // nbsp<->space swap, then a separate bare "/" insert. Running the ACTUAL
+  // gate against real Chromium (with temporary diagnostic logging of
+  // `tr.steps`, added and then removed once this was understood) showed
+  // that guess was wrong: the real transaction is a SINGLE ReplaceStep whose
+  // slice is one text node containing " /" (a space, then the slash) AS ONE
+  // UNIT, replacing the 1-character nbsp with that whole 2-character run.
+  // insertedSingleSlash's SLASH_INSERTION_TEXT pattern (whitespace* then a
+  // literal "/") is what actually matches this.
+  it('Gate 29: opens a session for the REAL measured Chromium shape -- one ReplaceStep replacing the nbsp with a " /" (space + slash) text run', async () => {
+    // Content ends in U+00A0 (a non-breaking space, written as an escape so
+    // this source file doesn't itself contain a raw irregular-whitespace
+    // character eslint would flag) -- standing in for "the user already
+    // typed a trailing space, which Chromium is currently representing as
+    // nbsp." "Hello" occupies positions 1-5, the nbsp sits at position 6.
+    const { view } = await viewFor('Hello\u00A0')
+    // ONE step: replace the nbsp (6,7) with the two-character text " /" --
+    // this is the literal shape captured from the real built app (Gate 29's
+    // own diagnostic run against real Chromium, not assumed or guessed).
+    const tr = view.state.tr.insertText(' /', 6, 7)
+    // insertText, given EXPLICIT from/to, does NOT move the selection to the
+    // insertion point on its own (the exact bug openSlashSessionAt's own doc
+    // comment already documents, from this file's very first task) -- set it
+    // explicitly, matching that established fix.
+    view.dispatch(tr.setSelection(TextSelection.create(tr.doc, 8)))
+    expect(session(view)).toEqual({
+      anchorPos: 7,
+      query: '',
+      queryEnd: 8,
+      activeIndex: 0,
+      itemCount: PLENTY
+    })
+  })
+
+  it('Gate 29 hypothetical shape: also opens for a "/" insertion accompanied by a SEPARATE, incidental length-preserving step -- not what real Chromium was measured to produce, but a shape the fix happens to support too', async () => {
+    // Content ends in U+00A0, same setup as the test above.
+    const { view } = await viewFor('Hello\u00A0')
+    // Step 1: replace the nbsp (6,7) with a plain space -- length-preserving
+    // (1 char removed, 1 char inserted). Step 2: insert "/" right after it,
+    // as its OWN separate step. Both steps land on the SAME transaction
+    // (chained Transform calls accumulate steps). This is NOT the shape Gate
+    // 29's own real-Chromium measurement found (see the test above and
+    // insertedSingleSlash's own comment for that) -- kept as a second,
+    // independent proof that the fix is not narrowly tuned to only the one
+    // exact captured shape.
+    const tr = view.state.tr.insertText(' ', 6, 7).insertText('/', 7)
+    view.dispatch(tr.setSelection(TextSelection.create(tr.doc, 8)))
+    expect(session(view)).toEqual({
+      anchorPos: 7,
+      query: '',
+      queryEnd: 8,
+      activeIndex: 0,
+      itemCount: PLENTY
+    })
+  })
+
+  it('Gate 29 control: a 2-character replacement ending in "/" is rejected when the FIRST character is not whitespace -- proves SLASH_INSERTION_TEXT is a whitespace-prefix check, not just a length/net-delta check', async () => {
+    const { view } = await viewFor('Hello\u00A0')
+    // Replaces the nbsp with "y/" -- the SAME size shape as the real
+    // Chromium case (1 old char -> 2 new chars, net +1), but "y" is not
+    // whitespace. A real paste of "y/" over one selected character must not
+    // open a session just because it happens to share a net-length delta
+    // with the real browser quirk this fix exists for.
+    const tr = view.state.tr.insertText('y/', 6, 7)
+    view.dispatch(tr.setSelection(TextSelection.create(tr.doc, 8)))
+    expect(session(view)).toBeNull()
+  })
+
+  it('Gate 29 control: a multi-step transaction whose LAST step is a multi-character insertion ending in "/" still does not open -- the widened check does not accept an arbitrary multi-character paste just because it rides alongside another step', async () => {
+    const { view } = await viewFor('Hello\u00A0')
+    // Same length-preserving first step as above, but the second step
+    // inserts "xyz/" (4 characters), not a bare "/" -- no step in this
+    // transaction matches the narrow "bare single-character /" shape
+    // insertedSingleSlash's loop requires, so this must not open regardless
+    // of the incidental first step riding along.
+    const tr = view.state.tr.insertText(' ', 6, 7).insertText('xyz/', 7)
+    view.dispatch(tr.setSelection(TextSelection.create(tr.doc, 11)))
+    expect(session(view)).toBeNull()
+  })
+
+  it('Gate 29 control: a genuine "/" insertion accompanied by an UNRELATED bulk edit elsewhere in the document does not open -- the net text-length-delta guard', async () => {
+    // Two paragraphs: the "/" lands in the second, a large unrelated
+    // insertion lands in the first, in the SAME transaction. The "/" step
+    // alone is the exact bare single-character shape and its own mapped
+    // position DOES land at the new cursor -- so without the net-length
+    // check, this would incorrectly open. With it, the whole transaction's
+    // net text-length delta is +1 (the "/") + 20 (the bulk insertion) = +21,
+    // not +1, and it correctly refuses.
+    const { view } = await viewFor('para one\n\npara two')
+    const secondParaEnd = posOf(view, 'two') + 3 // end of "two", in the STARTING doc
+    const tr = view.state.tr.insertText('/', secondParaEnd).insertText('X'.repeat(20), 1) // unrelated bulk edit in the FIRST paragraph
+    // The final cursor position is computed via the transaction's OWN
+    // mapping (`secondParaEnd` mapped forward through both steps), not
+    // hand-added arithmetic -- the second step shifts everything from
+    // position 1 onward forward by 20, including where the "/" itself
+    // landed, so a manually-added offset would silently point at the wrong
+    // position once the bulk insertion is added above it.
+    view.dispatch(tr.setSelection(TextSelection.create(tr.doc, tr.mapping.map(secondParaEnd))))
+    expect(session(view)).toBeNull()
+  })
+
+  it('a pure selection move landing right after a PRE-EXISTING "/" does not open a session -- no doc change at all, so there is nothing for the widened check to even inspect', async () => {
+    const { view } = await viewFor('and/or')
+    view.dispatch(
+      view.state.tr.setSelection(TextSelection.create(view.state.doc, posOf(view, '/or') + 1))
+    )
+    expect(session(view)).toBeNull()
+  })
+
   it('refuses to open at all when countMatching("") is already 0 -- the "empty filtered list" rule applies symmetrically at open time', async () => {
     const { view } = await viewFor('', noop, () => 0)
     openSlashSessionAt(view, 1)

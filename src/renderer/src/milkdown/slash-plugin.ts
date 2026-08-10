@@ -177,31 +177,114 @@ function sameSession(a: SlashSession | null, b: SlashSession | null): boolean {
   )
 }
 
-// True iff `tr` is EXACTLY "insert one literal '/' character, nothing else"
-// -- a single ReplaceStep whose slice is a single, unopened text node "/".
-// Deliberately narrow: a paste, an IME composition, or any multi-step
-// transaction is NOT this, and must not open a session -- typing "/" is the
-// one gesture this feature triggers on, matching the design doc's own
-// framing ("Open only when: a transaction inserted a single /"). Checking
-// the STEP shape (not just "does the resulting text end in /") is what
-// correctly ignores a "/" that arrived some other way, e.g. as part of a
-// larger pasted string ending in "/". (A single-character "/" paste is
-// indistinguishable from typing one and DOES open a session -- there is no
-// way to tell the two apart from the transaction alone, and there is no
-// reason to: a bare "/" paste is behaviourally identical to a keystroke.)
+// A step's slice qualifies as "the / insertion" iff its content is ONE bare,
+// unopened text node whose text is zero-or-more whitespace characters
+// followed by exactly one "/" -- see insertedSingleSlash's own header for
+// why the whitespace prefix is there (it is not optional padding, it is
+// what the real, measured Chromium transaction shape requires).
+const SLASH_INSERTION_TEXT = /^\s*\/$/
+
+// True iff `tr` genuinely inserted one literal "/" character immediately
+// before where the cursor now sits, and nothing else of consequence. Typing
+// "/" is the one gesture this feature triggers on, matching the design doc's
+// own framing ("Open only when: a transaction inserted a single /") -- a
+// paste, an IME composition, or a bulk programmatic edit must never open a
+// session, and still don't (see the checks below).
+//
+// !!! WIDENED, Gate 29 fix -- a real bug jsdom cannot reproduce, only found
+// by driving REAL Chromium (phase0/gate29-slash-menu.spec.ts's own
+// investigation), and the widening below is ITSELF the product of a second
+// round of real-app measurement, not the first guess !!! The ORIGINAL
+// version of this function required `tr` to be EXACTLY one ReplaceStep whose
+// slice was a bare single-character "/" -- nothing else, ever. That is
+// correct for typing "/" at the start of an empty paragraph or after an
+// ALREADY-EXISTING space, but real Chromium does not represent "type a
+// space, then type / immediately after it" that way: contenteditable stores
+// a genuinely TRAILING space as `&nbsp;` (so it isn't collapsed away by
+// normal whitespace rules), and typing the very next character converts
+// that nbsp back to a plain space as part of the SAME DOM mutation that
+// inserts the new character -- so typing "text /" (the single most common
+// way to invoke a slash menu) opened nothing.
+//
+// THE FIRST FIX ATTEMPT HERE WAS WRONG, AND CAUGHT BY THIS GATE ITSELF, NOT
+// BY REASONING ALONE -- worth recording so the next person doesn't repeat
+// the same guess. It assumed the nbsp swap and the "/" insertion would be
+// TWO separate steps (a length-preserving replace, plus a bare single-
+// character insert) and widened the step-matching loop to allow an extra
+// incidental step alongside a bare "/" step. Rerunning the ACTUAL gate
+// against real Chromium (with temporary diagnostic logging of `tr.steps`
+// added, then removed once this was understood) showed the real transaction
+// is a SINGLE ReplaceStep whose slice is one text node containing " /" (a
+// space THEN the slash) as ONE unit -- replacing the 1-character nbsp
+// range with that 2-character run. Chromium's own DOM diff, not
+// ProseMirror's, decided where the edit boundary falls, and it did not
+// isolate the "/" into its own step at all. The two-separate-steps guess
+// was never observed in practice; SLASH_INSERTION_TEXT's whitespace-prefix
+// pattern is what the real, captured transaction needed instead.
+//
+// The fix inspects what the transaction actually DID, rather than how many
+// steps it took to do it, via checks that together rule out exactly the
+// same things the old single-step check ruled out:
+//
+//   1. The character immediately before the FINAL cursor position really is
+//      "/" (checked against `tr.doc`, the resulting document -- indifferent
+//      to step count).
+//   2. Net TEXT-LENGTH delta across the whole transaction is exactly +1
+//      (`tr.doc.textContent.length` vs `tr.before.textContent.length`).
+//      This is what still rejects a real multi-character paste, even a
+//      single-step one ending in "/": it changes total text length by MORE
+//      than one, however many steps it takes.
+//   3. There EXISTS a step whose slice is ONE bare, unopened text node
+//      matching SLASH_INSERTION_TEXT (whitespace* then "/") -- deliberately
+//      NOT "any text ending in /", which would accept an arbitrary paste
+//      replacing a selection (e.g. pasting "xyz/" over selected text) --
+//      and whose own inserted content maps FORWARD (through every
+//      subsequent step's own mapping, `tr.mapping.slice(i + 1)`) to land
+//      EXACTLY at the final cursor position. Combined with check #2, this
+//      step alone already accounts for the ENTIRE transaction's net +1 (a
+//      leading-whitespace-then-/ run replacing a same-or-smaller old range
+//      nets to exactly +1 only when that whitespace prefix is itself a
+//      1-for-1 restatement of what was already there, e.g. nbsp-for-nbsp or
+//      nbsp-for-space) -- so no OTHER step can be adding real content
+//      anywhere else in the document, and this is also the "genuinely
+//      inserted, not merely pre-existing content the cursor moved next to"
+//      proof: a pure cursor move has no ReplaceStep at all, so this loop
+//      finds nothing and returns false regardless of what the cursor landed
+//      next to.
 function insertedSingleSlash(tr: Transaction): boolean {
-  if (tr.steps.length !== 1) return false
-  const [step] = tr.steps
-  if (!(step instanceof ReplaceStep)) return false
-  const { slice } = step
-  // openStart/openEnd > 0 would mean the slice is a fragment of a larger
-  // structure (e.g. half of a split node) rather than a bare inserted leaf --
-  // not reachable for a single typed character, kept as an explicit guard
-  // rather than assumed.
-  if (slice.openStart !== 0 || slice.openEnd !== 0) return false
-  if (slice.content.childCount !== 1) return false
-  const node = slice.content.firstChild
-  return !!node && node.isText && node.text === '/'
+  if (!tr.docChanged) return false
+  const { selection } = tr
+  if (!(selection instanceof TextSelection) || !selection.empty) return false
+  const pos = selection.from
+  if (pos < 1) return false
+  if (tr.doc.textBetween(pos - 1, pos, '￼', '￼') !== '/') return false
+
+  const oldLength = tr.before.textContent.length
+  const newLength = tr.doc.textContent.length
+  if (newLength !== oldLength + 1) return false
+
+  for (let i = 0; i < tr.steps.length; i++) {
+    const step = tr.steps[i]
+    if (!(step instanceof ReplaceStep)) continue
+    const { slice } = step
+    // openStart/openEnd > 0 would mean the slice is a fragment of a larger
+    // structure (e.g. half of a split node) rather than a bare inserted leaf
+    // -- not reachable for a single typed character, kept as an explicit
+    // guard rather than assumed.
+    if (slice.openStart !== 0 || slice.openEnd !== 0) continue
+    if (slice.content.childCount !== 1) continue
+    const node = slice.content.firstChild
+    if (!node || !node.isText || !SLASH_INSERTION_TEXT.test(node.text ?? '')) continue
+    // This step's own inserted run ends at `step.from + slice.content.size`
+    // in the document AS IT STOOD immediately after this one step
+    // (openStart/openEnd are both 0, so there is no open-depth adjustment to
+    // account for). Map that position FORWARD through every step that came
+    // after it to land in the FINAL document's own coordinates, and require
+    // it to be exactly where the cursor now sits.
+    const end = step.from + slice.content.size
+    if (tr.mapping.slice(i + 1).map(end) === pos) return true
+  }
+  return false
 }
 
 // Whether a brand-new session should open, given the transaction just
