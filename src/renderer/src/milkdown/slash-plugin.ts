@@ -27,13 +27,14 @@ import { findSlashTrigger, MAX_QUERY_LENGTH } from '../lib/slash-query'
 // (slash-items.ts, Task 4) or filterSlashItems (slash-filter.ts, Task 1) --
 // forcing that dependency here would mean every future catalogue change
 // touches this file too. Instead, whoever DOES hold the filtered list
-// (Task 5's useSlashMenu controller) reports its length in via
-// setSlashItemCount below, which is also how "close on empty filtered list"
-// (the design doc's own close condition) is satisfied without this file
-// importing slash-filter.ts at all: an explicit report of 0 closes the
-// session, but a session that has merely not been reported to YET (freshly
-// opened, itemCount defaults to 0) does not auto-close itself -- see
-// applyItemCount's own comment.
+// (Task 5's useSlashMenu controller) supplies a `countMatching(query)`
+// closure at construction time -- see createSlashPlugin's own comment for
+// why this is dependency injection rather than an external report channel
+// (an earlier version of this file used the latter; fix round 1 replaced it
+// after review found two real, measured costs: a stale-count window between
+// a query changing and the next report, and silent failure -- arrows
+// permanently inert, the empty-list close never firing -- if a caller ever
+// forgot to report).
 
 /** A live slash-command session: the palette is open and tracking a query. */
 export interface SlashSession {
@@ -42,19 +43,34 @@ export interface SlashSession {
   /** Everything after the "/" up to the cursor -- what the palette filters on. */
   query: string
   /**
+   * Document position of the RIGHT edge of the query's own tracked content,
+   * as of the last update -- i.e. where the cursor was the last time this
+   * session was recomputed. Exists ONLY to detect the cursor moving forward
+   * past it (see advanceSession's own header comment for the real, measured
+   * bug this closes): `query` itself is still derived as
+   * `doc.textBetween(anchorPos + 1, selection.from)`, exactly as before.
+   * Never read outside this file -- it is bookkeeping for advanceSession,
+   * not part of the palette's own display contract -- but left on the
+   * public interface rather than hidden in module state, since a session's
+   * entire shape is otherwise a plain, inspectable value.
+   */
+  queryEnd: number
+  /**
    * Index into the CURRENTLY FILTERED item list. Lives here, not in React --
-   * see this file's own header comment for why. Clamped into [0, itemCount)
-   * every time itemCount changes (setSlashItemCount below), so a query that
-   * narrows the list can never leave this pointing past the end.
+   * see this file's own header comment for why. Recomputed alongside `query`
+   * on every change (see advanceSession), clamped into [0, itemCount) so a
+   * query that narrows the list can never leave this pointing past the end.
    */
   activeIndex: number
   /**
-   * How many items currently match `query`, as last reported by
-   * setSlashItemCount. 0 until the first report arrives after a session
-   * opens -- deliberately NOT treated as "the list is empty, close" on its
-   * own (see applyItemCount), since 0-because-nothing-has-reported-yet and
-   * 0-because-the-query-genuinely-matches-nothing are different states this
-   * plugin has no way to tell apart by itself.
+   * How many items currently match `query`, computed via the injected
+   * countMatching(query) in the SAME apply that changes the query -- never
+   * stale, never independently "not yet known" the way an external-report
+   * design would leave it (see this file's header comment). A session
+   * cannot exist with itemCount <= 0: both tryOpen and advanceSession close
+   * (or refuse to open) outright the moment countMatching returns <= 0,
+   * which is this file's entire implementation of the design doc's "close
+   * on empty filtered list".
    */
   itemCount: number
 }
@@ -81,13 +97,13 @@ const WHITESPACE = /\s/
 // Meta shapes this plugin's own state.apply reads via tr.getMeta(key).
 // Private to this module -- every external caller goes through the
 // EditorView-taking helpers at the bottom of this file (openSlashSessionAt /
-// closeSlashIn / setSlashItemCount / runSlashItemIn), mirroring how
-// find-plugin.ts's FindStateInput is the one exception (applyFindState takes
-// it as a real parameter) rather than the rule.
-type SlashMeta =
-  | { type: 'close' }
-  | { type: 'setItemCount'; itemCount: number }
-  | { type: 'setActiveIndex'; activeIndex: number }
+// closeSlashIn / runSlashItemIn), mirroring how find-plugin.ts's
+// FindStateInput is the one exception (applyFindState takes it as a real
+// parameter) rather than the rule. No 'setItemCount' variant any more (fix
+// round 1 removed it along with setSlashItemCount) -- itemCount is now
+// always computed inline from the injected countMatching, never pushed in
+// from outside as a separate meta transaction.
+type SlashMeta = { type: 'close' } | { type: 'setActiveIndex'; activeIndex: number }
 
 function buildDecorations(doc: ProseNode, session: SlashSession): DecorationSet {
   const to = session.anchorPos + 1 + session.query.length
@@ -106,6 +122,7 @@ function sameSession(a: SlashSession | null, b: SlashSession | null): boolean {
   return (
     a.anchorPos === b.anchorPos &&
     a.query === b.query &&
+    a.queryEnd === b.queryEnd &&
     a.activeIndex === b.activeIndex &&
     a.itemCount === b.itemCount
   )
@@ -119,7 +136,10 @@ function sameSession(a: SlashSession | null, b: SlashSession | null): boolean {
 // framing ("Open only when: a transaction inserted a single /"). Checking
 // the STEP shape (not just "does the resulting text end in /") is what
 // correctly ignores a "/" that arrived some other way, e.g. as part of a
-// larger pasted string ending in "/".
+// larger pasted string ending in "/". (A single-character "/" paste is
+// indistinguishable from typing one and DOES open a session -- there is no
+// way to tell the two apart from the transaction alone, and there is no
+// reason to: a bare "/" paste is behaviourally identical to a keystroke.)
 function insertedSingleSlash(tr: Transaction): boolean {
   if (tr.steps.length !== 1) return false
   const [step] = tr.steps
@@ -144,7 +164,16 @@ function insertedSingleSlash(tr: Transaction): boolean {
 //   3. parent is a paragraph and not type.spec.code
 //   4. not inside an inlineCode mark
 //   5. findSlashTrigger accepts the text before the cursor
-function tryOpen(newState: EditorState, prev: SlashPluginState): SlashPluginState {
+//   6. countMatching(query) is > 0 -- see this function's own itemCount
+//      comment below; not literally in the design doc's list (query is
+//      always '' here, see findSlashTrigger's own invariant), but the same
+//      "close on empty filtered list" rule applies symmetrically at open
+//      time so a session can never exist with nothing to show.
+function tryOpen(
+  newState: EditorState,
+  prev: SlashPluginState,
+  countMatching: (query: string) => number
+): SlashPluginState {
   const { selection, schema, doc } = newState
   if (!(selection instanceof TextSelection) || !selection.empty) return prev
 
@@ -176,33 +205,77 @@ function tryOpen(newState: EditorState, prev: SlashPluginState): SlashPluginStat
   const trigger = findSlashTrigger(textBeforeCursor)
   if (!trigger) return prev
 
+  // trigger.query is always '' here in practice (findSlashTrigger's backward
+  // scan can only have matched the "/" this transaction JUST inserted as the
+  // very start of its run, since nothing follows it yet), but itemCount is
+  // still computed from trigger.query rather than hardcoded '' so this stays
+  // correct even if that invariant ever changes.
+  const itemCount = countMatching(trigger.query)
+  if (itemCount <= 0) return prev
+
   const anchorPos = $from.start() + trigger.slashOffset
-  return withSession(doc, { anchorPos, query: trigger.query, activeIndex: 0, itemCount: 0 })
+  return withSession(doc, {
+    anchorPos,
+    query: trigger.query,
+    queryEnd: selection.from,
+    activeIndex: 0,
+    itemCount
+  })
 }
 
 // Recomputes an ALREADY-OPEN session against a transaction that changed the
-// document and/or selection. Per this file's own header and the design
-// doc: the query is DERIVED from the anchor position via doc.textBetween,
-// never by re-running findSlashTrigger's backward scan -- that scan finds
-// "the nearest /", which is exactly wrong here (it would let the cursor
-// silently re-anchor to an unrelated LATER "/" typed elsewhere in the same
+// document and/or selection. Per this file's own header and the design doc:
+// the query is DERIVED from the anchor position via doc.textBetween, never
+// by re-running findSlashTrigger's backward scan -- that scan finds "the
+// nearest /", which is exactly wrong here (it would let the cursor silently
+// re-anchor to an unrelated LATER "/" typed elsewhere in the same
 // paragraph, rather than correctly closing this session because the cursor
 // left its range).
+//
+// !!! queryEnd / the RIGHT edge -- fix round 1, a real, measured bug !!!
+// The original version of this function enforced only the LEFT edge
+// (`selection.from <= anchorPos` closes) and derived the query purely from
+// wherever the cursor currently sat, with no boundary on how far right it
+// could go. That leaves the right edge undefined BY the cursor itself, so
+// it can never be "crossed": open a session before pre-existing text ("Hello
+// /world", session anchored before "world"), press ArrowRight once (NOT
+// intercepted by handleKeyDown -- only ArrowDown/Up are, for the item list --
+// so it reaches ProseMirror's own cursor movement), and the query silently
+// becomes "w", annexing a character that was never typed into it. Choosing
+// an item then deletes that annexed text along with the real query, which
+// is exactly the data loss the anchor-based design (CLAUDE.md/design doc:
+// "yields the exact [from, to) range to delete") exists to prevent.
+// `queryEnd` is the fix: it tracks where the query's own content ended as of
+// the LAST update, mapped forward through each new transaction the same way
+// `anchorPos` is. Typing AT queryEnd extends it forward (`Mapping.map`'s
+// default assoc=1 means a position exactly at an insertion point maps to
+// AFTER the inserted content), so ordinary typing is unaffected. But a
+// transaction that only moves the selection (assoc doesn't matter --
+// there's no step at all, so the mapping is the identity) leaves the mapped
+// `queryEnd` exactly where it was, and if the new cursor position is past
+// that, the session closes -- the cursor left the query's own tracked
+// range, which is "selection leaving the anchored range" per the design
+// doc's own close condition, now enforced on BOTH edges instead of one.
 function advanceSession(
   session: SlashSession,
   tr: Transaction,
-  newState: EditorState
+  newState: EditorState,
+  countMatching: (query: string) => number
 ): SlashPluginState {
   const anchorPos = tr.mapping.map(session.anchorPos)
+  const prevEnd = tr.mapping.map(session.queryEnd)
   const { doc, selection } = newState
 
   if (anchorPos < 0 || anchorPos + 1 > doc.content.size) return EMPTY_STATE
   if (!(selection instanceof TextSelection) || !selection.empty) return EMPTY_STATE
-  // The cursor must sit AT OR AFTER the position right after the "/" --
-  // otherwise it has moved onto or before the trigger character itself
-  // (Left arrow, Home, a click before the "/"), which is "selection leaving
-  // the anchored range" per the design doc's own close condition.
+  // LEFT edge: the cursor must sit AT OR AFTER the position right after the
+  // "/" -- otherwise it has moved onto or before the trigger character
+  // itself (Left arrow, Home, a click before the "/").
   if (selection.from <= anchorPos) return EMPTY_STATE
+  // RIGHT edge: the cursor must not have moved past where the query's own
+  // tracked content ended, mapped forward through this transaction. See
+  // this function's own header comment for the real bug this closes.
+  if (selection.from > prevEnd) return EMPTY_STATE
   if (doc.textBetween(anchorPos, anchorPos + 1) !== '/') return EMPTY_STATE
 
   // '\n' as both separators here (unlike tryOpen's '￼' above): this
@@ -213,42 +286,52 @@ function advanceSession(
   const query = doc.textBetween(anchorPos + 1, selection.from, '\n', '\n')
   if (WHITESPACE.test(query) || query.length > MAX_QUERY_LENGTH) return EMPTY_STATE
 
+  // itemCount is recomputed HERE, in the same apply that just derived the
+  // new query -- not reported in later from outside (fix round 1 removed
+  // that design; see this file's header). itemCount <= 0 closes outright,
+  // which is this file's entire implementation of "close on empty filtered
+  // list": synchronous, and structurally impossible to forget to call.
+  const itemCount = countMatching(query)
+  if (itemCount <= 0) return EMPTY_STATE
+
   return withSession(doc, {
     anchorPos,
     query,
-    itemCount: session.itemCount,
+    queryEnd: selection.from,
+    itemCount,
     // A changed query invalidates whatever the old activeIndex pointed at --
-    // the filtered list itself is about to change (Task 5's controller will
-    // re-filter and report a fresh itemCount), so land back on the first
-    // item rather than an index that may no longer make sense. An unchanged
+    // the filtered list itself just changed, so land back on the first item
+    // rather than an index that may no longer make sense. An unchanged
     // query (e.g. this transaction only moved the selection within the same
-    // range, or was a no-op replace) keeps the user's current pick.
-    activeIndex: query === session.query ? session.activeIndex : 0
+    // range) keeps the user's current pick, still defensively re-clamped in
+    // case countMatching is not perfectly stable across calls.
+    activeIndex:
+      query === session.query ? (session.activeIndex < itemCount ? session.activeIndex : 0) : 0
   })
-}
-
-// Applies an explicit itemCount report (setSlashItemCount below). itemCount
-// <= 0 closes the session outright -- this is the ONLY path that implements
-// the design doc's "close on empty filtered list", and it is deliberately a
-// REPORTED fact, not something this plugin infers on its own, because a
-// freshly opened session (itemCount defaults to 0, see tryOpen) must NOT
-// look indistinguishable from "the query genuinely matches nothing" before
-// anyone has actually computed the filtered list yet.
-function applyItemCount(
-  session: SlashSession,
-  itemCount: number,
-  doc: ProseNode
-): SlashPluginState {
-  if (itemCount <= 0) return EMPTY_STATE
-  const activeIndex = session.activeIndex < itemCount ? session.activeIndex : 0
-  return withSession(doc, { ...session, itemCount, activeIndex })
 }
 
 // Constructed per MOUNT (in MilkdownEditor.tsx, alongside findProse /
 // selectionProse / dropImageProse, Task 5), because it closes over a
 // per-mount callback -- same reasoning as createFindPlugin/
 // createSelectionPlugin.
-export function createSlashPlugin(onStateChanged: (session: SlashSession | null) => void): Plugin {
+//
+// `countMatching(query)` is supplied by the caller (Task 5's useSlashMenu,
+// which owns the item catalogue and slash-filter.ts's filterSlashItems) and
+// is expected to be `(query) => filterSlashItems(SLASH_ITEMS, query).length`
+// or equivalent -- a pure, cheap function of the query string alone. This
+// file still takes no dependency on the catalogue or on slash-filter.ts
+// itself (see this file's header for why); dependency injection is the
+// seam that keeps that true while still letting itemCount be computed
+// synchronously, in the SAME apply that changes the query, rather than
+// reported in later via a separate meta transaction (fix round 1's removed
+// setSlashItemCount) -- which review found two real costs for: a stale-
+// count window between the query changing and the next external report,
+// and silent failure (arrows permanently inert, the empty-list close never
+// firing) if a future caller simply forgot to call the reporter.
+export function createSlashPlugin(
+  onStateChanged: (session: SlashSession | null) => void,
+  countMatching: (query: string) => number
+): Plugin {
   return new Plugin<SlashPluginState>({
     key: slashPluginKey,
     state: {
@@ -261,9 +344,6 @@ export function createSlashPlugin(onStateChanged: (session: SlashSession | null)
         }
 
         if (prev.session) {
-          if (meta?.type === 'setItemCount') {
-            return applyItemCount(prev.session, meta.itemCount, newState.doc)
-          }
           if (meta?.type === 'setActiveIndex') {
             return withSession(newState.doc, { ...prev.session, activeIndex: meta.activeIndex })
           }
@@ -271,14 +351,14 @@ export function createSlashPlugin(onStateChanged: (session: SlashSession | null)
           // transaction from an unrelated plugin, or one with no meta and no
           // effect at all). Mirrors find-plugin.ts's identical early return.
           if (!tr.docChanged && !tr.selectionSet) return prev
-          return advanceSession(prev.session, tr, newState)
+          return advanceSession(prev.session, tr, newState, countMatching)
         }
 
         // No open session: the only way one can start is a transaction that
         // itself inserted a single "/" -- anything else (an unrelated edit
         // elsewhere, a selection-only transaction) has nothing to open.
         if (!tr.docChanged || !insertedSingleSlash(tr)) return prev
-        return tryOpen(newState, prev)
+        return tryOpen(newState, prev, countMatching)
       }
     },
     props: {
@@ -289,7 +369,13 @@ export function createSlashPlugin(onStateChanged: (session: SlashSession | null)
       // $prose plugin's own handleKeyDown here, and returning `true` triggers
       // ProseMirror's own preventDefault() call -- but NEVER stopPropagation(),
       // confirmed by the same spike -- which is exactly why Escape below calls
-      // it explicitly.
+      // it explicitly. EVERYTHING not explicitly matched below falls through
+      // to `default: return false` -- this is what lets ordinary printable
+      // characters keep extending the query, and it is directly tested (fix
+      // round 1: `default: return true` -- swallowing every keystroke,
+      // including plain letters -- previously passed all 32 existing tests,
+      // because none of them dispatched a real keydown for a printable
+      // character and checked event.defaultPrevented).
       handleKeyDown: (view, event) => {
         const session = slashPluginKey.getState(view.state)?.session
         if (!session) return false
@@ -299,12 +385,12 @@ export function createSlashPlugin(onStateChanged: (session: SlashSession | null)
           case 'ArrowUp': {
             const delta = event.key === 'ArrowDown' ? 1 : -1
             const { itemCount, activeIndex } = session
-            // Wraps in both directions via a positive-remainder modulo. When
-            // itemCount is still 0 (a session that just opened and hasn't had
-            // its first setSlashItemCount report yet), stay at 0 rather than
-            // divide by zero -- harmless, and self-corrects the moment a real
-            // count is reported.
-            const next = itemCount > 0 ? (activeIndex + delta + itemCount) % itemCount : 0
+            // Wraps in both directions via a positive-remainder modulo.
+            // itemCount is always > 0 here -- a session cannot exist with
+            // itemCount <= 0 (both tryOpen and advanceSession refuse/close
+            // on that), so there is no divide-by-zero case to guard left
+            // over from the earlier external-report design.
+            const next = (activeIndex + delta + itemCount) % itemCount
             view.dispatch(
               view.state.tr.setMeta(slashPluginKey, {
                 type: 'setActiveIndex',
@@ -325,7 +411,11 @@ export function createSlashPlugin(onStateChanged: (session: SlashSession | null)
             // goToNextTableCell from ever firing while a session is open,
             // per the design doc's "Keys intercepted while open" section --
             // that ordering is structural (see the design doc's "Keymap
-            // priority" section), not something tuned here.
+            // priority" section), not something tuned here. Directly proven,
+            // not just asserted: this file's own test suite fires a real
+            // Enter with no session open (the paragraph really splits,
+            // childCount 1 -> 2) as the control for the same real Enter with
+            // a session open (it does not split, childCount stays 1).
             return true
           case 'Escape':
             // stopPropagation is load-bearing, not defensive: ProseMirror's
@@ -418,20 +508,6 @@ export function closeSlashIn(view: EditorView): void {
   view.dispatch(view.state.tr.setMeta(slashPluginKey, { type: 'close' } satisfies SlashMeta))
 }
 
-// Reports how many items currently match the live query -- the one channel
-// through which the item catalogue's own filtering (Task 4/5, deliberately
-// NOT a dependency of this file) reaches this plugin. Also a plain meta-only
-// transaction, same non-dirtying guarantee as closeSlashIn. No-ops when
-// nothing is open, for the same reason: a stale report arriving after the
-// session already closed (e.g. a debounced filter callback resolving late)
-// must not resurrect it.
-export function setSlashItemCount(view: EditorView, itemCount: number): void {
-  if (!slashPluginKey.getState(view.state)?.session) return
-  view.dispatch(
-    view.state.tr.setMeta(slashPluginKey, { type: 'setItemCount', itemCount } satisfies SlashMeta)
-  )
-}
-
 // Deletes exactly `[from, to)` -- the "/query" text -- then calls `run`.
 // Two dispatches, not one: ProseMirror dispatch is synchronous (this
 // codebase already relies on that property -- see editor-commands.ts's own
@@ -442,8 +518,8 @@ export function setSlashItemCount(view: EditorView, itemCount: number): void {
 // takes no arguments deliberately: this file has no `ctx`/`Editor` of its
 // own (see this file's header), so the caller (Task 5's useSlashMenu, which
 // DOES hold both) closes over whatever it needs -- keeping this a plain,
-// catalogue-agnostic utility, the same reason setSlashItemCount and this
-// file as a whole take no dependency on the item catalogue.
+// catalogue-agnostic utility, the same reason countMatching and this file
+// as a whole take no dependency on the item catalogue.
 export function runSlashItemIn(view: EditorView, from: number, to: number, run: () => void): void {
   view.dispatch(view.state.tr.delete(from, to))
   run()
