@@ -4,6 +4,7 @@ import { editorViewCtx } from '@milkdown/core'
 import { TextSelection } from '@milkdown/prose/state'
 import type { EditorView } from '@milkdown/prose/view'
 import { $prose } from '@milkdown/utils'
+import { hardbreakSchema } from '@milkdown/preset-commonmark'
 import { createTestEditor } from './test-editor'
 import { EDITOR_COMMAND_PLUGINS } from './commands'
 import {
@@ -321,6 +322,37 @@ describe('slash-plugin: opening a session', () => {
     const { view } = await viewFor('', noop, () => 0)
     openSlashSessionAt(view, 1)
     expect(session(view)).toBeNull()
+  })
+
+  // Final whole-branch review, item 4: tryOpen's own textBetween call used
+  // to map EVERY leaf node, hardbreak included, to '￼' (the non-whitespace
+  // stand-in correct for e.g. an inline image) -- so a "/" typed
+  // immediately after a hardbreak (Shift-Enter) read as "preceded by
+  // non-whitespace content" and findSlashTrigger rejected it, the same rule
+  // that correctly rejects "and/or". The fix (slashLeafText) maps a
+  // hardbreak specifically to '\n', matching that node's own
+  // hardbreakSchema `leafText: () => '\n'` declaration
+  // (@milkdown/preset-commonmark) -- '\n' IS whitespace per WHITESPACE
+  // (slash-query.ts), so a "/" right after one is now correctly treated as
+  // "start of a new line," not "mid-word."
+  it('opens when the "/" is preceded by a hardbreak (Shift-Enter) -- "\\n" is whitespace, not a non-text-atom stand-in', async () => {
+    const { view, editor } = await viewFor('Buy milk')
+    editor.action((ctx) => {
+      const hardbreakType = hardbreakSchema.type(ctx)
+      // Inserted as the paragraph's own first inline child (position 1,
+      // right after the paragraph's own open token) -- "Buy milk" shifts one
+      // position to the right, so the hardbreak now occupies position 1-2
+      // and position 2 sits immediately after it.
+      view.dispatch(view.state.tr.insert(1, hardbreakType.create()))
+    })
+    openSlashSessionAt(view, 2)
+    expect(session(view)).toEqual({
+      anchorPos: 2,
+      query: '',
+      queryEnd: 3,
+      activeIndex: 0,
+      itemCount: PLENTY
+    })
   })
 })
 

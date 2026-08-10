@@ -12,16 +12,11 @@ import { Plugin } from '@milkdown/prose/state'
 import { EDITOR_SCHEMA_PLUGINS } from './plugins'
 import { EDITOR_COMMAND_PLUGINS } from './commands'
 import { PINNED_STRINGIFY_OPTIONS } from './stringify-options'
-import { buildEditorCommands, type EditorCommands } from './editor-commands'
+import { buildEditorCommands, chooseSlashItem, type EditorCommands } from './editor-commands'
 import { createFindPlugin } from './find-plugin'
 import { createDropImagePlugin } from './drop-image'
 import { createSelectionPlugin, type SelectionSnapshot } from './selection-plugin'
-import {
-  createSlashPlugin,
-  runSlashItemIn,
-  slashPluginKey,
-  type SlashSession
-} from './slash-plugin'
+import { createSlashPlugin, type SlashSession } from './slash-plugin'
 import { enabledSlashItems } from './slash-items'
 import type { PageGeometry } from '../../../typography/page-geometry'
 import type { DocumentStyle } from '../../../typography/document-style'
@@ -323,27 +318,29 @@ const MilkdownEditor = forwardRef<MilkdownEditorHandle, MilkdownEditorProps>(
       // what makes Enter/Tab actually choose an item -- see slash-plugin.ts's
       // own OnChooseActive doc comment for the bug this closes (the palette
       // was previously mouse-only: the plugin swallowed Enter/Tab with
-      // nothing behind them). Deliberately reads `session.query` and rebuilds
-      // `items` via enabledSlashItems FRESH here, in the SAME synchronous
-      // call the plugin invokes this from (itself inside handleKeyDown,
-      // called synchronously off a real DOM keydown) -- not from any
-      // React-mirrored copy of the query or the item list (useSlashMenu's own
-      // `state.items`), which could theoretically still be one render behind
-      // (React 18 does not flush state updates synchronously). Reading
-      // straight from the live view.state and re-deriving `items` the exact
-      // same way countMatching above does is what guarantees the index and
-      // the list it indexes into can never disagree.
+      // nothing behind them). Delegates to chooseSlashItem (editor-commands.ts)
+      // with an INDEX selector -- fix round (final review, item 2): this used
+      // to inline its own copy of "read the live session, re-derive
+      // enabledSlashItems, resolve one item, runSlashItemIn," duplicated
+      // verbatim with editor-commands.ts's own runSlashItem (which resolves
+      // by id instead). See chooseSlashItem's own doc comment for why that
+      // duplication was a real, measured gap, not tidiness: the keyboard copy
+      // here had ZERO regression coverage of its own safety gate until this
+      // fix round. `ctx` is captured by this closure (from `$prose((ctx) =>
+      // ...)` below), so chooseSlashItem re-derives the enabled item list
+      // FRESH here, in the SAME synchronous call the plugin invokes this from
+      // (itself inside handleKeyDown, called synchronously off a real DOM
+      // keydown) -- not from any React-mirrored copy of the query or the item
+      // list (useSlashMenu's own `state.items`), which could theoretically
+      // still be one render behind (React 18 does not flush state updates
+      // synchronously). Reading straight from the live view.state is what
+      // guarantees the index and the list it indexes into can never disagree.
       const slashProse = $prose((ctx) =>
         createSlashPlugin(
           (session) => onSlashStateChangedRef.current?.(session),
           (query, state) => enabledSlashItems(ctx, state, query).length,
           (activeIndex) => {
-            const view = ctx.get(editorViewCtx)
-            const session = slashPluginKey.getState(view.state)?.session
-            if (!session) return
-            const items = enabledSlashItems(ctx, view.state, session.query)
-            const item = items[activeIndex]
-            if (item) runSlashItemIn(view, session.anchorPos, session.queryEnd, () => item.run(ctx))
+            chooseSlashItem(ctx, ctx.get(editorViewCtx), { index: activeIndex })
           }
         )
       )

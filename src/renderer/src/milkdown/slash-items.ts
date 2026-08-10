@@ -146,11 +146,13 @@ function isTargetBlockEmptyAfterQueryRemoved(state: EditorState): boolean {
 //
 //   - insertMathBlockCommand / insertMermaidBlockCommand: BLOCK-REPLACING.
 //     Both wipe the target block's entire content outright (see their own
-//     doc comments in commands.ts). Gated on
-//     isTargetBlockEmptyAfterQueryRemoved, composed with each command's own
-//     dry run as a defensive second check (harmless belt-and-suspenders,
-//     since a session can only be open inside a real paragraph to begin
-//     with -- see slash-plugin.ts's tryOpen).
+//     doc comments in commands.ts). Gated on isInsideTableCell (fix round,
+//     final review -- see this file's own isEnabled comments below for the
+//     measured "sole, useless item inside an empty cell" finding this
+//     closes) composed with isTargetBlockEmptyAfterQueryRemoved, composed
+//     with each command's own dry run as a defensive third check (harmless
+//     belt-and-suspenders, since a session can only be open inside a real
+//     paragraph to begin with -- see slash-plugin.ts's tryOpen).
 //   - insertTableCommand (@milkdown/preset-gfm) / insertHrCommand
 //     (@milkdown/preset-commonmark): NOT block-replacing (both use
 //     replaceSelectionWith on the session's own always-collapsed selection,
@@ -345,7 +347,23 @@ export const SLASH_ITEMS: SlashItem[] = [
     // check is the load-bearing gate; the command's own dry run is a
     // defensive second check, not the primary one (a dry run alone is
     // exactly what this task's brief proved is NOT sufficient here).
+    //
+    // Fix round (final review): `!isInsideTableCell` prepended. Measured: an
+    // EMPTY table cell (no prose to protect) passed
+    // isTargetBlockEmptyAfterQueryRemoved and insertMathBlockCommand's own
+    // dry run both -- neither one is table-aware, and a cell's content model
+    // is a single, unsplittable paragraph, so the command's own
+    // "target must be a paragraph" check is satisfied by the CELL's
+    // paragraph too. Choosing it writes a raw `$$` block straight into the
+    // cell's markdown source (`| $$\nx^2\n$$ | d |`) -- non-destructive
+    // (round-trips byte-stably) but nonsensical: math has no meaning inside
+    // a table cell, and this was the ONLY item ever offered there, so an
+    // empty cell's palette had exactly one, useless entry. Table/Horizontal
+    // rule/Page break already refuse inside a table cell (see this file's
+    // own findings comment above) for the SAME isInsideTableCell reason;
+    // this brings Math block/Mermaid diagram in line with that precedent.
     isEnabled: (ctx, state) =>
+      !isInsideTableCell(ctx, state) &&
       isTargetBlockEmptyAfterQueryRemoved(state) &&
       ctx.get(commandsCtx).get(insertMathBlockCommand.key)(undefined)(state)
   },
@@ -358,8 +376,10 @@ export const SLASH_ITEMS: SlashItem[] = [
     run: (ctx) => {
       ctx.get(commandsCtx).call(insertMermaidBlockCommand.key)
     },
-    // BLOCK-REPLACING -- identical reasoning to Math block above.
+    // BLOCK-REPLACING -- identical reasoning to Math block above, including
+    // the `!isInsideTableCell` fix round addition (final review).
     isEnabled: (ctx, state) =>
+      !isInsideTableCell(ctx, state) &&
       isTargetBlockEmptyAfterQueryRemoved(state) &&
       ctx.get(commandsCtx).get(insertMermaidBlockCommand.key)(undefined)(state)
   }
