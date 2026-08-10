@@ -69,17 +69,22 @@ describe('template starter content', () => {
 // the whole file on the next flush. These templates' shipped bytes are now
 // deliberately authored to already match what createTestEditor +
 // EDITOR_SCHEMA_PLUGINS.flat() + getMarkdown() produces, so this asserts
-// that stays true rather than only hoping it does. meeting-notes and
-// newsletter are deliberately excluded here -- see the comment at the top
-// of each of those two files for why (a known Milkdown list `spread`
-// fidelity gap, not a defect in the template content).
+// that stays true rather than only hoping it does. ALL SEVEN are covered
+// now: meeting-notes and newsletter used to be excluded because their tight
+// lists came back loose (Milkdown dropped mdast `spread` on serialize), and
+// that exclusion is gone with the gap -- see list-spread-fix.ts. Neither
+// template's content was changed to make this pass; the serializer was
+// fixed. meeting-notes additionally exercises GFM task-list `checked` state,
+// which the same fix nearly destroyed and which is pinned here as a result.
 describe('template starter content round-trips byte-identically through Milkdown', () => {
   it.each([
     ['resume', RESUME_TEMPLATE],
     ['letter', LETTER_TEMPLATE],
     ['report', REPORT_TEMPLATE],
     ['cover letter', COVER_LETTER_TEMPLATE],
-    ['invoice', INVOICE_TEMPLATE]
+    ['meeting notes', MEETING_NOTES_TEMPLATE],
+    ['invoice', INVOICE_TEMPLATE],
+    ['newsletter', NEWSLETTER_TEMPLATE]
   ])('%s template is already in canonical Milkdown-serialized form', async (_name, template) => {
     const output = await roundTrip(template)
     expect(output).toBe(template)

@@ -1,12 +1,11 @@
-// This template is deliberately NOT byte-canonical against Milkdown's
-// round-trip serialization. The sole remaining difference (verified via
-// createTestEditor + EDITOR_SCHEMA_PLUGINS.flat() + getMarkdown()) is that
-// its tight "- **March N** — ..." bullet list comes back LOOSE (a blank
-// line inserted between each item) -- Milkdown's schema doesn't preserve
-// list `spread` (tight vs. loose) on round trip. That's a known Milkdown
-// schema fidelity gap, not a defect in this template, and the list is left
-// exactly as authored rather than pre-loosened to mask the gap. Revisit
-// once `spread` preservation lands; see also meeting-notes.md.ts.
+// This template IS byte-canonical against Milkdown's round-trip
+// serialization, and is asserted so alongside every other template in
+// templates.test.ts. It previously was not, and carried a comment saying so:
+// its tight "- **March N** — ..." bullet list came back LOOSE, because
+// Milkdown's schema dropped list `spread` (tight vs. loose) on serialize.
+// That gap is closed -- see list-spread-fix.ts -- so the exclusion is gone
+// and the template content itself is unchanged, exactly as it was authored.
+// See also meeting-notes.md.ts.
 export const NEWSLETTER_TEMPLATE = `# The Weekly Brief
 
 _Issue 14 — March 3, 2026_

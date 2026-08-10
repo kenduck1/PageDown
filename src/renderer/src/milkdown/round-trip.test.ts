@@ -15,13 +15,14 @@ const CORPUS_DIR = join(__dirname, '..', '..', '..', '..', 'phase0', 'corpus')
 // MilkdownPlugin -- same fix as
 // src/renderer/src/milkdown/nodes/frontmatter.test.ts and
 // src/renderer/src/milkdown/nodes/pagebreak.test.ts, so this typechecks
-// against createTestEditor's MilkdownPlugin[] parameter. commonmark/gfm are
-// re-included here even though createTestEditor's own builder already adds
-// them unconditionally -- Milkdown's `.use()` is idempotent per plugin
-// instance (confirmed: re-using the same already-installed plugin instance
-// is a documented no-op, not a duplicate-registration error), so this stays
-// harmless while keeping PLUGINS a faithful, literal copy of
-// EDITOR_SCHEMA_PLUGINS rather than a hand-filtered subset that could drift.
+// against createTestEditor's MilkdownPlugin[] parameter. This list is now
+// also exactly what createTestEditor's own builder mounts as its base (that
+// base used to be a bare commonmark + gfm; see test-editor.ts for why it had
+// to become EDITOR_SCHEMA_PLUGINS once reference-link support started
+// REMOVING a plugin from the commonmark preset), so passing it again here is
+// redundant -- kept anyway because Milkdown's `.use()` is idempotent per
+// plugin instance and because naming the composition at the call site is
+// what makes this file's subject explicit.
 const PLUGINS = EDITOR_SCHEMA_PLUGINS.flat()
 
 async function roundTrip(markdown: string): Promise<string> {
@@ -53,12 +54,159 @@ describe('Full node-set round trip (frontmatter + pagebreak + commonmark + gfm t
     expect(output).toContain('<!-- pagebreak -->')
   })
 
-  it('normalizes an alternate \\newpage marker to the canonical pagebreak marker on save', async () => {
+  // DELIBERATE INVERSION of what this test used to assert (it pinned
+  // `\newpage` -> `<!-- pagebreak -->`). Normalizing an alternate marker
+  // rewrote the user's PROSE, not its formatting: a Pandoc/LaTeX tutorial
+  // whose bare `\newpage` paragraph documents the command rather than
+  // invoking it had that paragraph silently and irreversibly changed on the
+  // next Format-mode save. `Pagebreak#raw` (src/markdown/pagebreak-plugin.ts)
+  // now records the matched literal and the serializer emits it back, so the
+  // marker survives as itself while still paginating. See that field's
+  // comment, and the equivalent inverted block in pagebreak-plugin.test.ts.
+  it('preserves an alternate \\newpage marker verbatim through a Format-mode round trip', async () => {
     const source = 'Before.\n\n\\newpage\n\nAfter.\n'
     const output = await roundTrip(source)
 
-    expect(output).toContain('<!-- pagebreak -->')
-    expect(output).not.toContain('\\newpage')
+    expect(output).toBe(source)
+    expect(output).not.toContain('<!-- pagebreak -->')
+  })
+
+  it('preserves the page-break-after div convention verbatim too', async () => {
+    const source = 'Before.\n\n<div style="page-break-after: always;"></div>\n\nAfter.\n'
+    const output = await roundTrip(source)
+
+    expect(output).toBe(source)
+  })
+
+  // Reference-style links: a linkReference plus its definition used to come
+  // back with the link INLINED and the definition block DELETED -- semantics
+  // preserved, syntax destroyed. See nodes/reference.ts for the root cause
+  // (@milkdown/preset-commonmark's own remarkInlineLinkPlugin) and the
+  // modelling rationale.
+  it('round-trips a full reference link and its definition byte-identically', async () => {
+    const source =
+      'According to the [primary source][1], results were consistent.\n\n[1]: https://example.com/primary "Primary Source"\n'
+    const output = await roundTrip(source)
+
+    expect(output).toBe(source)
+  })
+
+  it('round-trips collapsed and shortcut reference forms without expanding them', async () => {
+    const source =
+      'A [collapsed][] and a [shortcut] reference.\n\n[collapsed]: /a\n\n[shortcut]: /b\n'
+    const output = await roundTrip(source)
+
+    expect(output).toBe(source)
+  })
+
+  it('round-trips a reference-style image', async () => {
+    const source = 'Here: ![The logo][logo]\n\n[logo]: ./logo.png "Logo"\n'
+    const output = await roundTrip(source)
+
+    expect(output).toBe(source)
+  })
+
+  // Proves the reference link is a MARK carrying real inline content, not an
+  // atom with a flattened text attr -- the nested emphasis survives AND the
+  // link stays one link rather than splitting at the mark boundary. That
+  // second half is link-mark-priority-fix.ts's doing; the inline-link control
+  // right below it is what makes this a statement about both, since the two
+  // marks must behave identically.
+  it('keeps emphasis nested inside a reference link, as one reference', async () => {
+    const source = 'See the [_emphatic_ source][1] here.\n\n[1]: https://example.com\n'
+    const output = await roundTrip(source)
+
+    expect(output).toBe(source)
+  })
+
+  it('keeps emphasis nested inside an ordinary inline link, as one link', async () => {
+    const source = 'See the [_emphatic_ source](https://example.com) here.\n'
+    const output = await roundTrip(source)
+
+    expect(output).toBe(source)
+  })
+
+  // The other nesting direction, which the priority fix must NOT invert:
+  // here the emphasis opens BEFORE the link and has to stay outermost.
+  // SerializerState#orderMarks puts already-continuing marks ahead of
+  // priority, which is what makes both directions work at once.
+  it('keeps a link nested inside a longer emphasis run, not the other way round', async () => {
+    const source = '_Emphasis with a [link](https://example.com) inside_ it.\n'
+    const output = await roundTrip(source)
+
+    expect(output).toBe(source)
+  })
+
+  // GFM task lists share the 'list_item' node id with the plain list item,
+  // via @milkdown/preset-gfm's own extendSchema. list-spread-fix.ts overrides
+  // that same id, and an early version of it chained off the COMMONMARK
+  // original instead of the gfm one -- silently replacing gfm's version and
+  // serializing every `- [ ] task` back as a plain `- task`, i.e. real data
+  // loss. This pins both the checkbox state and the tightness together.
+  it('round-trips a tight GFM task list with its checked state intact', async () => {
+    const source = '- [ ] alpha\n- [x] beta\n- [ ] gamma\n'
+    const output = await roundTrip(source)
+
+    expect(output).toBe(source)
+  })
+
+  it('preserves reference links and definitions in the corpus fixture', async () => {
+    const source = readFileSync(join(CORPUS_DIR, 'reference-links-and-footnotes.md'), 'utf8')
+    const output = await roundTrip(source)
+
+    // Deliberately NOT a byte-identity assertion, and the reason is not the
+    // reference machinery: this fixture writes its two definitions on
+    // adjacent lines, and plain remark-stringify -- with no Milkdown involved
+    // at all, verified directly against `unified().use(remarkParse).use(
+    // remarkStringify)` -- separates consecutive definitions with a blank
+    // line. So the fixture simply is not in canonical form, and demanding
+    // byte identity here would pin remark's block-separation policy rather
+    // than anything this sub-project changed. What the fixture is FOR is
+    // asserted instead: both references stay references and both definitions
+    // survive, where before this landed the references were inlined and the
+    // definition blocks deleted outright.
+    expect(output).toContain('[primary source][1]')
+    expect(output).toContain('[secondary source][2]')
+    expect(output).toContain('[1]: https://example.com/primary "Primary Source"')
+    expect(output).toContain('[2]: https://example.com/secondary "Secondary Source"')
+    expect(output).not.toContain('](https://example.com/primary)')
+
+    // Idempotency: whatever canonical form it lands in is STABLE, so a second
+    // edit does not churn the file again.
+    expect(await roundTrip(output)).toBe(output)
+  })
+
+  // List tightness (mdast `spread`). A tight list came back loose -- a blank
+  // line inserted between every item -- which is why two of this app's own
+  // shipped templates carried a "deliberately not byte-canonical" header
+  // comment until this landed. See list-spread-fix.ts for the string-vs-
+  // boolean root cause.
+  it('keeps a tight bullet list tight', async () => {
+    const source = '- alpha\n- beta\n- gamma\n'
+    const output = await roundTrip(source)
+
+    expect(output).toBe(source)
+  })
+
+  it('keeps a tight ordered list tight', async () => {
+    const source = '1. alpha\n2. beta\n3. gamma\n'
+    const output = await roundTrip(source)
+
+    expect(output).toBe(source)
+  })
+
+  it('keeps a genuinely LOOSE list loose -- the fix preserves spread, it does not force tightness', async () => {
+    const source = '- alpha\n\n- beta\n\n- gamma\n'
+    const output = await roundTrip(source)
+
+    expect(output).toBe(source)
+  })
+
+  it('keeps a tight nested list tight at both levels', async () => {
+    const source = '- alpha\n  - nested one\n  - nested two\n- beta\n'
+    const output = await roundTrip(source)
+
+    expect(output).toBe(source)
   })
 
   it('round-trips a document containing both frontmatter and a pagebreak together', async () => {

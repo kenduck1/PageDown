@@ -244,9 +244,13 @@ export function markdownToHtml(
   // closing `$` right before "120K"), silently swallowing a real, extremely
   // common construct in THIS app's own stated primary use case -- reports,
   // résumés, letters routinely quote dollar figures in running prose. That
-  // is a much higher base-rate collision than the already-accepted
-  // \newpage/\pagebreak prose-mention edge case documented elsewhere in this
-  // file, so unlike that one, this is prevented rather than accepted.
+  // is a much higher base-rate collision than the \newpage/\pagebreak
+  // prose-mention edge case pagebreak-plugin.ts describes (which used to be
+  // an accepted loss and is now lossless -- see `Pagebreak#raw` there),
+  // so this too is prevented rather than accepted, by a different means:
+  // there is nothing to "preserve" for a mis-tokenized currency figure the
+  // way there is for a recognized page-break literal, so the tokenizer has
+  // to be narrowed instead.
   // Requiring a DOUBLED delimiter for inline math (`$$x^2$$` inline, on one
   // line, distinct from a `$$` block fence alone on its own line -- the two
   // are different tokenizer constructs and don't collide) costs a little
