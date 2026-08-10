@@ -33,10 +33,11 @@ const PLUGINS = [...EDITOR_SCHEMA_PLUGINS.flat(), ...EDITOR_COMMAND_PLUGINS]
 const TABLE = '| a | b |\n| --- | --- |\n| x | y |\n'
 // What TABLE round-trips to untouched. remark-stringify emits the MINIMAL
 // delimiter row and pads every column to its widest cell, so `| --- |` on the
-// way in comes back as `| - |` -- and any test whose table gains a `<br />`
-// cell (six characters) sees every delimiter widen to match. Both are pure
-// formatting, and pinning the exact bytes is the point: this file is asserting
-// the file on disk, not a prettified view of it.
+// way in comes back as `| - |`. (Before the empty-cell fix below, a test
+// whose table gained a `<br />` cell -- six characters -- saw every delimiter
+// in that column widen to match; that's gone now that an empty cell is
+// genuinely empty instead.) Pinning the exact bytes is the point throughout
+// this file: it's asserting the file on disk, not a prettified view of it.
 const TABLE_ROUNDTRIP = '| a | b |\n| - | - |\n| x | y |\n'
 
 interface Harness {
@@ -67,16 +68,50 @@ async function harness(source: string): Promise<Harness> {
   }
 }
 
-// PRE-EXISTING, NOT INTRODUCED HERE, and worth pinning so nobody blames these
-// commands for it: an EMPTY table cell serializes as `<br />`, whatever created
-// it. Proven directly below against a hand-written empty cell that no command
-// in this file ever touched, and visible in this app already -- the shipped
-// "Insert table" button has always produced `| <br /> | <br /> |`. It renders
-// as an empty cell on every surface; it is only the bytes that are ugly.
-describe('empty table cells (pre-existing serializer behaviour)', () => {
-  it('serializes a hand-written empty cell as <br />, with no command involved', async () => {
+// FIXED (product-completeness audit, Tier 1): an EMPTY table cell used to
+// serialize as `<br />`, whatever created it -- the shipped "Insert table"
+// toolbar button had always produced `| <br /> | <br /> |`, non-portable HTML
+// landing in the user's file before they had typed anything. This describe
+// block used to PIN that as pre-existing, deliberately-not-this-file's-fault
+// behaviour; it now pins the CORRECTED behaviour instead, deliberately, so a
+// regression back to `<br />` fails loudly. Root cause (see
+// table-cell-empty-fix.ts's own header comment for the full writeup): not a
+// table-specific bug at all -- @milkdown/preset-commonmark's paragraphSchema
+// substitutes `<br />` for ANY genuinely empty paragraph so a deliberately
+// blank line in the document BODY survives a save/reopen round trip, and a
+// GFM table cell's own required paragraph child tripped that same
+// substitution even though `|  |` already represents an empty cell
+// unambiguously. Fixed
+// by overriding table_cell/table_header's own toMarkdown runners to stop
+// delegating into that substitution specifically.
+describe('empty table cells (fixed serializer behaviour)', () => {
+  it('serializes a hand-written empty cell as a blank cell, not <br />', async () => {
     const { markdown } = await harness('| a | b |\n| --- | --- |\n|  | y |\n')
-    expect(markdown()).toContain('<br />')
+    const result = markdown()
+    expect(result).not.toContain('<br')
+    expect(result).toBe('| a | b |\n| - | - |\n|   | y |\n')
+  })
+
+  // Verifies the fix against the REAL serializer's round trip, not just the
+  // one-way output: feeding the corrected markdown back through a fresh
+  // editor instance must parse it back to an equivalent table and re-emit
+  // the SAME bytes -- a stable fixed point -- proving `|   |` really does
+  // parse as an empty cell rather than, say, losing the row or column
+  // entirely on reparse.
+  it('the corrected empty-cell markdown round-trips to itself', async () => {
+    const { markdown: firstPass } = await harness('| a | b |\n| --- | --- |\n|  | y |\n')
+    const onceSerialized = firstPass()
+    const { markdown: secondPass } = await harness(onceSerialized)
+    expect(secondPass()).toBe(onceSerialized)
+  })
+
+  // A cell that is NOT empty -- including one with no TEXT but very much not
+  // blank (an image) -- must take the exact original path and round-trip
+  // untouched. Guards against an over-broad "is this cell empty" check that
+  // would silently drop real content instead of only a genuinely empty one.
+  it('leaves a non-empty cell (including an image-only one) completely untouched', async () => {
+    const { markdown } = await harness('| a | b |\n| --- | --- |\n| ![x](y.png) | z |\n')
+    expect(markdown()).toBe('| a           | b |\n| ----------- | - |\n| ![x](y.png) | z |\n')
   })
 })
 
@@ -85,36 +120,39 @@ describe('adding rows and columns', () => {
     const { commands, markdown, caretAt } = await harness(TABLE)
     caretAt('x')
     commands.addRowAfter()
-    expect(markdown()).toBe(
-      '| a      | b      |\n| ------ | ------ |\n| x      | y      |\n| <br /> | <br /> |\n'
-    )
+    // The new row's cells are genuinely empty (`|   |`), not `<br />` --
+    // see table-cell-empty-fix.ts. Delimiter row is minimal (`- -`, not
+    // `------`) because nothing in this table is wide enough to need padding
+    // now that `<br />`'s six characters no longer inflate the column width.
+    expect(markdown()).toBe('| a | b |\n| - | - |\n| x | y |\n|   |   |\n')
   })
 
   it('addRowBefore inserts a row above the caret row', async () => {
     const { commands, markdown, caretAt } = await harness(TABLE)
     caretAt('x')
     commands.addRowBefore()
-    expect(markdown()).toBe(
-      '| a      | b      |\n| ------ | ------ |\n| <br /> | <br /> |\n| x      | y      |\n'
-    )
+    expect(markdown()).toBe('| a | b |\n| - | - |\n|   |   |\n| x | y |\n')
   })
 
   it('addColumnAfter inserts a column to the right of the caret column', async () => {
     const { commands, markdown, caretAt } = await harness(TABLE)
     caretAt('x')
     commands.addColumnAfter()
-    // The new column carries `:-----`, not `------`: prosemirror-tables builds
+    // The new column carries `:-`, not `:-----`: prosemirror-tables builds
     // its cells with `createAndFill()`, which takes the gfm schema's own
     // `alignment` default of 'left'. Pre-existing preset behaviour, pinned
-    // here so a future change to it is visible rather than silent.
-    expect(markdown()).toBe('| a | <br /> | b |\n| - | :----- | - |\n| x | <br /> | y |\n')
+    // here so a future change to it is visible rather than silent -- the
+    // delimiter itself shrank from `:-----` to `:-` versus this test's own
+    // pre-fix pin, purely because the column's cells are now genuinely empty
+    // rather than the six-character `<br />` string.
+    expect(markdown()).toBe('| a |    | b |\n| - | :- | - |\n| x |    | y |\n')
   })
 
   it('addColumnBefore inserts a column to the left of the caret column', async () => {
     const { commands, markdown, caretAt } = await harness(TABLE)
     caretAt('y')
     commands.addColumnBefore()
-    expect(markdown()).toBe('| a | <br /> | b |\n| - | :----- | - |\n| x | <br /> | y |\n')
+    expect(markdown()).toBe('| a |    | b |\n| - | :- | - |\n| x |    | y |\n')
   })
 
   it('does nothing at all outside a table', async () => {
@@ -232,9 +270,7 @@ describe('Tab in a table', () => {
     caretAt('y')
     const event = pressTab(view)
     expect(event.defaultPrevented).toBe(true)
-    expect(markdown()).toBe(
-      '| a      | b      |\n| ------ | ------ |\n| x      | y      |\n| <br /> | <br /> |\n'
-    )
+    expect(markdown()).toBe('| a | b |\n| - | - |\n| x | y |\n|   |   |\n')
   })
 
   it('leaves the document alone in a NON-last cell (the preset moves the caret instead)', async () => {

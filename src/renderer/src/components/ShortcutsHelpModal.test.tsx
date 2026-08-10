@@ -55,4 +55,34 @@ describe('ShortcutsHelpModal', () => {
 
     expect(onClose).not.toHaveBeenCalled()
   })
+
+  // Product-completeness audit, Tier 1 section 1.4: this modal had NO Escape
+  // handler and NO focus management at all -- aria-modal="true" was a false
+  // claim, and pressing Mod-/ left focus in the document behind the scrim,
+  // so every keystroke (including Escape itself) went into the user's file.
+  // Both real behaviours now come from the shared useModalDialog hook (see
+  // useModalDialog.test.tsx for the hook's own dedicated, thorough coverage
+  // of focus-trap/focus-restore); these two tests are the wiring-level proof
+  // that THIS component actually uses it, matching this file's existing
+  // "click calls onClose" tests' level of integration rather than duplicating
+  // the hook's own unit tests here.
+  it('pressing Escape calls onClose', async () => {
+    const onClose = vi.fn()
+    const user = userEvent.setup()
+    render(<ShortcutsHelpModal open={true} onClose={onClose} />)
+
+    await user.keyboard('{Escape}')
+
+    expect(onClose).toHaveBeenCalledTimes(1)
+  })
+
+  it('moves focus into the dialog when it opens, rather than leaving it in the background', async () => {
+    render(<ShortcutsHelpModal open={true} onClose={vi.fn()} />)
+
+    // No render-triggered wait needed: useModalDialog's focus-in runs inside
+    // a useEffect, and Testing Library's render() already flushes effects
+    // synchronously (wrapped in its own act()) before returning.
+    expect(screen.getByRole('dialog')).toContainElement(document.activeElement as HTMLElement)
+    expect(document.activeElement).not.toBe(document.body)
+  })
 })

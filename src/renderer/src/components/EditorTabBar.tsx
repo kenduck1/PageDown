@@ -1,3 +1,4 @@
+import { useRef } from 'react'
 import { useDocumentStore } from '../store/documentStore'
 // Moved out to lib/ when the window-close guard needed the identical label for
 // its "save the changes you made to <name>?" dialog -- see that module.
@@ -48,6 +49,13 @@ function EditorTabBar({ onRequestCloseTab }: EditorTabBarProps): React.JSX.Eleme
   const switchTab = useDocumentStore((state) => state.switchTab)
   const closeTab = useDocumentStore((state) => state.closeTab)
   const openTab = useDocumentStore((state) => state.openTab)
+  // Only needed so ArrowLeft/Right/Home/End below can move real DOM focus to
+  // the target tab's own div -- see handleTabKeyDown's comment for why a
+  // querySelectorAll off this ref, rather than a per-tab ref array, is
+  // enough (DOM order here already matches `tabs` order by construction,
+  // same one-query-not-N-refs convention useModalDialog.ts's focus trap
+  // uses for its own focusable-descendant list).
+  const tabListRef = useRef<HTMLDivElement>(null)
 
   const handleClose = (tabId: string): void => {
     if (onRequestCloseTab) {
@@ -57,15 +65,73 @@ function EditorTabBar({ onRequestCloseTab }: EditorTabBarProps): React.JSX.Eleme
     closeTab(tabId)
   }
 
+  // Completes the roving-tabindex pattern this component only half-had:
+  // tabIndex={isActive ? 0 : -1} below already SET UP roving tabindex (only
+  // the active tab is in the normal Tab sequence), but nothing ever moved
+  // that roving state -- Enter/Space activated whatever tab already HAD
+  // focus, and nothing could give an inactive tab focus in the first place.
+  // A keyboard user could therefore reach exactly one tab (the active one)
+  // no matter how many were open. Fixed the standard way (WAI-ARIA APG
+  // "tabs" pattern): arrow keys move focus AND switch the active tab
+  // together (automatic activation) -- not "move focus only, activate
+  // later on Enter" -- because this component's OWN existing model already
+  // ties tabIndex directly to isActive (there is no separate "focused but
+  // not yet selected" concept anywhere else in this file or in
+  // documentStore), so decoupling focus from activation here would leave
+  // the moved-to tab still showing tabIndex=-1 until a second, separate
+  // activation step. Matches what a mouse click on a tab already does
+  // (switches immediately) and keeps click/Enter/Space/arrows all
+  // triggering the exact same switchTab call.
   const handleTabKeyDown = (event: React.KeyboardEvent, tabId: string): void => {
     if (event.key === 'Enter' || event.key === ' ') {
       event.preventDefault()
       switchTab(tabId)
+      return
     }
+
+    const currentIndex = tabs.findIndex((tab) => tab.id === tabId)
+    if (currentIndex === -1) return
+
+    let targetIndex: number
+    switch (event.key) {
+      case 'ArrowRight':
+        // Wraps in both directions via a positive-remainder modulo -- same
+        // technique slash-plugin.ts's own ArrowDown/ArrowUp handler uses for
+        // its item list, for the identical reason (ArrowRight past the last
+        // tab should land back on the first, not do nothing).
+        targetIndex = (currentIndex + 1) % tabs.length
+        break
+      case 'ArrowLeft':
+        targetIndex = (currentIndex - 1 + tabs.length) % tabs.length
+        break
+      case 'Home':
+        targetIndex = 0
+        break
+      case 'End':
+        targetIndex = tabs.length - 1
+        break
+      default:
+        return
+    }
+
+    event.preventDefault()
+    const targetTab = tabs[targetIndex]
+    switchTab(targetTab.id)
+    // Query fresh rather than cache a per-tab ref array: every tab's div is
+    // ALREADY in the DOM regardless of isActive (only tabIndex/styling
+    // differ), so the target node exists and is focusable right now, before
+    // the switchTab-triggered re-render even happens -- .focus() works on a
+    // tabIndex=-1 element exactly as well as a tabIndex=0 one, it just isn't
+    // reachable by sequential Tab. querySelectorAll's return order matches
+    // `tabs` order because both come from the same single `tabs.map(...)`
+    // call below.
+    const tabEls = tabListRef.current?.querySelectorAll<HTMLElement>('[role="tab"]')
+    tabEls?.[targetIndex]?.focus()
   }
 
   return (
     <div
+      ref={tabListRef}
       role="tablist"
       aria-label="Open documents"
       className="flex h-[38px] flex-none items-end gap-0.5 border-b border-border-chrome bg-chrome-light px-2.5"
@@ -124,8 +190,16 @@ function EditorTabBar({ onRequestCloseTab }: EditorTabBarProps): React.JSX.Eleme
                 event.stopPropagation()
                 handleClose(tab.id)
               }}
+              // focus:opacity-100 is the actual fix, not a style nicety: this
+              // button has no explicit tabIndex, so (unlike its parent tab
+              // div, which IS part of the roving-tabindex scheme above) it
+              // sits in the NORMAL Tab sequence on every tab, active or not.
+              // Without this, a keyboard user tabbing through could already
+              // land here on a background tab's close button while it was
+              // still opacity-0 -- landing on, and able to activate, a
+              // control they could not see and had no other way to find.
               className={`text-13 leading-none text-text-tertiary ${
-                isActive ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'
+                isActive ? 'opacity-100' : 'opacity-0 group-hover:opacity-100 focus:opacity-100'
               }`}
             >
               &times;
