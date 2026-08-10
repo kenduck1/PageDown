@@ -50,3 +50,51 @@ export function pickCurrentPage(pageTops: readonly number[], viewportHeight: num
   }
   return current
 }
+
+/**
+ * Split-mode "Follow" (docs/superpowers/plans/2026-08-09-design-doc-gap-audit.md's
+ * "Follow, not Sync" recommendation): estimates which page the editor is
+ * scrolled to from its own raw scroll offset and the document's own
+ * per-page content height (`computePageGeometry(...).contentHeightPx`,
+ * src/typography/page-geometry.ts), WITHOUT ever touching the preview's own
+ * scrollHeight.
+ *
+ * That last point is the whole reason this exists as a separate function
+ * from a naive `editorScrollTop / editorScrollHeight` ratio rather than a
+ * two-line inline expression at the call site: the recon measured that a
+ * scrollHeight-RATIO mapping is actively misleading here, not just
+ * imprecise -- every `.pagedjs_page` in the preview carries its own 1in top
+ * AND bottom margin plus an inter-page gap that the editor's own single
+ * continuous card has no counterpart for (~192px of pure preview-side
+ * overhead per extra page), so a ratio mapping drifts by multiple pages by
+ * mid-document. Dividing the editor's own pixel offset by the document's own
+ * pixel-exact per-page CONTENT height sidesteps that error entirely, at the
+ * cost of being a genuine estimate (Paged.js's own keep-with-next/
+ * avoid-split break avoidance can push a real break earlier than a uniform
+ * per-page slice would predict) -- an intentionally smaller, slowly
+ * accumulating error, not zero error. See that plan doc for the full
+ * writeup on why exact block-level sync is out of reach today.
+ *
+ * `clampPageIndex` absorbs most of the ways this can go wrong on its own
+ * (see its own tests) -- a NaN numerator (a non-finite `scrollOffsetPx`, or
+ * the 0/0 case below) clamps to 1, and Infinity clamps to `pageCount`. One
+ * case it does NOT save on its own: a non-finite or non-positive
+ * `contentHeightPx` with a genuinely positive `scrollOffsetPx` divides to
+ * POSITIVE Infinity, which `clampPageIndex` would then resolve to the LAST
+ * page -- a plausible-looking but wrong answer (confidently wrong is worse
+ * than obviously wrong for a feature that silently drives the preview), so
+ * that one case is guarded explicitly below rather than left to fall out of
+ * clampPageIndex's own, differently-motivated Infinity handling.
+ * `computePageGeometry` always produces a positive `contentHeightPx` in
+ * practice (see its own `MIN_CONTENT_PX` floor), so this guard is defensive
+ * dead code in production, not a real input this function expects to see.
+ */
+export function estimatePageFromScrollOffset(
+  scrollOffsetPx: number,
+  contentHeightPx: number,
+  pageCount: number
+): number {
+  if (!(contentHeightPx > 0)) return clampPageIndex(1, pageCount)
+  const estimated = Math.floor(scrollOffsetPx / contentHeightPx) + 1
+  return clampPageIndex(estimated, pageCount)
+}
