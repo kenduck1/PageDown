@@ -4,6 +4,7 @@ import userEvent from '@testing-library/user-event'
 import SlashMenu from './SlashMenu'
 import type { SlashItem } from '../milkdown/slash-items'
 import type { Rect } from '../lib/floating-position'
+import { SLASH_LISTBOX_ID, slashOptionDomId } from '../lib/slash-a11y'
 
 // POSITIONING IS DELIBERATELY NOT ASSERTED IN THIS FILE, for the identical
 // reason SelectionBubble.test.tsx's own header comment gives: jsdom performs
@@ -169,23 +170,67 @@ describe('SlashMenu grouping and content', () => {
     expect(screen.queryByText('Insert')).toBeNull()
     expect(screen.getByText('Text')).toBeInTheDocument()
   })
+
+  // === Follow-up 1: "role=option elements are nested inside an untyped
+  // section div, so they are not owned by the listbox" ===
+  // ARIA's listbox pattern requires every element a listbox owns to be
+  // `option` or `group` -- this proves the section wrapper is a real,
+  // labelled `group` (not the untyped `<div>` it used to be), and that its
+  // own visible heading text is what the group's aria-labelledby actually
+  // resolves to, not merely present somewhere nearby.
+  it('each section is a real ARIA group, labelled by its own visible heading, owning its options directly', () => {
+    renderMenu()
+    const groups = screen.getAllByRole('group')
+    expect(groups.length).toBeGreaterThan(0)
+    const textGroup = groups.find((el) => el.textContent?.includes('Alpha'))
+    expect(textGroup).toBeDefined()
+
+    const labelId = textGroup?.getAttribute('aria-labelledby')
+    expect(labelId).toBeTruthy()
+    const heading = document.getElementById(labelId as string)
+    expect(heading?.textContent).toBe('Text')
+
+    // The option is a DIRECT descendant reachable from the group itself --
+    // i.e. genuinely owned by it, not merely rendered somewhere inside the
+    // listbox at large.
+    expect(textGroup?.querySelector('[role="option"]')).not.toBeNull()
+  })
 })
 
 describe('SlashMenu active index', () => {
-  it('marks the item at activeIndex aria-selected and points aria-activedescendant at it', () => {
+  // === Follow-up 1: "aria-activedescendant sits on the listbox element,
+  // which never holds DOM focus... The attribute is therefore inert." ===
+  // The fix moves that relationship onto slash-plugin.ts's own view.dom
+  // (exercised directly in slash-plugin.test.ts, since this component has
+  // no ProseMirror view to assert against) -- what THIS component owns is
+  // the id contract that relationship must reference: a stable, index-keyed
+  // DOM id per option (slashOptionDomId, lib/slash-a11y.ts), aria-selected
+  // marking exactly the active one, and NO stray aria-activedescendant left
+  // on the listbox itself (dead markup, worse than none per this task's own
+  // framing of a stale attribute).
+  it('marks the item at activeIndex aria-selected, with a DOM id keyed on the FLAT INDEX (not item.id)', () => {
     const items = makeItems()
     renderMenu({ items, activeIndex: 1 })
     const listbox = screen.getByRole('listbox')
-    const activeId = listbox.getAttribute('aria-activedescendant')
-    expect(activeId).toBe(`pagedown-slash-item-${items[1].id}`)
-    expect(document.getElementById(activeId as string)).toHaveAttribute('aria-selected', 'true')
+
+    const activeOption = document.getElementById(slashOptionDomId(1))
+    expect(activeOption).not.toBeNull()
+    expect(activeOption).toHaveAttribute('aria-selected', 'true')
+    expect(activeOption?.textContent).toContain(items[1].label)
 
     const options = screen.getAllByRole('option')
     for (const option of options) {
-      if (option.id !== activeId) {
+      if (option.id !== slashOptionDomId(1)) {
         expect(option).toHaveAttribute('aria-selected', 'false')
       }
     }
+
+    expect(listbox).not.toHaveAttribute('aria-activedescendant')
+  })
+
+  it("exposes a stable listbox id (SLASH_LISTBOX_ID) -- what slash-plugin.ts's own view.dom aria-controls must reference", () => {
+    renderMenu()
+    expect(screen.getByRole('listbox').id).toBe(SLASH_LISTBOX_ID)
   })
 })
 
