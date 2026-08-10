@@ -787,3 +787,164 @@
 .pagedown-document.pagedown-font-inter td {
   font-family: var(--font-doc-sans);
 }
+
+/* ---------------------------------------------------------------------------
+   Body text size (`fontSize` frontmatter key / the toolbar's size dropdown).
+
+   Same mechanism as the themes above -- one more class on each surface's own
+   `.pagedown-document` element (`pagedown-size-<n>`, emitted by
+   documentStyleClasses in src/typography/document-style.ts) -- and `default`
+   deliberately emits NO class and therefore matches nothing here, so a
+   document that never sets a size is byte-for-byte unaffected by this whole
+   block. That is what keeps Gate 10's 0.000px parity out of reach of this
+   feature.
+
+   THIS BLOCK MUST STAY BELOW THE THEME BLOCK ABOVE. Both are (0,2,1) on the
+   element selectors, so the cascade resolves the tie by source order, and an
+   explicitly chosen body size has to win over the theme's own implied one --
+   otherwise picking 18 inside the `resume` theme would silently do nothing to
+   `p`/`li`/`td`.
+
+   `table` and `th` are restated for the identical, already-learned reason the
+   theme block documents at length: the base file matches `table` DIRECTLY, and
+   a direct match is never overridden by inheritance from an ancestor selector,
+   however specific -- so omitting them leaves `table` (and `th`, which has no
+   direct rule anywhere and inherits from `table`) pinned at the base 14px
+   while `td` tracks the chosen size, rendering a header cell larger than the
+   body cell beside it.
+
+   Headings scale PROPORTIONALLY rather than being restated per size, via one
+   `em`-based block below: `em` resolves against the parent's computed size,
+   which under a size class is the chosen body size, so `calc(26 / 14 * 1em)`
+   reproduces the default ramp's own 26:14 relationship at any body size with
+   no per-size arithmetic. Without this an 18px body would render an `h3`
+   (16px, fixed) SMALLER than its own body text. `calc(...)` rather than a
+   pre-divided decimal so the ratio's two real numbers stay legible and exact.
+
+   Accepted, deliberate consequence: choosing an explicit size takes over the
+   whole heading ramp, so a theme's own heading design (report's 32/21, resume's
+   20/13) is replaced by the proportional one. An explicit body size is a
+   stronger, more specific statement of intent than the theme's implied one --
+   and the alternative (theme headings held fixed while body text moves) is how
+   you get an h2 smaller than a paragraph.
+   --------------------------------------------------------------------------- */
+
+.pagedown-document.pagedown-size-9 {
+  font-size: 9px;
+}
+
+.pagedown-document.pagedown-size-9 p,
+.pagedown-document.pagedown-size-9 li,
+.pagedown-document.pagedown-size-9 td,
+.pagedown-document.pagedown-size-9 blockquote,
+.pagedown-document.pagedown-size-9 table,
+.pagedown-document.pagedown-size-9 th {
+  font-size: 9px;
+}
+
+.pagedown-document.pagedown-size-10 {
+  font-size: 10px;
+}
+
+.pagedown-document.pagedown-size-10 p,
+.pagedown-document.pagedown-size-10 li,
+.pagedown-document.pagedown-size-10 td,
+.pagedown-document.pagedown-size-10 blockquote,
+.pagedown-document.pagedown-size-10 table,
+.pagedown-document.pagedown-size-10 th {
+  font-size: 10px;
+}
+
+.pagedown-document.pagedown-size-11 {
+  font-size: 11px;
+}
+
+.pagedown-document.pagedown-size-11 p,
+.pagedown-document.pagedown-size-11 li,
+.pagedown-document.pagedown-size-11 td,
+.pagedown-document.pagedown-size-11 blockquote,
+.pagedown-document.pagedown-size-11 table,
+.pagedown-document.pagedown-size-11 th {
+  font-size: 11px;
+}
+
+.pagedown-document.pagedown-size-12 {
+  font-size: 12px;
+}
+
+.pagedown-document.pagedown-size-12 p,
+.pagedown-document.pagedown-size-12 li,
+.pagedown-document.pagedown-size-12 td,
+.pagedown-document.pagedown-size-12 blockquote,
+.pagedown-document.pagedown-size-12 table,
+.pagedown-document.pagedown-size-12 th {
+  font-size: 12px;
+}
+
+.pagedown-document.pagedown-size-14 {
+  font-size: 14px;
+}
+
+.pagedown-document.pagedown-size-14 p,
+.pagedown-document.pagedown-size-14 li,
+.pagedown-document.pagedown-size-14 td,
+.pagedown-document.pagedown-size-14 blockquote,
+.pagedown-document.pagedown-size-14 table,
+.pagedown-document.pagedown-size-14 th {
+  font-size: 14px;
+}
+
+.pagedown-document.pagedown-size-16 {
+  font-size: 16px;
+}
+
+.pagedown-document.pagedown-size-16 p,
+.pagedown-document.pagedown-size-16 li,
+.pagedown-document.pagedown-size-16 td,
+.pagedown-document.pagedown-size-16 blockquote,
+.pagedown-document.pagedown-size-16 table,
+.pagedown-document.pagedown-size-16 th {
+  font-size: 16px;
+}
+
+.pagedown-document.pagedown-size-18 {
+  font-size: 18px;
+}
+
+.pagedown-document.pagedown-size-18 p,
+.pagedown-document.pagedown-size-18 li,
+.pagedown-document.pagedown-size-18 td,
+.pagedown-document.pagedown-size-18 blockquote,
+.pagedown-document.pagedown-size-18 table,
+.pagedown-document.pagedown-size-18 th {
+  font-size: 18px;
+}
+
+/* One proportional heading ramp for every size class -- see the block comment
+   above for why this is `em`-based and why the attribute selector is the right
+   shape here (it is (0,2,1), the same specificity the per-size rules above and
+   the theme rules before them carry, so source order decides and this wins). */
+
+.pagedown-document[class*='pagedown-size-'] h1 {
+  font-size: calc(26 / 14 * 1em);
+}
+
+.pagedown-document[class*='pagedown-size-'] h2 {
+  font-size: calc(20 / 14 * 1em);
+}
+
+.pagedown-document[class*='pagedown-size-'] h3 {
+  font-size: calc(16 / 14 * 1em);
+}
+
+.pagedown-document[class*='pagedown-size-'] h4 {
+  font-size: calc(14 / 14 * 1em);
+}
+
+.pagedown-document[class*='pagedown-size-'] h5 {
+  font-size: calc(13 / 14 * 1em);
+}
+
+.pagedown-document[class*='pagedown-size-'] h6 {
+  font-size: calc(12 / 14 * 1em);
+}

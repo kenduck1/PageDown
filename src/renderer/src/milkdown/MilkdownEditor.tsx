@@ -19,7 +19,7 @@ import { createSelectionPlugin, type SelectionSnapshot } from './selection-plugi
 import { createSlashPlugin, type SlashSession } from './slash-plugin'
 import { enabledSlashItems } from './slash-items'
 import type { PageGeometry } from '../../../typography/page-geometry'
-import type { DocumentStyle } from '../../../typography/document-style'
+import { documentStyleClasses, type DocumentStyle } from '../../../typography/document-style'
 
 interface MilkdownEditorProps {
   content: string
@@ -529,7 +529,7 @@ const MilkdownEditor = forwardRef<MilkdownEditorHandle, MilkdownEditorProps>(
         // is what keeps the two surfaces in typographic parity -- Gate 10
         // measures exactly that. `default`/`source-serif-4` deliberately
         // have no rules at all, so those two classes are inert by design.
-        className={`milkdown-mount pagedown-document pagedown-theme-${documentStyle.theme} pagedown-font-${documentStyle.fontFamily} flow-root min-h-full mx-auto py-6`}
+        className={`milkdown-mount pagedown-document ${documentStyleClasses(documentStyle).join(' ')} flow-root min-h-full mx-auto py-6`}
         // The native `dir` attribute, not a CSS `direction` override: it
         // also drives the browser's own bidi text-run resolution and list/
         // table mirroring, which a bare `direction:` CSS property does not

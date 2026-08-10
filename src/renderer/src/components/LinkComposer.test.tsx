@@ -21,13 +21,13 @@ afterEach(() => {
 
 describe('LinkComposer', () => {
   it('renders nothing when linkComposerOpen is false', () => {
-    render(<LinkComposer onInsertLink={vi.fn()} />)
+    render(<LinkComposer initialHref="" onRemoveLink={vi.fn()} onInsertLink={vi.fn()} />)
     expect(screen.queryByRole('group', { name: 'Insert link' })).not.toBeInTheDocument()
   })
 
   it('renders the composer row when linkComposerOpen is true', () => {
     useAppStore.setState({ linkComposerOpen: true })
-    render(<LinkComposer onInsertLink={vi.fn()} />)
+    render(<LinkComposer initialHref="" onRemoveLink={vi.fn()} onInsertLink={vi.fn()} />)
     expect(screen.getByRole('group', { name: 'Insert link' })).toBeInTheDocument()
     expect(screen.getByRole('textbox', { name: 'Link URL' })).toBeInTheDocument()
   })
@@ -35,7 +35,7 @@ describe('LinkComposer', () => {
   it('the Insert button is disabled until a real URL is typed', async () => {
     useAppStore.setState({ linkComposerOpen: true })
     const user = userEvent.setup()
-    render(<LinkComposer onInsertLink={vi.fn()} />)
+    render(<LinkComposer initialHref="" onRemoveLink={vi.fn()} onInsertLink={vi.fn()} />)
 
     const insertButton = screen.getByRole('button', { name: 'Insert' })
     expect(insertButton).toBeDisabled()
@@ -51,7 +51,7 @@ describe('LinkComposer', () => {
     useAppStore.setState({ linkComposerOpen: true })
     const onInsertLink = vi.fn()
     const user = userEvent.setup()
-    render(<LinkComposer onInsertLink={onInsertLink} />)
+    render(<LinkComposer initialHref="" onRemoveLink={vi.fn()} onInsertLink={onInsertLink} />)
 
     await user.type(screen.getByRole('textbox', { name: 'Link URL' }), 'https://example.com{Enter}')
 
@@ -63,7 +63,7 @@ describe('LinkComposer', () => {
     useAppStore.setState({ linkComposerOpen: true })
     const onInsertLink = vi.fn()
     const user = userEvent.setup()
-    render(<LinkComposer onInsertLink={onInsertLink} />)
+    render(<LinkComposer initialHref="" onRemoveLink={vi.fn()} onInsertLink={onInsertLink} />)
 
     await user.type(screen.getByRole('textbox', { name: 'Link URL' }), 'https://example.com')
     await user.click(screen.getByRole('button', { name: 'Insert' }))
@@ -78,7 +78,7 @@ describe('LinkComposer', () => {
     useAppStore.setState({ linkComposerOpen: true })
     const onInsertLink = vi.fn()
     const user = userEvent.setup()
-    render(<LinkComposer onInsertLink={onInsertLink} />)
+    render(<LinkComposer initialHref="" onRemoveLink={vi.fn()} onInsertLink={onInsertLink} />)
 
     const input = screen.getByRole('textbox', { name: 'Link URL' })
     await user.type(input, '   {Enter}')
@@ -94,7 +94,7 @@ describe('LinkComposer', () => {
     useAppStore.setState({ linkComposerOpen: true })
     const onInsertLink = vi.fn()
     const user = userEvent.setup()
-    const { rerender } = render(<LinkComposer onInsertLink={onInsertLink} />)
+    const { rerender } = render(<LinkComposer initialHref="" onRemoveLink={vi.fn()} onInsertLink={onInsertLink} />)
 
     await user.type(screen.getByRole('textbox', { name: 'Link URL' }), 'https://example.com')
     await user.click(screen.getByRole('button', { name: 'Cancel' }))
@@ -103,7 +103,7 @@ describe('LinkComposer', () => {
     expect(useAppStore.getState().linkComposerOpen).toBe(false)
 
     useAppStore.setState({ linkComposerOpen: true })
-    rerender(<LinkComposer onInsertLink={onInsertLink} />)
+    rerender(<LinkComposer initialHref="" onRemoveLink={vi.fn()} onInsertLink={onInsertLink} />)
     expect(screen.getByRole('textbox', { name: 'Link URL' })).toHaveValue('')
   })
 
@@ -111,7 +111,7 @@ describe('LinkComposer', () => {
     useAppStore.setState({ linkComposerOpen: true })
     const onInsertLink = vi.fn()
     const user = userEvent.setup()
-    render(<LinkComposer onInsertLink={onInsertLink} />)
+    render(<LinkComposer initialHref="" onRemoveLink={vi.fn()} onInsertLink={onInsertLink} />)
 
     await user.type(
       screen.getByRole('textbox', { name: 'Link URL' }),

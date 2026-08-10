@@ -41,7 +41,16 @@ function createCommands(): SelectionBubbleCommands {
     toggleHeading: vi.fn(),
     setParagraph: vi.fn(),
     insertLink: vi.fn(),
-    addComment: vi.fn()
+    addComment: vi.fn(),
+    removeLink: vi.fn(),
+    addRowBefore: vi.fn(),
+    addRowAfter: vi.fn(),
+    addColumnBefore: vi.fn(),
+    addColumnAfter: vi.fn(),
+    deleteRow: vi.fn(),
+    deleteColumn: vi.fn(),
+    deleteTable: vi.fn(),
+    setColumnAlignment: vi.fn()
   }
 }
 

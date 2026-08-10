@@ -222,7 +222,8 @@ describe('EditorSidebar', () => {
       // cleanup, same contract as onMenuCommand above.
       onWindowCloseRequest: vi.fn().mockReturnValue(() => {}),
       respondToWindowClose: vi.fn(),
-      getStartupWarnings: vi.fn().mockResolvedValue([])
+      getStartupWarnings: vi.fn().mockResolvedValue([]),
+      getAppVersion: vi.fn().mockResolvedValue('1.0.0')
     }
     const user = userEvent.setup()
     render(
@@ -282,7 +283,8 @@ describe('EditorSidebar', () => {
       // cleanup, same contract as onMenuCommand above.
       onWindowCloseRequest: vi.fn().mockReturnValue(() => {}),
       respondToWindowClose: vi.fn(),
-      getStartupWarnings: vi.fn().mockResolvedValue([])
+      getStartupWarnings: vi.fn().mockResolvedValue([]),
+      getAppVersion: vi.fn().mockResolvedValue('1.0.0')
     }
     useAppStore.setState({ sidebarTab: 'history' })
     render(

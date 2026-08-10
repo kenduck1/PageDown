@@ -28,6 +28,15 @@ import { useAppStore } from '../store/appStore'
 // what is structurally the same interaction (a one-field inline prompt over
 // the current selection).
 export interface LinkComposerProps {
+  // The href of the link the selection is ALREADY on, or '' when there is
+  // none. Until the capability-gap pass this component seeded its input from
+  // `useState('')` and never looked at the document at all, so there was no
+  // way to see -- let alone correct -- an existing link's URL: the field
+  // opened blank every time, and submitting a "correction" over already-linked
+  // text ran toggleMark's REMOVE branch and destroyed the link (see
+  // EditorCommands.insertLink for that mechanism). Prefilling is half the fix;
+  // the update-vs-toggle branch in insertLink is the other half.
+  initialHref: string
   // Called with the trimmed URL when the user confirms. Returns nothing,
   // deliberately unlike CommentComposer's `onAddComment: (text) => boolean`:
   // the underlying command (toggleLinkCommand, via
@@ -38,12 +47,35 @@ export interface LinkComposerProps {
   // failure -- so there is nothing here for an inline error to report, and
   // inventing a boolean would be a fake seam.
   onInsertLink: (href: string) => void
+  // Dispatched instead of onInsertLink when the user clicks "Remove link".
+  // Only reachable when `initialHref` is non-empty -- there is nothing to
+  // remove otherwise, and a permanently present button that silently no-ops is
+  // exactly the class of dead control this pass exists to eliminate.
+  onRemoveLink: () => void
 }
 
-function LinkComposer({ onInsertLink }: LinkComposerProps): ReactElement | null {
+function LinkComposer({
+  initialHref,
+  onInsertLink,
+  onRemoveLink
+}: LinkComposerProps): ReactElement | null {
   const isOpen = useAppStore((state) => state.linkComposerOpen)
   const closeComposer = useAppStore((state) => state.closeLinkComposer)
   const [href, setHref] = useState('')
+  // Seeding on OPEN, not on mount, and via React's own "adjust state during
+  // render" pattern rather than an effect. Two constraints force this shape:
+  // this component is rendered unconditionally by EditorScreen and returns
+  // null while closed, so it never unmounts and a `useState(initialHref)`
+  // initialiser would run exactly once, for the very first document, forever;
+  // and mirroring an external value into local state from a `useEffect` trips
+  // this project's `react-hooks/set-state-in-effect` rule (a real cascading-
+  // render warning), the same trap SettingsScreen's autosave-interval field
+  // documents and solves the same way.
+  const [wasOpen, setWasOpen] = useState(false)
+  if (isOpen !== wasOpen) {
+    setWasOpen(isOpen)
+    if (isOpen) setHref(initialHref)
+  }
 
   if (!isOpen) return null
 
@@ -78,6 +110,7 @@ function LinkComposer({ onInsertLink }: LinkComposerProps): ReactElement | null 
       aria-label="Insert link"
       className="flex flex-none items-center gap-1.5 border-b border-border-chrome bg-chrome-dark px-3 py-1.5 text-12 text-text-secondary"
     >
+      <span className="flex-none">{initialHref === '' ? 'Link' : 'Edit link'}</span>
       <input
         type="text"
         aria-label="Link URL"
@@ -104,8 +137,20 @@ function LinkComposer({ onInsertLink }: LinkComposerProps): ReactElement | null 
         disabled={href.trim() === ''}
         className="flex-none rounded-sm border border-border-chrome px-2.5 py-1 text-12 text-text-primary transition-colors hover:bg-chrome-light disabled:cursor-not-allowed disabled:opacity-40"
       >
-        Insert
+        {initialHref === '' ? 'Insert' : 'Update'}
       </button>
+      {initialHref !== '' && (
+        <button
+          type="button"
+          onClick={() => {
+            onRemoveLink()
+            handleClose()
+          }}
+          className="flex-none rounded-sm border border-border-chrome px-2.5 py-1 text-12 text-text-primary transition-colors hover:bg-chrome-light"
+        >
+          Remove link
+        </button>
+      )}
       <button
         type="button"
         onClick={handleClose}

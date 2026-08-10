@@ -9,6 +9,7 @@ import {
 } from 'react'
 import { computeFloatingPosition, type Rect } from '../lib/floating-position'
 import type { SelectionSnapshot } from '../milkdown/selection-plugin'
+import type { TableAlignment } from '../milkdown/table-context'
 
 // The floating formatting toolbar that appears near a text selection in the
 // Milkdown (Format mode) canvas -- an explicit v1 requirement of the master
@@ -68,6 +69,23 @@ export interface SelectionBubbleCommands {
   // bubble's anchor -- hence `suppressed` below.
   insertLink: () => void
   addComment: () => void
+  // Removing a link is the one link action that does NOT need a composer --
+  // there is nothing to type -- so unlike insertLink it dispatches directly.
+  removeLink: () => void
+  // ---- Table structure editing -----------------------------------------
+  // These are why this bubble now appears for a bare CARET (see `visible`
+  // below), not only for a text selection: a user working in a table has a
+  // caret, not a range, and until this pass none of @milkdown/preset-gfm's
+  // table commands except "insert table" was reachable from any surface in
+  // the app at all.
+  addRowBefore: () => void
+  addRowAfter: () => void
+  addColumnBefore: () => void
+  addColumnAfter: () => void
+  deleteRow: () => void
+  deleteColumn: () => void
+  deleteTable: () => void
+  setColumnAlignment: (alignment: TableAlignment) => void
 }
 
 export interface SelectionBubbleProps {
@@ -167,24 +185,41 @@ function SelectionBubble({
     )
   }, [])
 
-  // Escape dismisses the bubble for THIS selection only. Stored as the
-  // dismissed range rather than a boolean specifically so it self-clears when
-  // the selection changes, with no effect and no setState-during-render: a
-  // boolean would need an effect to reset it, which is both the lint rule's
-  // target and a real extra render.
+  // Escape dismisses the bubble for THIS context only. Stored as the dismissed
+  // context KEY rather than a boolean specifically so it self-clears when the
+  // selection changes, with no effect and no setState-during-render: a boolean
+  // would need an effect to reset it, which is both the lint rule's target and
+  // a real extra render.
   const [dismissedRange, setDismissedRange] = useState<string | null>(null)
-  const rangeKey = snapshot && !snapshot.empty ? `${snapshot.from}:${snapshot.to}` : null
+  // Two kinds of context can raise this bubble, and the key has to say which,
+  // so that dismissing one does not also dismiss the other. A ranged selection
+  // is keyed by its own two ends (as it always was). A bare caret inside a
+  // table is keyed by the TABLE -- deliberately not by the caret position,
+  // which is not even reported for a collapsed selection (sameSnapshot ignores
+  // collapsed positions, so they can be stale by design) and which would in
+  // any case re-raise a dismissed bubble on every keystroke.
+  const contextKey =
+    snapshot == null
+      ? null
+      : !snapshot.empty
+        ? `range:${snapshot.from}:${snapshot.to}`
+        : snapshot.table
+          ? `table:${snapshot.table.tablePos}`
+          : null
 
   const visible =
     snapshot != null &&
-    !snapshot.empty &&
     snapshot.hasFocus &&
     // A NodeSelection is an image / pagebreak / frontmatter atom -- none of
     // this bubble's commands mean anything for one.
     !snapshot.nodeSelection &&
     !suppressed &&
-    rangeKey !== null &&
-    dismissedRange !== rangeKey &&
+    // Non-null exactly when there is either a real text selection or a caret
+    // inside a table -- i.e. this replaces the old bare `!snapshot.empty`,
+    // which is what kept the table controls unreachable from the one selection
+    // a user editing a table actually has.
+    contextKey !== null &&
+    dismissedRange !== contextKey &&
     anchor != null &&
     // No measurable safe rect means no non-occlusion guarantee, so nothing is
     // rendered at all -- see intersectRect's own comment. (Consequence worth
@@ -226,10 +261,10 @@ function SelectionBubble({
   // and still read current values -- matching Toast.tsx's onDismiss and
   // MilkdownEditor.tsx's onChangeRef convention.
   const visibleRef = useRef(visible)
-  const rangeKeyRef = useRef(rangeKey)
+  const contextKeyRef = useRef(contextKey)
   useEffect(() => {
     visibleRef.current = visible
-    rangeKeyRef.current = rangeKey
+    contextKeyRef.current = contextKey
   })
 
   // **Registered unconditionally on mount, NOT gated on `visible` — that gate
@@ -250,7 +285,7 @@ function SelectionBubble({
       // wins depend on listener registration order.
       if (event.key !== 'Escape') return
       if (!visibleRef.current) return
-      setDismissedRange(rangeKeyRef.current)
+      setDismissedRange(contextKeyRef.current)
     }
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
@@ -311,56 +346,172 @@ function SelectionBubble({
       // what would put it under the native preview view.
       className="scrollbar-hide z-40 flex items-center gap-0.5 overflow-x-auto rounded-md border border-border-chrome bg-page px-1 py-1 shadow-float-sm"
     >
-      <BubbleButton label="Bold" active={snapshot.marks.bold} onClick={commands.toggleBold}>
-        <span className="text-13 font-bold leading-none">B</span>
-      </BubbleButton>
-      <BubbleButton label="Italic" active={snapshot.marks.italic} onClick={commands.toggleItalic}>
-        <span className="text-13 italic leading-none">I</span>
-      </BubbleButton>
-      <BubbleButton
-        label="Inline code"
-        active={snapshot.marks.inlineCode}
-        onClick={commands.toggleInlineCode}
-      >
-        <BubbleIcon>
-          <path d="M9 8.5 5.5 12 9 15.5" />
-          <path d="M15 8.5 18.5 12 15 15.5" />
-        </BubbleIcon>
-      </BubbleButton>
+      {/* The FORMATTING half renders only for a real text selection. A bare
+      caret in a table raises this bubble too (that is how the table controls
+      below are reachable at all), and every control in this group is either
+      meaningless or misleading there: bold/italic on a caret set a STORED mark
+      that only affects the next typed character, and a table cell's content
+      model is the single rigid `paragraph`, so the heading buttons cannot
+      apply inside one and would render as buttons that visibly do nothing --
+      exactly the failure mode this whole pass exists to remove. */}
+      {!snapshot.empty && (
+        <>
+          <BubbleButton label="Bold" active={snapshot.marks.bold} onClick={commands.toggleBold}>
+            <span className="text-13 font-bold leading-none">B</span>
+          </BubbleButton>
+          <BubbleButton
+            label="Italic"
+            active={snapshot.marks.italic}
+            onClick={commands.toggleItalic}
+          >
+            <span className="text-13 italic leading-none">I</span>
+          </BubbleButton>
+          <BubbleButton
+            label="Inline code"
+            active={snapshot.marks.inlineCode}
+            onClick={commands.toggleInlineCode}
+          >
+            <BubbleIcon>
+              <path d="M9 8.5 5.5 12 9 15.5" />
+              <path d="M15 8.5 18.5 12 15 15.5" />
+            </BubbleIcon>
+          </BubbleButton>
 
-      <BubbleDivider />
+          <BubbleDivider />
 
-      {([1, 2, 3] as const).map((level) => (
-        <BubbleButton
-          key={level}
-          label={`Heading ${level}`}
-          // A genuine toggle: toggleHeading turns an h{level} back into a
-          // paragraph when it is already that level (see EditorCommands).
-          active={snapshot.headingLevel === level}
-          onClick={() => commands.toggleHeading(level)}
-        >
-          <span className="text-12-5 font-semibold leading-none">H{level}</span>
-        </BubbleButton>
-      ))}
-      {/* One-shot: setParagraph converts unconditionally, so no aria-pressed. */}
-      <BubbleButton label="Normal text" onClick={commands.setParagraph}>
-        <span className="text-13 leading-none">¶</span>
-      </BubbleButton>
+          {([1, 2, 3] as const).map((level) => (
+            <BubbleButton
+              key={level}
+              label={`Heading ${level}`}
+              // A genuine toggle: toggleHeading turns an h{level} back into a
+              // paragraph when it is already that level (see EditorCommands).
+              active={snapshot.headingLevel === level}
+              onClick={() => commands.toggleHeading(level)}
+            >
+              <span className="text-12-5 font-semibold leading-none">H{level}</span>
+            </BubbleButton>
+          ))}
+          {/* One-shot: setParagraph converts unconditionally, so no aria-pressed. */}
+          <BubbleButton label="Normal text" onClick={commands.setParagraph}>
+            <span className="text-13 leading-none">¶</span>
+          </BubbleButton>
 
-      <BubbleDivider />
+          <BubbleDivider />
 
-      <BubbleButton label="Insert link" onClick={commands.insertLink}>
-        <BubbleIcon>
-          <path d="M9.5 14.5 14.5 9.5" />
-          <path d="M11 7.5l1-1a3.5 3.5 0 0 1 5 5l-1 1" />
-          <path d="M13 16.5l-1 1a3.5 3.5 0 0 1-5-5l1-1" />
-        </BubbleIcon>
-      </BubbleButton>
-      <BubbleButton label="Add comment" onClick={commands.addComment}>
-        <BubbleIcon>
-          <path d="M4 5.5h16v10H10l-4 3.5v-3.5H4z" />
-        </BubbleIcon>
-      </BubbleButton>
+          <BubbleButton label="Insert link" onClick={commands.insertLink}>
+            <BubbleIcon>
+              <path d="M9.5 14.5 14.5 9.5" />
+              <path d="M11 7.5l1-1a3.5 3.5 0 0 1 5 5l-1 1" />
+              <path d="M13 16.5l-1 1a3.5 3.5 0 0 1-5-5l1-1" />
+            </BubbleIcon>
+          </BubbleButton>
+          <BubbleButton label="Add comment" onClick={commands.addComment}>
+            <BubbleIcon>
+              <path d="M4 5.5h16v10H10l-4 3.5v-3.5H4z" />
+            </BubbleIcon>
+          </BubbleButton>
+          {/* Only offered when there IS a link to remove -- a permanently present
+      "Remove link" that silently no-ops on unlinked text would be one more
+      dead control. `marks.link` is the same predicate insertLink itself
+      branches on to choose update-vs-toggle, so the button's presence and the
+      command's behaviour cannot disagree. */}
+          {snapshot.marks.link && (
+            <BubbleButton label="Remove link" onClick={commands.removeLink}>
+              <BubbleIcon>
+                <path d="M11 7.5l1-1a3.5 3.5 0 0 1 5 5l-1 1" />
+                <path d="M13 16.5l-1 1a3.5 3.5 0 0 1-5-5l1-1" />
+                <path d="M5 5l14 14" />
+              </BubbleIcon>
+            </BubbleButton>
+          )}
+        </>
+      )}
+
+      {/* The TABLE half. Present only while the selection is genuinely inside
+      a table, which is the whole reason this is a context-sensitive floating
+      surface rather than ten more permanently-visible toolbar buttons -- see
+      this file's own module comment and the report for why the toolbar, the
+      slash menu and the native context menu were each ruled out. */}
+      {snapshot.table && (
+        <>
+          {!snapshot.empty && <BubbleDivider />}
+          <BubbleButton label="Insert row above" onClick={commands.addRowBefore}>
+            <BubbleIcon>
+              <path d="M4 13.5h16v6H4z" />
+              <path d="M12 4v6M9 7h6" />
+            </BubbleIcon>
+          </BubbleButton>
+          <BubbleButton label="Insert row below" onClick={commands.addRowAfter}>
+            <BubbleIcon>
+              <path d="M4 4.5h16v6H4z" />
+              <path d="M12 14v6M9 17h6" />
+            </BubbleIcon>
+          </BubbleButton>
+          <BubbleButton label="Insert column left" onClick={commands.addColumnBefore}>
+            <BubbleIcon>
+              <path d="M13.5 4v16h6V4z" />
+              <path d="M4 12h6M7 9v6" />
+            </BubbleIcon>
+          </BubbleButton>
+          <BubbleButton label="Insert column right" onClick={commands.addColumnAfter}>
+            <BubbleIcon>
+              <path d="M4.5 4v16h6V4z" />
+              <path d="M14 12h6M17 9v6" />
+            </BubbleIcon>
+          </BubbleButton>
+
+          <BubbleDivider />
+
+          <BubbleButton label="Delete row" onClick={commands.deleteRow}>
+            <BubbleIcon>
+              <path d="M4 9h16v6H4z" />
+              <path d="M8 20h8" />
+            </BubbleIcon>
+          </BubbleButton>
+          <BubbleButton label="Delete column" onClick={commands.deleteColumn}>
+            <BubbleIcon>
+              <path d="M9 4v16h6V4z" />
+              <path d="M20 8v8" />
+            </BubbleIcon>
+          </BubbleButton>
+          <BubbleButton label="Delete table" onClick={commands.deleteTable}>
+            <BubbleIcon>
+              <path d="M4.5 5h15v14h-15z" />
+              <path d="M4.5 10h15M4.5 15h15M12 5v14" />
+              <path d="M5 5l14 14" />
+            </BubbleIcon>
+          </BubbleButton>
+
+          <BubbleDivider />
+
+          {/* Genuine toggles, so these DO carry aria-pressed -- the pressed one
+          is the column's current alignment, read from the column's own HEADER
+          cell (table-context.ts's readColumnAlignment) because that is the only
+          cell markdown actually serialises. */}
+          {(['left', 'center', 'right'] as const).map((alignment) => (
+            <BubbleButton
+              key={alignment}
+              label={`Align column ${alignment}`}
+              active={snapshot.table?.alignment === alignment}
+              onClick={() => commands.setColumnAlignment(alignment)}
+            >
+              <BubbleIcon>
+                <path d="M4 7h16" />
+                <path
+                  d={
+                    alignment === 'left'
+                      ? 'M4 12h9'
+                      : alignment === 'center'
+                        ? 'M7.5 12h9'
+                        : 'M11 12h9'
+                  }
+                />
+                <path d="M4 17h16" />
+              </BubbleIcon>
+            </BubbleButton>
+          ))}
+        </>
+      )}
     </div>
   )
 }

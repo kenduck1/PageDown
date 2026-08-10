@@ -81,7 +81,11 @@ import sourceSerif4Base64 from '../../src/renderer/src/assets/fonts/source-serif
 import interVariableBase64 from '../../src/renderer/src/assets/fonts/inter-variable.woff2'
 import sourceCodeProBase64 from '../../src/renderer/src/assets/fonts/source-code-pro-variable.woff2'
 import { DPI, type PageGeometry } from '../../src/typography/page-geometry'
-import { buildRunningContentCss, type DocumentStyle } from '../../src/typography/document-style'
+import {
+  buildRunningContentCss,
+  documentStyleClasses,
+  type DocumentStyle
+} from '../../src/typography/document-style'
 import type { RenderRequestMessage } from '../../src/pagination/render-message'
 import { clampPageIndex, pickCurrentPage, type PageNavState } from '../../src/pagination/page-nav'
 
@@ -1542,11 +1546,13 @@ window.addEventListener('message', async (event: MessageEvent<IncomingMessage>) 
   // src/main/split-preview-window.ts), so a second render against the same
   // <body> must not accumulate a stale `pagedown-theme-*`/`pagedown-font-*`
   // class from a PREVIOUS request alongside the current one.
-  document.body.className = [
-    'pagedown-document',
-    `pagedown-theme-${documentStyle.theme}`,
-    `pagedown-font-${documentStyle.fontFamily}`
-  ].join(' ')
+  //
+  // The class list itself comes from documentStyleClasses (document-style.ts),
+  // shared verbatim with the Milkdown mount -- a class added for one surface
+  // and forgotten on the other is precisely the divergence this whole shared-
+  // typography design exists to prevent, and the body-size class added by the
+  // capability-gap pass would have been the third hand-copied entry here.
+  document.body.className = ['pagedown-document', ...documentStyleClasses(documentStyle)].join(' ')
   // Native `dir` attribute (mirrors MilkdownEditor.tsx's own mount div),
   // not a CSS `direction` override -- it drives the browser's bidi text-run
   // resolution and list/table mirroring during Paged.js's own layout pass,

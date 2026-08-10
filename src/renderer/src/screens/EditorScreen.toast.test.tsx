@@ -39,18 +39,18 @@ const { mockEditorHandle } = vi.hoisted(() => ({
     closeSlashMenu: vi.fn(),
     getSlashItems: vi.fn(() => []),
     insertImages: vi.fn(),
-  removeLink: vi.fn(),
-  toggleTaskList: vi.fn(),
-  addRowBefore: vi.fn(),
-  addRowAfter: vi.fn(),
-  addColumnBefore: vi.fn(),
-  addColumnAfter: vi.fn(),
-  deleteRow: vi.fn(),
-  deleteColumn: vi.fn(),
-  deleteTable: vi.fn(),
-  setColumnAlignment: vi.fn(),
-  getTableRect: vi.fn(() => null),
-  setActiveSlashIndex: vi.fn()
+    removeLink: vi.fn(),
+    toggleTaskList: vi.fn(),
+    addRowBefore: vi.fn(),
+    addRowAfter: vi.fn(),
+    addColumnBefore: vi.fn(),
+    addColumnAfter: vi.fn(),
+    deleteRow: vi.fn(),
+    deleteColumn: vi.fn(),
+    deleteTable: vi.fn(),
+    setColumnAlignment: vi.fn(),
+    getTableRect: vi.fn(() => null),
+    setActiveSlashIndex: vi.fn()
   }
 }))
 
@@ -110,7 +110,8 @@ beforeEach(() => {
     // cleanup, same contract as onMenuCommand above.
     onWindowCloseRequest: vi.fn().mockReturnValue(() => {}),
     respondToWindowClose: vi.fn(),
-    getStartupWarnings: vi.fn().mockResolvedValue([])
+    getStartupWarnings: vi.fn().mockResolvedValue([]),
+    getAppVersion: vi.fn().mockResolvedValue('1.0.0')
   }
 })
 

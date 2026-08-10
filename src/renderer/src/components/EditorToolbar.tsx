@@ -3,7 +3,12 @@ import { useAppStore, type ViewMode } from '../store/appStore'
 import { useDocumentStore } from '../store/documentStore'
 import { useFindStore } from '../store/findStore'
 import { isSourceEditing } from '../lib/editing-surface'
-import { resolvePageConfig, type PageFontFamily } from '../../../markdown/page-config'
+import {
+  PAGE_FONT_SIZES,
+  resolvePageConfig,
+  type PageFontFamily,
+  type PageFontSize
+} from '../../../markdown/page-config'
 import type { MilkdownEditorHandle } from '../milkdown/MilkdownEditor'
 import type { SelectionSnapshot } from '../milkdown/selection-plugin'
 
@@ -44,6 +49,14 @@ export interface EditorToolbarProps {
   // `editorRef`; the select still shows the document's real current family
   // either way, it just can't change it.
   onSetFontFamily?: (fontFamily: PageFontFamily) => void
+  // Exactly the same contract as onSetFontFamily above, for the size select
+  // beside it: EditorScreen wires it to a real frontmatter write, because the
+  // body size is a property OF THE DOCUMENT (it has to survive save/reopen and
+  // reach the paginator and PDF export), so UI-only state would be wrong.
+  // Omitted in this component's own standalone tests, which render it with
+  // only `editorRef`; the select still shows the document's real current size
+  // either way, it just can't change it.
+  onSetFontSize?: (fontSize: PageFontSize) => void
   // The live selection/formatting state from milkdown/selection-plugin.ts,
   // threaded through EditorScreen. Optional and defaulting to null, so this
   // component's own standalone tests (which render it with only `editorRef`)
@@ -158,6 +171,7 @@ function EditorToolbar({
   editorRef,
   onSetViewMode,
   onSetFontFamily,
+  onSetFontSize,
   selection = null
 }: EditorToolbarProps): ReactElement {
   const viewMode = useAppStore((state) => state.viewMode)
@@ -210,6 +224,17 @@ function EditorToolbar({
   // below. resolvePageConfig does a real YAML parse, so it is memoized on
   // `content` for the same reason EditorScreen memoizes its own copy.
   const fontFamily = useMemo(() => resolvePageConfig(content).fontFamily, [content])
+  // Same treatment, same memo, for the size select beside it.
+  const fontSize = useMemo(() => resolvePageConfig(content).fontSize, [content])
+  // A real, hidden <input type="file">, clicked programmatically by the
+  // "Insert image" button. Chromium opens the genuine OS picker for it, which
+  // is why this feature needed NO new main-process IPC handler at all -- worth
+  // stating explicitly, because reaching for `dialog.showOpenDialog` would
+  // have meant touching src/main/index.ts and inventing a second
+  // path-validation story next to the isKnownPath rule. A File object from
+  // this input is indistinguishable from one in a DataTransfer, so it feeds
+  // the identical documentStore.saveDroppedImage path drag-and-drop uses.
+  const imageInputRef = useRef<HTMLInputElement>(null)
   // Forces the paragraph-style <select> below to remount (fresh DOM node,
   // back to its uncontrolled default) after every use -- see
   // handleHeadingChange's own comment for why. Not a value store; only
@@ -529,14 +554,32 @@ function EditorToolbar({
                   <ChevronDownIcon />
                 </span>
               </div>
+              {/* Real, controlled, and document-backed as of the capability-gap
+              pass. This was the single worst control in the toolbar: it had
+              `defaultValue="11"` and NO onChange at all, so it visibly moved to
+              whatever the user picked and then changed nothing -- and 11 was not
+              even the app's real body size (14px), so it also misreported the
+              document's actual state. `fontSize` is now a real PageConfig/
+              DocumentStyle field rendered by BOTH surfaces through shared
+              classes in document-typography.css, exactly like the font-family
+              select beside it. "Default" means "whatever the document's theme
+              says" and emits no class at all -- see PageFontSize. */}
               <div className="relative flex h-[30px] items-center">
                 <select
                   aria-label="Font size"
-                  className="h-full appearance-none rounded-sm bg-transparent pl-2 pr-5 text-12-5 text-text-primary hover:bg-chrome-light"
-                  defaultValue="11"
+                  className="h-full appearance-none rounded-sm bg-transparent pl-2 pr-6 text-12-5 text-text-primary hover:bg-chrome-light"
+                  value={String(fontSize)}
+                  onChange={(e) =>
+                    onSetFontSize?.(
+                      e.target.value === 'default'
+                        ? 'default'
+                        : (Number(e.target.value) as PageFontSize)
+                    )
+                  }
                 >
-                  {['9', '10', '11', '12', '14', '16', '18'].map((size) => (
-                    <option key={size} value={size}>
+                  <option value="default">Default</option>
+                  {PAGE_FONT_SIZES.map((size) => (
+                    <option key={size} value={String(size)}>
                       {size}
                     </option>
                   ))}
@@ -550,18 +593,27 @@ function EditorToolbar({
             <ToolbarDivider />
           </div>
 
-          {/* Bold / Italic / Underline / text color. Underline and text-color
-          have no backing command -- Markdown has no native underline
-          syntax, and this sub-project's brief doesn't scope a color-mark
-          command -- so both stay real, present, but unwired buttons. */}
+          {/* Bold / Italic.
+
+          UNDERLINE AND TEXT COLOUR WERE REMOVED HERE (capability-gap pass),
+          deliberately, and should not come back. Neither has any
+          representation in Markdown: there is no underline syntax at all, and
+          no colour syntax -- the only way to express either would be raw HTML
+          (`<u>`, `<span style>`), and this pipeline's own sanitize schema
+          strips both (`hast-util-sanitize`'s defaultSchema allows neither the
+          `u` tag nor a `style` attribute on anything), so the mark would
+          survive in the editor and then silently vanish from the paginated
+          preview, the exported PDF, and the file itself. A control that
+          renders at full opacity, takes hover styling and keyboard focus, and
+          does nothing when clicked reads as BROKEN, not as unbuilt -- removing
+          it is strictly more honest than shipping it. */}
           <div className="flex items-center gap-0.5">
             {/* Real, live pressed state as of the bubble menu sub-project --
             these two carried a hardcoded `active={false}` from the design
             handoff until then, which rendered an actively misleading
             aria-pressed="false" while the cursor sat inside bold text.
-            Underline keeps its hardcoded false because it has no backing
-            command at all (Markdown has no underline), i.e. there is no state
-            to report, not merely no way to read it. */}
+            (Underline, which used to sit here carrying that same hardcoded
+            false, is gone -- see the block comment above.) */}
             <ToolbarIconButton
               label="Bold"
               active={selection?.marks.bold ?? false}
@@ -578,15 +630,6 @@ function EditorToolbar({
             >
               <span className="text-14 italic leading-none">I</span>
             </ToolbarIconButton>
-            <ToolbarIconButton label="Underline" active={false}>
-              <span className="text-14 leading-none underline">U</span>
-            </ToolbarIconButton>
-            <ToolbarIconButton label="Text color">
-              <span className="flex flex-col items-center gap-px">
-                <span className="text-13 leading-none">A</span>
-                <span className="h-[2.5px] w-3.5 rounded-full bg-accent" />
-              </span>
-            </ToolbarIconButton>
           </div>
 
           <ToolbarDivider />
@@ -595,9 +638,16 @@ function EditorToolbar({
           three plain icon buttons side by side (verified against
           PageDown.dc.html's own markup: no chevron/dropdown panel actually
           exists for this group, despite the README's prose calling it a
-          "dropdown group"), so that's what's built here. Checkbox list has
-          no backing command (GFM task-list items aren't in this
-          sub-project's command scope) and stays unwired. */}
+          "dropdown group"), so that's what's built here. Checkbox list had
+          no backing command until the capability-gap pass, and now has one
+          (toggleTaskListCommand, commands.ts) -- GFM task lists were supported
+          end to end the whole time (the Meeting Notes template ships them,
+          @milkdown/preset-gfm has a real extendListItemSchemaForTask node, and
+          the sanitize schema already allows the checkbox markup); the button
+          simply had nothing wired to it. Its pressed state reads
+          `selection.taskList`, NOT `listType === 'bullet_list'` -- every task
+          item satisfies both, so the latter would light up the bullet button
+          and this one together. */}
           <div className="flex items-center gap-0.5">
             <ToolbarIconButton
               label="Bulleted list"
@@ -635,7 +685,12 @@ function EditorToolbar({
                 <path d="M9 17h11" />
               </Icon>
             </ToolbarIconButton>
-            <ToolbarIconButton label="Checklist" active={false}>
+            <ToolbarIconButton
+              label="Checklist"
+              active={selection?.taskList ?? false}
+              onClick={() => editorRef.current?.toggleTaskList()}
+              disabled={isSourceMode}
+            >
               <svg
                 width="15"
                 height="15"
@@ -655,9 +710,22 @@ function EditorToolbar({
 
           <ToolbarDivider />
 
-          {/* Link / image / table / split-cell / page-break. Image and
-          split-cell have no backing command in this sub-project's scope and
-          stay unwired, same treatment as Underline/text-color above. */}
+          {/* Link / image / table / page-break.
+
+          "Insert image" is real as of the capability-gap pass -- a hidden
+          `<input type="file">` (below) opens the OS picker through Chromium
+          itself, needing no new IPC handler at all, and the resulting File
+          objects go through documentStore.saveDroppedImage, i.e. the exact
+          save path drag-and-drop already uses. Before this, dragging a file in
+          was the ONLY way to insert an image.
+
+          "SPLIT CELL" WAS REMOVED, deliberately. Splitting a cell only means
+          anything against merged cells, and GFM pipe tables cannot express a
+          merged cell at all -- there is no colspan/rowspan syntax -- so
+          @milkdown/preset-gfm ships no merge or split command (confirmed
+          against the installed 7.21.3: its command list has no such entry),
+          and any merged state one produced would be silently destroyed on the
+          next save. Same reasoning as Underline/text colour above. */}
           <div className="flex items-center gap-0.5">
             {/* Opens LinkComposer (a FindBar-style layout row, rendered by
             EditorScreen), exactly like "Add comment" below opens
@@ -682,13 +750,38 @@ function EditorToolbar({
                 <path d="M13 16.5l-1 1a3.5 3.5 0 0 1-5-5l1-1" />
               </Icon>
             </ToolbarIconButton>
-            <ToolbarIconButton label="Insert image">
+            <ToolbarIconButton
+              label="Insert image"
+              onClick={() => imageInputRef.current?.click()}
+              disabled={isSourceMode}
+            >
               <Icon strokeWidth={1.7}>
                 <rect x="3.5" y="5" width="17" height="14" rx="2" />
                 <circle cx="9" cy="10" r="1.4" />
                 <path d="M4 16.5 9 12a2 2 0 0 1 2.7 0l5.3 4.7" />
               </Icon>
             </ToolbarIconButton>
+            <input
+              ref={imageInputRef}
+              type="file"
+              accept="image/*"
+              multiple
+              className="hidden"
+              // aria-hidden + tabIndex -1: the real, labelled control is the
+              // button above; this node exists only to open the OS picker.
+              // Leaving it in the accessibility tree would announce an
+              // unlabelled file input next to it.
+              aria-hidden="true"
+              tabIndex={-1}
+              onChange={(e) => {
+                const files = Array.from(e.target.files ?? [])
+                if (files.length > 0) editorRef.current?.insertImages(files)
+                // Cleared so picking the SAME file twice in a row still fires
+                // a change event the second time -- a real, standard
+                // <input type="file"> gotcha, not defensive padding.
+                e.target.value = ''
+              }}
+            />
             <ToolbarIconButton
               label="Insert table"
               onClick={() => editorRef.current?.insertTable()}
@@ -699,14 +792,6 @@ function EditorToolbar({
                 <path d="M3.5 10.3h17" />
                 <path d="M3.5 15.6h17" />
                 <path d="M10 5v14" />
-              </Icon>
-            </ToolbarIconButton>
-            <ToolbarIconButton label="Split cell">
-              <Icon strokeWidth={1.7}>
-                <rect x="3.5" y="4" width="7" height="5" rx="1" />
-                <rect x="13.5" y="15" width="7" height="5" rx="1" />
-                <path d="M7 9v3a2 2 0 0 0 2 2h1.5" />
-                <path d="M14.5 14h-1a2 2 0 0 1-2-2v0" />
               </Icon>
             </ToolbarIconButton>
             <ToolbarIconButton
