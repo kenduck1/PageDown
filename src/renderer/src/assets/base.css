@@ -17,6 +17,19 @@
   src: url('./fonts/inter-variable.woff2') format('woff2-variations');
 }
 
+/* Cross-machine determinism fix (audit finding A2) -- see --font-mono's own
+   comment below in @theme static for the full writeup. Vendored the same
+   way as the two faces above: Google's variable-font build via
+   @fontsource-variable/source-code-pro@5.3.0 (SIL OFL 1.1,
+   ./fonts/OFL-Source-Code-Pro.txt), latin subset, upright only. */
+@font-face {
+  font-family: 'Source Code Pro';
+  font-style: normal;
+  font-weight: 200 900;
+  font-display: block;
+  src: url('./fonts/source-code-pro-variable.woff2') format('woff2-variations');
+}
+
 @theme static {
   /* Colors -- docs/superpowers/specs/2026-07-28-token-foundation-app-shell-design.md */
   --color-chrome-dark: #ececee;
@@ -42,7 +55,39 @@
   /* Font families */
   --font-sans: -apple-system, 'Segoe UI', system-ui, sans-serif;
   --font-serif: 'Source Serif 4', serif;
-  --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  /* Cross-machine determinism fix (audit finding A2), pinned the same way
+     font-serif/font-doc-sans already are. Used to be `ui-monospace,
+     SFMono-Regular, Menlo, Consolas, monospace` -- an unbundled SYSTEM
+     stack (Menlo on macOS, Consolas on Windows, whatever fontconfig picks
+     on Linux), so every fenced code block's text metrics, and therefore
+     page counts around code blocks, varied by host machine. Same class of
+     bug as Mermaid's label font (see MERMAID_LABEL_FONT_FAMILY in
+     src/diagrams/render-mermaid.ts and commit be38f55), fixed the same
+     way: point the token at a real, vendored, OFL-licensed face instead of
+     a name the host happens to resolve. Source Code Pro over JetBrains
+     Mono (measured: 22,044 bytes vs. 40,404 bytes on disk for each
+     candidate's single latin-subset variable file) and over KaTeX's
+     already-bundled KaTeX_Typewriter-Regular (13,568 bytes, but
+     disqualified: single weight, roman only, while
+     document-typography.css's highlight.js theme sets real `font-weight:
+     bold`/`font-style: italic` on code tokens -- a variable weight axis
+     gives real bold; italic falls back to Chromium's own synthetic-oblique
+     transform, which is deterministic across machines since it's computed
+     by the (pinned-via-Electron) browser itself, never by a host font).
+     `resources/pagination-render/index.ts` holds the matching sandboxed-
+     context copy of this exact value -- document-typography.test.ts
+     cross-checks the two files declare byte-for-byte identical values for
+     every custom property this stylesheet references, specifically so a
+     one-sided edit here can't trade a cross-machine divergence for a
+     same-machine editor-vs-paginator one (which would break Gate 10's
+     0.000px parity). The plain `monospace` generic-family fallback (rather
+     than restating the old system names) matches font-serif/font-doc-sans's
+     own "pinned face, generic keyword, nothing else" pattern -- it's inert
+     in practice, since document-typography.css's `pre`/`code` rules are the
+     only consumers and Chunker.loadFonts() (see the sandboxed context's own
+     comment) awaits the real face before anything is measured whenever a
+     document actually has code. */
+  --font-mono: 'Source Code Pro', monospace;
   /* This is deliberately a separate token from font-sans above, which is the
      app chrome's own unbundled system stack and cannot be reused for
      document text without breaking cross-machine determinism and
