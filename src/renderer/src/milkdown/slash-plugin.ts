@@ -80,6 +80,32 @@ export interface SlashPluginState {
   decorations: DecorationSet
 }
 
+// Fix round 1, IMPORTANT I3: widened from `(query: string) => number` to also
+// receive the live EditorState. The catalogue's own "which items are
+// currently offered" question (slash-items.ts's isEnabled) is NOT a pure
+// function of the query string alone -- it also depends on document
+// structure (is the target block empty once the query is removed; is the
+// cursor inside a table cell). Task 5's real `countMatching` is expected to
+// be `(query, state) => filterSlashItems(SLASH_ITEMS, query).filter((item) =>
+// item.isEnabled(ctx, state)).length` (ctx captured by closure at
+// construction) -- and BOTH call sites below already have the relevant
+// EditorState in scope (`newState`), so this is a threading change, not new
+// machinery. Before this fix, `countMatching` only ever saw the query, so
+// there was no way for it to apply isEnabled filtering AT ALL -- it was
+// structurally forced to report the LARGER, query-only catalogue size
+// (filterSlashItems alone), while the palette itself (built with access to
+// both ctx and state) would only ever RENDER the smaller, isEnabled-filtered
+// subset. This plugin's own activeIndex wraps against the larger, wrong
+// number it was fed, so arrow-key navigation could walk past the end of the
+// shorter, actually-rendered list -- exactly the "13 counted vs 11
+// rendered, ArrowDown 11 times highlights nothing" desync a code review
+// caught, in this feature's own mid-paragraph safety-gate scenario. This
+// file still takes no direct dependency on the item catalogue or on Ctx
+// (see this file's header) -- `state` is exactly what tryOpen/advanceSession
+// already had in hand for their own use, just also handed to the injected
+// callback now.
+export type CountMatching = (query: string, state: EditorState) => number
+
 export const slashPluginKey = new PluginKey<SlashPluginState>('pagedownSlash')
 
 const EMPTY_STATE: SlashPluginState = { session: null, decorations: DecorationSet.empty }
@@ -172,7 +198,7 @@ function insertedSingleSlash(tr: Transaction): boolean {
 function tryOpen(
   newState: EditorState,
   prev: SlashPluginState,
-  countMatching: (query: string) => number
+  countMatching: CountMatching
 ): SlashPluginState {
   const { selection, schema, doc } = newState
   if (!(selection instanceof TextSelection) || !selection.empty) return prev
@@ -209,8 +235,10 @@ function tryOpen(
   // scan can only have matched the "/" this transaction JUST inserted as the
   // very start of its run, since nothing follows it yet), but itemCount is
   // still computed from trigger.query rather than hardcoded '' so this stays
-  // correct even if that invariant ever changes.
-  const itemCount = countMatching(trigger.query)
+  // correct even if that invariant ever changes. `newState` is passed
+  // through so an isEnabled-aware countMatching sees the SAME document a
+  // real choice would run against (see CountMatching's own doc comment).
+  const itemCount = countMatching(trigger.query, newState)
   if (itemCount <= 0) return prev
 
   const anchorPos = $from.start() + trigger.slashOffset
@@ -260,7 +288,7 @@ function advanceSession(
   session: SlashSession,
   tr: Transaction,
   newState: EditorState,
-  countMatching: (query: string) => number
+  countMatching: CountMatching
 ): SlashPluginState {
   const anchorPos = tr.mapping.map(session.anchorPos)
   const prevEnd = tr.mapping.map(session.queryEnd)
@@ -291,7 +319,11 @@ function advanceSession(
   // that design; see this file's header). itemCount <= 0 closes outright,
   // which is this file's entire implementation of "close on empty filtered
   // list": synchronous, and structurally impossible to forget to call.
-  const itemCount = countMatching(query)
+  // `newState` (not the pre-transaction state) is passed through, matching
+  // tryOpen's own call -- an isEnabled-aware countMatching must see the
+  // document as it stands AFTER this transaction, the same document the
+  // palette itself is about to render against.
+  const itemCount = countMatching(query, newState)
   if (itemCount <= 0) return EMPTY_STATE
 
   return withSession(doc, {
@@ -315,22 +347,26 @@ function advanceSession(
 // per-mount callback -- same reasoning as createFindPlugin/
 // createSelectionPlugin.
 //
-// `countMatching(query)` is supplied by the caller (Task 5's useSlashMenu,
-// which owns the item catalogue and slash-filter.ts's filterSlashItems) and
-// is expected to be `(query) => filterSlashItems(SLASH_ITEMS, query).length`
-// or equivalent -- a pure, cheap function of the query string alone. This
-// file still takes no dependency on the catalogue or on slash-filter.ts
-// itself (see this file's header for why); dependency injection is the
-// seam that keeps that true while still letting itemCount be computed
-// synchronously, in the SAME apply that changes the query, rather than
-// reported in later via a separate meta transaction (fix round 1's removed
-// setSlashItemCount) -- which review found two real costs for: a stale-
-// count window between the query changing and the next external report,
-// and silent failure (arrows permanently inert, the empty-list close never
-// firing) if a future caller simply forgot to call the reporter.
+// `countMatching(query, state)` is supplied by the caller (Task 5's
+// useSlashMenu, which owns the item catalogue, slash-filter.ts's
+// filterSlashItems, AND the live Ctx isEnabled needs) and is expected to be
+// `(query, state) => filterSlashItems(SLASH_ITEMS, query).filter((item) =>
+// item.isEnabled(ctx, state)).length` or equivalent -- see CountMatching's
+// own doc comment above for why `state` was added in fix round 1 (an
+// isEnabled-aware count is NOT a pure function of the query string alone).
+// This file still takes no dependency on the catalogue or on
+// slash-filter.ts/Ctx itself (see this file's header for why); dependency
+// injection is the seam that keeps that true while still letting itemCount
+// be computed synchronously, in the SAME apply that changes the query,
+// rather than reported in later via a separate meta transaction (fix round
+// 1's removed setSlashItemCount) -- which review found two real costs for:
+// a stale-count window between the query changing and the next external
+// report, and silent failure (arrows permanently inert, the empty-list
+// close never firing) if a future caller simply forgot to call the
+// reporter.
 export function createSlashPlugin(
   onStateChanged: (session: SlashSession | null) => void,
-  countMatching: (query: string) => number
+  countMatching: CountMatching
 ): Plugin {
   return new Plugin<SlashPluginState>({
     key: slashPluginKey,

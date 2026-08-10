@@ -54,6 +54,21 @@ function makeItems(overrides: Partial<Record<string, Partial<SlashItem>>> = {}):
   return base.map((item) => ({ ...item, ...overrides[item.id] }))
 }
 
+// A single-group run of `n` items, for tests that care about COUNT (I1's
+// re-measurement, I2's scroll-into-view) rather than grouping -- makeItems'
+// own fixed three-item, two-group fixture is deliberately awkward to resize.
+function makeManyItems(n: number): SlashItem[] {
+  return Array.from({ length: n }, (_, i) => ({
+    id: `item-${i}`,
+    group: 'Text',
+    label: `Item ${i}`,
+    description: `Description ${i}`,
+    keywords: [],
+    run: vi.fn(),
+    isEnabled: () => true
+  }))
+}
+
 interface RenderOptions {
   items?: SlashItem[]
   activeIndex?: number
@@ -63,25 +78,31 @@ interface RenderOptions {
   onHover?: (index: number) => void
 }
 
+function props(options: RenderOptions): React.ComponentProps<typeof SlashMenu> {
+  return {
+    items: options.items ?? makeItems(),
+    activeIndex: options.activeIndex ?? 0,
+    anchor: options.anchor === undefined ? ANCHOR : options.anchor,
+    safe: options.safe === undefined ? SAFE : options.safe,
+    onChoose: options.onChoose ?? vi.fn(),
+    onHover: options.onHover ?? vi.fn()
+  }
+}
+
 function renderMenu(options: RenderOptions = {}): {
   items: SlashItem[]
   onChoose: (item: SlashItem) => void
   onHover: (index: number) => void
+  rerender: (next: RenderOptions) => void
 } {
-  const items = options.items ?? makeItems()
-  const onChoose = options.onChoose ?? vi.fn()
-  const onHover = options.onHover ?? vi.fn()
-  render(
-    <SlashMenu
-      items={items}
-      activeIndex={options.activeIndex ?? 0}
-      anchor={options.anchor === undefined ? ANCHOR : options.anchor}
-      safe={options.safe === undefined ? SAFE : options.safe}
-      onChoose={onChoose}
-      onHover={onHover}
-    />
-  )
-  return { items, onChoose, onHover }
+  const p = props(options)
+  const view = render(<SlashMenu {...p} />)
+  return {
+    items: p.items,
+    onChoose: p.onChoose,
+    onHover: p.onHover,
+    rerender: (next) => view.rerender(<SlashMenu {...props(next)} />)
+  }
 }
 
 afterEach(() => {
@@ -198,5 +219,102 @@ describe('SlashMenu interaction', () => {
     const event = new MouseEvent('mousedown', { bubbles: true, cancelable: true })
     listbox.dispatchEvent(event)
     expect(event.defaultPrevented).toBe(true)
+  })
+})
+
+// === IMPORTANT I1 regression, fix round 1 ===
+// measureSelf used to be `useCallback(fn, [])` -- copied from
+// SelectionBubble.tsx, whose OWN comment justifies that with "the button
+// set is fixed". This palette's rendered list shrinks on every keystroke,
+// so a `[]` dependency measured ONCE, on mount, and never again: a rerender
+// down to a shorter list re-rendered the DOM but kept the STALE, larger
+// size, so computeFloatingPosition kept placing the box as if it were still
+// that tall. jsdom performs no real layout, so this needs a dynamic
+// getBoundingClientRect stub -- one whose returned height reflects
+// whatever is ACTUALLY in the DOM at the moment it's called, mirroring the
+// coordinator's own probe technique (40px per rendered option).
+describe('SlashMenu re-measurement (fix round 1, IMPORTANT I1)', () => {
+  it('re-measures after the rendered item list shrinks, instead of keeping the mount-time size', () => {
+    const rectSpy = vi
+      .spyOn(HTMLElement.prototype, 'getBoundingClientRect')
+      .mockImplementation(function (this: HTMLElement): DOMRect {
+        const optionCount = this.querySelectorAll('[role="option"]').length
+        const height = optionCount * 40
+        return {
+          width: 200,
+          height,
+          top: 0,
+          left: 0,
+          right: 200,
+          bottom: height,
+          x: 0,
+          y: 0,
+          toJSON: () => ({})
+        } as DOMRect
+      })
+
+    // ANCHOR sits close to SAFE's own top edge, so whether the palette fits
+    // ABOVE it depends entirely on how tall the palette CURRENTLY measures
+    // -- chosen so a stale vs. a correctly re-measured size produce two
+    // DIFFERENT, directly observable `top` pixel values (not merely the
+    // same placement nudged by a few px).
+    const anchor: Rect = { left: 300, top: 100, right: 308, bottom: 118 }
+    const safe: Rect = { left: 0, top: 0, right: 600, bottom: 600 }
+
+    const { rerender } = renderMenu({ items: makeManyItems(5), anchor, safe })
+    const listbox = screen.getByRole('listbox')
+    // 5 items * 40px = 200px tall -- doesn't fit above a 100px-from-top
+    // anchor (above = 100 - 8 - 200 = -108, well under safe.top + 8), so it
+    // renders BELOW: top = anchor.bottom + gap = 118 + 8 = 126.
+    expect(listbox.style.top).toBe('126px')
+
+    rerender({ items: makeManyItems(1), anchor, safe })
+    // A genuinely re-measured 1-item (40px) box DOES fit above now
+    // (above = 100 - 8 - 40 = 52 >= 8), so a correct re-measurement flips
+    // placement to 'above' at top: 52px. The stale-measurement bug this
+    // test pins would leave `top` at the OLD 126px, computed against a
+    // 200px height that no longer describes anything on screen.
+    expect(listbox.style.top).toBe('52px')
+
+    rectSpy.mockRestore()
+  })
+})
+
+// === IMPORTANT I2 regression, fix round 1 ===
+// Probe (coordinator): activeIndex 12 of 13 -> scrollIntoView called 0
+// times. 13 items is roughly 600px of content inside a max-h-80 (320px)
+// scroll box, so ArrowDown navigation past roughly the 6th item highlighted
+// something the user could not see, with zero feedback anything had moved.
+// Element.prototype.scrollIntoView is already polyfilled as a real,
+// spy-able no-op by test-setup.ts (for jsdom's own long-standing gap), so
+// this is directly observable without any extra stubbing.
+describe('SlashMenu active-option scroll (fix round 1, IMPORTANT I2)', () => {
+  it('scrolls a deep active option into view -- 13 items, activeIndex 12', () => {
+    const scrollSpy = vi.spyOn(Element.prototype, 'scrollIntoView')
+    renderMenu({ items: makeManyItems(13), activeIndex: 12 })
+    expect(scrollSpy).toHaveBeenCalledWith({ block: 'nearest' })
+    scrollSpy.mockRestore()
+  })
+
+  it('scrolls again when activeIndex moves via rerender, not only once on mount', () => {
+    const scrollSpy = vi.spyOn(Element.prototype, 'scrollIntoView')
+    const items = makeManyItems(13)
+    const { rerender } = renderMenu({ items, activeIndex: 0 })
+    scrollSpy.mockClear()
+    rerender({ items, activeIndex: 12 })
+    expect(scrollSpy).toHaveBeenCalledWith({ block: 'nearest' })
+    scrollSpy.mockRestore()
+  })
+
+  it('does NOT scroll on a rerender where activeIndex genuinely did not change', () => {
+    // Control for the test above: proves the scroll is tied to activeIndex
+    // actually moving, not fired on every rerender regardless.
+    const scrollSpy = vi.spyOn(Element.prototype, 'scrollIntoView')
+    const items = makeManyItems(13)
+    const { rerender } = renderMenu({ items, activeIndex: 5 })
+    scrollSpy.mockClear()
+    rerender({ items, activeIndex: 5 })
+    expect(scrollSpy).not.toHaveBeenCalled()
+    scrollSpy.mockRestore()
   })
 })

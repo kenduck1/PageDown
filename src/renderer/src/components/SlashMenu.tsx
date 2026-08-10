@@ -49,6 +49,21 @@ export interface SlashMenuProps {
    * in this array at all -- there is no "disabled but visible" rendering
    * path here, matching the brief's own first (offer ONLY when safe)
    * option over its parenthetical alternative (show disabled).
+   *
+   * THE SINGLE SOURCE OF TRUTH FOR THIS CONTRACT is slash-plugin.ts's own
+   * `CountMatching` type, not this comment -- fix round 1, IMPORTANT I3.
+   * `activeIndex` below is an index into THIS array, but the live session's
+   * own `activeIndex`/wraparound is computed inside slash-plugin.ts against
+   * a SEPARATE count (`countMatching(query, state)`) that Task 5's
+   * controller must build with the IDENTICAL filter-then-isEnabled formula
+   * used to build `items` here. If the two ever compute different numbers
+   * (e.g. countMatching forgets the isEnabled half and only applies
+   * filterSlashItems), arrow-key navigation can walk `activeIndex` past the
+   * end of this shorter, rendered array -- `items[activeIndex]` undefined,
+   * nothing `aria-selected`, `aria-activedescendant` pointing at nothing,
+   * Enter picking nothing. This component cannot defend against that
+   * mismatch itself (it has no independent way to know the "correct" count);
+   * the two arrays must be built from the same formula at the call site.
    */
   items: SlashItem[]
   /** Index into `items` of the currently highlighted entry (arrow-key navigation lives in slash-plugin.ts, not here). */
@@ -92,15 +107,81 @@ function SlashMenu({
   // anchor and to clamp its width -- identical callback-ref technique to
   // SelectionBubble.tsx (measures during commit, before paint; not an
   // effect, so it doesn't trip react-hooks' set-state-in-effect rule).
+  //
+  // Fix round 1, IMPORTANT I1: `useCallback(..., [items])`, NOT `[]`.
+  // SelectionBubble's OWN identical pattern is safe with an empty dependency
+  // array only because its own comment states why: "the button set is
+  // fixed" -- SelectionBubble always renders the same toolbar, so it only
+  // ever needs measuring once, on mount. This palette's rendered content
+  // shrinks on every keystroke (the query narrows `items`), so a `[]`
+  // dependency measures ONCE, on first mount, and then never again --
+  // confirmed by probe: mount with 10 items records one measurement; a
+  // rerender down to 1 item re-renders the DOM (now ~40px tall) but the
+  // STALE 10-item height stays in `size`, so computeFloatingPosition keeps
+  // placing the box as if it were still that tall -- silently wrong
+  // above/below flips and a visibly floating gap beneath a now-short menu.
+  // Depending on `items` gives the callback ref a NEW identity whenever the
+  // rendered list changes, which makes React detach-then-reattach it (even
+  // though the underlying DOM node is the same element) -- and that
+  // reattach fires synchronously during the SAME commit that already
+  // re-rendered the shorter list, so the measurement it takes is never
+  // stale.
   const [size, setSize] = useState({ width: 0, height: 0 })
-  const measureSelf = useCallback((el: HTMLDivElement | null): void => {
-    if (!el) return
-    const rect = el.getBoundingClientRect()
-    setSize((prev) =>
-      Math.abs(prev.width - rect.width) < 0.5 && Math.abs(prev.height - rect.height) < 0.5
-        ? prev
-        : { width: rect.width, height: rect.height }
-    )
+  const measureSelf = useCallback(
+    (el: HTMLDivElement | null): void => {
+      if (!el) return
+      // `void items` -- a genuine reference react-hooks/exhaustive-deps'
+      // own dependency analysis recognizes, not a value this measurement
+      // logic itself needs. It exists ONLY so `items` in the dependency
+      // array below isn't flagged as "unnecessary": the value is never
+      // read, but its IDENTITY changing is the entire mechanism this fix
+      // relies on (see this function's own header comment).
+      void items
+      const rect = el.getBoundingClientRect()
+      setSize((prev) =>
+        Math.abs(prev.width - rect.width) < 0.5 && Math.abs(prev.height - rect.height) < 0.5
+          ? prev
+          : { width: rect.width, height: rect.height }
+      )
+    },
+    [items]
+  )
+
+  // Fix round 1, IMPORTANT I2: the active option must be scrolled into view
+  // inside THIS component's own scroll box (max-h-80 overflow-y-auto,
+  // introduced by this task) -- no other component owns that
+  // responsibility. Measured by probe: with activeIndex 12 of 13 (the full,
+  // unfiltered catalogue is roughly 600px of content across 4 sections in a
+  // 320px box), scrollIntoView was called 0 times -- ArrowDown navigation
+  // past roughly the 6th item highlighted something the user could not see,
+  // with no feedback anything had moved at all.
+  //
+  // A callback ref, matching measureSelf's own convention above over a
+  // useEffect -- but UNLIKE measureSelf, this one genuinely needs no
+  // dependency array at all, and is deliberately kept fully stable
+  // (`[]`, i.e. the same function every render) rather than mirroring
+  // measureSelf's `[items]` trick. measureSelf needs that trick because it
+  // is attached UNCONDITIONALLY to the same top-level container on every
+  // render -- nothing about a stable ref target ever tells React to call it
+  // again on its own. This ref is different: it is only ever assigned to
+  // the CURRENTLY active option (`active ? activeOptionRef : undefined`
+  // below), so which DOM node (if any) actually holds this ref changes
+  // every time `active` moves to a different index -- and REACT'S OWN ref
+  // reconciliation (comparing the ASSIGNED ref value per element across
+  // renders, entirely independent of whether the function itself is
+  // memo-stable) is what calls it on the newly-active node. The same holds
+  // when the ITEM at an unchanged index changes out from under it as the
+  // query filters the list: each option's own `key={item.id}` (below) forces
+  // React to unmount the old node and mount a new one, and a freshly
+  // mounted node always receives whatever ref is currently assigned to it.
+  // Confirmed empirically, not just reasoned: reverting this to `[activeIndex]`
+  // changes nothing observable -- every test below still passes -- which is
+  // the actual evidence this dependency was never load-bearing here.
+  // `block: 'nearest'` scrolls the minimum distance needed, matching
+  // ordinary list/menu keyboard-navigation convention -- never re-centers
+  // or snaps to an edge.
+  const activeOptionRef = useCallback((el: HTMLDivElement | null): void => {
+    el?.scrollIntoView({ block: 'nearest' })
   }, [])
 
   const visible = items.length > 0 && anchor != null && safe != null
@@ -169,6 +250,7 @@ function SlashMenu({
             return (
               <div
                 key={item.id}
+                ref={active ? activeOptionRef : undefined}
                 id={optionDomId(item.id)}
                 role="option"
                 aria-selected={active}
