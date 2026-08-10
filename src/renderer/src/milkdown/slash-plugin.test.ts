@@ -12,8 +12,12 @@ import {
   openSlashSessionAt,
   runSlashItemIn,
   slashPluginKey,
+  type CountMatching,
   type SlashSession
 } from './slash-plugin'
+import { SLASH_ITEMS } from './slash-items'
+import { filterSlashItems } from '../lib/slash-filter'
+import { EDITOR_SCHEMA_PLUGINS } from './plugins'
 
 // !!! SPIKE RESULT, load-bearing for how this file is written !!!
 // CLAUDE.md documents that a real DOM keydown does NOT reach
@@ -55,7 +59,7 @@ const PLENTY = 8
 async function viewFor(
   markdown: string,
   onStateChanged: (session: SlashSession | null) => void = noop,
-  countMatching: (query: string) => number = () => PLENTY
+  countMatching: CountMatching = () => PLENTY
 ): Promise<{ view: EditorView; editor: Awaited<ReturnType<typeof createTestEditor>> }> {
   const editor = await createTestEditor(markdown, [
     $prose(() => createSlashPlugin(onStateChanged, countMatching)),
@@ -473,6 +477,84 @@ describe('slash-plugin: itemCount is computed synchronously via the injected cou
     openSlashSessionAt(view, 1)
     view.dispatch(view.state.tr.insertText('z', view.state.selection.from))
     expect(session(view)).toBeNull()
+  })
+})
+
+// === IMPORTANT I3 regression, fix round 1 ===
+// countMatching used to be `(query: string) => number` -- a pure function of
+// the query alone, with no way to apply slash-items.ts's own isEnabled
+// (which needs BOTH a live Ctx and the current EditorState). Task 5's real
+// wiring is expected to be exactly `(query, state) =>
+// filterSlashItems(SLASH_ITEMS, query).filter((item) =>
+// item.isEnabled(ctx, state)).length` -- built here for real, against the
+// REAL catalogue, rather than a stand-in closure, because a stand-in could
+// not have caught the actual desync: in the safety gate's own mid-paragraph
+// scenario, math-block and mermaid-diagram are both correctly disabled by
+// isEnabled but were STILL counted by the old query-only countMatching,
+// so session.itemCount (13) outran what the palette could actually render
+// (11) -- ArrowDown 11 times landed on `items[11]`, undefined, with nothing
+// aria-selected and Enter picking nothing.
+describe('slash-plugin: itemCount agrees with the real, isEnabled-aware catalogue (fix round 1, IMPORTANT I3)', () => {
+  it('mid-paragraph destructive scenario: itemCount matches filterSlashItems+isEnabled (11), not the query-only catalogue size (13)', async () => {
+    const editor = await createTestEditor('Important prose here and more text', [
+      $prose((ctx) => {
+        const realCountMatching: CountMatching = (query, state) =>
+          filterSlashItems(SLASH_ITEMS, query).filter((item) => item.isEnabled(ctx, state)).length
+        return createSlashPlugin(noop, realCountMatching)
+      }),
+      ...EDITOR_SCHEMA_PLUGINS.flat(),
+      ...EDITOR_COMMAND_PLUGINS
+    ])
+    const view = editor.action((ctx) => ctx.get(editorViewCtx)) as EditorView
+
+    // Exactly the reviewer-measured HARD REQUIREMENT scenario: "/" typed
+    // mid-paragraph, right after the space before "and" -- a session
+    // legitimately opens (findSlashTrigger's own "preceded by whitespace"
+    // rule) with an empty query.
+    openSlashSessionAt(view, posOf(view, 'and'))
+
+    // Independently computed expectation, not trusted from the plugin's own
+    // report -- the query-only catalogue size (all 13 items, unfiltered by
+    // isEnabled) versus the real, isEnabled-aware count a palette built the
+    // way Task 5 is expected to build it would actually render.
+    expect(filterSlashItems(SLASH_ITEMS, '').length).toBe(13)
+    const reallyEnabled = editor.action(
+      (ctx) =>
+        filterSlashItems(SLASH_ITEMS, '').filter((item) => item.isEnabled(ctx, view.state)).length
+    )
+    expect(reallyEnabled).toBe(11) // math-block + mermaid-diagram both disabled here
+
+    // The plugin's own itemCount must agree with the real, rendered count --
+    // not the larger, query-only number the pre-fix code would have reported.
+    expect(session(view)?.itemCount).toBe(11)
+  })
+
+  it('ArrowDown never lands past the last REAL item in that scenario -- the desync this fix closes', async () => {
+    // Direct behavioral proof, not just a number: cycling ArrowDown exactly
+    // itemCount times must always land back on a valid index (0, by
+    // wraparound), never an out-of-range index a stale, too-large itemCount
+    // would have permitted.
+    const editor = await createTestEditor('Important prose here and more text', [
+      $prose((ctx) => {
+        const realCountMatching: CountMatching = (query, state) =>
+          filterSlashItems(SLASH_ITEMS, query).filter((item) => item.isEnabled(ctx, state)).length
+        return createSlashPlugin(noop, realCountMatching)
+      }),
+      ...EDITOR_SCHEMA_PLUGINS.flat(),
+      ...EDITOR_COMMAND_PLUGINS
+    ])
+    const view = editor.action((ctx) => ctx.get(editorViewCtx)) as EditorView
+    openSlashSessionAt(view, posOf(view, 'and'))
+    const itemCount = session(view)?.itemCount
+    expect(itemCount).toBe(11)
+
+    for (let i = 0; i < (itemCount as number); i++) {
+      fireEvent.keyDown(view.dom, { key: 'ArrowDown' })
+    }
+    // Wrapped all the way around exactly once -- back to 0, a real,
+    // in-range item, not 11 (which would be `items[11]`, undefined, per the
+    // desync this fix closes).
+    expect(session(view)?.activeIndex).toBe(0)
   })
 })
 
