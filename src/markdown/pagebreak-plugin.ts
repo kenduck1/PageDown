@@ -5,6 +5,30 @@ import type { Processor } from 'unified'
 
 export interface Pagebreak extends Node {
   type: 'pagebreak'
+  // The literal source text this pagebreak was matched FROM -- one of the
+  // canonical `<!-- pagebreak -->` marker, LaTeX/Pandoc's `\newpage` or
+  // `\pagebreak`, or the `page-break-after` div. Recorded so serializing
+  // back to Markdown can reproduce what the author actually wrote instead of
+  // rewriting it to the canonical marker.
+  //
+  // This exists to close a real, silent, irreversible prose-rewrite that
+  // CLAUDE.md previously recorded as an ACCEPTED false positive: a
+  // Pandoc/LaTeX tutorial whose prose is a bare `\newpage` paragraph --
+  // documenting the command rather than invoking it -- had that paragraph
+  // rewritten to `<!-- pagebreak -->` on the next save. Unlike the rest of
+  // this app's serializer normalization (bullet char, emphasis char, fence
+  // style), that changes what the document SAYS, not how it is formatted,
+  // which is why it gets the opposite treatment: lossless by default, with
+  // no consent prompt at all. The 2026-08-09 design-doc gap audit's B2
+  // follow-up recommends exactly this, having measured that a prompt-based
+  // gate would fire on 94% of real-world Markdown and is "mostly a fidelity
+  // bug wearing a consent-gate costume."
+  //
+  // Optional rather than required because a pagebreak node can also be
+  // CREATED in the editor (the toolbar/slash "Page break" command), where
+  // there is no source text to preserve and the canonical marker is the
+  // right thing to emit.
+  raw?: string
 }
 
 declare module 'mdast' {
@@ -16,10 +40,12 @@ declare module 'mdast' {
 const PAGEBREAK_MARKER = '<!-- pagebreak -->'
 
 // Common alternate page-break conventions from other Markdown toolchains,
-// recognized on parse and normalized to the canonical PAGEBREAK_MARKER on
-// serialize (remarkPagebreakToMarkdown below already always emits
-// PAGEBREAK_MARKER regardless of which syntax matched here -- no change
-// needed there) -- per the master design doc's File Format section.
+// recognized on parse -- per the master design doc's File Format section.
+// They are NOT normalized to the canonical PAGEBREAK_MARKER on serialize any
+// more: `Pagebreak#raw` (above) records whichever literal matched, and
+// remarkPagebreakToMarkdown emits it back verbatim. See that field's own
+// comment for why normalizing was a prose rewrite rather than a formatting
+// one, and therefore the one thing here that had to become lossless.
 // Tolerant of quote style, internal whitespace, and an optional trailing
 // semicolon, but otherwise matches this exact, narrow convention -- not an
 // open-ended "any div mentioning page-break-after" matcher.
@@ -63,6 +89,17 @@ function isPagebreakLeaf(node: { type: string; value?: string }): boolean {
   return isMatchingHtml(node) || isMatchingTextCommand(node)
 }
 
+// The literal the author wrote, trimmed. Trimmed rather than verbatim
+// because both matchers already compare against `.trim()`, so the surrounding
+// whitespace is never part of what was matched -- and re-emitting a leading
+// newline inside a flow node's own serialized text would corrupt block
+// spacing. Every matched shape is a single line by construction (the div
+// regex is anchored and admits no newline), so nothing multi-line is lost.
+function pagebreakRawOf(node: { value?: string }): string | undefined {
+  const value = typeof node.value === 'string' ? node.value.trim() : ''
+  return value.length > 0 ? value : undefined
+}
+
 export function remarkPagebreak() {
   return (tree: Root): void => {
     visit(tree, (node, index, parent: Parent | undefined) => {
@@ -74,7 +111,11 @@ export function remarkPagebreak() {
       // plain text they can only ever be paragraph content, never a direct,
       // unwrapped child of root/blockquote/footnoteDefinition.
       if (isMatchingHtml(node) && BLOCK_CONTAINER_TYPES.has(parent.type)) {
-        const pagebreak: Pagebreak = { type: 'pagebreak', position: node.position }
+        const pagebreak: Pagebreak = {
+          type: 'pagebreak',
+          position: node.position,
+          raw: pagebreakRawOf(node)
+        }
         parent.children[index] = pagebreak
         return
       }
@@ -98,7 +139,8 @@ export function remarkPagebreak() {
       ) {
         const pagebreak: Pagebreak = {
           type: 'pagebreak',
-          position: (node as Parent).children[0].position
+          position: (node as Parent).children[0].position,
+          raw: pagebreakRawOf((node as Parent).children[0] as Html | Text)
         }
         parent.children[index] = pagebreak
       }
@@ -127,8 +169,20 @@ export function remarkPagebreakToMarkdown(this: Processor): void {
   const extensions = data.toMarkdownExtensions ?? (data.toMarkdownExtensions = [])
   extensions.push({
     handlers: {
-      pagebreak() {
-        return '<!-- pagebreak -->'
+      // Emit the author's own literal when we have one, falling back to the
+      // canonical marker only for a node that never came from source text
+      // (created by the toolbar/slash "Page break" command, or round-tripped
+      // through a ProseMirror node whose `raw` attr is still its '' default).
+      // See the `raw` field's own comment on Pagebreak for why this is a
+      // deliberate inversion of the previous normalize-on-save behaviour and
+      // NOT a regression. The `raw` values reachable here are exactly the
+      // four this file's own matchers accept, so nothing arbitrary from
+      // document content can be smuggled into the output through this path:
+      // an `html`-typed source node's value had to equal the canonical
+      // marker or satisfy the anchored PAGE_BREAK_DIV_RE, and a `text`-typed
+      // one had to be exactly `\newpage` or `\pagebreak`.
+      pagebreak(node: Pagebreak) {
+        return node.raw ?? PAGEBREAK_MARKER
       }
     }
   })

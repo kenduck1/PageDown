@@ -7,11 +7,12 @@ import {
   editorViewCtx
 } from '@milkdown/core'
 import { listener, listenerCtx } from '@milkdown/plugin-listener'
+import { remarkGFMPlugin } from '@milkdown/preset-gfm'
 import { $prose, getMarkdown } from '@milkdown/utils'
 import { Plugin } from '@milkdown/prose/state'
 import { EDITOR_SCHEMA_PLUGINS } from './plugins'
 import { EDITOR_COMMAND_PLUGINS } from './commands'
-import { PINNED_STRINGIFY_OPTIONS } from './stringify-options'
+import { PINNED_STRINGIFY_OPTIONS, PINNED_GFM_OPTIONS } from './stringify-options'
 import { buildEditorCommands, chooseSlashItem, type EditorCommands } from './editor-commands'
 import { createFindPlugin } from './find-plugin'
 import { createDropImagePlugin, insertDroppedImages } from './drop-image'
@@ -386,6 +387,10 @@ const MilkdownEditor = forwardRef<MilkdownEditorHandle, MilkdownEditorProps>(
           ctx.set(rootCtx, root)
           ctx.set(defaultValueCtx, content)
           ctx.set(remarkStringifyOptionsCtx, PINNED_STRINGIFY_OPTIONS)
+          // tableCellPadding is a remark-gfm PLUGIN option, not a
+          // remark-stringify one -- see stringify-options.ts for why it
+          // cannot live in the object above.
+          ctx.set(remarkGFMPlugin.options.key, PINNED_GFM_OPTIONS)
           ctx.get(listenerCtx).markdownUpdated((_ctx, markdown) => {
             // Clearing editedSinceMountRef here (not just inside flush(),
             // below) is load-bearing, not cosmetic -- verified via a real

@@ -212,26 +212,54 @@ describe('alternate page-break syntax: page-break-after div', () => {
   })
 })
 
-describe('alternate syntaxes normalize to the canonical marker on serialize', () => {
-  it('remarkPagebreakToMarkdown emits the canonical marker regardless of which syntax matched', () => {
-    for (const source of [
-      'Paragraph one.\n\n\\newpage\n\nParagraph two.\n',
-      'Paragraph one.\n\n\\pagebreak\n\nParagraph two.\n',
+// DELIBERATE INVERSION of what this block used to assert. It previously
+// pinned "an alternate syntax NORMALIZES to the canonical marker on
+// serialize", and the surrounding CLAUDE.md note recorded the resulting
+// prose rewrite (a Pandoc/LaTeX tutorial whose bare `\newpage` paragraph
+// documents the command rather than invoking it) as an accepted false
+// positive. It is no longer accepted: `Pagebreak#raw` records the matched
+// literal and the serializer emits it back, so an alternate marker survives
+// a save as itself. Normalization was the only change this app made to a
+// document that altered what it SAYS rather than how it is formatted --
+// everything else the serializer rewrites (bullet char, emphasis char, fence
+// style) is pure presentation. The 2026-08-09 gap audit's B2 follow-up
+// recommends exactly this inversion, and names this test file and
+// round-trip.test.ts:56-62 as the assertions that should flip. This is the
+// correct signal, not a regression.
+describe('alternate syntaxes are PRESERVED verbatim on serialize, not normalized', () => {
+  it.each([
+    ['\\newpage', 'Paragraph one.\n\n\\newpage\n\nParagraph two.\n'],
+    ['\\pagebreak', 'Paragraph one.\n\n\\pagebreak\n\nParagraph two.\n'],
+    [
+      'the page-break-after div',
       'Paragraph one.\n\n<div style="page-break-after: always;"></div>\n\nParagraph two.\n'
-    ]) {
-      const processor = unified()
-        .use(remarkParse)
-        .use(remarkPagebreak)
-        .use(remarkPagebreakToMarkdown)
-        .use(remarkStringify)
-      const tree = processor.parse(source)
-      const transformed = processor.runSync(tree)
-      const output = processor.stringify(transformed)
-      expect(output).toContain('<!-- pagebreak -->')
-      expect(output).not.toContain('\\newpage')
-      expect(output).not.toContain('\\pagebreak')
-      expect(output).not.toContain('page-break-after')
+    ],
+    ['the canonical marker', 'Paragraph one.\n\n<!-- pagebreak -->\n\nParagraph two.\n']
+  ])('%s round-trips byte-identically', (_name, source) => {
+    const processor = unified()
+      .use(remarkParse)
+      .use(remarkPagebreak)
+      .use(remarkPagebreakToMarkdown)
+      .use(remarkStringify)
+    const tree = processor.parse(source)
+    const transformed = processor.runSync(tree)
+    expect(countNodesOfType(transformed as Root, 'pagebreak')).toBe(1)
+    expect(processor.stringify(transformed)).toBe(source)
+  })
+
+  // The fallback half of `node.raw ?? PAGEBREAK_MARKER`: a pagebreak node
+  // that never came from source text at all (what the toolbar/slash "Page
+  // break" command builds, and what a ProseMirror pagebreak node with its
+  // default empty `raw` attr serializes to) still emits the canonical
+  // marker. Without this the preservation change would silently turn an
+  // INSERTED page break into an empty node.
+  it('emits the canonical marker for a pagebreak node carrying no raw literal', () => {
+    const processor = unified().use(remarkParse).use(remarkPagebreakToMarkdown).use(remarkStringify)
+    const tree: Root = {
+      type: 'root',
+      children: [{ type: 'pagebreak' } as never]
     }
+    expect(processor.stringify(tree)).toBe('<!-- pagebreak -->\n')
   })
 })
 
