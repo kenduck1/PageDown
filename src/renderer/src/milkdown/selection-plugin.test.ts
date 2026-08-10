@@ -158,7 +158,10 @@ describe('sameSnapshot', () => {
     nodeSelection: false,
     marks: { bold: false, italic: false, inlineCode: false, link: false },
     headingLevel: null,
-    listType: null
+    listType: null,
+    linkHref: null,
+    taskList: false,
+    table: null
   }
 
   it('compares positions for a NON-empty selection -- a growing drag-select must re-anchor', () => {

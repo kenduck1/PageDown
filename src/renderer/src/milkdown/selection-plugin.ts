@@ -2,6 +2,7 @@ import { NodeSelection, Plugin, PluginKey, type EditorState } from '@milkdown/pr
 import type { MarkType } from '@milkdown/prose/model'
 import type { EditorView } from '@milkdown/prose/view'
 import { unionRect, type Rect } from '../lib/floating-position'
+import { findTableContext, type TableContext } from './table-context'
 
 // The selection-reporting half of the bubble menu: a stateless ProseMirror
 // plugin that tells React WHAT is selected and HOW it is currently formatted.
@@ -42,10 +43,32 @@ export interface SelectionSnapshot {
   /** A NodeSelection (image / pagebreak / frontmatter atom), not a text range. */
   nodeSelection: boolean
   marks: SelectionMarks
+  /**
+   * The `href` of the link mark under the selection, or null when there is
+   * none. Carried alongside `marks.link` (which only says whether one exists)
+   * because the link composer must PREFILL with the current URL: without it
+   * there is no way for a user to even see, let alone correct, the URL of a
+   * link they already have -- the composer opened blank every time.
+   */
+  linkHref: string | null
   /** 1-6 when the selection's block is a heading, else null. */
   headingLevel: number | null
   /** The nearest ancestor list, if any. */
   listType: ListTypeName | null
+  /**
+   * True when the selection sits in a GFM task list item (`- [ ]`/`- [x]`),
+   * i.e. a `list_item` whose `checked` attr is non-null. Distinct from
+   * `listType === 'bullet_list'`, which every task item ALSO satisfies -- the
+   * toolbar needs to tell the two apart to press the right button.
+   */
+  taskList: boolean
+  /**
+   * Where the selection sits inside a table, or null when it is not in one.
+   * This is what makes the selection bubble context-sensitive: the table
+   * controls only exist while this is non-null, so they cost nothing (and
+   * occupy nothing) for the overwhelming majority of documents.
+   */
+  table: TableContext | null
 }
 
 /**
@@ -89,6 +112,56 @@ export function findAncestorListType(state: EditorState): ListTypeName | null {
   return null
 }
 
+/**
+ * The `href` of the link mark covering the selection, or null.
+ *
+ * Two lookups rather than one, for the same reason `markActive` splits: with a
+ * caret, the link the user means is the one at the resolved position (stored
+ * marks first, since those are what the next typed character would carry);
+ * with a range, it is whichever link the range actually touches. The range
+ * scan widens a collapsed `to` by one so a caret sitting immediately before a
+ * linked character still finds it -- the exact widening
+ * `@milkdown/preset-commonmark`'s own `updateLinkCommand` uses, so "which link
+ * does the composer show" and "which link does Update rewrite" cannot disagree.
+ */
+export function readLinkHref(state: EditorState): string | null {
+  const linkType = state.schema.marks.link
+  if (!linkType) return null
+  const { from, to, empty, $from } = state.selection
+  if (empty) {
+    const mark = linkType.isInSet(state.storedMarks || $from.marks())
+    const href = mark?.attrs.href
+    return typeof href === 'string' ? href : null
+  }
+  let href: string | null = null
+  state.doc.nodesBetween(from, to, (node) => {
+    if (href !== null) return false
+    const mark = node.marks.find((candidate) => candidate.type === linkType)
+    if (!mark) return true
+    const value = mark.attrs.href
+    if (typeof value === 'string') href = value
+    return false
+  })
+  return href
+}
+
+/**
+ * True when the selection is inside a GFM task list item. Reads `checked` off
+ * the nearest ancestor `list_item`: `null` is an ordinary bullet, `false`/
+ * `true` are an unchecked/checked task (that is
+ * `extendListItemSchemaForTask`'s own convention -- its toMarkdown runner only
+ * emits `- [ ] `/`- [x] ` syntax for a non-null value).
+ */
+export function isTaskListItem(state: EditorState): boolean {
+  const { $from } = state.selection
+  for (let depth = $from.depth; depth > 0; depth--) {
+    const node = $from.node(depth)
+    if (node.type.name !== 'list_item') continue
+    return node.attrs.checked !== null && node.attrs.checked !== undefined
+  }
+  return false
+}
+
 export function readSelectionSnapshot(view: EditorView): SelectionSnapshot {
   const { state } = view
   const { selection } = state
@@ -105,11 +178,14 @@ export function readSelectionSnapshot(view: EditorView): SelectionSnapshot {
       inlineCode: markActive(state, state.schema.marks.inlineCode),
       link: markActive(state, state.schema.marks.link)
     },
+    linkHref: readLinkHref(state),
     headingLevel:
       parentBlock.type.name === 'heading' && typeof parentBlock.attrs.level === 'number'
         ? parentBlock.attrs.level
         : null,
-    listType: findAncestorListType(state)
+    listType: findAncestorListType(state),
+    taskList: isTaskListItem(state),
+    table: findTableContext(state)
   }
 }
 
@@ -136,6 +212,24 @@ export function sameSnapshot(a: SelectionSnapshot | null, b: SelectionSnapshot |
   if (a.nodeSelection !== b.nodeSelection) return false
   if (a.headingLevel !== b.headingLevel) return false
   if (a.listType !== b.listType) return false
+  if (a.taskList !== b.taskList) return false
+  if (a.linkHref !== b.linkHref) return false
+  // Every field of TableContext is compared, and every one of them is stable
+  // per keystroke (see TableContext's own doc comments), so this does not
+  // reintroduce the "React render per character" the collapsed-position
+  // exemption below exists to prevent -- while still re-reporting when the
+  // caret moves to a different column (the alignment buttons' pressed state
+  // depends on it) or into a different table.
+  if ((a.table === null) !== (b.table === null)) return false
+  if (a.table && b.table) {
+    if (
+      a.table.tablePos !== b.table.tablePos ||
+      a.table.column !== b.table.column ||
+      a.table.alignment !== b.table.alignment
+    ) {
+      return false
+    }
+  }
   if (
     a.marks.bold !== b.marks.bold ||
     a.marks.italic !== b.marks.italic ||
@@ -186,6 +280,42 @@ export function readSelectionRect(view: EditorView): Rect | null {
   } catch {
     return null
   }
+}
+
+/**
+ * The enclosing TABLE's own on-screen box, but ONLY for a collapsed selection
+ * inside a table -- null in every other case, including a ranged selection
+ * inside a table.
+ *
+ * This exists because the bubble now appears for a bare caret in a table (the
+ * table controls have to be reachable without first selecting something), and
+ * a caret anchor cannot be tracked there. `sameSnapshot` deliberately ignores
+ * positions while BOTH selections are collapsed -- that exemption is what
+ * keeps typing from costing a React render per character -- so nothing
+ * re-reports as the caret moves, and an anchor measured from `coordsAtPos`
+ * would freeze wherever the caret happened to be when the bubble appeared and
+ * then lie as the user Tab'd across the row. The table's own rect has the
+ * opposite property: it does not move while typing in a cell or tabbing
+ * between cells, so a stale measurement and a fresh one are the same
+ * measurement. Moving to a DIFFERENT table does change `table.tablePos`, which
+ * `sameSnapshot` does compare, so that case re-reports and re-measures.
+ *
+ * Returns null for a ranged selection so the caller falls back to
+ * `readSelectionRect`: with real selected text the bubble should sit by that
+ * text, and a ranged selection re-reports on every change anyway.
+ *
+ * Same jsdom hazard as readSelectionRect above: `getBoundingClientRect` is
+ * polyfilled to all-zeros there, so a jsdom test asserting a position proves
+ * nothing. Test the arithmetic; leave real positioning to a gate.
+ */
+export function readTableRect(view: EditorView): Rect | null {
+  if (!view.state.selection.empty) return null
+  const context = findTableContext(view.state)
+  if (!context) return null
+  const dom = view.nodeDOM(context.tablePos)
+  if (!(dom instanceof HTMLElement)) return null
+  const rect = dom.getBoundingClientRect()
+  return { left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom }
 }
 
 export const selectionPluginKey = new PluginKey('pagedownSelection')

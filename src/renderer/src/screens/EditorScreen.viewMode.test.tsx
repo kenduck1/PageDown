@@ -67,7 +67,19 @@ const { mockEditorHandle } = vi.hoisted(() => ({
     runSlashItem: vi.fn(),
     closeSlashMenu: vi.fn(),
     getSlashItems: vi.fn(() => []),
-    setActiveSlashIndex: vi.fn()
+    insertImages: vi.fn(),
+  removeLink: vi.fn(),
+  toggleTaskList: vi.fn(),
+  addRowBefore: vi.fn(),
+  addRowAfter: vi.fn(),
+  addColumnBefore: vi.fn(),
+  addColumnAfter: vi.fn(),
+  deleteRow: vi.fn(),
+  deleteColumn: vi.fn(),
+  deleteTable: vi.fn(),
+  setColumnAlignment: vi.fn(),
+  getTableRect: vi.fn(() => null),
+  setActiveSlashIndex: vi.fn()
   }
 }))
 

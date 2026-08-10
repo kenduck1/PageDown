@@ -24,7 +24,10 @@ const SNAPSHOT: SelectionSnapshot = {
   nodeSelection: false,
   marks: { bold: false, italic: false, inlineCode: false, link: false },
   headingLevel: null,
-  listType: null
+  listType: null,
+  linkHref: null,
+  taskList: false,
+  table: null
 }
 
 const ANCHOR: Rect = { left: 300, top: 300, right: 400, bottom: 318 }

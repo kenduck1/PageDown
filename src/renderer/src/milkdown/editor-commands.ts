@@ -11,23 +11,37 @@ import {
   wrapInBulletListCommand,
   wrapInOrderedListCommand,
   liftListItemCommand,
-  toggleLinkCommand
+  toggleLinkCommand,
+  updateLinkCommand
 } from '@milkdown/preset-commonmark'
-import { insertTableCommand } from '@milkdown/preset-gfm'
+import {
+  addColAfterCommand,
+  addColBeforeCommand,
+  addRowAfterCommand,
+  addRowBeforeCommand,
+  insertTableCommand
+} from '@milkdown/preset-gfm'
 import {
   undoCommand,
   redoCommand,
   insertPagebreakCommand,
   addCommentCommand,
-  resolveCommentCommand
+  resolveCommentCommand,
+  deleteTableRowCommand,
+  deleteTableColumnCommand,
+  deleteWholeTableCommand,
+  setColumnAlignmentCommand,
+  toggleTaskListCommand,
+  unlinkCommand
 } from './commands'
+import type { TableAlignment } from './table-context'
 import {
   applyFindState,
   replaceActiveMatchIn,
   replaceAllMatchesIn,
   type FindStateInput
 } from './find-plugin'
-import { findAncestorListType, readSelectionRect } from './selection-plugin'
+import { findAncestorListType, markActive, readSelectionRect, readTableRect } from './selection-plugin'
 import { slashPluginKey, closeSlashIn, runSlashItemIn, setActiveSlashIndexIn } from './slash-plugin'
 import { enabledSlashItems, type SlashItem } from './slash-items'
 import type { Rect } from '../lib/floating-position'
@@ -122,16 +136,66 @@ export interface EditorCommands {
   toggleBulletList: () => void
   // Same three-way treatment as toggleBulletList, for wrapInOrderedListCommand.
   toggleOrderedList: () => void
-  // toggleLinkCommand -- a toggleMark over the link mark's {href, title}
-  // attrs. Like bold/italic, applying this with an empty (collapsed)
-  // selection sets a *stored* mark that only takes visible effect on the
-  // next character typed, rather than rewriting any existing text -- the
-  // same toggleMark characteristic bold/italic have, not a special case.
+  // Applies a link, and -- as of the capability-gap pass -- CORRECTLY updates
+  // one that already exists.
+  //
+  // This used to be `toggleLinkCommand` unconditionally, which actively
+  // DESTROYED user content on the most obvious gesture there is: select an
+  // existing link, submit a corrected URL. `toggleLinkCommand` is a plain
+  // `toggleMark`, and prosemirror-commands' toggleMark defaults
+  // `removeWhenPresent` to true and branches on `rangeHasMark(..., markType)`
+  // ALONE -- the attrs it is handed are not consulted at all when deciding
+  // between add and remove (read directly from prosemirror-commands' source).
+  // So submitting a new href over already-linked text ran `tr.removeMark(...)`:
+  // the link was stripped and the typed URL thrown away, with no error and no
+  // indication. Submitting a second time re-added it, which is how the bug
+  // masqueraded as "you have to do it twice."
+  //
+  // @milkdown/preset-commonmark ships exactly the right command for the
+  // already-linked case, `updateLinkCommand`, and it was never imported
+  // anywhere in this project. It finds the existing mark's own full extent and
+  // rewrites its attrs in place, so the link survives and the URL changes.
+  // Branching on `markActive` (selection-plugin.ts's shared predicate, the
+  // same one that drives the bubble's pressed state) is what picks between the
+  // two -- so what the UI reports and what this does cannot disagree.
   insertLink: (href: string) => void
+  // Removes the link mark from the whole link under the selection. See
+  // unlinkCommand (commands.ts) for why toggleLinkCommand cannot serve as
+  // "unlink" (it splits a link in half on a partial selection, and does
+  // nothing visible at all from a bare caret).
+  removeLink: () => void
   // insertTableCommand, given `{ row: 2, col: 2 }` -- a minimal 2x2 table
   // (one header row + one body row, two columns; `row` counts the header
   // row, confirmed by reading @milkdown/preset-gfm's own createTable source).
   insertTable: () => void
+  // ---- Table structure editing (capability-gap pass) -------------------
+  // Until this pass, `insertTable` above was the ONLY one of @milkdown/
+  // preset-gfm's fifteen registered table commands reachable from any UI in
+  // this app: no toolbar item, no slash item, no bubble item, no keybinding.
+  // A user who inserted a 2x2 table could type in it and nothing else -- and
+  // this app ships Invoice and Report templates built on tables, where
+  // "I need one more line item" was a dead end.
+  //
+  // The four add-* methods are straight pass-throughs to the preset's own
+  // commands (which are correct from a plain caret, unlike its delete and
+  // align commands -- see commands.ts). The three delete methods and
+  // setColumnAlignment go through this project's own commands for the
+  // reasons documented there.
+  addRowBefore: () => void
+  addRowAfter: () => void
+  addColumnBefore: () => void
+  addColumnAfter: () => void
+  deleteRow: () => void
+  deleteColumn: () => void
+  deleteTable: () => void
+  setColumnAlignment: (alignment: TableAlignment) => void
+  // toggleTaskListCommand (commands.ts) -- backs the toolbar's Checklist
+  // button, which had no backing command at all until this pass despite GFM
+  // task lists being fully supported end to end (the Meeting Notes template
+  // already uses them, `@milkdown/preset-gfm` has a real
+  // extendListItemSchemaForTask node, and the sanitize schema already allows
+  // the checkbox markup).
+  toggleTaskList: () => void
   // insertPagebreakCommand (commands.ts) -- inserts this editor's own
   // existing pagebreak atom node (nodes/pagebreak.ts) at the current
   // selection, reusing the schema this editor already mounts rather than
@@ -202,6 +266,12 @@ export interface EditorCommands {
   // See readSelectionRect (selection-plugin.ts) for the zoom-transform
   // reasoning and the measured jsdom hazard before writing any test against it.
   getSelectionRect: () => Rect | null
+  // The enclosing TABLE's on-screen box, for a COLLAPSED selection inside a
+  // table only; null otherwise. The bubble anchors to this instead of the
+  // caret in that one case, because a caret anchor cannot be kept fresh there
+  // -- see readTableRect's own doc comment for the sameSnapshot interaction
+  // that makes a caret anchor go stale, and why a table rect does not.
+  getTableRect: () => Rect | null
   // addCommentCommand (commands.ts) -- applies a real comment mark over the
   // current selection. Returns the command's own boolean result (`editor.
   // action()` returns whatever the wrapped action returns, and callCommand's
@@ -396,13 +466,53 @@ export function buildEditorCommands(editor: Editor): EditorCommands {
       })
     },
     insertLink: (href) => {
-      editor.action(callCommand(toggleLinkCommand.key, { href }))
+      editor.action((ctx) => {
+        const view = ctx.get(editorViewCtx)
+        // markActive, not a hand-rolled rangeHasMark: the same predicate the
+        // bubble's own pressed state reads, so "the UI says this is a link"
+        // and "this takes the update branch" are the same question asked once.
+        // See EditorCommands.insertLink's own doc comment for the destructive
+        // toggleMark behaviour this branch exists to avoid.
+        const hasLink = markActive(view.state, view.state.schema.marks.link)
+        const key = hasLink ? updateLinkCommand.key : toggleLinkCommand.key
+        return callCommand(key, { href })(ctx)
+      })
+    },
+    removeLink: () => {
+      editor.action(callCommand(unlinkCommand.key))
     },
     insertTable: () => {
       // A minimal 2x2 table -- `row` includes the header row (see
       // insertTableCommand's own createTable helper source), so
       // `{ row: 2, col: 2 }` is one header row + one body row.
       editor.action(callCommand(insertTableCommand.key, { row: 2, col: 2 }))
+    },
+    addRowBefore: () => {
+      editor.action(callCommand(addRowBeforeCommand.key))
+    },
+    addRowAfter: () => {
+      editor.action(callCommand(addRowAfterCommand.key))
+    },
+    addColumnBefore: () => {
+      editor.action(callCommand(addColBeforeCommand.key))
+    },
+    addColumnAfter: () => {
+      editor.action(callCommand(addColAfterCommand.key))
+    },
+    deleteRow: () => {
+      editor.action(callCommand(deleteTableRowCommand.key))
+    },
+    deleteColumn: () => {
+      editor.action(callCommand(deleteTableColumnCommand.key))
+    },
+    deleteTable: () => {
+      editor.action(callCommand(deleteWholeTableCommand.key))
+    },
+    setColumnAlignment: (alignment) => {
+      editor.action(callCommand(setColumnAlignmentCommand.key, alignment))
+    },
+    toggleTaskList: () => {
+      editor.action(callCommand(toggleTaskListCommand.key))
     },
     insertPageBreak: () => {
       editor.action(callCommand(insertPagebreakCommand.key))
@@ -485,6 +595,13 @@ export function buildEditorCommands(editor: Editor): EditorCommands {
       let rect: Rect | null = null
       editor.action((ctx) => {
         rect = readSelectionRect(ctx.get(editorViewCtx))
+      })
+      return rect
+    },
+    getTableRect: () => {
+      let rect: Rect | null = null
+      editor.action((ctx) => {
+        rect = readTableRect(ctx.get(editorViewCtx))
       })
       return rect
     },
