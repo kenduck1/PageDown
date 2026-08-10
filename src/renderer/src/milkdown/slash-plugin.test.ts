@@ -11,7 +11,6 @@ import {
   createSlashPlugin,
   openSlashSessionAt,
   runSlashItemIn,
-  setSlashItemCount,
   slashPluginKey,
   type SlashSession
 } from './slash-plugin'
@@ -27,22 +26,39 @@ import {
 // preventDefault() -- but never stopPropagation(), also confirmed by spike --
 // exactly matching the design doc's claim. So every navigation-key test
 // below drives a REAL fireEvent.keyDown against view.dom, not a direct call
-// to plugin.props.handleKeyDown with a synthetic event.
+// to plugin.props.handleKeyDown with a synthetic event. Fix round 1 leaned on
+// this further still: it's also what makes the "no session -> a real Enter
+// really splits the paragraph" control (I2 below) possible at all -- a real,
+// measured finding (not assumed) that a bare, unmodified key like Enter DOES
+// reach the underlying keymap plugin under jsdom, unlike the modifier-chord
+// case (Mod-Z etc.) CLAUDE.md documents as NOT reaching prosemirror-keymap.
 
 const noop = (): void => {}
+
+// The default injected item count for tests that don't care about the exact
+// number, just that a session can open and stay open at all (itemCount <= 0
+// refuses to open / closes outright -- see createSlashPlugin's own header).
+// Picked to be an obviously-arbitrary "plenty of items" constant, distinct
+// from 0 and from 1, so a test that DOES care about the exact value reads as
+// deliberate rather than coincidental.
+const PLENTY = 8
 
 // Mirrors find-plugin.test.ts's / selection-plugin.test.ts's own viewFor
 // helper: the slash plugin is a per-mount $prose plugin (same as
 // MilkdownEditor.tsx will mount it in Task 5), and EDITOR_COMMAND_PLUGINS
 // rides along so the composition under test -- and the plugin-ordering test
 // below -- match the real one MilkdownEditor.tsx ships, not a thinner
-// stand-in.
+// stand-in. `countMatching` defaults to a constant (fix round 1 replaced the
+// old setSlashItemCount external-report channel with this constructor-time
+// dependency injection -- see slash-plugin.ts's own header for why) so tests
+// that don't care about the exact filtered count don't have to supply one.
 async function viewFor(
   markdown: string,
-  onStateChanged: (session: SlashSession | null) => void = noop
+  onStateChanged: (session: SlashSession | null) => void = noop,
+  countMatching: (query: string) => number = () => PLENTY
 ): Promise<{ view: EditorView; editor: Awaited<ReturnType<typeof createTestEditor>> }> {
   const editor = await createTestEditor(markdown, [
-    $prose(() => createSlashPlugin(onStateChanged)),
+    $prose(() => createSlashPlugin(onStateChanged, countMatching)),
     ...EDITOR_COMMAND_PLUGINS
   ])
   const view = editor.action((ctx) => ctx.get(editorViewCtx)) as EditorView
@@ -74,18 +90,38 @@ function session(view: EditorView): SlashSession | null {
   return slashPluginKey.getState(view.state)?.session ?? null
 }
 
+// A real, cancelable, bubbling KeyboardEvent -- used wherever a test needs to
+// read `event.defaultPrevented` afterward (fireEvent.keyDown's own return
+// value isn't the event, and constructing it directly is what selection-
+// plugin.test.ts's own blur test already does for the same reason).
+function keydown(key: string): KeyboardEvent {
+  return new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true })
+}
+
 describe('slash-plugin: opening a session', () => {
   it('opens at the start of an empty paragraph', async () => {
     const { view } = await viewFor('')
     openSlashSessionAt(view, 1)
-    expect(session(view)).toEqual({ anchorPos: 1, query: '', activeIndex: 0, itemCount: 0 })
+    expect(session(view)).toEqual({
+      anchorPos: 1,
+      query: '',
+      queryEnd: 2,
+      activeIndex: 0,
+      itemCount: PLENTY
+    })
   })
 
   it('opens when the "/" is preceded by whitespace', async () => {
     const { view } = await viewFor('para one\n\npara two')
     const pos = posOf(view, 'two')
     openSlashSessionAt(view, pos)
-    expect(session(view)).toEqual({ anchorPos: pos, query: '', activeIndex: 0, itemCount: 0 })
+    expect(session(view)).toEqual({
+      anchorPos: pos,
+      query: '',
+      queryEnd: pos + 1,
+      activeIndex: 0,
+      itemCount: PLENTY
+    })
   })
 
   it('does not open mid-word ("and/or") -- the false-positive guard findSlashTrigger owns', async () => {
@@ -124,12 +160,24 @@ describe('slash-plugin: opening a session', () => {
     // as a paragraph" test in disguise; that's the point being isolated).
     const pos = posOf(view, 'xyz')
     openSlashSessionAt(view, pos)
-    expect(session(view)).toEqual({ anchorPos: pos, query: '', activeIndex: 0, itemCount: 0 })
+    expect(session(view)).toEqual({
+      anchorPos: pos,
+      query: '',
+      queryEnd: pos + 1,
+      activeIndex: 0,
+      itemCount: PLENTY
+    })
   })
 
   it('does not open for a multi-character insertion ending in "/" -- e.g. a paste', async () => {
     const { view } = await viewFor('')
     view.dispatch(view.state.tr.insertText('abc/', 1))
+    expect(session(view)).toBeNull()
+  })
+
+  it('refuses to open at all when countMatching("") is already 0 -- the "empty filtered list" rule applies symmetrically at open time', async () => {
+    const { view } = await viewFor('', noop, () => 0)
+    openSlashSessionAt(view, 1)
     expect(session(view)).toBeNull()
   })
 })
@@ -139,7 +187,13 @@ describe('slash-plugin: tracking the live query', () => {
     const { view } = await viewFor('')
     openSlashSessionAt(view, 1)
     view.dispatch(view.state.tr.insertText('he', view.state.selection.from))
-    expect(session(view)).toEqual({ anchorPos: 1, query: 'he', activeIndex: 0, itemCount: 0 })
+    expect(session(view)).toEqual({
+      anchorPos: 1,
+      query: 'he',
+      queryEnd: 4,
+      activeIndex: 0,
+      itemCount: PLENTY
+    })
   })
 
   it('keeps the ORIGINAL anchor when a later "/" is typed into the live query -- never re-scans for a nearer trigger', async () => {
@@ -155,7 +209,13 @@ describe('slash-plugin: tracking the live query', () => {
     view.dispatch(view.state.tr.insertText('ab', view.state.selection.from))
     view.dispatch(view.state.tr.insertText('/', view.state.selection.from))
     view.dispatch(view.state.tr.insertText('cd', view.state.selection.from))
-    expect(session(view)).toEqual({ anchorPos: 1, query: 'ab/cd', activeIndex: 0, itemCount: 0 })
+    expect(session(view)).toEqual({
+      anchorPos: 1,
+      query: 'ab/cd',
+      queryEnd: 7,
+      activeIndex: 0,
+      itemCount: PLENTY
+    })
   })
 
   it('closes when whitespace lands in the query', async () => {
@@ -200,13 +260,85 @@ describe('slash-plugin: tracking the live query', () => {
     const span = view.dom.querySelector('.pagedown-slash-query')
     expect(span?.textContent).toBe('/abc')
   })
+
+  // === CRITICAL C1 regression, fix round 1 ===
+  // Measured by probe (see slash-plugin.ts's own advanceSession header
+  // comment for the full writeup): opening a session before pre-existing
+  // text and pressing ArrowRight once -- NOT intercepted by handleKeyDown,
+  // which only claims ArrowDown/Up for item-list navigation, so this really
+  // reaches ProseMirror's own cursor movement -- used to silently ANNEX the
+  // next character of that pre-existing text into the query. Choosing an
+  // item would then delete that annexed text along with the real query, a
+  // real, one-keypress-reachable data-loss bug. The fix (queryEnd, tracking
+  // the query's own right edge) closes the session instead.
+  //
+  // !!! JSDOM HAZARD !!! A real ArrowRight keydown does NOT move the
+  // ProseMirror selection under jsdom: prosemirror-commands' own baseKeymap
+  // (confirmed by reading its source) binds no ArrowLeft/ArrowRight command
+  // at all -- plain caret movement is entirely native browser/contentEditable
+  // behavior, which jsdom does not implement (the same class of gap
+  // documented elsewhere in this codebase for coordsAtPos/getClientRects).
+  // Dispatching `keydown('ArrowRight')` here was tried first and left the
+  // selection completely unchanged. The test instead dispatches the
+  // SELECTION TRANSACTION a real ArrowRight would have produced -- what
+  // matters for this fix is that the transaction is selection-only (no doc
+  // change, not intercepted by this plugin's own handleKeyDown, exactly
+  // like a real un-intercepted arrow key), not the literal DOM event that
+  // would cause it in a real browser. The genuine end-to-end key-press proof
+  // belongs in Gate 29 (Task 6), which drives real Chromium.
+  it('C1: does not annex pre-existing text when the cursor moves right past the query -- closes instead', async () => {
+    const { view } = await viewFor('Hello world')
+    const pos = posOf(view, 'world')
+    openSlashSessionAt(view, pos)
+    expect(session(view)).toEqual({
+      anchorPos: pos,
+      query: '',
+      queryEnd: pos + 1,
+      activeIndex: 0,
+      itemCount: PLENTY
+    })
+    view.dispatch(
+      view.state.tr.setSelection(
+        TextSelection.create(view.state.doc, view.state.selection.from + 1)
+      )
+    )
+    expect(session(view)).toBeNull()
+  })
+
+  // A related, intentional consequence of the SAME fix, worth pinning rather
+  // than leaving as an undocumented surprise: queryEnd is reset to
+  // selection.from on every update (per the prescribed fix), so moving the
+  // cursor LEFT into an already-typed query shrinks the tracked right edge
+  // to match -- and a SUBSEQUENT ArrowRight back toward where the cursor
+  // used to be then also closes the session, because it now exceeds that
+  // shrunken edge. This is not a separate bug: it is the same right-edge
+  // protection applied consistently, at the cost of also catching a
+  // "correct a typo mid-query, then arrow back" gesture. Documented here so
+  // a future reader doesn't mistake it for an oversight.
+  it('a related consequence: ArrowLeft into the query shrinks its tracked right edge, so a later ArrowRight past that (now smaller) edge also closes', async () => {
+    const { view } = await viewFor('')
+    openSlashSessionAt(view, 1)
+    view.dispatch(view.state.tr.insertText('abc', view.state.selection.from))
+    expect(session(view)?.query).toBe('abc')
+    view.dispatch(
+      view.state.tr.setSelection(
+        TextSelection.create(view.state.doc, view.state.selection.from - 1)
+      )
+    )
+    expect(session(view)?.query).toBe('ab') // still open, truncated
+    view.dispatch(
+      view.state.tr.setSelection(
+        TextSelection.create(view.state.doc, view.state.selection.from + 1)
+      )
+    )
+    expect(session(view)).toBeNull()
+  })
 })
 
 describe("slash-plugin: handleKeyDown (real DOM keydowns -- see this file's own spike note above)", () => {
   it('ArrowDown/ArrowUp move activeIndex with wraparound', async () => {
-    const { view } = await viewFor('')
+    const { view } = await viewFor('', noop, () => 3)
     openSlashSessionAt(view, 1)
-    setSlashItemCount(view, 3)
     fireEvent.keyDown(view.dom, { key: 'ArrowDown' })
     expect(session(view)?.activeIndex).toBe(1)
     fireEvent.keyDown(view.dom, { key: 'ArrowDown' })
@@ -217,11 +349,19 @@ describe("slash-plugin: handleKeyDown (real DOM keydowns -- see this file's own 
     expect(session(view)?.activeIndex).toBe(2) // wraps backward
   })
 
-  it('ArrowDown/Up are inert (but still swallowed) before any itemCount has been reported', async () => {
+  // === IMPORTANT I1 regression, fix round 1 ===
+  // Mutating the `default:` branch from `return false` to `return true`
+  // previously left all 32 existing tests green -- every query-tracking
+  // test drove `tr.insertText` directly and never reached handleKeyDown at
+  // all, so nothing actually proved a printable keystroke is left alone.
+  // `return true` would swallow every keystroke while the palette is open,
+  // meaning the query could never be typed in the real app.
+  it('I1: a printable character is NOT swallowed -- everything but the explicitly matched keys returns false', async () => {
     const { view } = await viewFor('')
     openSlashSessionAt(view, 1)
-    fireEvent.keyDown(view.dom, { key: 'ArrowDown' })
-    expect(session(view)?.activeIndex).toBe(0)
+    const event = keydown('a')
+    view.dom.dispatchEvent(event)
+    expect(event.defaultPrevented).toBe(false)
   })
 
   it('Enter and Tab are swallowed (preventDefault) but keep bubbling -- only Escape stops propagation', async () => {
@@ -233,7 +373,7 @@ describe("slash-plugin: handleKeyDown (real DOM keydowns -- see this file's own 
         windowSaw = true
       }
       window.addEventListener('keydown', listener, { once: true })
-      const event = new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true })
+      const event = keydown(key)
       view.dom.dispatchEvent(event)
       expect(event.defaultPrevented).toBe(true)
       expect(windowSaw).toBe(true)
@@ -246,14 +386,41 @@ describe("slash-plugin: handleKeyDown (real DOM keydowns -- see this file's own 
     openSlashSessionAt(view, 1)
     let windowSaw = false
     window.addEventListener('keydown', () => (windowSaw = true), { once: true })
-    const event = new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true })
+    const event = keydown('Escape')
     view.dom.dispatchEvent(event)
     expect(session(view)).toBeNull()
     expect(event.defaultPrevented).toBe(true)
     expect(windowSaw).toBe(false)
   })
 
-  it('does not intercept keys, and does not throw, when no session is open', async () => {
+  // === IMPORTANT I2 regression, fix round 1 ===
+  // The old "does not intercept keys ... when no session is open" test only
+  // fired ArrowDown and asserted "didn't throw" + "window saw it" -- both
+  // stay true even if Enter/Tab were swallowed EDITOR-WIDE (a severe
+  // regression: nothing could ever split a paragraph again). This pair is
+  // the real, measured control: a bare Enter, with no session open, really
+  // splits the paragraph (a genuine doc.childCount 1 -> 2, proving the real
+  // keymap fires under jsdom for this key), and the identical Enter, with a
+  // session open, does not (the plugin's own handleKeyDown genuinely beat
+  // the keymap to it) -- also the only runtime evidence for the
+  // keymap-priority claim; the plugin-ordering test near the bottom of this
+  // file proves array order only.
+  it('I2 control: a real Enter with NO session open really splits the paragraph', async () => {
+    const { view } = await viewFor('hello')
+    expect(view.state.doc.childCount).toBe(1)
+    view.dom.dispatchEvent(keydown('Enter'))
+    expect(view.state.doc.childCount).toBe(2)
+  })
+
+  it('I2: the identical Enter, with a session open, does NOT split the paragraph -- handleKeyDown genuinely wins', async () => {
+    const { view } = await viewFor('')
+    openSlashSessionAt(view, 1)
+    expect(view.state.doc.childCount).toBe(1)
+    view.dom.dispatchEvent(keydown('Enter'))
+    expect(view.state.doc.childCount).toBe(1)
+  })
+
+  it('does not throw, and does not intercept, ArrowDown when no session is open', async () => {
     const { view } = await viewFor('')
     let windowSaw = false
     window.addEventListener('keydown', () => (windowSaw = true), { once: true })
@@ -269,35 +436,42 @@ describe("slash-plugin: handleKeyDown (real DOM keydowns -- see this file's own 
   })
 })
 
-describe('slash-plugin: setSlashItemCount', () => {
-  it('closes the session on a report of 0 -- the "empty filtered list" close condition', async () => {
-    const { view } = await viewFor('')
+describe('slash-plugin: itemCount is computed synchronously via the injected countMatching', () => {
+  // === IMPORTANT I3, fix round 1 (replacing the old setSlashItemCount tests) ===
+  // The previous design reported itemCount IN from outside via a separate
+  // meta transaction, which review found two real costs for: a stale-count
+  // window between the query changing and the next external report, and
+  // silent failure (arrows permanently inert, the empty-list close never
+  // firing) if a future caller simply forgot to call the reporter. These
+  // tests prove the replacement -- a constructor-injected countMatching --
+  // closes both gaps: itemCount is recomputed in the SAME apply that
+  // changes the query, and "forgetting to report" is no longer a reachable
+  // state at all (there is nothing left to forget to call).
+  it('computes itemCount from countMatching at open time', async () => {
+    const { view } = await viewFor('', noop, (query) => (query === '' ? 5 : 0))
     openSlashSessionAt(view, 1)
-    setSlashItemCount(view, 0)
-    expect(session(view)).toBeNull()
+    expect(session(view)?.itemCount).toBe(5)
   })
 
-  it('does NOT close a freshly-opened session before any report has arrived (itemCount defaults to 0)', async () => {
-    const { view } = await viewFor('')
+  it('recomputes itemCount in the SAME transaction that changes the query -- no stale window', async () => {
+    const countMatching = (query: string): number => {
+      if (query === '') return 5
+      if (query.startsWith('h')) return 2
+      return 0
+    }
+    const { view } = await viewFor('', noop, countMatching)
     openSlashSessionAt(view, 1)
-    expect(session(view)).not.toBeNull()
-    expect(session(view)?.itemCount).toBe(0)
+    expect(session(view)?.itemCount).toBe(5)
+    view.dispatch(view.state.tr.insertText('h', view.state.selection.from))
+    expect(session(view)?.itemCount).toBe(2)
   })
 
-  it('clamps activeIndex back to 0 when a fresh report no longer covers it', async () => {
-    const { view } = await viewFor('')
+  it('closes the moment the query narrows to match nothing -- synchronous, not a later report', async () => {
+    const countMatching = (query: string): number =>
+      query === '' ? 5 : query.startsWith('h') ? 2 : 0
+    const { view } = await viewFor('', noop, countMatching)
     openSlashSessionAt(view, 1)
-    setSlashItemCount(view, 5)
-    fireEvent.keyDown(view.dom, { key: 'ArrowDown' })
-    fireEvent.keyDown(view.dom, { key: 'ArrowDown' })
-    expect(session(view)?.activeIndex).toBe(2)
-    setSlashItemCount(view, 2)
-    expect(session(view)?.activeIndex).toBe(0)
-  })
-
-  it('is a no-op when no session is open', async () => {
-    const { view } = await viewFor('')
-    expect(() => setSlashItemCount(view, 5)).not.toThrow()
+    view.dispatch(view.state.tr.insertText('z', view.state.selection.from))
     expect(session(view)).toBeNull()
   })
 })
@@ -324,7 +498,13 @@ describe('slash-plugin: reporting to React', () => {
     const seen: Array<SlashSession | null> = []
     const { view } = await viewFor('', (next) => seen.push(next))
     openSlashSessionAt(view, 1)
-    expect(seen.at(-1)).toEqual({ anchorPos: 1, query: '', activeIndex: 0, itemCount: 0 })
+    expect(seen.at(-1)).toEqual({
+      anchorPos: 1,
+      query: '',
+      queryEnd: 2,
+      activeIndex: 0,
+      itemCount: PLENTY
+    })
     closeSlashIn(view)
     expect(seen.at(-1)).toBeNull()
   })
@@ -351,7 +531,7 @@ describe('slash-plugin: reporting to React', () => {
   })
 })
 
-describe('slash-plugin: closing does not mark a clean document dirty', () => {
+describe('slash-plugin: closing/navigating does not mark a clean document dirty', () => {
   it('closeSlashIn dispatches only a doc-unchanged, no-stored-marks transaction', async () => {
     // The exact predicate MilkdownEditor's own editedSinceMountRef gates on
     // (see that component's own doc comment): (docChanged || storedMarksSet)
@@ -369,11 +549,11 @@ describe('slash-plugin: closing does not mark a clean document dirty', () => {
     }
   })
 
-  it('setSlashItemCount likewise dispatches only a doc-unchanged, no-stored-marks transaction', async () => {
-    const { view } = await viewFor('')
+  it('the ArrowDown/Up-triggered setActiveIndex transaction is also doc-unchanged and no-stored-marks', async () => {
+    const { view } = await viewFor('', noop, () => 3)
     openSlashSessionAt(view, 1)
     const dispatchSpy = vi.spyOn(view, 'dispatch')
-    setSlashItemCount(view, 3)
+    fireEvent.keyDown(view.dom, { key: 'ArrowDown' })
     expect(dispatchSpy.mock.calls.length).toBeGreaterThan(0)
     for (const [tr] of dispatchSpy.mock.calls) {
       expect(tr.docChanged).toBe(false)
@@ -397,7 +577,7 @@ function runtimePluginKey(p: unknown): string {
 }
 
 describe('slash-plugin: keymap priority', () => {
-  it("precedes MILKDOWN_CUSTOM_INPUTRULES$ in view.state.plugins -- the design doc's own evidence that a $prose handleKeyDown outranks every Milkdown keymap depends on this", async () => {
+  it("precedes MILKDOWN_CUSTOM_INPUTRULES$ in view.state.plugins -- the design doc's own evidence that a $prose handleKeyDown outranks every Milkdown keymap depends on this (array order only -- see I2 above for the runtime proof)", async () => {
     const { view } = await viewFor('')
     const slashIndex = view.state.plugins.findIndex(
       (p) => runtimePluginKey(p) === runtimePluginKey(slashPluginKey)
