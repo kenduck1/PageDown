@@ -186,6 +186,7 @@ export interface EditorCommands {
   // line of wiring -- and leaving the click inert regresses nothing, unlike
   // the dead CONTROLS this pass removed, which actively lied about being
   // actionable.
+  removeLink: () => void
   // insertTableCommand, given `{ row: 2, col: 2 }` -- a minimal 2x2 table
   // (one header row + one body row, two columns; `row` counts the header
   // row, confirmed by reading @milkdown/preset-gfm's own createTable source).
