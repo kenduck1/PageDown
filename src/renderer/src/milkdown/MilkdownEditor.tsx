@@ -14,7 +14,7 @@ import { EDITOR_COMMAND_PLUGINS } from './commands'
 import { PINNED_STRINGIFY_OPTIONS } from './stringify-options'
 import { buildEditorCommands, chooseSlashItem, type EditorCommands } from './editor-commands'
 import { createFindPlugin } from './find-plugin'
-import { createDropImagePlugin } from './drop-image'
+import { createDropImagePlugin, insertDroppedImages } from './drop-image'
 import { createSelectionPlugin, type SelectionSnapshot } from './selection-plugin'
 import { createSlashPlugin, type SlashSession } from './slash-plugin'
 import { enabledSlashItems } from './slash-items'
@@ -106,6 +106,19 @@ export interface MilkdownEditorHandle extends EditorCommands {
   // file (done for eslint-plugin-react-refresh's `only-export-components`
   // rule, not for any behavioral reason).
   flush: () => void
+  // Saves `files` into the document's own directory and inserts a real
+  // relative `![alt](filename)` reference for each, at the CURRENT selection.
+  //
+  // Defined here rather than in EditorCommands for the same reason flush() is:
+  // it needs this component's own `onDropImage` prop, not just a live Editor
+  // instance. It reuses insertDroppedImages -- the exact function the
+  // drag-and-drop plugin already calls, given a position instead of a drop
+  // coordinate -- so the toolbar's newly-wired "Insert image" button and a
+  // real OS file drop cannot produce different markdown, and the whole
+  // save/collision-numbering/magic-byte-sniffing path is shared.
+  //
+  // A no-op with no files, or before the editor has finished constructing.
+  insertImages: (files: File[]) => void
 }
 
 const MilkdownEditor = forwardRef<MilkdownEditorHandle, MilkdownEditorProps>(
@@ -205,16 +218,33 @@ const MilkdownEditor = forwardRef<MilkdownEditorHandle, MilkdownEditorProps>(
     // flushRef.current, inside the mount effect's `.then` below.
     const commandsRef = useRef<EditorCommands | null>(null)
 
+    // Same "set once construction finishes, null otherwise" treatment as
+    // flushRef/commandsRef -- see MilkdownEditorHandle.insertImages for why
+    // this can't live in buildEditorCommands (it needs this component's own
+    // onDropImage prop, not just a live Editor instance).
+    const insertImagesRef = useRef<((files: File[]) => void) | null>(null)
+
     useImperativeHandle(ref, () => ({
       flush: () => flushRef.current?.(),
+      insertImages: (files) => insertImagesRef.current?.(files),
       toggleBold: () => commandsRef.current?.toggleBold(),
       toggleItalic: () => commandsRef.current?.toggleItalic(),
       toggleHeading: (level) => commandsRef.current?.toggleHeading(level),
       setParagraph: () => commandsRef.current?.setParagraph(),
       toggleBulletList: () => commandsRef.current?.toggleBulletList(),
       toggleOrderedList: () => commandsRef.current?.toggleOrderedList(),
+      toggleTaskList: () => commandsRef.current?.toggleTaskList(),
       insertLink: (href) => commandsRef.current?.insertLink(href),
+      removeLink: () => commandsRef.current?.removeLink(),
       insertTable: () => commandsRef.current?.insertTable(),
+      addRowBefore: () => commandsRef.current?.addRowBefore(),
+      addRowAfter: () => commandsRef.current?.addRowAfter(),
+      addColumnBefore: () => commandsRef.current?.addColumnBefore(),
+      addColumnAfter: () => commandsRef.current?.addColumnAfter(),
+      deleteRow: () => commandsRef.current?.deleteRow(),
+      deleteColumn: () => commandsRef.current?.deleteColumn(),
+      deleteTable: () => commandsRef.current?.deleteTable(),
+      setColumnAlignment: (alignment) => commandsRef.current?.setColumnAlignment(alignment),
       insertPageBreak: () => commandsRef.current?.insertPageBreak(),
       undo: () => commandsRef.current?.undo(),
       redo: () => commandsRef.current?.redo(),
@@ -225,6 +255,7 @@ const MilkdownEditor = forwardRef<MilkdownEditorHandle, MilkdownEditorProps>(
       toggleInlineCode: () => commandsRef.current?.toggleInlineCode(),
       getSelectedText: () => commandsRef.current?.getSelectedText() ?? '',
       getSelectionRect: () => commandsRef.current?.getSelectionRect() ?? null,
+      getTableRect: () => commandsRef.current?.getTableRect() ?? null,
       addComment: (author, text) => commandsRef.current?.addComment(author, text) ?? false,
       resolveComment: (id) => commandsRef.current?.resolveComment(id),
       runSlashItem: (id) => commandsRef.current?.runSlashItem(id),
@@ -290,15 +321,20 @@ const MilkdownEditor = forwardRef<MilkdownEditorHandle, MilkdownEditorProps>(
       // `ctx` (unlike editedTrackerProse/findProse) to construct a real
       // image node via imageSchema.type(ctx), so this uses $prose's other
       // signature, (ctx) => Plugin, rather than the no-arg one.
-      const dropImageProse = $prose((ctx) =>
-        createDropImagePlugin(ctx, {
-          onDropImage: (file) =>
-            onDropImageRef.current
-              ? onDropImageRef.current(file)
-              : Promise.resolve({ error: 'Image drop is not available here.' }),
-          onError: (message) => onErrorRef.current(message)
-        })
-      )
+      // The exact handler pair BOTH the drop plugin below and the toolbar's
+      // "Insert image" button (insertImagesRef, wired in the `.then` further
+      // down) hand to insertDroppedImages -- one object, so a picked file and
+      // a dropped file cannot take different save paths or report errors
+      // differently.
+      const dropImageHandlers = {
+        onDropImage: (file: File) =>
+          onDropImageRef.current
+            ? onDropImageRef.current(file)
+            : Promise.resolve({ error: 'Image insertion is not available here.' }),
+        onError: (message: string) => onErrorRef.current(message)
+      }
+
+      const dropImageProse = $prose((ctx) => createDropImagePlugin(ctx, dropImageHandlers))
 
       // Same per-mount construction as findProse/dropImageProse above --
       // closes over this mount's own latest-ref callback, exactly like
@@ -410,6 +446,27 @@ const MilkdownEditor = forwardRef<MilkdownEditorHandle, MilkdownEditorProps>(
           // extraction exists (closing a real, verified mutation-testing
           // gap).
           commandsRef.current = buildEditorCommands(created)
+          insertImagesRef.current = (files) => {
+            if (files.length === 0) return
+            created.action((ctx) => {
+              const view = ctx.get(editorViewCtx)
+              // The CURRENT selection's `from`, not a drop coordinate: this
+              // path has no pointer event to hit-test, and "insert at the
+              // cursor" is what a toolbar button means anyway. `void` because
+              // insertDroppedImages is async by nature (a real IPC round trip
+              // per file) while an imperative handle method is not -- errors
+              // are surfaced through the shared onError handler, exactly as
+              // they are for a drop, rather than through a rejected promise
+              // nobody is awaiting.
+              void insertDroppedImages(
+                view,
+                ctx,
+                view.state.selection.from,
+                files,
+                dropImageHandlers
+              )
+            })
+          }
         })
         .catch((err: unknown) => {
           if (!cancelled) {
@@ -422,6 +479,7 @@ const MilkdownEditor = forwardRef<MilkdownEditorHandle, MilkdownEditorProps>(
         flushRef.current?.()
         flushRef.current = null
         commandsRef.current = null
+        insertImagesRef.current = null
         if (editorRef.current) {
           void editorRef.current.destroy()
           editorRef.current = null

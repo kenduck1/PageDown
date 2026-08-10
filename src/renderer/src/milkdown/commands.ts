@@ -3,8 +3,9 @@ import { commandsCtx } from '@milkdown/core'
 import type { Ctx } from '@milkdown/ctx'
 import { history, undo, redo } from '@milkdown/prose/history'
 import { wrapIn, setBlockType } from '@milkdown/prose/commands'
-import { TextSelection } from '@milkdown/prose/state'
+import { Plugin, TextSelection } from '@milkdown/prose/state'
 import type { EditorState, Transaction } from '@milkdown/prose/state'
+import { deleteColumn, deleteRow, deleteTable, goToNextCell, isInTable } from '@milkdown/prose/tables'
 import { Fragment } from '@milkdown/prose/model'
 import type { Mark } from '@milkdown/prose/model'
 import {
@@ -12,12 +13,14 @@ import {
   listItemSchema,
   codeBlockSchema,
   hardbreakSchema,
+  linkSchema,
   paragraphSchema
 } from '@milkdown/preset-commonmark'
-import { tableCellSchema, tableHeaderSchema } from '@milkdown/preset-gfm'
+import { addRowAfterCommand, tableCellSchema, tableHeaderSchema } from '@milkdown/preset-gfm'
 import { pagebreakNode } from './nodes/pagebreak'
 import { commentSchema } from './nodes/comment'
 import { safeImageViewProse } from './image-security'
+import { columnCellPositions, findTableContext, type TableAlignment } from './table-context'
 
 // prosemirror-history is not wired into either stock preset this editor
 // mounts -- confirmed by reading @milkdown/preset-commonmark's and
@@ -300,52 +303,20 @@ export const resolveCommentCommand = $command(
 // own toMarkdown runner (preset-gfm, read directly) only emits `- [ ] `/
 // `- [x] ` syntax when `checked` is non-null, so `false` is what actually
 // produces `- [ ] `, not merely "not checked."
+//
+// Fix-round change (capability-gap pass): the body below moved into the shared
+// `buildTaskListTransaction` helper further down this file, so the toolbar's
+// newly-wired Checklist button (toggleTaskListCommand) and this slash-menu
+// entry cannot drift into producing different markdown. Nothing about this
+// command's own behaviour changed -- see that helper for the wrapIn
+// fake-dispatch capture technique and the walk-up-to-the-list_item reasoning
+// this comment used to carry inline.
 export const insertTaskListCommand = $command(
   'InsertTaskList',
   (ctx) => () => (state, dispatch) => {
-    const listType = bulletListSchema.type(ctx)
-    const itemType = listItemSchema.type(ctx)
-
-    // Fake dispatch: wrapIn's own dispatch branch does exactly
-    // `dispatch(state.tr.wrap(range, wrapping).scrollIntoView())` (read
-    // directly from prosemirror-commands) -- passing a callback that only
-    // ASSIGNS its argument, rather than the real view dispatch, gets us the
-    // real, already-built Transaction object without applying it to any
-    // EditorState. `applicable` mirrors what wrapIn would have returned to
-    // a real caller (false when the current selection can't be wrapped in
-    // a bullet list at all -- e.g. it already spans incompatible block
-    // structure), so this command refuses under the exact same conditions
-    // wrapInBulletListCommand itself would.
-    let captured: Transaction | undefined
-    const applicable = wrapIn(listType)(state, (tr) => {
-      captured = tr
-    })
-    if (!applicable || !captured) return false
-
-    // Transaction.step (which .wrap() calls internally) auto-maps
-    // `tr.selection` through every step added so far, unless a step
-    // explicitly sets it -- so `captured.selection` already points at the
-    // same logical cursor position, now living inside the freshly-wrapped
-    // bullet_list > list_item > paragraph structure. Walking UP from there
-    // (rather than assuming a fixed depth offset like "-1" from the
-    // original block) finds the list_item regardless of how deep the
-    // original selection's block itself was nested (e.g. wrapping a block
-    // that was already inside another list).
-    const $pos = captured.selection.$from
-    let itemPos: number | null = null
-    for (let depth = $pos.depth; depth >= 0; depth--) {
-      if ($pos.node(depth).type === itemType) {
-        itemPos = $pos.before(depth)
-        break
-      }
-    }
-    if (itemPos == null) return false
-
-    const itemNode = captured.doc.nodeAt(itemPos)
-    if (!itemNode) return false
-
-    captured.setNodeMarkup(itemPos, undefined, { ...itemNode.attrs, checked: false })
-    dispatch?.(captured)
+    const tr = buildTaskListTransaction(ctx, state)
+    if (!tr) return false
+    dispatch?.(tr)
     return true
   }
 )
@@ -543,6 +514,271 @@ export const insertMermaidBlockCommand = $command(
   }
 )
 
+// ---------------------------------------------------------------------------
+// Table structure editing
+// ---------------------------------------------------------------------------
+//
+// @milkdown/preset-gfm registers real, working commands for adding a row or a
+// column (addRowBeforeCommand/addRowAfterCommand/addColBeforeCommand/
+// addColAfterCommand) and this project wires those straight through -- see
+// editor-commands.ts. The three commands below exist because the preset's own
+// equivalents are NOT usable from an ordinary caret, which is the only
+// selection a user typing in a table actually has:
+//
+//   - `deleteSelectedCellsCommand` opens with `if (!(selection instanceof
+//     CellSelection)) return false` (read from the installed 7.21.3 source).
+//     A caret in a cell is a TextSelection, so it refuses. Reaching it would
+//     mean first dispatching selectRowCommand/selectColCommand, i.e. moving
+//     the user's selection as a side effect of a delete.
+//   - `setAlignCommand` is `setCellAttr('alignment', ...)`, which writes only
+//     the cell(s) the selection covers -- and a body cell's alignment attr
+//     neither serializes nor survives. See table-context.ts's
+//     `readColumnAlignment` for the two preset facts that make that true.
+//
+// prosemirror-tables' own `deleteRow`/`deleteColumn`/`deleteTable` (which is
+// exactly what `deleteSelectedCellsCommand` itself delegates to, and which
+// @milkdown/prose/tables re-exports) already handle BOTH cases correctly: each
+// resolves `selectedRect(state)`, which is the current cell for a caret and
+// the full covered rectangle for a CellSelection -- so selecting three rows
+// and hitting delete removes all three, with no branch of our own.
+//
+// All three are plain pass-throughs, so a dry run (no `dispatch`) stays a dry
+// run: prosemirror-tables' commands follow the standard convention.
+
+export const deleteTableRowCommand = $command(
+  'DeleteTableRow',
+  () => () => (state, dispatch) => deleteRow(state, dispatch)
+)
+
+export const deleteTableColumnCommand = $command(
+  'DeleteTableColumn',
+  () => () => (state, dispatch) => deleteColumn(state, dispatch)
+)
+
+export const deleteWholeTableCommand = $command(
+  'DeleteWholeTable',
+  () => () => (state, dispatch) => deleteTable(state, dispatch)
+)
+
+// Sets a whole COLUMN's alignment -- header cell included, which is the only
+// cell markdown carries (see table-context.ts's readColumnAlignment for the
+// two preset facts, read out of the installed source, that make the preset's
+// own setAlignCommand wrong here: the header row is what serializes, and
+// keepTableAlignPlugin overwrites every body cell from it on the next
+// transaction anyway).
+//
+// Writes every cell in the column rather than only the header, even though
+// keepTableAlignPlugin would eventually propagate a header-only write: that
+// propagation happens in a SEPARATE appendTransaction, so a header-only write
+// would repaint the table in two steps and leave two entries in the undo
+// history for one click. Writing the column outright makes the change atomic
+// and leaves that plugin with nothing to do.
+export const setColumnAlignmentCommand = $command(
+  'SetColumnAlignment',
+  () => (alignment?: TableAlignment) => (state, dispatch) => {
+    if (!alignment) return false
+    const context = findTableContext(state)
+    if (!context) return false
+    if (context.alignment === alignment) return false
+
+    const positions = columnCellPositions(state, context)
+    if (positions.length === 0) return false
+
+    const tr = state.tr
+    for (const pos of positions) {
+      const cell = state.doc.nodeAt(pos)
+      if (!cell) continue
+      tr.setNodeMarkup(pos, undefined, { ...cell.attrs, alignment })
+    }
+    if (!tr.docChanged) return false
+    dispatch?.(tr)
+    return true
+  }
+)
+
+// Tab on the LAST cell of a table appends a row and moves into it.
+//
+// The gap this closes, measured rather than assumed: @milkdown/preset-gfm's
+// `tableKeymap` binds Tab to `goToNextTableCellCommand`, which is
+// prosemirror-tables' `goToNextCell(1)` -- and that returns FALSE when there
+// is no next cell (`findNextCell` returns null past the last one). So Tab in
+// the bottom-right cell of a table did nothing at all, and the only way to add
+// a row was a control that did not exist. Appending on Tab is the single most
+// expected table behaviour there is (Word, Google Docs, Notion all do it).
+//
+// A `$prose` plugin's `handleKeyDown`, NOT a `$useKeymap` entry, and that is
+// forced rather than preferred: `tableKeymap`'s NextCell binding carries
+// `priority: 100`, and Milkdown merges EVERY keymap into ONE ProseMirror
+// plugin, so priority is resolved internally to that plugin and a second
+// keymap cannot outrank it. A `$prose` plugin lands in `prosePlugins`, which
+// @milkdown/core's own editor-state.ts places BEFORE that merged keymap in
+// `state.plugins`, and prosemirror-view returns on the first truthy handler --
+// the same mechanism slash-plugin.ts already relies on and documents.
+//
+// Deliberately narrow, so nothing else changes: it returns false (letting the
+// preset's own binding run, exactly as before) for any modifier combination,
+// for Shift-Tab, outside a table, and -- crucially -- whenever a next cell
+// genuinely exists. That last check is a real DRY RUN: prosemirror-tables'
+// goToNextCell only mutates when handed a `dispatch`, so calling it with the
+// state alone answers "is there a next cell?" without moving anything.
+export const tableTabProse = $prose((ctx) => {
+  return new Plugin({
+    props: {
+      handleKeyDown: (view, event) => {
+        if (event.key !== 'Tab') return false
+        if (event.shiftKey || event.metaKey || event.ctrlKey || event.altKey) return false
+        if (!isInTable(view.state)) return false
+        // A next cell exists -- let the preset's own Tab binding move to it.
+        if (goToNextCell(1)(view.state)) return false
+
+        event.preventDefault()
+        // The preset's own addRowAfterCommand, not prosemirror-tables' bare
+        // addRowAfter: the preset wraps it in `addRowWithAlignment`, which
+        // copies each column's alignment onto the new row's cells. A bare
+        // addRowAfter would create cells at the schema default ('left') and
+        // leave keepTableAlignPlugin to fix them up in yet another
+        // transaction.
+        ctx.get(commandsCtx).call(addRowAfterCommand.key)
+        // Now that a row exists after the current one, the "next cell" the
+        // user asked for does too. Dispatched separately, which merges into
+        // the same undo group as the insertion above by prosemirror-history's
+        // ordinary adjacency rule (both land well inside newGroupDelay).
+        goToNextCell(1)(view.state, view.dispatch)
+        return true
+      }
+    }
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Task list toggle
+// ---------------------------------------------------------------------------
+
+// The shared body of insertTaskListCommand (above) and toggleTaskListCommand
+// (below): wrap the current block in a bullet list and flip the resulting
+// list_item's `checked` attr from null (a plain bullet) to false (an unchecked
+// task). Extracted rather than copied so the toolbar's Checklist button and
+// the slash menu's "Task list" item cannot drift into producing different
+// markdown. Returns the built Transaction, or null when the current selection
+// cannot be wrapped in a list at all -- never dispatches, so both callers stay
+// dry-run safe.
+function buildTaskListTransaction(ctx: Ctx, state: EditorState): Transaction | null {
+  const listType = bulletListSchema.type(ctx)
+  const itemType = listItemSchema.type(ctx)
+
+  let captured: Transaction | undefined
+  const applicable = wrapIn(listType)(state, (tr) => {
+    captured = tr
+  })
+  if (!applicable || !captured) return null
+
+  const $pos = captured.selection.$from
+  let itemPos: number | null = null
+  for (let depth = $pos.depth; depth >= 0; depth--) {
+    if ($pos.node(depth).type === itemType) {
+      itemPos = $pos.before(depth)
+      break
+    }
+  }
+  if (itemPos == null) return null
+
+  const itemNode = captured.doc.nodeAt(itemPos)
+  if (!itemNode) return null
+
+  captured.setNodeMarkup(itemPos, undefined, { ...itemNode.attrs, checked: false })
+  return captured
+}
+
+// The nearest ancestor list_item of the selection, when it is a real GFM task
+// item (`checked` non-null -- extendListItemSchemaForTask's own toMarkdown
+// runner only emits `- [ ] `/`- [x] ` syntax for a non-null value, so `null`
+// genuinely means "an ordinary bullet", not "an unchecked task").
+function findTaskListItem(
+  ctx: Ctx,
+  state: EditorState
+): { pos: number; node: ProseNodeLike } | null {
+  const itemType = listItemSchema.type(ctx)
+  const $from = state.selection.$from
+  for (let depth = $from.depth; depth > 0; depth--) {
+    const node = $from.node(depth)
+    if (node.type !== itemType) continue
+    return node.attrs.checked === null || node.attrs.checked === undefined
+      ? null
+      : { pos: $from.before(depth), node }
+  }
+  return null
+}
+
+// Minimal structural shape of the bits of a ProseMirror Node used above --
+// avoids importing the Node type purely for one field, matching how the rest
+// of this file leans on inference.
+interface ProseNodeLike {
+  attrs: Record<string, unknown>
+}
+
+// A real TOGGLE, unlike insertTaskListCommand: already a task item -> back to
+// a plain bullet (`checked: null`); anything else -> a task item. Backs the
+// toolbar's Checklist button, which sits alongside the bullet/numbered list
+// buttons and must behave like them (both of those lift you back out).
+//
+// insertTaskListCommand is deliberately NOT replaced by this. The slash menu's
+// "Task list" entry means "insert one", and an insertion that silently
+// un-tasked the block when it happened to already be a task would be wrong
+// there; the shared helper above is what keeps the two from drifting.
+export const toggleTaskListCommand = $command(
+  'ToggleTaskList',
+  (ctx) => () => (state, dispatch) => {
+    const existing = findTaskListItem(ctx, state)
+    if (existing) {
+      const tr = state.tr.setNodeMarkup(existing.pos, undefined, {
+        ...existing.node.attrs,
+        checked: null
+      })
+      dispatch?.(tr)
+      return true
+    }
+    const tr = buildTaskListTransaction(ctx, state)
+    if (!tr) return false
+    dispatch?.(tr)
+    return true
+  }
+)
+
+// ---------------------------------------------------------------------------
+// Links
+// ---------------------------------------------------------------------------
+
+// Removes the link mark from the WHOLE link under the selection, not merely
+// from the selected characters.
+//
+// `toggleLinkCommand` cannot do this job, and the difference is not cosmetic.
+// It is a plain `toggleMark`, so with a collapsed caret inside a link it only
+// clears a stored mark (the visible link is untouched), and with a partial
+// selection it splits one link into a linked and an unlinked half. "Remove
+// link", pressed with the caret anywhere in a link, has exactly one sensible
+// meaning, so this finds the mark's own full extent the same way
+// @milkdown/preset-commonmark's `updateLinkCommand` does (a `nodesBetween`
+// scan widened to `to + 1` for the collapsed case) and removes it there.
+export const unlinkCommand = $command('Unlink', (ctx) => () => (state, dispatch) => {
+  const linkType = linkSchema.type(ctx)
+  const { from, to } = state.selection
+  let markedFrom = -1
+  let markedTo = -1
+  let mark: Mark | undefined
+  state.doc.nodesBetween(from, from === to ? to + 1 : to, (node, pos) => {
+    if (mark) return false
+    const found = node.marks.find((candidate: Mark) => candidate.type === linkType)
+    if (!found) return true
+    mark = found
+    markedFrom = pos
+    markedTo = pos + node.nodeSize
+    return false
+  })
+  if (!mark) return false
+  dispatch?.(state.tr.removeMark(markedFrom, markedTo, mark))
+  return true
+})
+
 // The full set of non-schema editing-BEHAVIOR plugins MilkdownEditor.tsx
 // mounts alongside EDITOR_SCHEMA_PLUGINS (plugins.ts) -- deliberately a
 // separate list, for the same reason plugins.ts's own comment gives for
@@ -579,6 +815,21 @@ export const EDITOR_COMMAND_PLUGINS = [
   insertTaskListCommand,
   insertMathBlockCommand,
   insertMermaidBlockCommand,
+  // Capability-gap pass: table structure editing (row/column delete, column
+  // alignment), the Checklist toolbar button's real toggle, and "Remove link".
+  // Behavior plugins, not schema -- none introduces a node or mark type -- so
+  // they belong here rather than in plugins.ts's EDITOR_SCHEMA_PLUGINS, same
+  // reasoning as every entry above.
+  deleteTableRowCommand,
+  deleteTableColumnCommand,
+  deleteWholeTableCommand,
+  setColumnAlignmentCommand,
+  toggleTaskListCommand,
+  unlinkCommand,
+  // Tab-appends-a-row. A $prose plugin rather than a keymap, which is what
+  // lets it outrank @milkdown/preset-gfm's own priority-100 Tab binding --
+  // see its own doc comment.
+  tableTabProse,
   // See image-security.ts's own module comment for the real, confirmed
   // vulnerability this closes: the stock commonmark image node renders an
   // unrestricted <img src> directly in this privileged renderer. Rendering
