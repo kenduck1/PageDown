@@ -48,7 +48,7 @@ importers:
         specifier: ^5.2.2
         version: 5.2.2
       katex:
-        specifier: ^0.18.2
+        specifier: 0.18.2
         version: 0.18.2
       mermaid:
         specifier: 11.4.1

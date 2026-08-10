@@ -79,6 +79,7 @@ import { renderMathEquations, buildKatexFontFaceCss } from './katex-render'
 import documentTypographyCss from '../../src/typography/document-typography.css'
 import sourceSerif4Base64 from '../../src/renderer/src/assets/fonts/source-serif-4-variable.woff2'
 import interVariableBase64 from '../../src/renderer/src/assets/fonts/inter-variable.woff2'
+import sourceCodeProBase64 from '../../src/renderer/src/assets/fonts/source-code-pro-variable.woff2'
 import { DPI, type PageGeometry } from '../../src/typography/page-geometry'
 import { buildRunningContentCss, type DocumentStyle } from '../../src/typography/document-style'
 import type { RenderRequestMessage } from '../../src/pagination/render-message'
@@ -172,6 +173,16 @@ registerBreakHandlers()
 //      `DocumentStyle`, it emits exactly one `@font-face` rule -- whichever
 //      `documentStyle.fontFamily` ('source-serif-4' | 'inter') actually
 //      names -- and pays that decode cost for that one face only.
+//
+//      A THIRD @font-face -- Source Code Pro, the fix for audit finding
+//      A2's cross-machine determinism bug (--font-mono used to be an
+//      unbundled system stack: Menlo/Consolas/whatever fontconfig picks) --
+//      joins these two, gated on `hasCode` rather than on a style choice
+//      (there's no "which mono face" question the way there is a "which
+//      body face" one, so `hasCode` is a boolean, not a third branch of the
+//      `fontFace` ternary below). Same loadFonts() cost argument as above,
+//      same shape as `hasMath` gating KaTeX's font CSS a few lines down --
+//      a document with no code (`pre`/`code` elements) pays nothing.
 //   3. An explicit @page rule matching src/typography/page-geometry.ts's
 //      constants (in inches, @page's native unit, matching
 //      DEFAULT_PAGE_CONFIG's own inch-denominated margins).
@@ -254,10 +265,23 @@ registerBreakHandlers()
 // passes `true` once renderMathEquations has ALREADY found and replaced at
 // least one math placeholder in this request's own content, so this is a
 // real per-request decision, not a static default.
+//
+// `hasCode` (audit finding A2 fix) is the identical pattern one level up:
+// gates whether the vendored Source Code Pro face is registered at all.
+// Computed by the 'render' handler as `container.querySelector('pre, code')
+// !== null`, checked AFTER both renderMermaidDiagrams and renderMathEquations
+// have already run and replaced their own `pre > code.language-mermaid` /
+// `code.language-math-*` placeholders with real SVG/KaTeX output -- so this
+// never false-positives on a diagram- or equation-only document that
+// contains no genuine author-written code. Every real `pre`/`code` element
+// that DOES remain (a fenced block, labeled or not, or an inline `` `span` ``)
+// renders through --font-mono per document-typography.css, so any one of
+// them is sufficient to justify paying the decode cost.
 function buildDocumentStylesheet(
   geometry: PageGeometry,
   style: DocumentStyle,
-  hasMath: boolean
+  hasMath: boolean,
+  hasCode: boolean
 ): string {
   // Exactly one @font-face rule is emitted -- whichever family
   // `style.fontFamily` actually selects -- not both unconditionally. See
@@ -282,51 +306,90 @@ function buildDocumentStylesheet(
   src: url(data:font/woff2;base64,${sourceSerif4Base64}) format('woff2-variations');
 }`
 
+  // Audit finding A2 fix. See this file's own top-of-file comment (piece 2)
+  // and --font-mono's comment just below for the full writeup; this is the
+  // hasCode-gated counterpart to the body-font ternary immediately above.
+  const monoFontFace = hasCode
+    ? `@font-face {
+  font-family: 'Source Code Pro';
+  font-style: normal;
+  font-weight: 200 900;
+  font-display: block;
+  src: url(data:font/woff2;base64,${sourceCodeProBase64}) format('woff2-variations');
+}`
+    : ''
+
   return `
 :root {
   --font-serif: 'Source Serif 4', serif;
-  /* KNOWN, DELIBERATE EXCEPTION to the determinism guarantee this context
-     exists to serve, recorded here so the next reader knows it was weighed
-     rather than missed. The value below is an UNBUNDLED SYSTEM STACK:
-     Menlo ships on macOS, Consolas on Windows, and Linux resolves the
-     generic monospace keyword to whatever fontconfig picks. Every fenced
-     code block therefore measures in a different face per platform, so a
-     code-heavy document's page count is host-dependent in exactly the way
-     Mermaid's label font (see ensureMermaidLabelFontRegistered below) just
-     stopped being. Editor/paginator parity hides it locally: both surfaces
-     read this same token, so on any one machine they agree, and no test in
-     this repo compares two machines.
+  /* Audit finding A2, FIXED (previously a known, deliberate, documented
+     exception -- see git history / commit be38f55's own trailer for the
+     original deferred writeup this replaces). Used to be an UNBUNDLED
+     SYSTEM STACK: 'ui-monospace, SFMono-Regular, Menlo, Consolas,
+     monospace' -- Menlo ships on macOS, Consolas on Windows, Linux
+     resolves the generic keyword to whatever fontconfig picks. Every
+     fenced code block (and every inline inline-code span) measured in a
+     different face per platform, so a code-containing document's page
+     count was host-dependent -- the identical failure mode Mermaid's label
+     font had (fixed by commit be38f55, same session), and identical to why
+     the design doc chose Electron over Tauri in the first place: this app's
+     whole determinism argument rests on every render running against
+     bundled assets, never a host default.
 
-     NOT fixed in the same pass as the Mermaid font, and the asymmetry is
-     the reason. That fix pointed diagram labels at Inter Variable, which
-     was ALREADY vendored and ALREADY inlined into this bundle -- zero new
-     bytes, zero new licensing surface, one string. A real fix here is four
-     coupled changes:
-       1. Vendor a new monospace woff2 plus its OFL text. Measured, not
-          estimated (latin subset, variable weight axis, fetched and sized
-          directly): Source Code Pro is 22,044 bytes on disk / 29,392
-          base64 characters once inlined here; JetBrains Mono is 40,404 /
-          53,872. The only monospace face already in the dependency tree is
-          katex's KaTeX_Typewriter-Regular at 13,568 / 18,091, and it is
-          disqualified twice over -- single weight, roman only, while the
-          highlight.js theme further down this file sets real bold and
-          italic on code tokens; and Computer Modern Typewriter is a math
-          face, not a code face.
-       2. Change the matching token in base.css at the same time.
-          src/typography/document-typography.test.ts cross-checks the two
-          surfaces and requires identical VALUES, so changing only this
-          copy would swap a cross-machine divergence for a same-machine
-          editor-vs-paginator one and break the 0.000px parity Gate 10
-          pins. A half-fix here is strictly worse than no fix.
-       3. Gate the new face on the document actually containing code, the
-          way hasMath already gates KaTeX's font CSS -- otherwise every
-          code-free document pays an awaited decode per render, via the
-          Chunker.loadFonts behavior documented above.
-       4. Re-baseline the pinned corpus page counts in Gates 2, 4 and 6,
-          since code-block metrics would genuinely move.
-     Worth doing; it is its own small sub-project, not a rider on this
-     one. */
-  --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+     NOTE: this comment lives INSIDE a JS template literal (the CSS text
+     buildDocumentStylesheet returns), so it deliberately never uses a
+     backtick character anywhere in its own prose, including for inline
+     code terms that would normally get one -- a literal backtick here
+     would terminate the surrounding template literal and fail to compile.
+
+     Fixed the same way: point the token at a real, vendored, OFL-licensed
+     face (this file's own monoFontFace local, hasCode-gated like
+     buildKatexFontFaceCss's hasMath gating) instead of a name the host
+     happens to resolve. Source Code Pro was chosen over two other
+     candidates, measured rather than estimated (latin subset, variable
+     weight axis, actually fetched and sized): JetBrains Mono, at 40,404
+     bytes on disk / 53,872 base64 characters once inlined, is nearly
+     double the cost for no correctness benefit over Source Code Pro's
+     22,044 / 29,392. KaTeX's already-bundled KaTeX_Typewriter-Regular
+     (13,568 / 18,091, zero new bytes) was the cheapest option and still
+     disqualified, twice over: single weight (no real bold -- the
+     highlight.js theme below sets a bold font-weight on .hljs-strong/
+     .hljs-section) and roman-only (no real italic -- the same theme sets
+     an italic font-style on .hljs-emphasis), and it is a MATH face
+     (Computer Modern Typewriter), not a code face, so reusing it here
+     would be borrowing KaTeX's own visual identity for an unrelated
+     surface. Source Code Pro's variable weight axis gives a genuine bold
+     instance rather than Chromium's synthetic-bold thickening; italic
+     still falls back to Chromium's synthetic-oblique transform (this
+     vendored file is upright-only, matching the exact single file already
+     measured above) -- but that fallback is itself fully deterministic,
+     computed by the browser engine Electron pins, never by a host font, so
+     it doesn't reopen the bug this fix exists to close.
+
+     src/renderer/src/assets/base.css carries the matching --font-mono copy
+     for the Milkdown mount (plus the real, Vite-bundled @font-face this
+     sandboxed context's own base64 data: URI mirrors) -- the two MUST stay
+     byte-for-byte identical strings, not just resolve to the same face by
+     different means: src/typography/document-typography.test.ts's
+     cross-check enforces exactly that, because a one-sided edit here would
+     trade a cross-machine divergence for a same-machine editor-vs-
+     paginator one, which would break Gate 10's 0.000px parity -- strictly
+     worse than the bug being fixed. The plain monospace generic family is
+     kept as the sole fallback (matching --font-serif/--font-doc-sans's own
+     "pinned face, one generic keyword, nothing else" pattern) rather than
+     restating the old system names, since Chunker.loadFonts() (documented
+     at length where buildDocumentStylesheet is defined below) awaits the
+     real face before anything is measured whenever hasCode is true, so the
+     fallback is never actually exercised by real layout.
+
+     Corpus page counts (Gates 2/4/6) were re-measured after this fix, per
+     the same "check, don't assume" discipline commit be38f55 used for
+     Mermaid: see that gate's own committed results for whether any moved
+     and why -- none of the pinned corpus fixtures contain a real (non-
+     Mermaid-consumed) fenced code block or backtick span long enough to
+     cross a page boundary, so a lack of movement here is an expected,
+     verified result, not a skipped check. */
+  --font-mono: 'Source Code Pro', monospace;
   --font-doc-sans: 'Inter Variable', sans-serif;
   --text-12: 12px;
   --text-13: 13px;
@@ -340,6 +403,8 @@ function buildDocumentStylesheet(
 }
 
 ${fontFace}
+
+${monoFontFace}
 
 ${hasMath ? buildKatexFontFaceCss() : ''}
 
@@ -1624,6 +1689,15 @@ window.addEventListener('message', async (event: MessageEvent<IncomingMessage>) 
     // buildDocumentStylesheet below, since its return value decides whether
     // that call includes KaTeX's own font-face CSS at all.
     const hasMath = renderMathEquations(container)
+    // Audit finding A2 fix: gates whether the vendored Source Code Pro
+    // @font-face is registered at all (buildDocumentStylesheet's own
+    // `monoFontFace`), same shape as hasMath immediately above. Checked
+    // AFTER both renderMermaidDiagrams and renderMathEquations have already
+    // replaced their own `pre > code.language-mermaid` / `code.language-
+    // math-*` placeholders with real SVG/KaTeX output, so a document whose
+    // only "code-shaped" markup was a diagram or an equation doesn't pay
+    // the decode cost for a face nothing on the page actually uses.
+    const hasCode = container.querySelector('pre, code') !== null
 
     // Settle images BEFORE Paged.js measures anything -- a
     // Range.createContextualFragment fragment is deliberately NON-inert (see
@@ -1663,7 +1737,11 @@ window.addEventListener('message', async (event: MessageEvent<IncomingMessage>) 
     // below already does exactly this (`{ 'gate4-probe-stylesheet': css }`).
     const flow = await previewer.preview(
       container,
-      [{ 'document-typography': buildDocumentStylesheet(geometry, documentStyle, hasMath) }],
+      [
+        {
+          'document-typography': buildDocumentStylesheet(geometry, documentStyle, hasMath, hasCode)
+        }
+      ],
       root
     )
     const t1 = performance.now()
