@@ -1,11 +1,25 @@
+import { act } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import App from './App'
 import { useAppStore, initialAppState } from './store/appStore'
+import { useDocumentStore, initialDocumentState } from './store/documentStore'
+import type { MenuCommand } from '../../menu/commands'
+
+// Delivers an application-menu command through whatever callbacks are
+// currently registered -- exactly what preload does after validating the
+// command against MENU_COMMANDS.
+function emitMenuCommand(command: MenuCommand, payload?: string): void {
+  const calls = vi.mocked(window.api.onMenuCommand).mock.calls
+  act(() => {
+    for (const [callback] of calls) callback(command, payload)
+  })
+}
 
 beforeEach(() => {
   useAppStore.setState(initialAppState)
+  useDocumentStore.setState(initialDocumentState)
   window.api = {
     openFile: vi.fn(),
     openPath: vi.fn(),
@@ -42,7 +56,15 @@ beforeEach(() => {
     scrollSplitPreviewToPage: vi.fn(),
     getSplitPreviewPage: vi.fn(),
     saveDroppedImage: vi.fn(),
-    openInNewWindow: vi.fn()
+    openInNewWindow: vi.fn(),
+    // The application menu's two channels. Both are stubbed in every
+    // window.api fixture because window.api is a fully-typed FileApi here --
+    // a missing method is a compile error, not just a runtime one.
+    // onMenuCommand must return a real unsubscribe FUNCTION: App.tsx and
+    // EditorScreen both call it from an effect cleanup, and a bare vi.fn()
+    // returning undefined would throw on unmount.
+    onMenuCommand: vi.fn().mockReturnValue(() => {}),
+    setWindowState: vi.fn()
   }
 })
 
@@ -193,6 +215,142 @@ describe('App', () => {
       } finally {
         window.matchMedia = realMatchMedia
       }
+    })
+  })
+
+  describe('application-menu commands and window state', () => {
+    it("reports this window's state so main can title the window and enable menu items", async () => {
+      render(<App />)
+      await screen.findByText('PageDown')
+
+      // Home: no document, so main renders a bare "PageDown" title and
+      // disables every document-scoped File/View item.
+      expect(window.api.setWindowState).toHaveBeenCalledWith({
+        documentOpen: false,
+        viewMode: 'format',
+        fileName: null,
+        isDirty: false
+      })
+
+      act(() => {
+        useDocumentStore.setState({ filePath: '/tmp/docs/report.md', isDirty: true })
+        // 'source', not 'split' -- Split mode would mount a real
+        // SplitPreview, whose own effects call into IPC this fixture stubs
+        // bare. The field under test is just the reported viewMode.
+        useAppStore.setState({ screen: 'editor', viewMode: 'source' })
+      })
+
+      // The BASENAME, not the full path -- the renderer already splits paths
+      // this way for the tab bar, which keeps the main process out of the
+      // business of guessing POSIX vs Windows separators.
+      expect(window.api.setWindowState).toHaveBeenLastCalledWith({
+        documentOpen: true,
+        viewMode: 'source',
+        fileName: 'report.md',
+        isDirty: true
+      })
+    })
+
+    it('file:new creates a document and shows the editor', async () => {
+      render(<App />)
+      await screen.findByText('PageDown')
+
+      emitMenuCommand('file:new')
+
+      expect(useAppStore.getState().screen).toBe('editor')
+      expect(useDocumentStore.getState().tabs).toHaveLength(2)
+    })
+
+    it("file:new applies the user's own default page config, like the Home button does", async () => {
+      // The reason File > New shares useCreateDocument with HomeScreen rather
+      // than calling newDocument() directly: a menu New that quietly ignored
+      // the configured default page size would be a silent divergence.
+      vi.mocked(window.api.getPreferences).mockResolvedValue({
+        spellcheckEnabled: true,
+        autosaveIntervalMs: 45_000,
+        defaultPageConfig: {
+          pageSize: 'A4',
+          orientation: 'landscape',
+          theme: 'report',
+          fontFamily: 'inter'
+        },
+        colorScheme: 'system',
+        authorName: ''
+      })
+      render(<App />)
+      await screen.findByText('PageDown')
+      // Wait for App's own getPreferences() effect to resolve -- before it
+      // does, useCreateDocument correctly degrades to plain empty content.
+      await vi.waitFor(() => expect(window.api.getPreferences).toHaveBeenCalled())
+
+      emitMenuCommand('file:new')
+
+      await vi.waitFor(() => {
+        expect(useDocumentStore.getState().content).toContain('page: A4')
+      })
+    })
+
+    it('file:open opens the native dialog and navigates on success', async () => {
+      vi.mocked(window.api.openFile).mockResolvedValue({
+        filePath: '/tmp/opened.md',
+        content: '# Opened',
+        recoveredFromAutosave: false,
+        mtimeMs: 1000
+      })
+      render(<App />)
+      await screen.findByText('PageDown')
+
+      emitMenuCommand('file:open')
+
+      await vi.waitFor(() => expect(useAppStore.getState().screen).toBe('editor'))
+      expect(useDocumentStore.getState().filePath).toBe('/tmp/opened.md')
+    })
+
+    it('file:openRecent re-validates the path through the ordinary openPath action', async () => {
+      // Security-relevant: the path comes from main's own recent-files.json,
+      // but it still goes through documentStore.openPath -> file:openPath ->
+      // isKnownPath, exactly like clicking a Home-screen recent row. The menu
+      // grants no disk access of its own.
+      vi.mocked(window.api.openPath).mockResolvedValue({
+        filePath: '/tmp/recent.md',
+        content: '# Recent',
+        recoveredFromAutosave: false,
+        mtimeMs: 1000
+      })
+      render(<App />)
+      await screen.findByText('PageDown')
+
+      emitMenuCommand('file:openRecent', '/tmp/recent.md')
+
+      await vi.waitFor(() => {
+        expect(window.api.openPath).toHaveBeenCalledWith('/tmp/recent.md')
+        expect(useAppStore.getState().screen).toBe('editor')
+      })
+    })
+
+    it('file:openRecent with no payload does nothing at all', () => {
+      render(<App />)
+      emitMenuCommand('file:openRecent')
+      expect(window.api.openPath).not.toHaveBeenCalled()
+    })
+
+    it('app:preferences navigates to Settings from any screen', async () => {
+      render(<App />)
+      await screen.findByText('PageDown')
+
+      emitMenuCommand('app:preferences')
+
+      expect(useAppStore.getState().screen).toBe('settings')
+    })
+
+    it('unsubscribes from menu commands on unmount', () => {
+      const unsubscribe = vi.fn()
+      vi.mocked(window.api.onMenuCommand).mockReturnValue(unsubscribe)
+      const { unmount } = render(<App />)
+
+      unmount()
+
+      expect(unsubscribe).toHaveBeenCalled()
     })
   })
 })
