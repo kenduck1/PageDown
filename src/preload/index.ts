@@ -1,6 +1,13 @@
-import { contextBridge, ipcRenderer } from 'electron'
+import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron'
 import { electronAPI } from '@electron-toolkit/preload'
 import type { Preferences } from '../main/preferences'
+import {
+  MENU_COMMAND_CHANNEL,
+  WINDOW_STATE_CHANNEL,
+  isMenuCommand,
+  type MenuCommand
+} from '../menu/commands'
+import type { WindowUiState } from '../menu/window-state'
 
 // Custom APIs for renderer
 const api = {
@@ -79,7 +86,46 @@ const api = {
   // src/main/index.ts for why no isKnownPath check is needed here
   // specifically (the new window re-validates independently).
   openInNewWindow: (filePath?: string | null) =>
-    ipcRenderer.invoke('window:openInNew', filePath ?? null)
+    ipcRenderer.invoke('window:openInNew', filePath ?? null),
+  // This surface's FIRST push channel -- every other entry above is a
+  // renderer-initiated `invoke`/`send`. Three things about it are deliberate
+  // security choices, not ceremony:
+  //
+  // 1. `ipcRenderer.on` is NOT exposed. Handing the renderer a raw `on`
+  //    (or the `ipcRenderer` object) would let any renderer-side code listen
+  //    on ANY channel, including ones carrying file contents or paths.
+  //    Wrapping it pins the channel to exactly one.
+  // 2. The `IpcRendererEvent` first argument is STRIPPED, never forwarded.
+  //    That object carries a live `sender` reference (an ipcRenderer handle)
+  //    and `ports`; passing it through contextBridge would hand privileged
+  //    IPC objects to renderer code that is otherwise firewalled from them.
+  // 3. The command is validated against the shared MENU_COMMANDS allowlist
+  //    before any renderer callback runs, so an unexpected value can never
+  //    reach a handler map lookup.
+  //
+  // Returns a real unsubscribe function (contextBridge proxies functions in
+  // both directions) rather than exposing an `off`: an off-by-channel API
+  // would require the caller to hand the same function reference back across
+  // the bridge, and a bridged callback is not reference-identical to the one
+  // the caller passed, so `removeListener` would silently never match. The
+  // caller MUST call it -- EditorScreen remounts often enough (documentStore's
+  // `revision` key, mode switches) that a leaked listener per mount is a real
+  // accumulation, not a theoretical one.
+  onMenuCommand: (callback: (command: MenuCommand, payload?: string) => void) => {
+    const listener = (_event: IpcRendererEvent, command: unknown, payload: unknown): void => {
+      if (!isMenuCommand(command)) return
+      callback(command, typeof payload === 'string' ? payload : undefined)
+    }
+    ipcRenderer.on(MENU_COMMAND_CHANNEL, listener)
+    return () => {
+      ipcRenderer.removeListener(MENU_COMMAND_CHANNEL, listener)
+    }
+  },
+  // `send`, not `invoke` -- the main process has no result to return, and
+  // this fires on ordinary UI state changes (screen navigation, view-mode
+  // switches, the dirty flag flipping), the same high-frequency-no-result
+  // shape as setSplitPreviewBounds above.
+  setWindowState: (state: WindowUiState) => ipcRenderer.send(WINDOW_STATE_CHANNEL, state)
 }
 
 // Use `contextBridge` APIs to expose Electron APIs to

@@ -35,6 +35,8 @@ import {
   clearPendingAutosaveForFile
 } from './version-history'
 import { PAGE_WIDTH_PX, PAGE_HEIGHT_PX } from '../typography/page-geometry'
+import { applyWindowUiState, initApplicationMenu, refreshApplicationMenu } from './app-menu'
+import { MENU_COMMAND_CHANNEL, WINDOW_STATE_CHANNEL, type MenuCommand } from '../menu/commands'
 
 // Must run before app.whenReady() is awaited anywhere — Electron requires
 // protocol.registerSchemesAsPrivileged() to be called before the `ready`
@@ -194,6 +196,39 @@ function destroySplitPreviewHarness(): Promise<void> {
 // per-window Split mode support.
 const documentWindows = new Set<BrowserWindow>()
 
+// Routes an application-menu command to the window that should act on it.
+//
+// The FOCUSED window, matching the `BrowserWindow.fromWebContents(event.sender)`
+// pattern dialog:confirmDiscard/file:exportPdf/file:save already use for the
+// mirror-image direction (a renderer-initiated request that needs to know
+// which window asked). A menu is global to the app; the document it acts on
+// is not.
+//
+// The `documentWindows` fallback covers a narrow but real gap: on macOS a
+// window can be open while the app is not frontmost, in which case
+// getFocusedWindow() is null even though there is exactly one obvious
+// recipient. Deterministic (insertion order, i.e. the first window still
+// open) rather than arbitrary.
+//
+// With NO window at all -- macOS's "app running, every window closed" state,
+// where the menu is still on screen and still clickable -- only New and Open
+// do anything: they create a window, which boots at Home where both actions
+// are one click away. The command itself is deliberately NOT queued and
+// replayed into the new window: that would need a whole
+// deliver-once-the-renderer-is-ready handshake for two commands whose entire
+// effect is "show a screen the fresh window already shows." Every other
+// command is dropped, which is correct -- Save/Export/Find have no document
+// to act on.
+function dispatchMenuCommand(command: MenuCommand, payload?: string): void {
+  const focused = BrowserWindow.getFocusedWindow()
+  const target = focused ?? documentWindows.values().next().value
+  if (!target || target.isDestroyed()) {
+    if (command === 'file:new' || command === 'file:open') createWindow()
+    return
+  }
+  target.webContents.send(MENU_COMMAND_CHANNEL, command, payload)
+}
+
 // Builds the real native spelling-suggestion + standard edit context menu
 // for a given window's webContents -- see the original inline comment this
 // was extracted from (now attached per-window inside createWindow, not
@@ -248,7 +283,13 @@ function createWindow(openPath?: string): BrowserWindow {
     width: 900,
     height: 670,
     show: false,
-    autoHideMenuBar: true,
+    // `autoHideMenuBar: true` (the electron-vite template's own default) was
+    // removed when this app gained a real application menu: on Windows/Linux
+    // it hides the menu bar until Alt is pressed, which is precisely the
+    // discoverability problem this sub-project exists to fix -- the
+    // accelerators worked either way, but nothing showed a user that File >
+    // Export as PDF or View > Split existed. No effect on macOS, where the
+    // menu lives in the system menu bar regardless.
     ...(process.platform === 'linux' ? { icon } : {}),
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
@@ -352,6 +393,13 @@ app.whenReady().then(() => {
     if (result) {
       try {
         await addRecentFile(app.getPath('userData'), result.filePath)
+        // The File > Open Recent submenu is built from this same allowlist,
+        // so every write to it has to rebuild the menu or that submenu goes
+        // stale until the next focus change. Fire-and-forget for the same
+        // reason the addRecentFile call it follows is best-effort: a menu
+        // that is one entry behind must never fail an already-completed
+        // file open.
+        void refreshApplicationMenu()
       } catch (err) {
         console.error('Failed to record recent file', err)
       }
@@ -367,6 +415,8 @@ app.whenReady().then(() => {
     const result = await readFileByPath(filePath, userDataDir)
     try {
       await addRecentFile(userDataDir, result.filePath)
+      // See file:open above for why every recents write refreshes the menu.
+      void refreshApplicationMenu()
     } catch (err) {
       console.error('Failed to record recent file', err)
     }
@@ -393,6 +443,9 @@ app.whenReady().then(() => {
       if (result) {
         try {
           await addRecentFile(userDataDir, result.filePath)
+          // See file:open above for why every recents write refreshes the
+          // menu. Save-As in particular is a genuinely new recents entry.
+          void refreshApplicationMenu()
         } catch (err) {
           console.error('Failed to record recent file', err)
         }
@@ -415,7 +468,32 @@ app.whenReady().then(() => {
 
   ipcMain.handle('preferences:get', () => readPreferences(app.getPath('userData')))
 
+  // Each window's renderer reports its own screen/view-mode/filename/dirty
+  // state here (App.tsx's own effect). `ipcMain.on`, not `handle` -- there is
+  // no result to await, and this fires on ordinary state changes, matching
+  // split-preview:setBounds's own precedent. The payload is re-validated
+  // inside applyWindowUiState (coerceWindowUiState) rather than trusted:
+  // `fileName` reaches a real `win.setTitle()` call. A message from an
+  // already-closed window resolves to no window and is dropped.
+  ipcMain.on(WINDOW_STATE_CHANNEL, (event, state: unknown) => {
+    const win = BrowserWindow.fromWebContents(event.sender)
+    if (win) applyWindowUiState(win, state)
+  })
+
   const mainWindow = createWindow()
+
+  // The real application menu. Before this, the app ran on ELECTRON'S OWN
+  // default menu (Electron installs one when an app sets none) -- which is
+  // why Cmd+Q/Cmd+W/Cmd+Z already worked while nothing app-specific did:
+  // there was no Save, no Open, no Export, no view switching, and no way to
+  // discover any of it. Installed after createWindow so the first build can
+  // already see a window, though the menu is global to the app and does not
+  // depend on one existing.
+  initApplicationMenu({
+    userDataDir: app.getPath('userData'),
+    isDev: is.dev,
+    dispatch: dispatchMenuCommand
+  })
 
   // Applies the spellcheck half of a preferences change LIVE, on the same
   // session document-editing windows already use, not just on the next app

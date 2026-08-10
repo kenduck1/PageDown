@@ -2,7 +2,13 @@
 <html>
   <head>
     <meta charset="UTF-8" />
-    <title>Electron</title>
+    <!-- The real product name, not the electron-vite template's "Electron".
+    An Electron BrowserWindow adopts its page's title, so this is what the OS
+    window title (and the macOS window list) shows for the moments between the
+    window appearing and App.tsx's own first window-state report reaching the
+    main process, which then calls setTitle with the document-aware version.
+    Leaving it as "Electron" made that a visible flash of the wrong app name. -->
+    <title>PageDown</title>
     <!-- https://developer.mozilla.org/en-US/docs/Web/HTTP/CSP -->
     <meta
       http-equiv="Content-Security-Policy"

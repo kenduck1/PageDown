@@ -32,6 +32,13 @@ interface AppStateValues {
   linkComposerOpen: boolean
   homeActiveSection: HomeActiveSection
   currentPage: number
+  // Whether the editor's left rail (Pages/Outline/History/Comments) is
+  // showing. Added for View > Toggle Sidebar in the application menu -- the
+  // sidebar was previously rendered unconditionally, with no way to reclaim
+  // its 216px on a narrow window. Defaults to visible: hiding chrome the user
+  // never asked to hide would be a regression, and the menu item's own
+  // checkmark-free label reads as an action either way.
+  sidebarVisible: boolean
 }
 
 interface AppState extends AppStateValues {
@@ -52,6 +59,7 @@ interface AppState extends AppStateValues {
   closeLinkComposer: () => void
   setHomeActiveSection: (section: HomeActiveSection) => void
   setCurrentPage: (page: number) => void
+  toggleSidebar: () => void
 }
 
 export const initialAppState: AppStateValues = {
@@ -65,7 +73,8 @@ export const initialAppState: AppStateValues = {
   commentComposerOpen: false,
   linkComposerOpen: false,
   homeActiveSection: 'recent',
-  currentPage: 1
+  currentPage: 1,
+  sidebarVisible: true
 }
 
 function clampSplitRatio(percent: number): number {
@@ -92,5 +101,8 @@ export const useAppStore = create<AppState>()((set) => ({
   closeLinkComposer: () => set({ linkComposerOpen: false }),
   setHomeActiveSection: (section) => set({ homeActiveSection: section }),
   setCurrentPage: (page) =>
-    set((state) => (Number.isFinite(page) ? { currentPage: Math.max(1, Math.floor(page)) } : state))
+    set((state) =>
+      Number.isFinite(page) ? { currentPage: Math.max(1, Math.floor(page)) } : state
+    ),
+  toggleSidebar: () => set((state) => ({ sidebarVisible: !state.sidebarVisible }))
 }))
