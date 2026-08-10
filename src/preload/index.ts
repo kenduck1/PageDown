@@ -50,6 +50,23 @@ const api = {
   // `allowRemoteImages` -- see getPageCount's own comment above.
   exportPdf: (content: string, filePath: string | null = null, allowRemoteImages = false) =>
     ipcRenderer.invoke('file:exportPdf', content, filePath, allowRemoteImages),
+  // Product-completeness audit 2.3 (HTML export). Same optional/validated
+  // filePath treatment as exportPdf immediately above -- see that entry's
+  // own comment.
+  exportHtml: (content: string, filePath: string | null = null, allowRemoteImages = false) =>
+    ipcRenderer.invoke('file:exportHtml', content, filePath, allowRemoteImages),
+  // "Show in folder" for a just-written export. Deliberately takes the
+  // FULL path back from the renderer (documentStore already has it, off the
+  // exportPdf/exportHtml result) rather than the main process guessing "the
+  // last one" -- but that path is NOT trusted blindly on the other end: the
+  // main-process handler only reveals a path it ITSELF wrote via a real
+  // export a moment ago (a small remembered set, not an arbitrary-path
+  // reveal primitive) -- see the file:exportPdf/file:exportHtml handlers'
+  // own comments in src/main/index.ts for the full reasoning. Resolves
+  // `false` if the path isn't one this app just exported (nothing to show,
+  // never a thrown error over what's ultimately a courtesy action).
+  showItemInFolder: (filePath: string): Promise<boolean> =>
+    ipcRenderer.invoke('shell:showItemInFolder', filePath),
   // Same optional/validated filePath treatment as exportPdf immediately
   // above -- see that entry's own comment.
   print: (content: string, filePath: string | null = null, allowRemoteImages = false) =>

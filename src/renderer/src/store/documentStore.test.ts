@@ -15,6 +15,8 @@ beforeEach(() => {
     getPageCount: vi.fn(),
     confirmDiscardChanges: vi.fn(),
     exportPdf: vi.fn(),
+    exportHtml: vi.fn(),
+    showItemInFolder: vi.fn(),
     print: vi.fn(),
     getPreferences: vi.fn(),
     setPreferences: vi.fn(),
@@ -830,5 +832,105 @@ describe('useDocumentStore exportPdf/print', () => {
     await useDocumentStore.getState().print()
 
     expect(useDocumentStore.getState().error).toBeNull()
+  })
+
+  // Product-completeness audit 2.3: "Export gives no feedback" -- exportPdf
+  // used to discard the returned { filePath } entirely. These pin the fix:
+  // a real notice with the real path, surfaced through the store so both
+  // triggers (this toolbar button and the File menu's Cmd+Shift+E) can show
+  // it via EditorToolbar's own Toast.
+  it('a successful PDF export surfaces the real written path via exportNotice', async () => {
+    vi.mocked(window.api.exportPdf).mockResolvedValue({ filePath: '/tmp/reports/q3.pdf' })
+    useDocumentStore.setState({ content: '# Report' })
+
+    await useDocumentStore.getState().exportPdf()
+
+    expect(useDocumentStore.getState().exportNotice).toEqual({
+      message: 'Exported PDF: q3.pdf',
+      filePath: '/tmp/reports/q3.pdf'
+    })
+  })
+
+  it('a cancelled PDF export Save dialog sets no notice', async () => {
+    vi.mocked(window.api.exportPdf).mockResolvedValue(null)
+    useDocumentStore.setState({ content: '# Report' })
+
+    await useDocumentStore.getState().exportPdf()
+
+    expect(useDocumentStore.getState().exportNotice).toBeNull()
+  })
+
+  it('clearExportNotice resets the notice back to null', () => {
+    useDocumentStore.setState({ exportNotice: { message: 'x', filePath: '/tmp/x.pdf' } })
+    useDocumentStore.getState().clearExportNotice()
+    expect(useDocumentStore.getState().exportNotice).toBeNull()
+  })
+})
+
+describe('useDocumentStore exportHtml', () => {
+  it('calls window.api.exportHtml with content/path/consent, matching exportPdf', async () => {
+    vi.mocked(window.api.exportHtml).mockResolvedValue({ filePath: '/tmp/report.html' })
+    useDocumentStore.setState({
+      filePath: '/tmp/report.md',
+      content: '# Report',
+      remoteImagesAllowed: true
+    })
+
+    await useDocumentStore.getState().exportHtml()
+
+    expect(window.api.exportHtml).toHaveBeenCalledWith('# Report', '/tmp/report.md', true)
+  })
+
+  it('a successful HTML export surfaces the real written path via exportNotice', async () => {
+    vi.mocked(window.api.exportHtml).mockResolvedValue({ filePath: '/tmp/report.html' })
+    useDocumentStore.setState({ content: '# Report' })
+
+    await useDocumentStore.getState().exportHtml()
+
+    expect(useDocumentStore.getState().exportNotice).toEqual({
+      message: 'Exported HTML: report.html',
+      filePath: '/tmp/report.html'
+    })
+  })
+
+  it('holds its OWN in-flight guard, independent of isExporting (PDF)', async () => {
+    let resolveExport: (() => void) | undefined
+    vi.mocked(window.api.exportHtml).mockReturnValue(
+      new Promise((resolve) => {
+        resolveExport = () => resolve({ filePath: '/tmp/report.html' })
+      })
+    )
+    useDocumentStore.setState({ filePath: '/tmp/report.md', content: '# Report' })
+
+    const first = useDocumentStore.getState().exportHtml()
+    expect(useDocumentStore.getState().isExportingHtml).toBe(true)
+    expect(useDocumentStore.getState().isExporting).toBe(false)
+    await useDocumentStore.getState().exportHtml()
+
+    expect(window.api.exportHtml).toHaveBeenCalledTimes(1)
+    resolveExport?.()
+    await first
+    expect(useDocumentStore.getState().isExportingHtml).toBe(false)
+  })
+
+  it('surfaces a friendly message rather than the raw IPC error string', async () => {
+    vi.mocked(window.api.exportHtml).mockRejectedValue(
+      new Error("Error invoking remote method 'file:exportHtml': Error: disk full")
+    )
+    useDocumentStore.setState({ content: '# Report' })
+
+    await useDocumentStore.getState().exportHtml()
+
+    expect(useDocumentStore.getState().error).toBe('Failed to export HTML. Please try again.')
+    expect(useDocumentStore.getState().isExportingHtml).toBe(false)
+  })
+
+  it('a cancelled HTML export Save dialog sets no notice', async () => {
+    vi.mocked(window.api.exportHtml).mockResolvedValue(null)
+    useDocumentStore.setState({ content: '# Report' })
+
+    await useDocumentStore.getState().exportHtml()
+
+    expect(useDocumentStore.getState().exportNotice).toBeNull()
   })
 })

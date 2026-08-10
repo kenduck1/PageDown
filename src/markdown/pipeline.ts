@@ -74,7 +74,13 @@ function undoDoubleClobberPrefix(value: unknown): unknown {
 // absolute filesystem path, denied by resolveAssetPath on the main-process
 // side anyway, but never even worth routing through the __asset__ scheme)
 // and no URL scheme prefix (http(s), data:, pagedown-render:, ...).
-function isRelativeLocalPath(src: string): boolean {
+// Exported for src/main/html-exporter.ts, which needs the identical
+// relative-local-path test to decide which `<img>` srcs in its OWN output
+// are candidates for data: URI inlining -- reusing this rather than a
+// second hand-rolled regex is what keeps the two "is this a local image
+// reference" questions (rewrite-to-asset-scheme here, inline-to-data-URI
+// there) from silently drifting apart.
+export function isRelativeLocalPath(src: string): boolean {
   if (src.length === 0) return false
   if (src.startsWith('/')) return false
   if (URL_SCHEME_PATTERN.test(src)) return false
@@ -99,7 +105,12 @@ function isRelativeLocalPath(src: string): boolean {
 // this must not be unguarded, or a document containing one would crash
 // markdownToHtml entirely. Falling back to the raw value on failure is safe:
 // it's exactly what happened before this fix existed, for every src.
-function urlToRelativePath(src: string): string {
+// Exported for the same reason isRelativeLocalPath is, immediately above:
+// src/main/html-exporter.ts needs to turn a matched local `src` back into a
+// real relative filesystem path before it can hand that to
+// resolveAssetPath, and this is the one place that decode-one-layer logic
+// (and its documented undecodable-`%` guard) already lives.
+export function urlToRelativePath(src: string): string {
   try {
     return decodeURIComponent(src)
   } catch {

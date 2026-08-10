@@ -8,7 +8,8 @@ import {
   screen,
   type MenuItemConstructorOptions
 } from 'electron'
-import { join } from 'path'
+import { join, isAbsolute } from 'path'
+import { stat } from 'node:fs/promises'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
 import {
@@ -35,6 +36,7 @@ import { getThumbnail, destroyThumbnailHarness } from './thumbnail-generator'
 import { getPageCount, destroyPageCountHarness } from './page-count-generator'
 import { createSplitPreviewHarness, type SplitPreviewHarness } from './split-preview-window'
 import { exportDocumentToPdf } from './pdf-exporter'
+import { exportDocumentToHtml } from './html-exporter'
 import { printDocument } from './print-exporter'
 import { readPreferences, writePreferences, type Preferences } from './preferences'
 import {
@@ -64,12 +66,195 @@ import {
   WINDOW_CLOSE_REQUEST_CHANNEL,
   WINDOW_CLOSE_RESPONSE_CHANNEL
 } from '../window/close-request'
+import { extractMarkdownPathFromArgv, looksLikeMarkdownPath } from './open-file-args'
 
 // Must run before app.whenReady() is awaited anywhere — Electron requires
 // protocol.registerSchemesAsPrivileged() to be called before the `ready`
 // event fires (see pagination-scheme.ts for why this scheme needs to be
 // privileged at all).
 registerPaginationScheme()
+
+// ---------------------------------------------------------------------------
+// Product-completeness audit 2.5: file associations, "Open With", and a
+// single-instance lock. All three ship together, deliberately, because they
+// only work correctly AS a set:
+//
+//   - electron-builder.yml's `fileAssociations` (.md/.markdown) is what
+//     makes the OS route a double-click / "Open With PageDown" to this app
+//     at all -- without it, none of the code below ever runs, because the
+//     OS would never launch this app for a document in the first place.
+//   - Without the single-instance lock below, EVERY double-click would spawn
+//     a brand-new OS process (a full extra Electron app, not just a window)
+//     on Windows/Linux, since neither platform recognizes "PageDown is
+//     already running" on its own the way macOS's LaunchServices does.
+//   - Without `second-instance` (registered by the lock below), a SECOND
+//     double-click while the app is already running would do nothing at all
+//     once the duplicate second process refuses to start -- the file needs
+//     an explicit, IPC-like path back into the ALREADY-running process.
+//
+// --- Why an OS-supplied path is trusted as a FOURTH isKnownPath source ---
+//
+// CLAUDE.md's File I/O security invariant states the allowlist is fed only
+// by a real native dialog result or an already-persisted recents entry.
+// A path arriving via `open-file` (macOS), `process.argv` (Windows/Linux
+// cold launch), or `second-instance`'s own `argv` (Windows/Linux warm
+// launch) is a genuinely NEW, fourth source -- worth reasoning through
+// explicitly rather than adding by analogy.
+//
+// Verdict: trusted, and added to the SAME allowlist a native Open dialog
+// result already feeds, via the SAME addRecentFile call every other
+// "known" path goes through -- no new, parallel allowlist, no schema
+// change to isKnownPath itself. Reasoning:
+//
+//   1. It is a genuine, deliberate user gesture. Double-clicking a document
+//      in Finder/Explorer, or choosing "Open With > PageDown", is at least
+//      as intentional as navigating a native Open dialog to the same file
+//      and clicking Open -- arguably more so, since the user is acting on
+//      the FILE directly rather than on the app.
+//   2. It cannot be forged by a renderer. Nothing under src/renderer/**
+//      can fire an `open-file` app event or rewrite this process's own
+//      `process.argv` -- those are OS-to-main-process channels with zero
+//      renderer involvement, contextBridge or otherwise. This is NOT the
+//      same shape of risk isKnownPath's own comment warns about for
+//      registerAssetRoot ("any future caller must pass an
+//      isKnownPath-validated absolute path") -- that guards against a
+//      RENDERER laundering an arbitrary path through a main-process API;
+//      there is no renderer-reachable API here for that at all. A renderer
+//      cannot ask this app to "open-file" an arbitrary path on its
+//      behalf -- the only two entry points into this code path are a real
+//      OS launch event and a real OS-delivered argv list.
+//   3. It is validated BEFORE being trusted, not merely accepted verbatim.
+//      `resolveOsOpenedMarkdownPath` below requires the path to be
+//      absolute, to end in .md/.markdown, and to `stat()` as a real,
+//      currently-existing regular file -- the exact same "is this really a
+//      file, right now" check `readFileByPath` would perform anyway on
+//      open. A path that fails any of those is silently dropped, never
+//      opened and never added to recents.
+//   4. Once validated, it is handed to the SAME `addRecentFile` +
+//      `createWindow(path)` pair "Open in New Window" and the Home
+//      screen's own recent-file rows already use -- the new window's own
+//      App.tsx independently RE-validates the path through the real
+//      `file:openPath` handler's own `isKnownPath` check before ever
+//      reading its content (see createWindow's own doc comment on the
+//      `openPath` parameter). So this code path grants no new, direct
+//      disk-read capability of its own; its only real effect is deciding
+//      which already-known-safe path a fresh, already-fully-privileged
+//      window is told to open.
+// ---------------------------------------------------------------------------
+
+// Cheap, synchronous shape check (extractMarkdownPathFromArgv/
+// looksLikeMarkdownPath, open-file-args.ts) plus a real, async `stat` --
+// absolute-path-required and must resolve to an existing regular file RIGHT
+// NOW. Returns null (never throws) for anything that fails either check, so
+// a stale/deleted/malformed OS-supplied path is silently ignored rather than
+// surfacing a confusing error for a launch the user didn't consciously
+// trigger through this app's own UI at all.
+async function resolveOsOpenedMarkdownPath(rawPath: string): Promise<string | null> {
+  if (!looksLikeMarkdownPath(rawPath)) return null
+  if (!isAbsolute(rawPath)) return null
+  try {
+    const stats = await stat(rawPath)
+    if (!stats.isFile()) return null
+  } catch {
+    return null
+  }
+  return rawPath
+}
+
+// The shared "a real OS launch just named this document" handler -- used by
+// BOTH the macOS `open-file` listener and the Windows/Linux
+// `second-instance` listener below. Validates, records the path as a real
+// recent file (see this block's own "fourth isKnownPath source" reasoning
+// above), and opens a fresh window for it via the exact same `createWindow`
+// path/query-param mechanism `window:openInNew` already uses.
+async function handleOpenRequestedPath(rawPath: string): Promise<void> {
+  const validated = await resolveOsOpenedMarkdownPath(rawPath)
+  if (!validated) return
+  try {
+    await addRecentFile(app.getPath('userData'), validated)
+    void refreshApplicationMenu()
+  } catch (err) {
+    console.error('Failed to record an OS-opened file as recent', err)
+  }
+  createWindow(validated)
+}
+
+// macOS delivers a file-open request (a Finder double-click, drag-onto-Dock-
+// icon, or "Open With") via this event, NOT via `process.argv` the way
+// Windows/Linux do -- confirmed by Electron's own documented behavior (macOS
+// file-open requests route through LaunchServices/Apple Events, surfaced as
+// `open-file`, regardless of whether the app was already running).
+//
+// The classic bug this guards against: `open-file` CAN fire before
+// `app.whenReady()` resolves (a cold launch triggered BY double-clicking the
+// document itself, not by opening the app first) -- an unguarded handler
+// that called `handleOpenRequestedPath` immediately would try to create a
+// BrowserWindow before Electron is ready for one, and typically silently
+// drop the request. `pendingOpenFilePaths` queues every such early event;
+// `app.whenReady()`'s own callback below drains it as part of deciding what
+// the FIRST window should open, rather than opening a redundant separate
+// window for it.
+// `event.preventDefault()` marks this event as handled, per Electron's own
+// documented contract for `open-file`.
+const pendingOpenFilePaths: string[] = []
+let openFileQueueDrained = false
+app.on('open-file', (event, filePath) => {
+  event.preventDefault()
+  if (openFileQueueDrained) {
+    void handleOpenRequestedPath(filePath)
+  } else {
+    pendingOpenFilePaths.push(filePath)
+  }
+})
+
+// Windows/Linux: a file-association double-click while PageDown is not
+// already running spawns a brand-new OS process, which -- without this
+// lock -- would become a second, fully independent instance of the app
+// rather than opening the file in the one the user is presumably already
+// using. `requestSingleInstanceLock()` returns false in that brand-new
+// process the INSTANT a lock-holding instance is detected; quitting
+// immediately here (before any window is created) is what stops the
+// duplicate instance from ever showing anything, while the ORIGINAL
+// instance's own `second-instance` listener below receives that second
+// launch's argv and takes the actual action.
+//
+// Scoped by Electron to the app's own userData path (confirmed against
+// Electron's documented behavior, not assumed) -- phase0/phase1 gate specs,
+// which each launch via `launchIsolatedApp`'s own fresh `--user-data-dir`
+// per test (CLAUDE.md's own documented reason: never pollute a real
+// developer's recent-files.json), therefore never collide with each other
+// OR with a real interactively-running dev instance's own default userData
+// directory. Left unconditional (not gated behind `is.dev`) on purpose --
+// single-instance behavior is exactly as real a product requirement in
+// development as in a packaged build, and gating it would mean this code
+// path never actually runs until the first real packaged install.
+const gotSingleInstanceLock = app.requestSingleInstanceLock()
+if (!gotSingleInstanceLock) {
+  app.quit()
+}
+
+// Fires in the ORIGINAL (lock-holding) instance whenever a SECOND launch is
+// attempted -- `argv` is that second launch's own full command line, which
+// is where electron-builder's `fileAssociations`-driven
+// `pagedown.exe "C:\path\to\file.md"` launch actually carries the document
+// path on Windows/Linux (macOS never reaches this path for a file-open --
+// see the `open-file` listener above). Harmless to register even in the
+// process that FAILED to get the lock (it's about to quit via app.quit()
+// above and this listener will simply never fire there).
+//
+// Focuses/restores an existing window regardless of whether this second
+// launch also names a file -- bringing the already-running app to the
+// front is the entire point of a single-instance lock, independent of
+// whatever else the second launch was trying to do.
+app.on('second-instance', (_event, argv) => {
+  const target = [...documentWindows][0]
+  if (target) {
+    if (target.isMinimized()) target.restore()
+    target.focus()
+  }
+  const candidate = extractMarkdownPathFromArgv(argv)
+  if (candidate) void handleOpenRequestedPath(candidate)
+})
 
 // Phase 0 spike bridge, not part of the shipped app: Playwright's
 // `electronApplication.evaluate()` runs the injected callback in a bare V8
@@ -236,6 +421,40 @@ function destroySplitPreviewHarness(): Promise<void> {
 // to the FIRST window specifically, a disclosed, narrower scope than full
 // per-window Split mode support.
 const documentWindows = new Set<BrowserWindow>()
+
+// Product-completeness audit 2.3: "Show in folder" for a just-exported PDF/
+// HTML file. Deliberately NOT an arbitrary-path reveal primitive -- the
+// `shell:showItemInFolder` handler below only ever reveals a path that
+// EXISTS IN THIS SET, and the only two places that ever ADD to it are the
+// file:exportPdf/file:exportHtml handlers themselves, immediately after a
+// real dialog.showSaveDialog()-chosen path was actually written to. A
+// renderer can hand this handler any string it wants (contextBridge grants
+// no protection against a compromised renderer calling an exposed IPC
+// method with attacker-chosen arguments), but that string can only ever
+// match a path THIS PROCESS itself just wrote -- there is no way to get an
+// arbitrary existing file (a user's SSH key, a config file) into this set
+// without this app's own export flow having written a file at that exact
+// path a moment earlier. `rememberRevealablePath` below caps this at a
+// small, bounded size (most-recently-exported-first) purely for hygiene --
+// unbounded growth here is a memory footprint concern over a very long
+// session, never a security one, since membership is the only thing that
+// matters, not recency.
+const revealableExportPaths = new Set<string>()
+const MAX_REVEALABLE_EXPORT_PATHS = 20
+
+function rememberRevealablePath(filePath: string): void {
+  // Delete-then-add moves an already-present path to the "most recent" end
+  // of the Set's own iteration order, so repeatedly re-exporting the same
+  // path doesn't let it get evicted by newer, unrelated exports while it's
+  // still the one most likely to be revealed next.
+  revealableExportPaths.delete(filePath)
+  revealableExportPaths.add(filePath)
+  while (revealableExportPaths.size > MAX_REVEALABLE_EXPORT_PATHS) {
+    const oldest = revealableExportPaths.values().next().value
+    if (oldest === undefined) break
+    revealableExportPaths.delete(oldest)
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Window-close / app-quit guard.
@@ -644,6 +863,15 @@ function createWindow(openPath?: string, initialBounds?: InitialWindowBounds): B
 // initialization and is ready to create browser windows.
 // Some APIs can only be used after this event occurs.
 app.whenReady().then(async () => {
+  // The instance that failed to acquire the single-instance lock already
+  // called app.quit() at module scope (see that check's own comment above)
+  // -- but app.quit() is a REQUEST, not synchronous termination, so this
+  // promise still resolves in that doomed process before it actually exits.
+  // Returning here (before creating any window, registering any IPC
+  // handler, or touching any file) is what stops it from doing any of that
+  // pointless work in the brief window before the process really dies.
+  if (!gotSingleInstanceLock) return
+
   // Set app user model id for windows -- must match electron-builder.yml's
   // own `appId` (com.pagedown.app), or Windows taskbar grouping/toast
   // attribution silently splits from the installed app's real identity.
@@ -799,6 +1027,45 @@ app.whenReady().then(async () => {
   // nothing in this app branches on it.
   ipcMain.handle('app:getVersion', () => app.getVersion())
 
+  // File associations / "Open With" (product-completeness audit 2.5): does
+  // THIS launch itself name a document to open? macOS answers via whatever
+  // `open-file` queued before this promise resolved (that listener's own
+  // comment explains why an early event can't be handled immediately);
+  // Windows/Linux never emit `open-file` for a plain launch and instead
+  // pass the path as a real `process.argv` entry (electron-builder's
+  // `fileAssociations` is what makes the OS launch
+  // `pagedown.exe "C:\path\to\file.md"` in the first place). Each candidate
+  // is validated (existence + shape) via the SAME function `open-file`/
+  // `second-instance` already use, so a launch naming a stale or malformed
+  // path degrades to a plain Home-screen launch rather than a startup error.
+  const launchOpenPaths: string[] = []
+  for (const candidate of pendingOpenFilePaths) {
+    const validated = await resolveOsOpenedMarkdownPath(candidate)
+    if (validated) launchOpenPaths.push(validated)
+  }
+  pendingOpenFilePaths.length = 0
+  // openFileQueueDrained flips AFTER draining the queue above, not before --
+  // an `open-file` arriving in the narrow window while this very `await`
+  // chain is still running is a genuinely NEW request (e.g. the user
+  // double-clicks a second file while PageDown is still finishing startup),
+  // correctly handled as "just-arrived", not re-processed as part of this
+  // cold launch's own batch.
+  openFileQueueDrained = true
+  if (launchOpenPaths.length === 0 && process.platform !== 'darwin') {
+    const argvCandidate = extractMarkdownPathFromArgv(process.argv)
+    if (argvCandidate) {
+      const validated = await resolveOsOpenedMarkdownPath(argvCandidate)
+      if (validated) launchOpenPaths.push(validated)
+    }
+  }
+  for (const validated of launchOpenPaths) {
+    try {
+      await addRecentFile(app.getPath('userData'), validated)
+    } catch (err) {
+      console.error('Failed to record an OS-opened file as recent', err)
+    }
+  }
+
   // Window state persistence (App identity/packaging cleanup pass): restore
   // the last saved size/position for the FIRST window this launch creates
   // only -- see createWindow's own doc comment for why every other
@@ -813,7 +1080,17 @@ app.whenReady().then(async () => {
     savedWindowBounds,
     screen.getAllDisplays().map((display) => display.workArea)
   )
-  const mainWindow = createWindow(undefined, initialWindowBounds)
+  const mainWindow = createWindow(launchOpenPaths[0], initialWindowBounds)
+  // Any ADDITIONAL queued document (macOS's own multi-file "Open With", or a
+  // pathological case of more than one launch-open source resolving at
+  // once) gets its own separate window, same as "Open in New Window"
+  // already does for one path at a time -- these deliberately do NOT
+  // receive `initialWindowBounds` (that saved size/position is a single
+  // "restore the last real window" value, meaningful only for the one
+  // window that stands in for the app's own last session).
+  for (const extra of launchOpenPaths.slice(1)) {
+    createWindow(extra)
+  }
 
   // The real application menu. Before this, the app ran on ELECTRON'S OWN
   // default menu (Electron installs one when an app sets none) -- which is
@@ -1231,9 +1508,50 @@ app.whenReady().then(async () => {
       // real Save dialog exportDocumentToPdf opens must anchor to whichever
       // window actually asked for the export.
       const win = BrowserWindow.fromWebContents(event.sender) ?? mainWindow
-      return exportDocumentToPdf(win, content, documentPath, allowRemoteImages)
+      const result = await exportDocumentToPdf(win, content, documentPath, allowRemoteImages)
+      // Only a genuinely successful, real write is ever revealable -- a
+      // cancelled Save dialog resolves `null` and adds nothing here.
+      if (result) rememberRevealablePath(result.filePath)
+      return result
     }
   )
+
+  // Product-completeness audit 2.3 (HTML export). Identical shape and
+  // reasoning to file:exportPdf immediately above -- see html-exporter.ts's
+  // own module comment for what this format deliberately does and does not
+  // render (typography-parity flowing HTML; Mermaid/math stay inert
+  // placeholders), and for why it needs no enqueueExport-style queue (it
+  // never touches the shared pagination harness at all).
+  ipcMain.handle(
+    'file:exportHtml',
+    async (event, content: string, filePath: string | null = null, allowRemoteImages = false) => {
+      const userDataDir = app.getPath('userData')
+      const documentPath =
+        filePath && (await isKnownPath(userDataDir, filePath)) ? filePath : undefined
+      const win = BrowserWindow.fromWebContents(event.sender) ?? mainWindow
+      const result = await exportDocumentToHtml(win, content, documentPath, allowRemoteImages)
+      if (result) rememberRevealablePath(result.filePath)
+      return result
+    }
+  )
+
+  // "Show in folder" for a just-exported PDF/HTML file (product-completeness
+  // audit 2.3). Deliberately does NOT treat `filePath` as a general
+  // renderer-supplied path the way file:getPageCount/file:exportPdf's own
+  // SOURCE path does -- there is no meaningful "known document" allowlist
+  // concept for an export's own OUTPUT path (isKnownPath's allowlist is
+  // .md-open-history, not export history), so this checks membership in
+  // `revealableExportPaths` instead -- see that Set's own module-scope
+  // comment for the full "why this isn't an arbitrary-path reveal
+  // primitive" reasoning. Resolves `false` (never throws, never rejects)
+  // for anything not in that set, matching this codebase's established
+  // "a courtesy action degrades quietly, never as a user-visible error"
+  // posture (autosave snapshots, menu refreshes, etc.).
+  ipcMain.handle('shell:showItemInFolder', (_event, filePath: unknown) => {
+    if (typeof filePath !== 'string' || !revealableExportPaths.has(filePath)) return false
+    shell.showItemInFolder(filePath)
+    return true
+  })
 
   // Real native print plumbing (see src/main/print-exporter.ts). Same
   // renderer-supplied-source-path treatment as file:exportPdf just above --

@@ -1,4 +1,5 @@
 import { create } from 'zustand'
+import { tabLabel } from '../lib/tab-label'
 
 // One open document "tab". Deliberately a subset of DocumentStateValues'
 // per-document fields (content/filePath/isDirty) -- `error` and `revision`
@@ -60,6 +61,31 @@ interface DocumentStateValues {
   // store actions, never window.api directly.
   isExporting: boolean
   isPrinting: boolean
+  // Product-completeness audit 2.3 (HTML export): a THIRD, independent
+  // in-flight guard, not folded into `isExporting` -- PDF export and HTML
+  // export are two genuinely different operations a user can trigger from
+  // two different toolbar buttons, and sharing one flag would make clicking
+  // "Export HTML" grey out "Export PDF" (and vice versa) for no reason; the
+  // two don't contend over any shared resource the way PDF export/print do
+  // (html-exporter.ts never touches the pagination harness at all -- see
+  // its own module comment).
+  isExportingHtml: boolean
+  // Product-completeness audit 2.3: "Export gives no feedback." Surfaces the
+  // outcome of the most recent SUCCESSFUL Export PDF / Export HTML action as
+  // a short-lived notice for EditorToolbar's own Toast (a generic, reusable
+  // primitive -- see Toast.tsx -- already used for the undo-barrier notice).
+  // Store-owned rather than component-local state, because export has TWO
+  // independent triggers per format: this toolbar's own buttons, AND the
+  // File menu's Cmd+Shift+E accelerator/menu item (EditorScreen's
+  // useMenuCommands calls this SAME store action directly) -- only the store
+  // sees both, so only the store can notify regardless of which one fired.
+  // `null` between actions and once EditorToolbar's Toast auto-dismisses it
+  // via clearExportNotice. A CANCELLED native Save dialog does NOT set this
+  // (exportPdf/exportHtml's own `window.api` calls resolve `null` for a
+  // cancel, matching print()'s own pre-existing "cancel is not a failure"
+  // treatment) -- there is nothing to announce for a choice the user made on
+  // purpose.
+  exportNotice: { message: string; filePath: string } | null
   // Bumped on every action that changes *what* is displayed for reasons
   // other than an in-place edit -- new tab opened, tab switched, active tab
   // closed -- so EditorScreen's `key={revision}` remounts MilkdownEditor
@@ -103,7 +129,20 @@ interface DocumentState extends DocumentStateValues {
   // failed Save from moments earlier must not vanish because an export
   // succeeded.
   exportPdf: () => Promise<void>
+  // Product-completeness audit 2.3: HTML export, same shape and same
+  // reasoning as exportPdf immediately above (one implementation behind one
+  // in-flight guard, friendly-not-raw error text, success surfaced via
+  // exportNotice rather than silently discarding the returned path).
+  exportHtml: () => Promise<void>
   print: () => Promise<void>
+  // Dismisses the current export success notice -- called by Toast's own
+  // auto-dismiss timer (via EditorToolbar) and available for an explicit
+  // dismiss click too. A plain `set` wrapped as a named action rather than a
+  // bare `useDocumentStore.setState({ exportNotice: null })` call from
+  // EditorToolbar, matching this store's own "screen components call
+  // actions, never mutate state directly" convention stated in CLAUDE.md's
+  // State management section.
+  clearExportNotice: () => void
   // Reads the ACTIVE tab's own filePath internally (same rationale as
   // save() capturing it before its own await -- see that action's comment)
   // rather than requiring the caller to look it up, since callers here are
@@ -272,6 +311,8 @@ export const initialDocumentState: DocumentStateValues = {
   error: null,
   isExporting: false,
   isPrinting: false,
+  isExportingHtml: false,
+  exportNotice: null,
   revision: 0,
   tabs: [initialTab],
   activeTabId: initialTab.id
@@ -639,7 +680,22 @@ export const useDocumentStore = create<DocumentState>()((set, get) => ({
       // filePath is what resolves local image references in the exported PDF
       // against the document's own directory (src/main/pdf-exporter.ts) --
       // null (an unsaved document) correctly denies all local assets.
-      await window.api.exportPdf(content, filePath, remoteImagesAllowed === true)
+      const result = await window.api.exportPdf(content, filePath, remoteImagesAllowed === true)
+      // Product-completeness audit 2.3: this used to discard `result` (and
+      // therefore the real written path) entirely -- the button stopped
+      // saying "Exporting..." and nothing else ever told the user the export
+      // actually happened, let alone where. `result === null` means the user
+      // cancelled the native Save dialog -- their own choice, not a failure,
+      // so no notice fires for that branch (mirroring print()'s own
+      // cancelled-dialog non-error treatment just below).
+      if (result) {
+        set({
+          exportNotice: {
+            message: `Exported PDF: ${tabLabel(result.filePath)}`,
+            filePath: result.filePath
+          }
+        })
+      }
     } catch (err) {
       // Log the real error for diagnosis, but never put a raw IPC error
       // string in front of the user.
@@ -649,6 +705,28 @@ export const useDocumentStore = create<DocumentState>()((set, get) => ({
       set({ isExporting: false })
     }
   },
+  exportHtml: async () => {
+    if (get().isExportingHtml) return
+    set({ isExportingHtml: true })
+    const { content, filePath, remoteImagesAllowed } = get()
+    try {
+      const result = await window.api.exportHtml(content, filePath, remoteImagesAllowed === true)
+      if (result) {
+        set({
+          exportNotice: {
+            message: `Exported HTML: ${tabLabel(result.filePath)}`,
+            filePath: result.filePath
+          }
+        })
+      }
+    } catch (err) {
+      console.error('Failed to export HTML', err)
+      set({ error: 'Failed to export HTML. Please try again.' })
+    } finally {
+      set({ isExportingHtml: false })
+    }
+  },
+  clearExportNotice: () => set({ exportNotice: null }),
   print: async () => {
     if (get().isPrinting) return
     set({ isPrinting: true })

@@ -143,6 +143,17 @@ export interface FileApi {
     filePath?: string | null,
     allowRemoteImages?: boolean
   ) => Promise<{ filePath: string } | null>
+  // Product-completeness audit 2.3 (HTML export) -- same shape as exportPdf.
+  exportHtml: (
+    content: string,
+    filePath?: string | null,
+    allowRemoteImages?: boolean
+  ) => Promise<{ filePath: string } | null>
+  // Reveals a just-exported file (PDF or HTML) in the OS file manager.
+  // `false` when `filePath` isn't a path this app itself wrote via a recent
+  // export -- see the preload implementation's own comment for why this is
+  // deliberately NOT an arbitrary-path reveal primitive.
+  showItemInFolder: (filePath: string) => Promise<boolean>
   print: (
     content: string,
     filePath?: string | null,

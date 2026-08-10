@@ -129,7 +129,12 @@ export async function resolveAssetPath(
 }
 
 const ASSET_PATH_PREFIX = '/__asset__/'
-const MAX_ASSET_BYTES = 10 * 1024 * 1024 // 10 MiB, per this plan's Global Constraints
+// Exported so src/main/html-exporter.ts enforces the IDENTICAL cap when
+// inlining a local image as a data: URI for HTML export -- one source of
+// truth for "how big a local asset this app will ever read into memory on
+// a document's behalf," rather than a second hand-copied 10 * 1024 * 1024
+// that could silently drift from this one.
+export const MAX_ASSET_BYTES = 10 * 1024 * 1024 // 10 MiB, per this plan's Global Constraints
 
 // Real magic-byte sniffing, not a file-extension guess -- "content-type
 // sniffed server-side... non-image types rejected" per the design doc.
