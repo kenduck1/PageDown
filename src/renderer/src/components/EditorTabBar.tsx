@@ -1,13 +1,7 @@
 import { useDocumentStore } from '../store/documentStore'
-
-// Mirrors HomeScreen.tsx's RecentRow basename convention (filePath.split on
-// both path separators) -- a tab bar has far less horizontal room per item
-// than EditorScreen's title bar (which shows the full path), so a tab shows
-// just the filename, falling back to "Untitled" for an unsaved document.
-function tabLabel(filePath: string | null): string {
-  if (!filePath) return 'Untitled'
-  return filePath.split(/[/\\]/).pop() ?? filePath
-}
+// Moved out to lib/ when the window-close guard needed the identical label for
+// its "save the changes you made to <name>?" dialog -- see that module.
+import { tabLabel } from '../lib/tab-label'
 
 // Per docs/design-handoff/README.md, "Editor -- shared chrome", item 2 ("Tab
 // bar") and the matching markup in docs/design-handoff/PageDown.dc.html
@@ -27,39 +21,37 @@ function tabLabel(filePath: string | null): string {
 // tokens-exclusively styling convention. This is a deliberate, minor
 // deviation from the mock's literal hex -- see GA_TRACK_1_REPORT.md.
 interface EditorTabBarProps {
-  // Called instead of the store's plain closeTab(tabId) ONLY when the tab
-  // being closed is BOTH dirty AND the currently active one -- the one case
-  // that needs a live MilkdownEditor flush() (to pick up an edit still
-  // sitting inside the ~200ms onChange debounce) and Save capability this
-  // component doesn't own (EditorScreen does, via editorRef/save() -- same
-  // machinery its own handleGoHome already uses for the "<- Home" button,
-  // see that function's doc comments for the full reasoning this mirrors).
+  // Called INSTEAD of the store's plain closeTab(tabId) for EVERY close, not
+  // just a dirty one, whenever the parent provides it (EditorScreen does).
   //
-  // Every OTHER close -- a clean tab, or a dirty BACKGROUND tab -- still
-  // goes straight to the store's closeTab, unchanged from before this prop
-  // existed. A dirty background tab's close-confirmation is a real, still-
-  // deferred gap, not silently dropped by this change: documentStore.ts's
-  // own closeTab doc comment already discloses it, and closing it properly
-  // would need a tab-scoped save (documentStore.save() only ever operates
-  // on the ACTIVE tab's mirror fields today) -- out of scope for this pass,
-  // which targets the far more common "closing the tab you're currently
-  // looking at" case.
+  // It used to be `onCloseDirtyActiveTab` and fire only when the tab was BOTH
+  // dirty AND active, with every other close -- including a dirty BACKGROUND
+  // tab's -- going straight to closeTab. That discarded a dirty background tab
+  // silently and irrecoverably: useAutosave only ever sees the ACTIVE tab, so
+  // a background tab has no autosave snapshot either.
+  //
+  // The widening from "dirty closes" to ALL closes is not incidental. This
+  // component cannot answer "is this tab dirty?" reliably on its own:
+  // @milkdown/plugin-listener's onChange is 200ms-debounced, so a tab edited
+  // moments ago still reads isDirty: false here. Only the parent can flush the
+  // live editor first and THEN decide -- so the decision has to move there
+  // wholesale rather than being split across the two.
   //
   // Optional so every existing test rendering <EditorTabBar /> standalone
-  // (none of which puts a dirty tab in play) keeps working unchanged.
-  onCloseDirtyActiveTab?: (tabId: string) => void
+  // keeps working: with no handler, closes fall back to the store directly.
+  onRequestCloseTab?: (tabId: string) => void
 }
 
-function EditorTabBar({ onCloseDirtyActiveTab }: EditorTabBarProps): React.JSX.Element {
+function EditorTabBar({ onRequestCloseTab }: EditorTabBarProps): React.JSX.Element {
   const tabs = useDocumentStore((state) => state.tabs)
   const activeTabId = useDocumentStore((state) => state.activeTabId)
   const switchTab = useDocumentStore((state) => state.switchTab)
   const closeTab = useDocumentStore((state) => state.closeTab)
   const openTab = useDocumentStore((state) => state.openTab)
 
-  const handleClose = (tabId: string, isDirty: boolean): void => {
-    if (isDirty && tabId === activeTabId && onCloseDirtyActiveTab) {
-      onCloseDirtyActiveTab(tabId)
+  const handleClose = (tabId: string): void => {
+    if (onRequestCloseTab) {
+      onRequestCloseTab(tabId)
       return
     }
     closeTab(tabId)
@@ -96,14 +88,41 @@ function EditorTabBar({ onCloseDirtyActiveTab }: EditorTabBarProps): React.JSX.E
                 : 'group flex cursor-pointer items-center gap-2 pb-[9px] pl-3.5 pr-2.5 pt-2 text-12-5 text-text-secondary'
             }
           >
-            <span aria-hidden="true" className="h-1.5 w-1.5 flex-none rounded-[1px] bg-accent" />
+            {/* The unsaved-changes marker. This square was previously rendered
+                UNCONDITIONALLY (a decorative "kind tag" from the design
+                handoff, with no per-document colour behind it), so it conveyed
+                nothing at all -- isDirty reached the UI in exactly one place,
+                the status bar, for the active tab only. A user with five tabs
+                open therefore had no way to see which held unsaved work, which
+                is precisely the information needed to answer the close/quit
+                prompts this same change adds.
+
+                Kept in the layout when clean (`invisible`, not removed) so
+                saving a document doesn't shift every tab's text sideways.
+                `invisible` also removes it from the accessibility tree, which
+                is what makes the role/aria-label below unambiguous: the marker
+                has an accessible name exactly when it means something.
+
+                NOT conveyed by colour alone: it is a presence/absence marker
+                with a real accessible name and a `title` tooltip. The name is
+                on the marker rather than folded into the tab's own aria-label
+                deliberately -- the tab's label is what `getByRole('tab', {name})`
+                and the close button's own "Close <label>" derive from. */}
+            <span
+              {...(tab.isDirty
+                ? { role: 'img', 'aria-label': 'Unsaved changes', title: 'Unsaved changes' }
+                : { 'aria-hidden': true })}
+              className={`h-1.5 w-1.5 flex-none rounded-full bg-accent ${
+                tab.isDirty ? '' : 'invisible'
+              }`}
+            />
             <span className="max-w-[160px] truncate">{label}</span>
             <button
               type="button"
               aria-label={`Close ${label}`}
               onClick={(event) => {
                 event.stopPropagation()
-                handleClose(tab.id, tab.isDirty)
+                handleClose(tab.id)
               }}
               className={`text-13 leading-none text-text-tertiary ${
                 isActive ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'

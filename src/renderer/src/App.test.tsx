@@ -1,6 +1,6 @@
 import { act } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, render, screen } from '@testing-library/react'
+import { cleanup, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import App from './App'
 import { useAppStore, initialAppState } from './store/appStore'
@@ -64,7 +64,13 @@ beforeEach(() => {
     // EditorScreen both call it from an effect cleanup, and a bare vi.fn()
     // returning undefined would throw on unmount.
     onMenuCommand: vi.fn().mockReturnValue(() => {}),
-    setWindowState: vi.fn()
+    setWindowState: vi.fn(),
+    // The window-close guard's two channels. onWindowCloseRequest must
+    // return a real unsubscribe FUNCTION -- App.tsx calls it from an effect
+    // cleanup, same contract as onMenuCommand above.
+    onWindowCloseRequest: vi.fn().mockReturnValue(() => {}),
+    respondToWindowClose: vi.fn(),
+    getStartupWarnings: vi.fn().mockResolvedValue([])
   }
 })
 
@@ -351,6 +357,113 @@ describe('App', () => {
       unmount()
 
       expect(unsubscribe).toHaveBeenCalled()
+    })
+  })
+
+  // The renderer half of the window-close / app-quit guard. Subscribed HERE,
+  // not in EditorScreen, because a close request can arrive while the user is
+  // on Home or Settings -- where EditorScreen is unmounted but documentStore
+  // still holds every dirty tab.
+  describe('window-close guard', () => {
+    function emitCloseRequest(): void {
+      const calls = vi.mocked(window.api.onWindowCloseRequest).mock.calls
+      act(() => {
+        for (const [callback] of calls) callback()
+      })
+    }
+
+    it('answers "close me" when nothing is dirty', async () => {
+      render(<App />)
+      await screen.findByText('PageDown')
+
+      emitCloseRequest()
+
+      await waitFor(() => {
+        expect(window.api.respondToWindowClose).toHaveBeenCalledWith(true)
+      })
+      expect(window.api.confirmDiscardChanges).not.toHaveBeenCalled()
+    })
+
+    it('prompts, and answers "stay open", when the user cancels with unsaved work', async () => {
+      vi.mocked(window.api.confirmDiscardChanges).mockResolvedValue('cancel')
+      render(<App />)
+      await screen.findByText('PageDown')
+      act(() => {
+        useDocumentStore.setState((state) => ({
+          filePath: '/tmp/report.md',
+          isDirty: true,
+          tabs: state.tabs.map((tab) =>
+            tab.id === state.activeTabId
+              ? { ...tab, filePath: '/tmp/report.md', isDirty: true }
+              : tab
+          )
+        }))
+      })
+
+      emitCloseRequest()
+
+      await waitFor(() => {
+        expect(window.api.respondToWindowClose).toHaveBeenCalledWith(false)
+      })
+      expect(window.api.confirmDiscardChanges).toHaveBeenCalledWith('report.md')
+    })
+
+    it('answers "stay open" if the check itself fails, rather than closing', async () => {
+      // Refusing to close is recoverable (fix, save, close again); closing on
+      // an error is exactly the silent loss this guard exists to prevent.
+      vi.mocked(window.api.confirmDiscardChanges).mockRejectedValue(new Error('IPC exploded'))
+      vi.spyOn(console, 'error').mockImplementation(() => {})
+      render(<App />)
+      await screen.findByText('PageDown')
+      act(() => {
+        useDocumentStore.setState((state) => ({
+          isDirty: true,
+          tabs: state.tabs.map((tab) =>
+            tab.id === state.activeTabId ? { ...tab, isDirty: true } : tab
+          )
+        }))
+      })
+
+      emitCloseRequest()
+
+      await waitFor(() => {
+        expect(window.api.respondToWindowClose).toHaveBeenCalledWith(false)
+      })
+      expect(useDocumentStore.getState().error).not.toBeNull()
+    })
+
+    it('unsubscribes on unmount', () => {
+      const unsubscribe = vi.fn()
+      vi.mocked(window.api.onWindowCloseRequest).mockReturnValue(unsubscribe)
+      const { unmount } = render(<App />)
+
+      unmount()
+
+      expect(unsubscribe).toHaveBeenCalled()
+    })
+  })
+
+  // Corrupt preferences / recent-files notices (src/main/config-warnings.ts).
+  // A silently-emptied recents allowlist makes previously-openable documents
+  // start failing with "Requested path is not a known recent file", which is
+  // inexplicable without this.
+  describe('startup warnings', () => {
+    it('shows a drained startup warning to the user', async () => {
+      vi.mocked(window.api.getStartupWarnings).mockResolvedValue([
+        'Your list of recent documents could not be read and has been reset.'
+      ])
+      render(<App />)
+
+      expect(await screen.findByRole('status')).toHaveTextContent(
+        'Your list of recent documents could not be read and has been reset.'
+      )
+    })
+
+    it('shows nothing when there is nothing to report', async () => {
+      render(<App />)
+      await screen.findByText('PageDown')
+
+      expect(screen.queryByRole('status')).not.toBeInTheDocument()
     })
   })
 })

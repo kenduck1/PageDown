@@ -216,7 +216,13 @@ describe('EditorSidebar', () => {
       // EditorScreen both call it from an effect cleanup, and a bare vi.fn()
       // returning undefined would throw on unmount.
       onMenuCommand: vi.fn().mockReturnValue(() => {}),
-      setWindowState: vi.fn()
+      setWindowState: vi.fn(),
+      // The window-close guard's two channels. onWindowCloseRequest must
+      // return a real unsubscribe FUNCTION -- App.tsx calls it from an effect
+      // cleanup, same contract as onMenuCommand above.
+      onWindowCloseRequest: vi.fn().mockReturnValue(() => {}),
+      respondToWindowClose: vi.fn(),
+      getStartupWarnings: vi.fn().mockResolvedValue([])
     }
     const user = userEvent.setup()
     render(
@@ -270,7 +276,13 @@ describe('EditorSidebar', () => {
       // EditorScreen both call it from an effect cleanup, and a bare vi.fn()
       // returning undefined would throw on unmount.
       onMenuCommand: vi.fn().mockReturnValue(() => {}),
-      setWindowState: vi.fn()
+      setWindowState: vi.fn(),
+      // The window-close guard's two channels. onWindowCloseRequest must
+      // return a real unsubscribe FUNCTION -- App.tsx calls it from an effect
+      // cleanup, same contract as onMenuCommand above.
+      onWindowCloseRequest: vi.fn().mockReturnValue(() => {}),
+      respondToWindowClose: vi.fn(),
+      getStartupWarnings: vi.fn().mockResolvedValue([])
     }
     useAppStore.setState({ sidebarTab: 'history' })
     render(

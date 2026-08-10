@@ -123,7 +123,10 @@ export interface FileApi {
     filePath?: string | null,
     allowRemoteImages?: boolean
   ) => Promise<{ pageCount: number }>
-  confirmDiscardChanges: () => Promise<'save' | 'discard' | 'cancel'>
+  // `documentName` is a display-only label naming WHICH document the dialog is
+  // about -- required once several tabs can be prompted about in a row (the
+  // window-close guard). Omitted keeps the original document-agnostic wording.
+  confirmDiscardChanges: (documentName?: string) => Promise<'save' | 'discard' | 'cancel'>
   exportPdf: (
     content: string,
     filePath?: string | null,
@@ -164,6 +167,16 @@ export interface FileApi {
   // Reports this window's own menu-relevant/title-relevant state to the main
   // process. Fire-and-forget, like setSplitPreviewBounds.
   setWindowState: (state: WindowUiState) => void
+  // Subscribes to the main process's "this window is trying to close" request.
+  // Returns an unsubscribe function the caller MUST invoke on unmount, same
+  // contract (and same reason) as onMenuCommand above. The callback MUST
+  // eventually call respondToWindowClose exactly once -- until it does, the
+  // window stays open with its close cancelled.
+  onWindowCloseRequest: (callback: () => void) => () => void
+  respondToWindowClose: (allow: boolean) => void
+  // "Your configuration could not be read" notices collected during startup
+  // (src/main/config-warnings.ts). Drains: the first caller gets them, once.
+  getStartupWarnings: () => Promise<string[]>
 }
 
 declare global {

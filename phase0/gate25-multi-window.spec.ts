@@ -126,6 +126,27 @@ test('Gate 25: Open in New Window creates a genuinely independent second window,
       .toContain('Independent edit in window 2.')
     expect(await win1.locator('body').innerText()).not.toContain('Independent edit in window 2.')
 
+    // Save window 2 before closing it. This is REQUIRED, not tidiness: the
+    // window-close guard added for the unsaved-work fix cancels the close of a
+    // window holding a dirty document and asks its renderer to confirm, which
+    // opens a genuine native dialog.showMessageBox -- a modal no automated
+    // test can dismiss (the same limitation Print and the mtime-conflict
+    // feature already document as their reason for having no gate). The typed
+    // edit above has already proven what this gate is about (two windows with
+    // genuinely independent state); saving it is how this gate reaches the
+    // close it actually wants to test, and it exercises Save in a second
+    // window into the bargain.
+    await win2!.getByRole('button', { name: 'Save' }).click()
+    await expect
+      .poll(
+        async () =>
+          win2!.evaluate(
+            () => document.querySelector('[role="img"][aria-label="Unsaved changes"]') === null
+          ),
+        { message: 'expected window 2 to become clean after Save' }
+      )
+      .toBe(true)
+
     // Closing the SECOND window must not break the FIRST window's own
     // pagination-harness-backed features (Multi-window support's own
     // harness-teardown-only-on-last-window-close fix) -- proven by asking

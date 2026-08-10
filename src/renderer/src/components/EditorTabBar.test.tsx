@@ -1,3 +1,4 @@
+import { act } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
@@ -88,78 +89,52 @@ describe('EditorTabBar', () => {
     expect(useDocumentStore.getState().tabs).toHaveLength(1)
   })
 
-  // The next four tests cover the onCloseDirtyActiveTab discriminator added
-  // for the dirty-tab-close-confirmation fix: it must defer to the callback
-  // in exactly one case (dirty AND active AND a callback is provided) and
-  // fall through to the store's own closeTab, unchanged, in every other
-  // case -- a clean tab (active or background), a dirty background tab, or
-  // a dirty active tab when no callback prop was given at all (so every
-  // pre-existing test above, which renders <EditorTabBar /> with no props,
-  // keeps working unmodified).
-  it('clicking "x" on a DIRTY ACTIVE tab calls onCloseDirtyActiveTab instead of closing it directly', async () => {
+  // The next three tests cover onRequestCloseTab, which replaced the older
+  // onCloseDirtyActiveTab. That prop only fired when the tab was BOTH dirty
+  // AND active, so a dirty BACKGROUND tab was discarded with no confirmation
+  // at all -- and unrecoverably, since useAutosave only ever snapshots the
+  // ACTIVE tab. This component also cannot decide dirtiness for itself (the
+  // 200ms onChange debounce means a just-edited tab still reads isDirty:
+  // false), so the whole decision moved to the parent, which can flush first.
+  it('clicking "x" routes EVERY close through onRequestCloseTab, including a DIRTY BACKGROUND tab', async () => {
     useDocumentStore.getState().openTab('/tmp/a.md', '# A', true)
-    const activeId = useDocumentStore.getState().activeTabId
-    const onCloseDirtyActiveTab = vi.fn()
+    const backgroundId = useDocumentStore.getState().activeTabId
+    // Opening b.md makes it active, leaving a.md dirty but in the background.
+    useDocumentStore.getState().openTab('/tmp/b.md', '# B')
+    const onRequestCloseTab = vi.fn()
     const user = userEvent.setup()
-    render(<EditorTabBar onCloseDirtyActiveTab={onCloseDirtyActiveTab} />)
+    render(<EditorTabBar onRequestCloseTab={onRequestCloseTab} />)
 
     await user.click(screen.getByRole('button', { name: 'Close a.md' }))
 
-    expect(onCloseDirtyActiveTab).toHaveBeenCalledWith(activeId)
-    expect(onCloseDirtyActiveTab).toHaveBeenCalledTimes(1)
+    expect(onRequestCloseTab).toHaveBeenCalledWith(backgroundId)
+    expect(onRequestCloseTab).toHaveBeenCalledTimes(1)
     // The tab must still be open -- EditorTabBar defers the ENTIRE close
-    // decision to the callback in this case; it must not also call the
-    // store's closeTab itself (that would close the tab twice-over: once
-    // for real here, and again whenever the callback eventually decides to).
-    expect(useDocumentStore.getState().tabs.some((tab) => tab.id === activeId)).toBe(true)
+    // decision to the callback; it must not also call the store's closeTab
+    // itself (that would close the tab twice-over: once for real here, and
+    // again whenever the callback eventually decides to).
+    expect(useDocumentStore.getState().tabs.some((tab) => tab.id === backgroundId)).toBe(true)
   })
 
-  it('clicking "x" on a DIRTY BACKGROUND tab still closes it immediately, without invoking onCloseDirtyActiveTab', async () => {
-    useDocumentStore.getState().openTab('/tmp/a.md', '# A', true)
-    // Opening b.md makes it active, leaving a.md dirty but in the background
-    // -- the disclosed, deliberately-unfixed gap this test locks in.
-    useDocumentStore.getState().openTab('/tmp/b.md', '# B')
-    const onCloseDirtyActiveTab = vi.fn()
-    const user = userEvent.setup()
-    render(<EditorTabBar onCloseDirtyActiveTab={onCloseDirtyActiveTab} />)
-
-    await user.click(screen.getByRole('button', { name: 'Close a.md' }))
-
-    expect(onCloseDirtyActiveTab).not.toHaveBeenCalled()
-    expect(useDocumentStore.getState().tabs.some((tab) => tab.filePath === '/tmp/a.md')).toBe(false)
-  })
-
-  it('clicking "x" on a CLEAN active tab still closes it immediately, without invoking onCloseDirtyActiveTab', async () => {
+  it('routes a CLEAN tab close through onRequestCloseTab too, rather than closing it directly', async () => {
+    // A clean tab looks safe to close here, but only the parent can know that
+    // for sure -- see this component's own prop comment on the debounce.
     useDocumentStore.getState().openTab('/tmp/a.md', '# A')
-    const onCloseDirtyActiveTab = vi.fn()
+    const cleanId = useDocumentStore.getState().activeTabId
+    const onRequestCloseTab = vi.fn()
     const user = userEvent.setup()
-    render(<EditorTabBar onCloseDirtyActiveTab={onCloseDirtyActiveTab} />)
+    render(<EditorTabBar onRequestCloseTab={onRequestCloseTab} />)
 
     await user.click(screen.getByRole('button', { name: 'Close a.md' }))
 
-    expect(onCloseDirtyActiveTab).not.toHaveBeenCalled()
-    expect(screen.queryByRole('tab', { name: 'a.md' })).not.toBeInTheDocument()
+    expect(onRequestCloseTab).toHaveBeenCalledWith(cleanId)
+    expect(useDocumentStore.getState().tabs.some((tab) => tab.id === cleanId)).toBe(true)
   })
 
-  it('clicking "x" on a CLEAN background tab still closes it immediately, without invoking onCloseDirtyActiveTab', async () => {
-    useDocumentStore.getState().openTab('/tmp/a.md', '# A')
-    useDocumentStore.getState().openTab('/tmp/b.md', '# B')
-    const onCloseDirtyActiveTab = vi.fn()
-    const user = userEvent.setup()
-    render(<EditorTabBar onCloseDirtyActiveTab={onCloseDirtyActiveTab} />)
-
-    await user.click(screen.getByRole('button', { name: 'Close a.md' }))
-
-    expect(onCloseDirtyActiveTab).not.toHaveBeenCalled()
-    expect(screen.queryByRole('tab', { name: 'a.md' })).not.toBeInTheDocument()
-  })
-
-  it('closes a dirty active tab directly, with no callback, when no onCloseDirtyActiveTab prop is given at all', async () => {
+  it('closes directly, with no callback, when no onRequestCloseTab prop is given at all', async () => {
     // Every pre-existing test in this file renders <EditorTabBar /> with no
-    // props -- this locks in that the "not dirty" fast path this diff adds
-    // (`isDirty && tabId === activeTabId && onCloseDirtyActiveTab`) degrades
-    // to the exact old behavior when the prop is simply absent, not just
-    // when the tab happens to be clean.
+    // props -- this locks in that the fallback degrades to the exact old
+    // store-level behavior when the prop is simply absent.
     useDocumentStore.getState().openTab('/tmp/a.md', '# A', true)
     const activeId = useDocumentStore.getState().activeTabId
     const user = userEvent.setup()
@@ -168,5 +143,42 @@ describe('EditorTabBar', () => {
     await user.click(screen.getByRole('button', { name: 'Close a.md' }))
 
     expect(useDocumentStore.getState().tabs.some((tab) => tab.id === activeId)).toBe(false)
+  })
+
+  // The unsaved-changes marker. It used to render unconditionally (a
+  // decorative "kind tag" square), so it conveyed nothing -- isDirty reached
+  // the UI in exactly one place, the status bar, for the active tab only.
+  describe('unsaved-changes marker', () => {
+    it('shows a named marker on exactly the dirty tabs', () => {
+      useDocumentStore.getState().openTab('/tmp/dirty.md', '# D', true)
+      useDocumentStore.getState().openTab('/tmp/clean.md', '# C')
+      render(<EditorTabBar />)
+
+      // Exactly one marker, for the one dirty tab -- not one per tab, which
+      // is what the unconditional version rendered.
+      const markers = screen.getAllByRole('img', { name: 'Unsaved changes' })
+      expect(markers).toHaveLength(1)
+      // Inside the dirty tab, not merely somewhere on screen.
+      expect(screen.getByRole('tab', { name: 'dirty.md' })).toContainElement(markers[0])
+      // Not conveyed by colour alone: a real title tooltip as well as the
+      // accessible name.
+      expect(markers[0]).toHaveAttribute('title', 'Unsaved changes')
+    })
+
+    it('drops the marker once the tab is saved', () => {
+      useDocumentStore.getState().openTab('/tmp/dirty.md', '# D', true)
+      const { rerender } = render(<EditorTabBar />)
+      expect(screen.getAllByRole('img', { name: 'Unsaved changes' })).toHaveLength(1)
+
+      act(() => {
+        useDocumentStore.setState((state) => ({
+          isDirty: false,
+          tabs: state.tabs.map((tab) => ({ ...tab, isDirty: false }))
+        }))
+      })
+      rerender(<EditorTabBar />)
+
+      expect(screen.queryByRole('img', { name: 'Unsaved changes' })).not.toBeInTheDocument()
+    })
   })
 })

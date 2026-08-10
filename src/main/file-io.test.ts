@@ -38,6 +38,7 @@ import {
   readFileByPath,
   saveFile,
   canonicalizeDocumentPath,
+  confirmDiscardChanges,
   saveDroppedImage
 } from './file-io'
 
@@ -538,5 +539,54 @@ describe('saveDroppedImage', () => {
     expect(original).toBe('pre-existing content, must survive untouched')
     const written = await readFile(join(docDir, 'photo-2.png'))
     expect(written).toEqual(Buffer.from(PNG_BASE64, 'base64'))
+  })
+})
+
+// The window-close guard can prompt about several different tabs in a row, so
+// the dialog has to say WHICH document it means -- three identical "Do you
+// want to save the changes you made?" dialogs is how a user discards the wrong
+// one. No end-to-end gate covers this (dialog.showMessageBox is a genuine
+// native modal no automated test can dismiss), matching the Print feature's
+// and the mtime-conflict feature's own established precedent: test the real
+// function directly against a mocked dialog instead.
+describe('confirmDiscardChanges', () => {
+  beforeEach(() => {
+    vi.mocked(dialog.showMessageBox).mockReset()
+    vi.mocked(dialog.showMessageBox).mockResolvedValue({
+      response: 0,
+      checkboxChecked: false
+    })
+  })
+
+  it('names the document when given one', async () => {
+    await confirmDiscardChanges(FAKE_WIN, 'report.md')
+
+    expect(dialog.showMessageBox).toHaveBeenCalledWith(
+      FAKE_WIN,
+      expect.objectContaining({ message: expect.stringContaining('report.md') })
+    )
+  })
+
+  it('keeps the original document-agnostic wording when given no name', async () => {
+    // The two original callers (Home navigation, closing the tab you are
+    // looking at) are unambiguous on their own -- the document in question is
+    // the one on screen.
+    await confirmDiscardChanges(FAKE_WIN)
+
+    expect(dialog.showMessageBox).toHaveBeenCalledWith(
+      FAKE_WIN,
+      expect.objectContaining({ message: 'Do you want to save the changes you made?' })
+    )
+  })
+
+  it('maps the three button indexes onto the three choices', async () => {
+    for (const [response, expected] of [
+      [0, 'save'],
+      [1, 'discard'],
+      [2, 'cancel']
+    ] as const) {
+      vi.mocked(dialog.showMessageBox).mockResolvedValue({ response, checkboxChecked: false })
+      expect(await confirmDiscardChanges(FAKE_WIN)).toBe(expected)
+    }
   })
 })
