@@ -1,9 +1,10 @@
 import { $command, $prose, $useKeymap } from '@milkdown/utils'
 import { commandsCtx } from '@milkdown/core'
+import type { Ctx } from '@milkdown/ctx'
 import { history, undo, redo } from '@milkdown/prose/history'
 import { wrapIn, setBlockType } from '@milkdown/prose/commands'
 import { TextSelection } from '@milkdown/prose/state'
-import type { Transaction } from '@milkdown/prose/state'
+import type { EditorState, Transaction } from '@milkdown/prose/state'
 import { Fragment } from '@milkdown/prose/model'
 import type { Mark } from '@milkdown/prose/model'
 import {
@@ -13,6 +14,7 @@ import {
   hardbreakSchema,
   paragraphSchema
 } from '@milkdown/preset-commonmark'
+import { tableCellSchema, tableHeaderSchema } from '@milkdown/preset-gfm'
 import { pagebreakNode } from './nodes/pagebreak'
 import { commentSchema } from './nodes/comment'
 import { safeImageViewProse } from './image-security'
@@ -88,6 +90,48 @@ export const historyKeymap = $useKeymap('historyKeymap', {
   }
 })
 
+// Task 4 (slash-menu) finding, measured directly against a real editor, not
+// theorized: a table cell's content model is the rigid, single-child
+// 'paragraph' (no `+`/`*`) -- confirmed by reading @milkdown/preset-gfm's own
+// table/schema.ts, which builds both table_cell and table_header via
+// prosemirror-tables' tableNodes({ cellContent: 'paragraph' }). That's
+// categorically different from a plain top-level paragraph or a list item
+// (listItemSchema's own content is 'paragraph block*', genuinely flexible) --
+// a table cell has NO room for a sibling block at all. Several stock preset
+// commands that insert a block-level node via ProseMirror's own
+// `replaceSelectionWith` on a collapsed selection -- insertPagebreakCommand
+// below (before this fix), plus @milkdown/preset-gfm's insertTableCommand
+// and @milkdown/preset-commonmark's insertHrCommand, neither of which is
+// this project's own code to patch -- don't refuse in that situation:
+// replaceSelectionWith's fallback path (prosemirror-transform's
+// replaceRange, reached whenever insertPoint() can't find a clean nearby
+// escape) instead walks OUTWARD through table_row/table looking for ANY
+// depth the node fits at. Measured directly: inserting a page break, a
+// table, or a horizontal rule from inside one cell of a real 2x2 table each
+// produced a corrupted THREE-TABLE document with the sibling cell's own
+// content silently replaced by `<br />`. (wrapInBlockquoteCommand and
+// createCodeBlockCommand do NOT share this failure -- both refuse cleanly
+// inside a cell on their own, via wrapIn/setBlockType's real applicability
+// checks -- so this guard is deliberately not applied to every command.)
+//
+// One shared implementation, exported so slash-items.ts (Task 4's palette
+// catalogue) can apply the SAME guard to insertTableCommand/insertHrCommand
+// at the call site -- the only place a guard CAN go for a command this
+// project doesn't own the body of. insertPagebreakCommand uses it directly
+// below, since that command IS ours. Walking every ancestor depth (not just
+// the immediate parent) is deliberate -- $from.parent is the paragraph
+// itself, and the table_cell/table_header is one level up.
+export function isInsideTableCell(ctx: Ctx, state: EditorState): boolean {
+  const cellType = tableCellSchema.type(ctx)
+  const headerType = tableHeaderSchema.type(ctx)
+  const $from = state.selection.$from
+  for (let depth = $from.depth; depth >= 0; depth--) {
+    const ancestorType = $from.node(depth).type
+    if (ancestorType === cellType || ancestorType === headerType) return true
+  }
+  return false
+}
+
 // Neither preset ships a command to insert THIS project's own custom
 // pagebreak atom node (naturally -- pagebreakNode, from ./nodes/pagebreak.ts,
 // is a PageDown-specific node, not part of commonmark/gfm), so this defines
@@ -112,8 +156,26 @@ export const insertPagebreakCommand = $command(
   'InsertPagebreak',
   (ctx) => () => (state, dispatch) => {
     const type = pagebreakNode.type(ctx)
+
+    // See isInsideTableCell's own doc comment above for the real, measured
+    // table-corruption bug this refuses outright rather than merely
+    // reporting honestly on a dry run.
+    if (isInsideTableCell(ctx, state)) return false
+
     const collapsed = TextSelection.create(state.doc, state.selection.from)
     const tr = state.tr.setSelection(collapsed).replaceSelectionWith(type.create())
+    // Fix-round finding: this used to `return true` unconditionally, even on
+    // a dry run (no dispatch), which is exactly the "reports applicable when
+    // it's actually a no-op" bug the slash-menu palette's own isEnabled dry
+    // run depends on NOT happening (see slash-items.ts). `tr.docChanged` is
+    // the correct, general signal here: setSelection never adds a Step, so
+    // this is true iff replaceSelectionWith genuinely inserted the pagebreak
+    // node somewhere -- false for the (today, believed unreachable given the
+    // slash menu's own paragraph-only gate, but not proven impossible for
+    // every future caller) case where no valid insertion point exists at
+    // all, distinct from the table-corruption case above, which is refused
+    // explicitly rather than relying on this generic check to catch it.
+    if (!tr.docChanged) return false
     dispatch?.(tr)
     return true
   }
