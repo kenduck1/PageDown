@@ -10,7 +10,6 @@ import EditorToolbar from '../components/EditorToolbar'
 import EditorSidebar from '../components/EditorSidebar'
 import EditorStatusBar from '../components/EditorStatusBar'
 import PageSetupModal from '../components/PageSetupModal'
-import ShortcutsHelpModal from '../components/ShortcutsHelpModal'
 import FindBar from '../components/FindBar'
 import CommentComposer from '../components/CommentComposer'
 import LinkComposer from '../components/LinkComposer'
@@ -59,8 +58,15 @@ function EditorScreen(): React.JSX.Element {
   const openCommentComposer = useAppStore((state) => state.openCommentComposer)
   const linkComposerOpen = useAppStore((state) => state.linkComposerOpen)
   const openLinkComposer = useAppStore((state) => state.openLinkComposer)
+  // No `closeShortcutsHelp` read here anymore -- App.tsx owns the modal's
+  // render (and therefore its onClose) as of the product-completeness audit
+  // Tier 3, C hoist. `openShortcutsHelp` and `shortcutsHelpOpen` are still
+  // read here: this screen still triggers the open (its own Mod-/ listener
+  // and `app:shortcuts` menu handler below, both for the closeSlashMenu()
+  // side effect that only makes sense while a Milkdown instance exists) and
+  // still needs to know whether it's open (SplitPreview's overlayOpen,
+  // SelectionBubble's suppressed list).
   const openShortcutsHelp = useAppStore((state) => state.openShortcutsHelp)
-  const closeShortcutsHelp = useAppStore((state) => state.closeShortcutsHelp)
   const viewMode = useAppStore((state) => state.viewMode)
   const setViewMode = useAppStore((state) => state.setViewMode)
   const splitLeftMode = useAppStore((state) => state.splitLeftMode)
@@ -110,6 +116,24 @@ function EditorScreen(): React.JSX.Element {
   const splitRowRef = useRef<HTMLDivElement>(null)
   const [zoom, setZoom] = useState(1)
   const [activeSourceOffset, setActiveSourceOffset] = useState<number | undefined>(undefined)
+  // Product-completeness audit Tier 3, B.3: SplitPreview's own onRenderError
+  // reports the most recent Split-mode render failure (or null once the next
+  // attempt succeeds) -- see EditorStatusBar's own comment for why the
+  // status bar, not a new layout row, is where this surfaces. This raw state
+  // is NOT reset on leaving Split mode -- deliberately: SplitPreview
+  // unmounts on that transition, so nothing would ever clear it again if it
+  // stayed stuck, and a `useEffect` calling `setSplitPreviewError` on every
+  // `viewMode` change is exactly the synchronous-setState-in-an-effect
+  // cascading-render shape this codebase's own lint rule (react-hooks/
+  // set-state-in-effect) flags. Gating what's actually PASSED DOWN on
+  // `viewMode === 'split'` below (rather than the state itself) is simpler
+  // and needs no effect at all: Format/Source mode always sees `null`
+  // regardless of what's stored, and re-entering Split mode briefly shows
+  // whichever value is left over from the previous session until the fresh
+  // mount's own first send resolves -- the same "briefly stale, then
+  // corrected" tradeoff `usePageCount` already accepts elsewhere in this
+  // file, not a new one.
+  const [splitPreviewError, setSplitPreviewError] = useState<string | null>(null)
   // Ephemeral, EditorScreen-local UI state -- not in appStore/documentStore
   // because nothing else in the app needs it (see design doc's "kept local"
   // rationale). `id` is a monotonically increasing nonce (via the ref below),
@@ -269,6 +293,18 @@ function EditorScreen(): React.JSX.Element {
   // focus into the modal the instant it opens, and the editor's
   // contenteditable node cannot hold focus -- and therefore cannot be the
   // target of a keydown -- while a modal does.
+  //
+  // Product-completeness audit Tier 3, C: App.tsx now owns a SECOND, more
+  // general Mod-/ listener (and the modal's actual render) so the shortcuts
+  // reference is reachable from Home/Settings too, not just from inside a
+  // document. This listener stays, deliberately not removed in favor of
+  // that one: its real job is the SYNCHRONOUS closeSlashMenu() call just
+  // below, which only means anything while a live Milkdown instance exists
+  // (i.e. only ever while this screen is mounted) -- see that call's own
+  // comment for why a render-later effect isn't fast enough to replace it.
+  // Both listeners firing in the same tick whenever this screen happens to
+  // be mounted is harmless: `openShortcutsHelp()` is an idempotent "set
+  // true" store action either way.
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent): void => {
       if ((event.metaKey || event.ctrlKey) && event.key === '/') {
@@ -1334,8 +1370,21 @@ function EditorScreen(): React.JSX.Element {
           Save
         </button>
       </div>
+      {/* Product-completeness audit Tier 3, B.1: this banner had no role at
+      all, so a failed Save (or any other store-level error) was completely
+      invisible to a screen-reader user -- nothing announces its own
+      appearance the way sighted feedback (a red bar appearing) does.
+      `role="alert"` is the right strength, not `aria-live="polite"`: this is
+      a genuinely discrete event (a save either just failed or it didn't),
+      not a value that updates continuously the way FindBar's match count
+      does, so there's no "chatter" risk an assertive interruption would
+      cause -- see FindBar.tsx's own comment for the case where that
+      distinction actually matters. */}
       {error && (
-        <div className="flex flex-none items-center gap-3 border-b border-border-chrome bg-red-50 px-3 py-2 text-13 text-red-600">
+        <div
+          role="alert"
+          className="flex flex-none items-center gap-3 border-b border-border-chrome bg-red-50 px-3 py-2 text-13 text-red-600"
+        >
           <span className="flex-1">{error}</span>
           <button onClick={clearError} className="text-12 font-semibold text-red-600">
             Dismiss
@@ -1500,6 +1549,7 @@ function EditorScreen(): React.JSX.Element {
                   targetPage={effectiveCurrentPage}
                   onPageChange={(state) => setCurrentPage(state.currentPage)}
                   remoteImagesAllowed={remoteImagesAllowed === true}
+                  onRenderError={setSplitPreviewError}
                 />
               </div>
             </div>
@@ -1523,6 +1573,7 @@ function EditorScreen(): React.JSX.Element {
         onNavigateToPage={handleNavigateToPage}
         zoom={zoom}
         onZoomChange={setZoom}
+        splitPreviewError={viewMode === 'split' ? splitPreviewError : null}
       />
       <PageSetupModal
         open={pageSetupOpen}
@@ -1530,7 +1581,13 @@ function EditorScreen(): React.JSX.Element {
         onApply={handleApplyPageConfig}
         onClose={closePageSetup}
       />
-      <ShortcutsHelpModal open={shortcutsHelpOpen} onClose={closeShortcutsHelp} />
+      {/* ShortcutsHelpModal itself is rendered by App.tsx now, not here --
+      product-completeness audit Tier 3, C. Rendering it in both places would
+      mount two independent instances (two competing focus traps) any time a
+      document happens to be open; `shortcutsHelpOpen` above is still read by
+      this screen for SplitPreview's overlayOpen and SelectionBubble's
+      suppressed list, which need to know the modal is open regardless of
+      which component renders it. */}
       {/* Rendered HERE, at this screen's root alongside the modals and Toast,
       and deliberately NOT inside `document-content` -- the single-pane branch
       wraps its pane in `transform: scale(zoom)`, and a transform establishes a

@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { act } from 'react'
 import { cleanup, render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import EditorStatusBar from './EditorStatusBar'
@@ -16,6 +17,8 @@ beforeEach(() => {
     getPageCount: vi.fn().mockResolvedValue({ pageCount: 3 }),
     confirmDiscardChanges: vi.fn(),
     exportPdf: vi.fn(),
+    exportHtml: vi.fn(),
+    showItemInFolder: vi.fn(),
     print: vi.fn(),
     getPreferences: vi.fn(),
     setPreferences: vi.fn(),
@@ -291,5 +294,138 @@ describe('EditorStatusBar page-count in-progress indicator', () => {
     expect(screen.getByRole('button', { name: /page 3 of 12/i })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Next page' })).toBeEnabled()
     expect(screen.getByRole('button', { name: 'Previous page' })).toBeEnabled()
+  })
+})
+
+// Product-completeness audit §2.4: character count and reading time, the
+// "other half" of the statistics surface -- word count used to be the whole
+// thing.
+describe('EditorStatusBar document statistics', () => {
+  it('renders the real character count alongside the word count', () => {
+    renderBar({ content: 'Hello world' })
+    // "Hello world" -- no markdown syntax to strip -- is 11 characters.
+    expect(screen.getByText('11 characters')).toBeInTheDocument()
+  })
+
+  it('uses singular "character" for a one-character document', () => {
+    renderBar({ content: 'A' })
+    expect(screen.getByText('1 character')).toBeInTheDocument()
+  })
+
+  it('shows "< 1 min read" for a short document', () => {
+    renderBar({ content: 'Hello world' })
+    expect(screen.getByText('< 1 min read')).toBeInTheDocument()
+  })
+
+  it('shows a rounded minute estimate for a longer document', () => {
+    // 400 words at the documented 200 wpm estimate is exactly 2 minutes.
+    renderBar({ content: Array(400).fill('word').join(' ') })
+    expect(screen.getByText('2 min read')).toBeInTheDocument()
+  })
+})
+
+// Product-completeness audit §2.4 perf fix: word/character count must come
+// off the synchronous typing path via a debounce, matching usePageCount's
+// own established pattern -- not recomputed on every single content change.
+describe('EditorStatusBar statistics debounce', () => {
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('does not update the word count until the debounce window elapses', () => {
+    vi.useFakeTimers()
+    const { rerender } = render(
+      <EditorStatusBar
+        content="one two three"
+        isDirty={false}
+        zoom={1}
+        onZoomChange={vi.fn()}
+        pageCount={3}
+        pageCountPending={false}
+        currentPage={1}
+        onNavigateToPage={vi.fn()}
+      />
+    )
+    expect(screen.getByText('3 words')).toBeInTheDocument()
+
+    rerender(
+      <EditorStatusBar
+        content="one two three four five"
+        isDirty={false}
+        zoom={1}
+        onZoomChange={vi.fn()}
+        pageCount={3}
+        pageCountPending={false}
+        currentPage={1}
+        onNavigateToPage={vi.fn()}
+      />
+    )
+    // Still the OLD count -- a real keystroke-by-keystroke edit must not
+    // trigger a fresh parse before the debounce settles.
+    expect(screen.getByText('3 words')).toBeInTheDocument()
+
+    act(() => {
+      vi.advanceTimersByTime(200)
+    })
+    expect(screen.getByText('5 words')).toBeInTheDocument()
+  })
+
+  it('a burst of rapid content changes only recomputes once, for the final value', () => {
+    vi.useFakeTimers()
+    const { rerender } = render(
+      <EditorStatusBar
+        content="a"
+        isDirty={false}
+        zoom={1}
+        onZoomChange={vi.fn()}
+        pageCount={3}
+        pageCountPending={false}
+        currentPage={1}
+        onNavigateToPage={vi.fn()}
+      />
+    )
+
+    for (const content of ['a b', 'a b c', 'a b c d']) {
+      rerender(
+        <EditorStatusBar
+          content={content}
+          isDirty={false}
+          zoom={1}
+          onZoomChange={vi.fn()}
+          pageCount={3}
+          pageCountPending={false}
+          currentPage={1}
+          onNavigateToPage={vi.fn()}
+        />
+      )
+      act(() => {
+        vi.advanceTimersByTime(50)
+      })
+    }
+    // Still the very first render's count -- none of the intermediate
+    // values ever had 200ms of quiet to settle.
+    expect(screen.getByText('1 word')).toBeInTheDocument()
+
+    act(() => {
+      vi.advanceTimersByTime(200)
+    })
+    expect(screen.getByText('4 words')).toBeInTheDocument()
+  })
+})
+
+// Product-completeness audit Tier 3, B.3: Split-mode preview render failures
+// used to be console-only, with no on-screen indication anything was wrong.
+describe('EditorStatusBar split-preview error', () => {
+  it('renders nothing extra when there is no error', () => {
+    renderBar({ splitPreviewError: null })
+    expect(screen.queryByRole('status')).not.toBeInTheDocument()
+  })
+
+  it('surfaces a live-region status message when the preview failed to render', () => {
+    renderBar({ splitPreviewError: 'Pagination harness timed out waiting for a result' })
+    const status = screen.getByRole('status')
+    expect(status).toHaveTextContent('Preview may be out of date')
+    expect(status).toHaveAttribute('aria-live', 'polite')
+    expect(status).toHaveAttribute('title', 'Pagination harness timed out waiting for a result')
   })
 })

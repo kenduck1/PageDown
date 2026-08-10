@@ -20,6 +20,8 @@ beforeEach(() => {
     getPageCount: vi.fn().mockResolvedValue({ pageCount: 1 }),
     confirmDiscardChanges: vi.fn(),
     exportPdf: vi.fn(),
+    exportHtml: vi.fn(),
+    showItemInFolder: vi.fn(),
     print: vi.fn(),
     getPreferences: vi.fn(),
     setPreferences: vi.fn(),
@@ -273,6 +275,16 @@ describe('EditorScreen', () => {
 
     expect(useDocumentStore.getState().error).toBeNull()
     expect(screen.queryByText('File not found')).not.toBeInTheDocument()
+  })
+
+  // Product-completeness audit Tier 3, B.1: this banner had no role at all,
+  // so a failed save (or any other store-level error) was invisible to a
+  // screen-reader user.
+  it('announces the error banner via role="alert"', () => {
+    useDocumentStore.setState({ error: 'File not found' })
+    render(<EditorScreen />)
+
+    expect(screen.getByRole('alert')).toHaveTextContent('File not found')
   })
 
   it('prompts before navigating Home when the document is dirty, and stays if cancelled', async () => {
@@ -1839,31 +1851,39 @@ describe('EditorScreen', () => {
     })
   })
 
+  // Product-completeness audit Tier 3, C: ShortcutsHelpModal itself is now
+  // rendered by App.tsx, not this screen (see EditorScreen.tsx's own comment
+  // on why -- two simultaneous instances would race each other's focus
+  // trap), so these tests assert on `shortcutsHelpOpen` store state rather
+  // than a rendered dialog -- that's this screen's own real contribution
+  // (its Mod-/ listener still exists, for the closeSlashMenu() side effect
+  // -- see that listener's own comment). The real end-to-end "does the
+  // dialog actually appear, from every screen" proof lives in App.test.tsx's
+  // own 'keyboard shortcuts reference modal' describe block.
   describe('shortcuts-help keyboard shortcut', () => {
-    it('Mod-/ opens ShortcutsHelpModal', () => {
+    it('Mod-/ sets shortcutsHelpOpen', () => {
       render(<EditorScreen />)
-      expect(screen.queryByRole('dialog', { name: 'Keyboard shortcuts' })).not.toBeInTheDocument()
+      expect(useAppStore.getState().shortcutsHelpOpen).toBe(false)
 
       fireEvent.keyDown(window, { key: '/', metaKey: true })
 
-      expect(screen.getByRole('dialog', { name: 'Keyboard shortcuts' })).toBeInTheDocument()
       expect(useAppStore.getState().shortcutsHelpOpen).toBe(true)
     })
 
-    it('Ctrl-/ (non-Mac convention) also opens it', () => {
+    it('Ctrl-/ (non-Mac convention) also sets it', () => {
       render(<EditorScreen />)
 
       fireEvent.keyDown(window, { key: '/', ctrlKey: true })
 
-      expect(screen.getByRole('dialog', { name: 'Keyboard shortcuts' })).toBeInTheDocument()
+      expect(useAppStore.getState().shortcutsHelpOpen).toBe(true)
     })
 
-    it('a bare "/" with no modifier does not open it (must not fire while typing a literal slash)', () => {
+    it('a bare "/" with no modifier does not set it (must not fire while typing a literal slash)', () => {
       render(<EditorScreen />)
 
       fireEvent.keyDown(window, { key: '/' })
 
-      expect(screen.queryByRole('dialog', { name: 'Keyboard shortcuts' })).not.toBeInTheDocument()
+      expect(useAppStore.getState().shortcutsHelpOpen).toBe(false)
     })
   })
 
@@ -1915,19 +1935,30 @@ describe('EditorScreen', () => {
     }
 
     it('zero-sizes the preview while the keyboard-shortcuts modal is open, and restores it on close', async () => {
+      // ShortcutsHelpModal itself is rendered by App.tsx now (product-
+      // completeness audit Tier 3, C), not this screen, so this test drives
+      // the SAME `shortcutsHelpOpen` store flag the toolbar button and
+      // App.tsx's modal both actually key off, rather than clicking a dialog
+      // that no longer exists in THIS render tree. What's under test here is
+      // this screen's own `overlayOpen={pageSetupOpen || shortcutsHelpOpen}`
+      // wiring into SplitPreview -- unchanged by where the modal renders --
+      // and App.test.tsx's own 'keyboard shortcuts reference modal' suite is
+      // what proves the dialog itself really appears/disappears.
       const user = userEvent.setup()
       const setSplitPreviewBounds = await renderSplitWithLayout()
 
       await user.click(screen.getByRole('button', { name: 'Keyboard shortcuts' }))
 
-      expect(screen.getByRole('dialog', { name: 'Keyboard shortcuts' })).toBeInTheDocument()
+      expect(useAppStore.getState().shortcutsHelpOpen).toBe(true)
       await waitFor(() => {
         expect(setSplitPreviewBounds).toHaveBeenLastCalledWith(ZERO_BOUNDS)
       })
 
       // Closing has to put the preview back -- a one-way hide would leave the
       // pane permanently blank for the rest of the Split-mode session.
-      await user.click(screen.getByRole('button', { name: 'Close' }))
+      act(() => {
+        useAppStore.getState().closeShortcutsHelp()
+      })
       await waitFor(() => {
         expect(setSplitPreviewBounds).toHaveBeenLastCalledWith(REAL_BOUNDS)
       })
@@ -1972,6 +2003,65 @@ describe('EditorScreen', () => {
         { timeout: 3000 }
       )
       expect(screen.getByRole('button', { name: /page 1 of 4/i })).toBeInTheDocument()
+    })
+  })
+
+  // Product-completeness audit Tier 3, B.3: SplitPreview's own render
+  // failures used to be console-only -- nothing on screen told the user the
+  // preview might be stale. This is the end-to-end wiring test: a real
+  // rejected sendSplitPreviewDocument call reaching the real status bar.
+  describe('split-preview render error', () => {
+    it('surfaces a failed preview render in the status bar, and clears it once a retry succeeds', async () => {
+      vi.spyOn(console, 'error').mockImplementation(() => {})
+      const sendDocument = vi
+        .fn()
+        .mockRejectedValueOnce(new Error('harness timed out'))
+        .mockResolvedValue({ pageCount: 1 })
+      window.api.sendSplitPreviewDocument = sendDocument
+      useAppStore.setState({ viewMode: 'split' })
+      useDocumentStore.setState({ filePath: '/tmp/report.md', content: '# Report' })
+
+      render(<EditorScreen />)
+
+      const status = await screen.findByText('Preview may be out of date')
+      expect(status).toHaveAttribute('aria-live', 'polite')
+
+      // A real edit triggers the debounced retry, which this time succeeds
+      // -- the note must disappear, not linger once the underlying problem
+      // is gone.
+      act(() => {
+        useDocumentStore
+          .getState()
+          .updateContentForTab(useDocumentStore.getState().activeTabId, '# Report\n\nMore.')
+      })
+      await waitFor(
+        () => {
+          expect(screen.queryByText('Preview may be out of date')).not.toBeInTheDocument()
+        },
+        { timeout: 2000 }
+      )
+      vi.restoreAllMocks()
+    })
+
+    it('clears the note when leaving Split mode, so it does not linger in Format/Source', async () => {
+      vi.spyOn(console, 'error').mockImplementation(() => {})
+      window.api.sendSplitPreviewDocument = vi
+        .fn()
+        .mockRejectedValue(new Error('harness timed out'))
+      useAppStore.setState({ viewMode: 'split' })
+      useDocumentStore.setState({ filePath: '/tmp/report.md', content: '# Report' })
+
+      render(<EditorScreen />)
+      await screen.findByText('Preview may be out of date')
+
+      act(() => {
+        useAppStore.getState().setViewMode('format')
+      })
+
+      await waitFor(() => {
+        expect(screen.queryByText('Preview may be out of date')).not.toBeInTheDocument()
+      })
+      vi.restoreAllMocks()
     })
   })
 })

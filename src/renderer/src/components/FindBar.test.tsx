@@ -85,6 +85,20 @@ describe('FindBar', () => {
     expect(screen.getByTestId('find-count')).toBeEmptyDOMElement()
   })
 
+  // Product-completeness audit Tier 3, B.1: the count readout used to have
+  // no live region at all, so a screen-reader user editing the query never
+  // heard "3 / 12"/"No results" change.
+  it('marks the count readout as a polite, atomic live region -- not an assertive alert', () => {
+    renderBar({ query: 'cat', matchCount: 12, activeIndex: 2 })
+    const count = screen.getByTestId('find-count')
+    expect(count).toHaveAttribute('aria-live', 'polite')
+    expect(count).toHaveAttribute('aria-atomic', 'true')
+    // Specifically NOT role="alert": this text changes on every keystroke
+    // while the user is actively typing in the adjacent input, and an
+    // assertive region would interrupt that on every change.
+    expect(count).not.toHaveAttribute('role', 'alert')
+  })
+
   it('navigates with the next and previous buttons', async () => {
     const user = userEvent.setup()
     renderBar({ query: 'cat', matchCount: 3, activeIndex: 0 })

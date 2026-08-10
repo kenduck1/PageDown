@@ -1,5 +1,17 @@
 import { useMemo } from 'react'
 import { extractOutline, type OutlineHeading } from '../lib/extractOutline'
+import { useDebouncedValue } from '../hooks/useDebouncedValue'
+
+// Same real perf finding, and the same fix, as EditorStatusBar's own word
+// count (product-completeness audit §2.4). This component only mounts while
+// the Outline sidebar tab is active (EditorSidebar's own ternary), so the
+// blast radius is narrower than RemoteImageBanner's -- but while it IS
+// mounted, `extractOutline`'s own full remark parse ran on every content
+// change too, including every keystroke in Source mode. Same 200ms as the
+// other two fixes, for the same reason: no IPC to wait out, so there's no
+// reason to pick anything other than the cadence Format mode's own Milkdown
+// debounce already gives for free.
+const OUTLINE_DEBOUNCE_MS = 200
 
 export interface EditorOutlineProps {
   content: string
@@ -33,7 +45,8 @@ function EditorOutline({
   onSelectHeading,
   activeSourceOffset
 }: EditorOutlineProps): React.JSX.Element {
-  const headings = useMemo(() => extractOutline(content), [content])
+  const debouncedContent = useDebouncedValue(content, OUTLINE_DEBOUNCE_MS)
+  const headings = useMemo(() => extractOutline(debouncedContent), [debouncedContent])
   const activeIndex = useMemo(
     () => findActiveIndex(headings, activeSourceOffset),
     [headings, activeSourceOffset]

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { countWords } from './wordCount'
+import { countWords, countCharacters, analyzeText } from './wordCount'
 
 describe('countWords', () => {
   it('counts plain prose as whitespace-delimited words', () => {
@@ -151,5 +151,70 @@ describe('countWords', () => {
     // "See the total variable above for the raw figure." (9, "total" from inlineCode)
     // Total: 2 + 9 + 1 + 5 + 3 + 9 = 29
     expect(countWords(markdown)).toBe(29)
+  })
+
+  // Product-completeness audit, §2.4: raw HTML blocks previously rendered
+  // (pipeline.ts) but counted zero words, since a bare `html` mdast node
+  // contributed nothing to concatenateInlineText/computeTextStats.
+  describe('raw HTML text (fix for the disclosed "counts zero words" gap)', () => {
+    it('counts visible text inside a block-level raw HTML element, excluding its tags', () => {
+      const markdown = 'Intro.\n\n<div>\nSome real text here.\n</div>\n\nOutro.'
+      // "Intro." (1) + "Some real text here." (4) + "Outro." (1) = 6.
+      // Confirmed against the real parsed tree: the <div>...</div> block is
+      // ONE root-level `html` node, a sibling of the two paragraphs, not
+      // nested inside either.
+      expect(countWords(markdown)).toBe(6)
+    })
+
+    it('still counts zero words for a bare HTML comment (e.g. <!-- pagebreak -->)', () => {
+      // Regression guard for the pre-existing pagebreak test above: comment
+      // CONTENT must never count as prose just because tag-stripping alone
+      // would otherwise expose it.
+      expect(countWords('One.\n\n<!-- a note to self, not for readers -->\n\nTwo.')).toBe(2)
+    })
+
+    it('counts the real text inside a comment-marker pair that CommonMark folds into one html node', () => {
+      // Mirrors the Comments feature's own marker shape (CLAUDE.md's
+      // "Comments" section): when a `<!--comment...-->marked text<!--/comment...-->`
+      // run OPENS a paragraph, CommonMark's HTML-block-type-2 rule folds
+      // the whole line -- both comments AND the real text between them --
+      // into a single `html` node. Both comments must disappear and
+      // "marked text" must still count, i.e. this must NOT collapse to 0
+      // words the way it did before this fix.
+      const markdown =
+        '<!--comment id="c1" data="eyJ4IjoxfQ=="-->marked text<!--/comment id="c1"-->'
+      expect(countWords(markdown)).toBe(2)
+    })
+
+    it('is a no-op for an inline tag delimiter that already sits beside real text nodes', () => {
+      // "Before <span>text **bold** more</span> after." -- remark-parse
+      // already splits this into real text/strong nodes for "text"/"bold"/
+      // "more"/"after." plus two BARE-tag `html` nodes ("<span>", "</span>")
+      // that contribute nothing themselves; this proves the fix doesn't
+      // double-count anything already being counted correctly.
+      const markdown = 'Before <span>text **bold** more</span> after.'
+      // "Before" "text" "bold" "more" "after." = 5.
+      expect(countWords(markdown)).toBe(5)
+    })
+  })
+
+  describe('countCharacters / analyzeText', () => {
+    it('counts characters of the same rendered text words counts, not markdown.length', () => {
+      // "Hello" (5 chars) -- **not** "**Hello**".length (9).
+      expect(countCharacters('**Hello**')).toBe(5)
+    })
+
+    it('excludes frontmatter/code from the character count exactly like countWords excludes them', () => {
+      const markdown = ['---', 'title: X', '---', '', 'Hi.'].join('\n')
+      expect(countCharacters(markdown)).toBe(3)
+    })
+
+    it('analyzeText returns the same numbers as the separate word/character functions, from one parse', () => {
+      const markdown = 'This is *emphasized* and **bold** text.'
+      expect(analyzeText(markdown)).toEqual({
+        words: countWords(markdown),
+        characters: countCharacters(markdown)
+      })
+    })
   })
 })

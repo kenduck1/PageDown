@@ -223,8 +223,31 @@ function FindBar({ onReplace, onReplaceAll, queryInputRef }: FindBarProps): Reac
           className="h-[30px] min-w-0 flex-1 rounded-sm border border-border-chrome bg-page px-2.5 text-12 text-text-primary"
         />
 
+        {/* Product-completeness audit Tier 3, B.1: this readout had no live
+        region at all, so "3 / 12" flipping to "No results" (or vice versa)
+        as the user edits the query was invisible to a screen-reader user --
+        sighted feedback only. `aria-live="polite"`, not `role="alert"`
+        (assertive): this text changes on every keystroke while the user is
+        actively typing in the adjacent input, and an assertive region
+        INTERRUPTS whatever the screen reader is currently announcing --
+        including, on some AT/browser combinations, the user's own just-typed
+        character -- on every single change. Polite instead QUEUES the
+        announcement behind whatever's in progress and, per how every major
+        screen reader actually implements polite live regions, naturally
+        coalesces a fast run of updates into announcing whatever the region's
+        content settled on, not a separate utterance per keystroke -- so no
+        extra debounce is needed here on top of that platform behavior
+        (unlike EditorStatusBar's word count, which had to debounce because
+        the cost there is a synchronous parse blocking the render thread, an
+        entirely different problem from "how many things get spoken aloud").
+        `aria-atomic="true"` makes the whole phrase re-read as one unit
+        ("1 / 5000+") rather than a diff of what changed, which is the only
+        sensible way to consume a count like this. */}
         <span
           data-testid="find-count"
+          role="status"
+          aria-live="polite"
+          aria-atomic="true"
           className="w-16 flex-none text-center text-11-5 text-text-tertiary"
         >
           {countText}

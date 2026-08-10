@@ -6,6 +6,7 @@ import { useMenuCommands } from './hooks/useMenuCommands'
 import { useCreateDocument } from './hooks/useCreateDocument'
 import { confirmWindowClose } from './lib/close-guard'
 import Toast from './components/Toast'
+import ShortcutsHelpModal from './components/ShortcutsHelpModal'
 import HomeScreen from './screens/HomeScreen'
 import EditorScreen from './screens/EditorScreen'
 import SettingsScreen from './screens/SettingsScreen'
@@ -15,6 +16,9 @@ function App(): React.JSX.Element {
   const goEditor = useAppStore((state) => state.goEditor)
   const goSettings = useAppStore((state) => state.goSettings)
   const viewMode = useAppStore((state) => state.viewMode)
+  const shortcutsHelpOpen = useAppStore((state) => state.shortcutsHelpOpen)
+  const openShortcutsHelp = useAppStore((state) => state.openShortcutsHelp)
+  const closeShortcutsHelp = useAppStore((state) => state.closeShortcutsHelp)
   const filePath = useDocumentStore((state) => state.filePath)
   const isDirty = useDocumentStore((state) => state.isDirty)
   const openFile = useDocumentStore((state) => state.openFile)
@@ -89,12 +93,48 @@ function App(): React.JSX.Element {
     })
   }, [screen, viewMode, filePath, isDirty])
 
+  // Product-completeness audit Tier 3, C: the shortcuts reference used to be
+  // reachable ONLY from inside EditorScreen -- both its `Mod-/` keydown
+  // listener and its own `<ShortcutsHelpModal>` render lived there, so a user
+  // on Home or Settings had no way to see it at all, and nothing on Home even
+  // says what this app is or that Split/Source modes exist. Hoisted here so
+  // it works from every screen. `ShortcutsHelpModal` itself is unchanged
+  // (still built on `useModalDialog`'s real focus-trap/Escape/focus-restore
+  // behavior, see that hook's own header comment) -- only WHERE it mounts and
+  // WHAT can open it moved.
+  //
+  // EditorScreen keeps its OWN, narrower `Mod-/` listener too (see that
+  // file), rather than this one being the sole trigger -- deliberately, not
+  // redundantly: that listener's real job is calling `editorRef.current
+  // ?.closeSlashMenu()` synchronously, in the same tick as the keystroke,
+  // so an open slash-command session doesn't stay visibly rendered
+  // underneath the freshly-opened modal for a render or more (see that
+  // file's own comment on why `useModalDialog`'s blur-driven close alone
+  // isn't fast enough). This listener firing too, whenever EditorScreen also
+  // happens to be mounted, is harmless: `openShortcutsHelp()` is a plain
+  // "set true" store action, idempotent no matter how many times it's
+  // called in the same tick.
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent): void => {
+      if ((event.metaKey || event.ctrlKey) && event.key === '/') {
+        event.preventDefault()
+        openShortcutsHelp()
+      }
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [openShortcutsHelp])
+
   // The application-menu commands that are meaningful on EVERY screen, and
   // therefore cannot live in EditorScreen (which is unmounted on Home and
   // Settings). Everything document-scoped -- Save, Export, Find, view modes,
   // zoom -- is handled by EditorScreen's own subscription instead; see
   // useMenuCommands' own comment on why a partial handler map per call site
-  // beats one central switch.
+  // beats one central switch. `app:shortcuts` is the one command handled at
+  // BOTH levels (this one, and EditorScreen's own) for the identical reason
+  // the keydown listener above is duplicated -- EditorScreen's copy also
+  // closes any open slash-command session, which only means something while
+  // EditorScreen is mounted at all.
   useMenuCommands({
     // The SAME shared implementation the Home screen's own "New document"
     // button uses, so File > New honours the user's default page config
@@ -115,7 +155,8 @@ function App(): React.JSX.Element {
         if (loaded) goEditor()
       })
     },
-    'app:preferences': () => goSettings()
+    'app:preferences': () => goSettings(),
+    'app:shortcuts': () => openShortcutsHelp()
   })
 
   // Fetched once, here, rather than lazily by whichever screen first needs
@@ -194,6 +235,16 @@ function App(): React.JSX.Element {
         onDismiss={() => setStartupWarning(null)}
         durationMs={12_000}
       />
+      {/* Product-completeness audit Tier 3, C: moved here from EditorScreen so
+      it works from Home and Settings too, not just while a document is open
+      -- see the effect/useMenuCommands entry above for the full reasoning.
+      EditorScreen no longer renders its own copy (rendering both here AND
+      there would mount two independent instances racing each other's own
+      focus trap the moment a document happens to be open) -- it still reads
+      `shortcutsHelpOpen` from the same store for its own, unrelated needs
+      (Split-mode preview occlusion, the selection bubble's suppression list),
+      just not to render the modal itself anymore. */}
+      <ShortcutsHelpModal open={shortcutsHelpOpen} onClose={closeShortcutsHelp} />
     </>
   )
 }

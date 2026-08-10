@@ -240,16 +240,29 @@ function HomeScreen(): React.JSX.Element {
     if (loaded) goEditor()
   }
 
-  // Fire-and-forget, same rationale as every other one-shot IPC action in
-  // this app that has no meaningful loading/error state of its own to
-  // show (e.g. this component's own thumbnail requests) -- the new
-  // window's own creation/load failures have nothing THIS window could
-  // usefully surface anyway. Deliberately does NOT touch this window's own
-  // state at all: it stays exactly where it was (Home), which is the
-  // whole point of opening a second document in its OWN window rather than
-  // navigating away from this one.
+  // Fire-and-forget in the sense that a SUCCESSFUL open touches nothing about
+  // this window's own state -- it stays exactly where it was (Home), which is
+  // the whole point of opening a second document in its OWN window rather
+  // than navigating away from this one. Product-completeness audit Tier 3,
+  // B.2: it was previously ALSO fire-and-forget about a FAILED open -- a bare
+  // `void`, no `.catch()` at all -- so a rejection (the new window failing to
+  // create, or the target path failing its own re-validated isKnownPath
+  // check inside that new window) became an unhandled promise rejection with
+  // literally nothing surfacing anywhere: not this window's UI, not even a
+  // console.error a developer could find. The button just looked dead.
+  // Logs (matching handleRemoveRecent/handleClearRecents' own established
+  // "log and move on" precedent just below) AND surfaces a generic error via
+  // the existing error banner -- unlike those two, a completely silent
+  // failure here has no OTHER visible symptom at all (no row disappears, no
+  // list fails to update), so console-only would still leave a real user
+  // with a click that appears to do nothing.
   const handleOpenInNewWindow = (filePath: string): void => {
-    void window.api.openInNewWindow(filePath)
+    window.api.openInNewWindow(filePath).catch((err: unknown) => {
+      console.error('Failed to open in new window', err)
+      useDocumentStore.setState({
+        error: 'Could not open this document in a new window.'
+      })
+    })
   }
 
   // Product-completeness audit 0.6. Low-stakes, deliberately no confirmation
@@ -331,8 +344,12 @@ function HomeScreen(): React.JSX.Element {
       </nav>
 
       <main className="flex-1 overflow-auto p-6">
+        {/* Product-completeness audit Tier 3, B.1 -- same fix, same reasoning,
+        as EditorScreen's identical error banner: a discrete failure (an
+        open/thumbnail/etc. error) with nothing announcing its own
+        appearance to a screen reader. */}
         {error && (
-          <div className="mb-4 flex items-center gap-3 text-13 text-red-600">
+          <div role="alert" className="mb-4 flex items-center gap-3 text-13 text-red-600">
             <span>{error}</span>
             <button onClick={clearError} className="font-semibold">
               Dismiss

@@ -63,6 +63,27 @@ describe('CommentComposer', () => {
     expect(useAppStore.getState().commentComposerOpen).toBe(true)
   })
 
+  // Product-completeness audit Tier 3, B.1: the inline error had no role at
+  // all (invisible to a screen reader) and no aria-describedby tying it to
+  // the field it's actually about.
+  it('the error is announced via role="alert" and tied to the input via aria-describedby', async () => {
+    useAppStore.setState({ commentComposerOpen: true })
+    const onAddComment = vi.fn(() => false)
+    const user = userEvent.setup()
+    render(<CommentComposer onAddComment={onAddComment} />)
+    const input = screen.getByRole('textbox', { name: 'Comment text' })
+
+    // Before any error, the field must not claim a description that doesn't
+    // exist yet.
+    expect(input).not.toHaveAttribute('aria-describedby')
+
+    await user.type(input, 'a note{Enter}')
+
+    const alert = screen.getByRole('alert')
+    expect(alert).toHaveTextContent('Select some text within a single paragraph first.')
+    expect(input).toHaveAttribute('aria-describedby', alert.id)
+  })
+
   it('editing the text after a failed attempt clears the error', async () => {
     useAppStore.setState({ commentComposerOpen: true })
     const onAddComment = vi.fn(() => false)

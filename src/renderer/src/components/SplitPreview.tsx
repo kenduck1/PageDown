@@ -49,6 +49,17 @@ interface SplitPreviewProps {
   targetPage: number
   onPageChange: (state: PageNavState) => void
   /**
+   * Product-completeness audit Tier 3, B.3: reports the most recent render
+   * failure's message, or `null` once a subsequent send succeeds. Both
+   * `.catch()` blocks below already logged a failed render (see their own
+   * comments); this is the missing renderer-side USER-facing half -- the
+   * preview kept showing its last known-good content with nothing else
+   * indicating that content might now be stale. Optional so every existing
+   * caller (and every existing test in SplitPreview.test.tsx) that doesn't
+   * care about this stays unaffected.
+   */
+  onRenderError?: (message: string | null) => void
+  /**
    * This document's own remote-image consent decision, forwarded to the
    * render context so an allowed document's `http(s)` image references
    * survive the pipeline. A plain boolean, NOT `boolean | null`: the store's
@@ -83,9 +94,20 @@ function SplitPreview({
   overlayOpen,
   targetPage,
   onPageChange,
-  remoteImagesAllowed
+  remoteImagesAllowed,
+  onRenderError
 }: SplitPreviewProps): React.JSX.Element {
   const placeholderRef = useRef<HTMLDivElement>(null)
+  // Latest-ref, matching onPageChangeRef below (and MilkdownEditor.tsx's own
+  // onChangeRef/onErrorRef precedent) -- both `.then`/`.catch` sites that
+  // call this run inside effects with narrow dependency arrays (mount-only,
+  // or keyed on content/filePath/remoteImagesAllowed but not on this
+  // callback's own identity), so depending on the prop directly would either
+  // re-fire those effects on every parent render or call a stale closure.
+  const onRenderErrorRef = useRef(onRenderError)
+  useEffect(() => {
+    onRenderErrorRef.current = onRenderError
+  })
   // Tracks the last {content, filePath, remoteImagesAllowed} triple the
   // harness has CONFIRMED receiving (stamped only inside the .then() below,
   // never before the call) so the 500ms-debounced effect can skip re-sending
@@ -168,16 +190,24 @@ function SplitPreview({
       .sendSplitPreviewDocument(content, filePath, remoteImagesAllowed)
       .then(() => {
         lastSentRef.current = { content, filePath, remoteImagesAllowed }
+        // Product-completeness audit Tier 3, B.3: a stale error from an
+        // EARLIER failed attempt must not keep showing once a later one
+        // succeeds -- this mount send is the first attempt, so there is
+        // nothing to clear yet in practice, but calling this unconditionally
+        // on every success (mirrored in the debounced effect below) is what
+        // makes "the indicator always reflects the MOST RECENT attempt" true
+        // without a separate success-tracking mechanism.
+        onRenderErrorRef.current?.(null)
       })
       .catch((err: unknown) => {
         // Split mode's preview is best-effort, same governing rule as the
         // rest of this app's fire-and-forget IPC calls (see
         // EditorHistory.tsx's own .catch() for the precedent this matches):
-        // never let a rejection surface as an unhandled promise rejection,
-        // and no dedicated error UI for this task. Deliberately does NOT
-        // stamp lastSentRef on failure -- see that ref's own comment above
-        // for why leaving it unset here is what lets the debounced effect
-        // retry instead of believing this content was already delivered.
+        // never let a rejection surface as an unhandled promise rejection.
+        // Deliberately does NOT stamp lastSentRef on failure -- see that
+        // ref's own comment above for why leaving it unset here is what lets
+        // the debounced effect retry instead of believing this content was
+        // already delivered.
         //
         // LOGGED, though, rather than discarded entirely (matching
         // EditorToolbar.tsx's own console.error precedent for a failed
@@ -188,8 +218,14 @@ function SplitPreview({
         // preview keeping its last known-good content (the sandbox's own
         // commit-point fix, resources/pagination-render/index.ts) is the
         // right USER-facing behavior and is precisely why the failure needs
-        // to be visible somewhere else.
+        // to be visible somewhere else -- `onRenderErrorRef` is that
+        // "somewhere else", added alongside this pre-existing console.error
+        // rather than instead of it (a developer with devtools open still
+        // gets the exact error; a real user gets an honest, non-noisy
+        // status-bar note -- see EditorStatusBar.tsx's own comment on why
+        // THAT surface, not a new layout row, was chosen).
         console.error('Split preview render failed', err)
+        onRenderErrorRef.current?.(err instanceof Error ? err.message : String(err))
       })
     // Mount-only: sends the initial content immediately rather than waiting
     // out the debounce below for the very first paint.
@@ -216,6 +252,12 @@ function SplitPreview({
         .sendSplitPreviewDocument(content, filePath, remoteImagesAllowed)
         .then(() => {
           lastSentRef.current = { content, filePath, remoteImagesAllowed }
+          // Clears whatever the LAST attempt reported, success or failure --
+          // this is the path a repeated transient failure during fast typing
+          // actually resolves through (the next settled edit tries again),
+          // so this is also what keeps the indicator from being "sticky"
+          // once the real problem is gone.
+          onRenderErrorRef.current?.(null)
         })
         .catch((err: unknown) => {
           // Same as the mount effect's catch above: log so a failed render
@@ -223,7 +265,15 @@ function SplitPreview({
           // lastSentRef unset for this value so a later edit (or the next
           // unrelated debounce cycle) retries rather than getting stuck
           // believing a failed send succeeded.
+          //
+          // Not "noisy" by construction, not by an extra hysteresis
+          // mechanism on top of the debounce: DEBOUNCE_MS above already
+          // rate-limits a real send (and therefore a real failure) to at
+          // most once per settled edit, so this can only flip at that same,
+          // already-throttled cadence -- there is no faster path that could
+          // make it flicker per keystroke the way an undebounced call would.
           console.error('Split preview render failed', err)
+          onRenderErrorRef.current?.(err instanceof Error ? err.message : String(err))
         })
     }, DEBOUNCE_MS)
     return () => clearTimeout(timer)

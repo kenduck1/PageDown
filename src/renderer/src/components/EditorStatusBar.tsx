@@ -1,10 +1,67 @@
 import { useMemo, useState } from 'react'
-import { countWords } from '../lib/wordCount'
+import { analyzeText } from '../lib/wordCount'
+import { useDebouncedValue } from '../hooks/useDebouncedValue'
 // Moved out of this file and into lib/ so View > Zoom In/Out/Actual Size in
 // the application menu steps through the EXACT same levels this <select>
 // renders -- a zoom value not in this list makes the control render blank,
 // so the two surfaces have to share the list itself, not just a range.
 import { ZOOM_OPTIONS } from '../lib/zoom-levels'
+
+// Product-completeness audit §2.4: `analyzeText` runs a full remark parse
+// (see wordCount.ts), and this component recomputed it synchronously on
+// EVERY render whose `content` prop changed -- which, in Source mode, is
+// EVERY keystroke (SourceEditor writes the store directly per keystroke,
+// unlike Format mode's Milkdown mount, which only calls back through its own
+// 200ms-debounced `markdownUpdated`; see CLAUDE.md's "Quirk" note on that
+// debounce). On a large document (measured directly, via `tsx` against the
+// real module: ~215ms mean per parse on the 523KB/322-page `very-long.md`
+// corpus fixture, Node/V8 -- see this sub-project's own report for the full
+// before/after numbers) that is a real, synchronous, main-thread block WELL
+// past the ~100ms "instant" perception threshold, on every single character
+// typed in Source mode.
+//
+// Three fixes were weighed:
+//   1. Debounce the stats the way `usePageCount` already debounces its own
+//      IPC round trip (chosen).
+//   2. Compute from a cheaper source (e.g. a naive `content.split(/\s+/)`
+//      instead of a real parse). Rejected: the current implementation is
+//      already correct in ways a naive split is not (excludes code/
+//      frontmatter, merges "un*bel*ievable" into one word, counts
+//      "**bold**." as one word not two -- see wordCount.ts's own test
+//      suite) -- the task was explicitly to extend it, not regress its
+//      accuracy for a speed win a debounce achieves for free anyway.
+//   3. Share one parse across every renderer-side consumer that runs its
+//      own remark parse off the same `content` (this component, plus
+//      EditorOutline's extractOutline and RemoteImageBanner's
+//      documentHasRemoteImages). Rejected FOR THIS COMPONENT specifically:
+//      those three live in separate, non-nested subtrees (this bar,
+//      EditorSidebar's Outline tab, and a top-level layout row), so sharing
+//      one memoized tree would mean lifting a parse cache into a common
+//      ancestor (EditorScreen) and threading a parsed-tree prop through
+//      three unrelated components for a benefit debouncing already
+//      captures -- a real architectural change, not a "close this one
+//      finding" change. (RemoteImageBanner and EditorOutline got the same
+//      debounce treatment independently, for the same reason, since they
+//      have the identical bug shape -- see those files' own comments.)
+//
+// 200ms, not `usePageCount`'s own 500ms: this is a synchronous, in-process
+// computation (no IPC round trip to wait out), so there's no reason to wait
+// longer than Milkdown's own `markdownUpdated` debounce already imposes on
+// Format mode -- this just gives Source mode the identical cadence Format
+// mode already has "for free," rather than inventing a new number.
+const STATS_DEBOUNCE_MS = 200
+
+// A commonly-cited average adult silent-reading speed (Medium's own stated
+// convention, among others) -- not intended to be precise per-document (that
+// would need real prose-complexity analysis), just a standard, unsurprising
+// estimate matching what other writing tools already show.
+const WORDS_PER_MINUTE = 200
+
+function formatReadingTime(words: number): string {
+  const minutes = words / WORDS_PER_MINUTE
+  if (minutes < 1) return '< 1 min read'
+  return `${Math.round(minutes)} min read`
+}
 
 export interface EditorStatusBarProps {
   content: string
@@ -55,6 +112,15 @@ export interface EditorStatusBarProps {
    */
   zoom: number
   onZoomChange: (zoom: number) => void
+  /**
+   * A message describing the most recent Split-mode preview render failure,
+   * or `null`/omitted when the last attempt succeeded (or Split mode isn't
+   * active). EditorScreen owns this -- it clears automatically on the next
+   * successful render and is reset entirely on leaving Split mode -- see
+   * that screen's own `splitPreviewError` state and SplitPreview's
+   * `onRenderError` prop for the source of truth.
+   */
+  splitPreviewError?: string | null
 }
 
 function ChevronLeftIcon(): React.JSX.Element {
@@ -145,9 +211,14 @@ function EditorStatusBar({
   currentPage,
   onNavigateToPage,
   zoom,
-  onZoomChange
+  onZoomChange,
+  splitPreviewError
 }: EditorStatusBarProps): React.JSX.Element {
-  const wordCount = useMemo(() => countWords(content), [content])
+  const debouncedContent = useDebouncedValue(content, STATS_DEBOUNCE_MS)
+  const { words: wordCount, characters: characterCount } = useMemo(
+    () => analyzeText(debouncedContent),
+    [debouncedContent]
+  )
   const [jumpDraft, setJumpDraft] = useState<string | null>(null)
   const hasPages = typeof pageCount === 'number' && pageCount > 0
   const canGoPrevious = hasPages && currentPage > 1
@@ -254,9 +325,52 @@ function EditorStatusBar({
         </select>
       </label>
 
+      {/* The document statistics cluster -- word count (pre-existing),
+      plus character count and reading time (product-completeness audit
+      §2.4's "other half": word count was the entire statistics surface).
+      Three separate text nodes, not one combined string, so existing
+      queries like `getByText('5 words')` keep matching an exact node
+      rather than a substring of a longer sentence -- and so a screen
+      reader's or test's search for one figure never has to parse the
+      others out of it. The middle-dot separators are aria-hidden: they're
+      pure visual punctuation with nothing for a screen reader to announce,
+      and each real span already reads as a complete, self-contained
+      phrase in sequence without needing "and" or a spoken dot between them. */}
       <span>
         {wordCount} {wordCount === 1 ? 'word' : 'words'}
       </span>
+      <span aria-hidden="true" className="text-text-tertiary">
+        ·
+      </span>
+      <span>
+        {characterCount} {characterCount === 1 ? 'character' : 'characters'}
+      </span>
+      <span aria-hidden="true" className="text-text-tertiary">
+        ·
+      </span>
+      <span>{formatReadingTime(wordCount)}</span>
+
+      {/* Product-completeness audit Tier 3, B.3: Split-mode preview render
+      failures used to be console-only -- the preview silently kept showing
+      stale content with no indication anything was wrong. Placed in the
+      status bar rather than as a layout row (like FindBar/CommentComposer/
+      RemoteImageBanner) deliberately: those rows shrink/grow the content
+      area on open/close, which would resize the native preview pane's own
+      bounds (see SplitPreview.tsx's ResizeObserver chain) every time this
+      flips -- exactly the kind of visual noise "without being noisy" rules
+      out. The status bar's height never changes, so this can appear/
+      disappear with zero effect on the preview's own layout. `role="status"`
+      (implicit aria-live="polite") is deliberately different from the
+      pageCountPending dot above, which explicitly avoids any live region --
+      that dot re-renders every debounce cycle with no new INFORMATION each
+      time (see its own comment), while this text only changes between two
+      genuinely different, meaningful states (a real failure vs. resolved),
+      so there is nothing to "chatter" about. */}
+      {splitPreviewError && (
+        <span role="status" aria-live="polite" title={splitPreviewError} className="text-amber-600">
+          Preview may be out of date
+        </span>
+      )}
 
       <span className="ml-auto flex items-center gap-1">
         {isDirty ? (
