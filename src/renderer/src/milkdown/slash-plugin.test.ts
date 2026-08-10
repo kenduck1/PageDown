@@ -1,10 +1,11 @@
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { fireEvent } from '@testing-library/react'
-import { editorViewCtx } from '@milkdown/core'
+import { commandsCtx, editorViewCtx } from '@milkdown/core'
 import { TextSelection } from '@milkdown/prose/state'
 import type { EditorView } from '@milkdown/prose/view'
+import { undo, undoDepth } from '@milkdown/prose/history'
 import { $prose } from '@milkdown/utils'
-import { hardbreakSchema } from '@milkdown/preset-commonmark'
+import { hardbreakSchema, wrapInHeadingCommand } from '@milkdown/preset-commonmark'
 import { createTestEditor } from './test-editor'
 import { EDITOR_COMMAND_PLUGINS } from './commands'
 import {
@@ -21,6 +22,7 @@ import {
 import { SLASH_ITEMS } from './slash-items'
 import { filterSlashItems } from '../lib/slash-filter'
 import { EDITOR_SCHEMA_PLUGINS } from './plugins'
+import { SLASH_LISTBOX_ID, slashOptionDomId } from '../lib/slash-a11y'
 
 // !!! SPIKE RESULT, load-bearing for how this file is written !!!
 // CLAUDE.md documents that a real DOM keydown does NOT reach
@@ -804,6 +806,117 @@ describe('slash-plugin: runSlashItemIn', () => {
   })
 })
 
+// === Follow-up 2: undo grouping was unpinned, racing prosemirror-history's
+// own 500ms newGroupDelay ===
+//
+// DECISION (this project's own follow-up report has the full writeup):
+// choosing a slash-menu item is a discrete, deliberate UI action -- the same
+// category as clicking a toolbar button, not a continuation of free-form
+// typing -- so it must be EXACTLY one undo group (the query delete + the
+// item's own insertion, atomically), and that group must be
+// DETERMINISTICALLY separate from whatever query typing preceded it, never
+// merged with it just because the user happened to press Enter quickly.
+// `closeHistory` (runSlashItemIn's own fix, see that function's doc comment)
+// is the mechanism: stamped on the delete transaction, it forces that
+// transaction to start a brand-new prosemirror-history group unconditionally,
+// regardless of real elapsed wall-clock time -- the immediately-following
+// item transaction then merges FORWARD into that new group via
+// prosemirror-history's ordinary adjacency/timing rule (the same rule that
+// already merges two back-to-back keystrokes), so the net result is always
+// one clean {delete, insert} group.
+//
+// REJECTED alternative: collapsing the WHOLE gesture (every keystroke of the
+// query typing PLUS the delete PLUS the insert) into one group,
+// deterministically, regardless of how long the user pauses mid-query. No
+// public prosemirror-history primitive can force a MERGE (closeHistory only
+// ever forces a SPLIT), and it would be worse UX besides -- see
+// runSlashItemIn's own doc comment in slash-plugin.ts for the full argument.
+//
+// Both tests below use `vi.spyOn(Date, 'now')`, not `vi.useFakeTimers()` --
+// prosemirror-state's own `Transaction` constructor sets `this.time =
+// Date.now()` (confirmed by reading its source), which is the ONLY thing
+// prosemirror-history's grouping math reads, so stubbing just that call
+// gives full, deterministic control over the "how much wall-clock time
+// passed" question this fix is about, without also stubbing
+// setTimeout/rAF/etc. and risking perturbing Milkdown's own internal
+// scheduling during editor construction (`vi.useFakeTimers()`'s broader
+// blast radius, used elsewhere in this codebase for genuinely timer-driven
+// code like useAutosave, is more than this fix needs).
+describe('slash-plugin: runSlashItemIn pins undo grouping deterministically (Follow-up 2)', () => {
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  // Real production shape, not a synthetic stand-in: open a session, type
+  // "head" as the query (matching slash-items.ts's own heading-1 filter
+  // bucket), wait `gapMs` of SIMULATED wall-clock time, then choose
+  // "Heading 1" via runSlashItemIn with a REAL wrapInHeadingCommand
+  // dispatch -- the exact command slash-items.ts's own heading-1 `run`
+  // calls (`ctx.get(commandsCtx).call(wrapInHeadingCommand.key, 1)`).
+  // Returns the undoDepth delta the choose action itself produced, so both
+  // timings can be compared for EQUALITY -- proving the fix removes the
+  // timing dependency rather than merely happening to pass at two sampled
+  // points.
+  async function typeThenChoose(gapMs: number): Promise<{
+    view: EditorView
+    deltaOnChoose: number
+  }> {
+    let now = 1_000_000
+    vi.spyOn(Date, 'now').mockImplementation(() => now)
+
+    const { view, editor } = await viewFor('')
+    openSlashSessionAt(view, 1)
+    view.dispatch(view.state.tr.insertText('head', view.state.selection.from))
+
+    const depthAfterTyping = editor.action((ctx) => undoDepth(ctx.get(editorViewCtx).state))
+    now += gapMs
+
+    const current = session(view)!
+    runSlashItemIn(view, current.anchorPos, current.queryEnd, () => {
+      editor.action((ctx) => {
+        ctx.get(commandsCtx).call(wrapInHeadingCommand.key, 1)
+      })
+    })
+
+    const depthAfterChoose = editor.action((ctx) => undoDepth(ctx.get(editorViewCtx).state))
+    return { view, deltaOnChoose: depthAfterChoose - depthAfterTyping }
+  }
+
+  it('choosing IMMEDIATELY after typing (0ms gap, well under the 500ms group delay) opens its OWN new undo group', async () => {
+    // Pre-fix, this was the FAILING case: adjacency + near-zero time gap let
+    // the delete (and, transitively, the insert) silently merge INTO the
+    // still-open typing group, so choosing added no new group at all
+    // (delta 0) -- matching the bug report's own "ONE undo returns the
+    // document to completely empty."
+    const { deltaOnChoose } = await typeThenChoose(0)
+    expect(deltaOnChoose).toBe(1)
+  })
+
+  it('choosing after a 600ms gap (past the 500ms group delay) ALSO opens exactly one new undo group -- the SAME outcome as the immediate case', async () => {
+    const { deltaOnChoose } = await typeThenChoose(600)
+    expect(deltaOnChoose).toBe(1)
+  })
+
+  it('one undo after choosing -- at EITHER timing -- lands back on the un-deleted query text, never on the pre-typing empty document: delete+insert undo TOGETHER, as one group, separate from typing', async () => {
+    for (const gapMs of [0, 600]) {
+      const { view } = await typeThenChoose(gapMs)
+      // Before undo: the chosen heading was really inserted, and the query
+      // text is really gone.
+      expect(view.state.doc.firstChild?.type.name).toBe('heading')
+      expect(view.state.doc.textContent).toBe('')
+
+      const undone = undo(view.state, view.dispatch)
+      expect(undone).toBe(true)
+
+      // Back to "/head" as plain paragraph text -- the query typing itself
+      // is a SEPARATE, still-intact undo group that this one undo did not
+      // touch, at EITHER timing.
+      expect(view.state.doc.firstChild?.type.name).toBe('paragraph')
+      expect(view.state.doc.textContent).toBe('/head')
+    }
+  })
+})
+
 // Task 5 addition -- backs SlashMenu's onHover (pointer hover moves the SAME
 // plugin-owned activeIndex handleKeyDown's ArrowDown/Up already move, so a
 // subsequent keypress continues from wherever the mouse last left it). See
@@ -896,6 +1009,95 @@ describe('slash-plugin: reporting to React', () => {
     // find-plugin.ts's identical apply-level early return).
     view.dispatch(view.state.tr)
     expect(seen.length).toBe(countAfterOpen)
+  })
+})
+
+// === Follow-up 1: "the palette is effectively invisible to assistive
+// technology" ===
+// jsdom cannot prove a screen reader announces anything, but it CAN prove
+// the DOM contract a real screen reader would read from is actually there:
+// the right attributes, on the right element (`view.dom`, the ProseMirror
+// contenteditable node -- the one element that genuinely holds DOM focus
+// while a session is open, unlike SlashMenu.tsx's own listbox, which never
+// does), referencing real ids, updating live as activeIndex changes, and
+// fully removed the moment the session closes (a stale aria-expanded="true"
+// is worse than none, per this task's own framing). Deliberately does NOT
+// assert rendered position/geometry -- jsdom's coordsAtPos lies (see
+// CLAUDE.md/this codebase's own established warning), and none of that is
+// what this fix is about.
+describe('slash-plugin: applySlashA11y sets/clears aria-activedescendant/aria-controls/aria-expanded on view.dom (Follow-up 1)', () => {
+  it('sets all three attributes on view.dom the moment a session opens', async () => {
+    const { view } = await viewFor('')
+    expect(view.dom.hasAttribute('aria-activedescendant')).toBe(false)
+    expect(view.dom.hasAttribute('aria-controls')).toBe(false)
+    expect(view.dom.hasAttribute('aria-expanded')).toBe(false)
+
+    openSlashSessionAt(view, 1)
+
+    expect(view.dom.getAttribute('aria-expanded')).toBe('true')
+    expect(view.dom.getAttribute('aria-controls')).toBe(SLASH_LISTBOX_ID)
+    // Freshly opened: activeIndex is always 0 (SlashSession's own tryOpen
+    // contract, see this file's "opens at the start of an empty paragraph"
+    // test above).
+    expect(view.dom.getAttribute('aria-activedescendant')).toBe(slashOptionDomId(0))
+  })
+
+  it('updates aria-activedescendant as activeIndex moves via a real ArrowDown -- never a stale, mount-time value', async () => {
+    const { view } = await viewFor('', undefined, () => 3)
+    openSlashSessionAt(view, 1)
+    expect(view.dom.getAttribute('aria-activedescendant')).toBe(slashOptionDomId(0))
+
+    fireEvent.keyDown(view.dom, { key: 'ArrowDown' })
+    expect(session(view)?.activeIndex).toBe(1)
+    expect(view.dom.getAttribute('aria-activedescendant')).toBe(slashOptionDomId(1))
+
+    fireEvent.keyDown(view.dom, { key: 'ArrowDown' })
+    expect(session(view)?.activeIndex).toBe(2)
+    expect(view.dom.getAttribute('aria-activedescendant')).toBe(slashOptionDomId(2))
+  })
+
+  it("updates aria-activedescendant when the index moves via setActiveSlashIndexIn (SlashMenu's own onHover path), not just via keyboard", async () => {
+    const { view } = await viewFor('', undefined, () => 5)
+    openSlashSessionAt(view, 1)
+    setActiveSlashIndexIn(view, 3)
+    expect(view.dom.getAttribute('aria-activedescendant')).toBe(slashOptionDomId(3))
+  })
+
+  it('removes all three attributes the moment the session closes (Escape) -- a stale aria-expanded is worse than none', async () => {
+    const { view } = await viewFor('')
+    openSlashSessionAt(view, 1)
+    expect(view.dom.hasAttribute('aria-expanded')).toBe(true)
+
+    closeSlashIn(view)
+
+    expect(view.dom.hasAttribute('aria-activedescendant')).toBe(false)
+    expect(view.dom.hasAttribute('aria-controls')).toBe(false)
+    expect(view.dom.hasAttribute('aria-expanded')).toBe(false)
+  })
+
+  it('removes all three attributes when the session closes because the query narrowed to an empty match list -- not just on an explicit Escape/blur', async () => {
+    const countMatching: CountMatching = (query) => (query === '' ? 5 : 0)
+    const { view } = await viewFor('', undefined, countMatching)
+    openSlashSessionAt(view, 1)
+    expect(view.dom.hasAttribute('aria-expanded')).toBe(true)
+
+    view.dispatch(view.state.tr.insertText('z', view.state.selection.from))
+    expect(session(view)).toBeNull()
+    expect(view.dom.hasAttribute('aria-activedescendant')).toBe(false)
+    expect(view.dom.hasAttribute('aria-controls')).toBe(false)
+    expect(view.dom.hasAttribute('aria-expanded')).toBe(false)
+  })
+
+  it('removes all three attributes on editor destroy -- a remount cannot inherit a stale, still-expanded contenteditable node', async () => {
+    const { view, editor } = await viewFor('')
+    openSlashSessionAt(view, 1)
+    expect(view.dom.hasAttribute('aria-expanded')).toBe(true)
+
+    await editor.destroy()
+
+    expect(view.dom.hasAttribute('aria-activedescendant')).toBe(false)
+    expect(view.dom.hasAttribute('aria-controls')).toBe(false)
+    expect(view.dom.hasAttribute('aria-expanded')).toBe(false)
   })
 })
 

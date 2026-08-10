@@ -7,8 +7,10 @@ import {
 } from '@milkdown/prose/state'
 import { ReplaceStep } from '@milkdown/prose/transform'
 import { Decoration, DecorationSet, type EditorView } from '@milkdown/prose/view'
+import { closeHistory } from '@milkdown/prose/history'
 import type { Node as ProseNode } from '@milkdown/prose/model'
 import { findSlashTrigger, MAX_QUERY_LENGTH } from '../lib/slash-query'
+import { SLASH_LISTBOX_ID, slashOptionDomId } from '../lib/slash-a11y'
 
 // The ProseMirror-plugin half of the slash-command menu -- structurally a
 // sibling of find-plugin.ts (read that file's own header first; every rule
@@ -201,6 +203,60 @@ function sameSession(a: SlashSession | null, b: SlashSession | null): boolean {
     a.activeIndex === b.activeIndex &&
     a.itemCount === b.itemCount
   )
+}
+
+// Follow-up 1 fix (CLAUDE.md's "Slash command menu" section: "the palette is
+// effectively invisible to assistive technology"). Two problems compounded
+// to make the a11y markup that shipped with the feature buy nothing:
+//   1. `aria-activedescendant` sat on SlashMenu.tsx's own listbox `<div>`,
+//      but that element NEVER holds DOM focus -- focus deliberately stays
+//      on the ProseMirror contenteditable node the whole time a session is
+//      open (typing has to keep extending the query), so the listbox is
+//      never the "element with DOM focus" ARIA requires
+//      aria-activedescendant to live on. An attribute on the wrong element
+//      is inert, not merely incomplete.
+//   2. Options were nested inside an untyped section `<div>`, so they
+//      weren't OWNED by the listbox at all -- ARIA's listbox pattern
+//      requires every child a listbox owns to carry `option` or `group`.
+// Fixed by moving this relationship onto `view.dom` -- the ProseMirror
+// node that genuinely holds focus -- rather than by patching either
+// symptom individually. Applied HERE, inside the plugin's own `view()`
+// spec, not threaded out through onStateChanged/useSlashMenu.ts/
+// MilkdownEditor.tsx: this function already has direct, synchronous access
+// to `view.dom` on every update, and the session state it needs
+// (activeIndex) is exactly what it already tracks -- no new prop, ref, or
+// store round trip is needed to reach the one DOM node this whole fix is
+// about.
+//
+// aria-activedescendant is keyed on `session.activeIndex` alone (via
+// slashOptionDomId, lib/slash-a11y.ts), NOT on any item id -- deliberately,
+// preserving this file's own "knows nothing about the item catalogue"
+// architecture (see this file's header comment): SlashSession.activeIndex
+// is BY DEFINITION "an index into the currently filtered [and
+// isEnabled-filtered] item list" (see that field's own doc comment), the
+// exact array SlashMenu.tsx renders in order -- so the plugin can compute a
+// correct, always-in-sync id purely from its own state, with no Ctx/item
+// lookup required. See lib/slash-a11y.ts's own header for why a
+// catalogue-aware id (keyed on item.id) was rejected.
+//
+// `session: null` clears all three attributes rather than merely leaving
+// them stale -- per this task's own framing, "a stale aria-expanded=true is
+// worse than none": a screen reader that still believes a collapsed
+// listbox exists and is expanded is actively misleading, not just
+// unhelpful. `view.dom.removeAttribute` on an element that never had the
+// attribute (the common "session was already closed" case, reached on
+// every ordinary keystroke once no session is open) is a harmless no-op,
+// so this needs no "was it actually set" guard of its own.
+function applySlashA11y(view: EditorView, session: SlashSession | null): void {
+  if (!session) {
+    view.dom.removeAttribute('aria-activedescendant')
+    view.dom.removeAttribute('aria-controls')
+    view.dom.removeAttribute('aria-expanded')
+    return
+  }
+  view.dom.setAttribute('aria-expanded', 'true')
+  view.dom.setAttribute('aria-controls', SLASH_LISTBOX_ID)
+  view.dom.setAttribute('aria-activedescendant', slashOptionDomId(session.activeIndex))
 }
 
 // A step's slice qualifies as "the / insertion" iff its content is ONE bare,
@@ -632,16 +688,28 @@ export function createSlashPlugin(
     // key={revision} remount (a different document, or Format<->Source mode
     // switching) can't leave a stale palette on screen after the instance
     // that owned it is gone -- same pattern as selectionProse's own destroy.
-    view: () => ({
+    //
+    // Follow-up 1 (applySlashA11y, above): the factory below takes its
+    // `initialView` argument -- previously ignored (`view: () => ({...})`)
+    // -- and captures it so destroy() (which prosemirror-view calls with NO
+    // arguments of its own; only the per-update `update(view, prevState)`
+    // callback receives one) still has a real `view.dom` to clear the three
+    // aria attributes off of on teardown. Both are the SAME EditorView
+    // instance for this plugin's entire lifetime (a ProseMirror view is
+    // constructed once and updated in place, never swapped), so capturing
+    // the factory's own argument is exactly as current as reading update's.
+    view: (initialView) => ({
       update: (view, prevState) => {
         const previous = slashPluginKey.getState(prevState)
         const next = slashPluginKey.getState(view.state)
         if (!next) return
         if (sameSession(previous?.session ?? null, next.session)) return
         onStateChanged(next.session)
+        applySlashA11y(view, next.session)
       },
       destroy: () => {
         onStateChanged(null)
+        applySlashA11y(initialView, null)
       }
     })
   })
@@ -738,7 +806,57 @@ export function setActiveSlashIndexIn(view: EditorView, index: number): void {
 // DOES hold both) closes over whatever it needs -- keeping this a plain,
 // catalogue-agnostic utility, the same reason countMatching and this file
 // as a whole take no dependency on the item catalogue.
+//
+// !!! Follow-up 2 fix (CLAUDE.md's "Slash command menu" section: "undo
+// grouping is unpinned") !!! `closeHistory` (prosemirror-history, re-exported
+// from `@milkdown/prose/history`) is stamped on the delete transaction
+// specifically -- not on the transaction `run()` goes on to dispatch, and
+// not as a THIRD, separate no-op transaction either.
+//
+// DECISION, worth restating here since the mechanism only makes sense in
+// light of it: choosing a slash-menu item is a discrete, deliberate UI
+// action -- the same category as clicking a toolbar button -- so it must be
+// exactly ONE undo group (the query delete + the item's own insertion,
+// atomically), and that group must be DETERMINISTICALLY separate from
+// whatever free-form query typing preceded it, never merged with it just
+// because the user happened to press Enter quickly. Measured before this
+// fix: prosemirror-history groups transactions that land within its own
+// 500ms `newGroupDelay` of each other (and are "adjacent," i.e. touch
+// overlapping ranges) into ONE undo event -- so typing "/head" and pressing
+// Enter immediately silently merged the typing + this delete + the item's
+// own insertion into ONE group (one undo emptied the document completely),
+// while pausing past 500ms before Enter produced TWO groups instead. Same
+// gesture, two different outcomes, purely as a function of real wall-clock
+// timing -- exactly the kind of flake a user could never predict or
+// reproduce on purpose.
+//
+// closeHistory's real, read-from-source effect (prosemirror-history's own
+// `applyTransaction`): stamping it on a transaction resets the history
+// plugin's OWN "am I still inside the same group?" bookkeeping (prevTime to
+// 0, prevRanges to null) before that transaction is folded in -- which
+// forces THIS transaction to start a brand-new group unconditionally,
+// severing it from whatever group preceded it, regardless of real elapsed
+// time. The immediately-following transaction `run()` dispatches (the
+// item's own wrapInHeadingCommand/wrapInBulletListCommand/etc., same call
+// stack, no closeHistory of its own) is then free to merge FORWARD into
+// THIS new group via prosemirror-history's ordinary adjacency/timing rule --
+// exactly the same rule that already, correctly, merges two back-to-back
+// keystrokes -- so the net result is one clean group covering exactly
+// {delete, insert}, on every choose, regardless of how long the user spent
+// composing the query beforehand.
+//
+// REJECTED alternative: collapsing the ENTIRE gesture -- every keystroke of
+// the query typing, PLUS this delete, PLUS the item's own insertion -- into
+// one deterministic undo group regardless of how long the user pauses while
+// typing. There is no public prosemirror-history primitive that FORCES a
+// merge (closeHistory only ever forces a SPLIT); reaching that outcome would
+// mean poking at the plugin's own private HistoryState, which no public API
+// exposes. It would also be worse UX: a user who pauses for minutes
+// mid-query, deliberating over wording, would have that entire pause swept
+// into one "session" alongside a later, unrelated block insertion -- one
+// undo removing several minutes of unrelated typing along with the choice
+// that actually needs undoing.
 export function runSlashItemIn(view: EditorView, from: number, to: number, run: () => void): void {
-  view.dispatch(view.state.tr.delete(from, to))
+  view.dispatch(closeHistory(view.state.tr.delete(from, to)))
   run()
 }

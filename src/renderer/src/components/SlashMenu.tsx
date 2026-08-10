@@ -1,5 +1,6 @@
 import { useCallback, useState, type ReactElement } from 'react'
 import { computeFloatingPosition, type Rect } from '../lib/floating-position'
+import { SLASH_LISTBOX_ID, slashOptionDomId } from '../lib/slash-a11y'
 import type { SlashItem, SlashItemGroup } from '../milkdown/slash-items'
 
 // The floating palette that appears when a slash-command session is open
@@ -60,10 +61,12 @@ export interface SlashMenuProps {
    * (e.g. countMatching forgets the isEnabled half and only applies
    * filterSlashItems), arrow-key navigation can walk `activeIndex` past the
    * end of this shorter, rendered array -- `items[activeIndex]` undefined,
-   * nothing `aria-selected`, `aria-activedescendant` pointing at nothing,
-   * Enter picking nothing. This component cannot defend against that
-   * mismatch itself (it has no independent way to know the "correct" count);
-   * the two arrays must be built from the same formula at the call site.
+   * nothing `aria-selected`, and slash-plugin.ts's own view.dom
+   * aria-activedescendant (Follow-up 1 -- see lib/slash-a11y.ts) pointing at
+   * an id with no matching element, Enter picking nothing. This component
+   * cannot defend against that mismatch itself (it has no independent way
+   * to know the "correct" count); the two arrays must be built from the
+   * same formula at the call site.
    */
   items: SlashItem[]
   /** Index into `items` of the currently highlighted entry (arrow-key navigation lives in slash-plugin.ts, not here). */
@@ -99,8 +102,31 @@ const GROUP_ORDER: SlashItemGroup[] = ['Text', 'Lists', 'Insert', 'Advanced']
 // header comment names), never widened past it.
 const MENU_WIDTH_PX = 260
 
-function optionDomId(id: string): string {
-  return `pagedown-slash-item-${id}`
+// optionDomId (id keyed on FLAT INDEX, not item.id) moved to lib/slash-a11y.ts
+// -- see that file's own header for why the id must be shared, verbatim,
+// with slash-plugin.ts rather than defined here alone (Follow-up 1: the
+// plugin sets aria-activedescendant on view.dom, the one element that
+// actually holds DOM focus, and must reference the SAME id this component
+// renders).
+
+/**
+ * Follow-up 1 fix (CLAUDE.md's "the palette is effectively invisible to
+ * assistive technology"): each section wrapper below gets `role="group"`
+ * with `aria-labelledby` pointing at its own visible heading -- not
+ * `role="presentation"`. ARIA's listbox pattern requires every element a
+ * listbox owns to be `option` or `group` (this file previously nested
+ * `option`s inside an untyped section `<div>`, which orphaned them from the
+ * listbox entirely); `role="group"` is the choice that ALSO gives the
+ * section headers ("Text", "Lists", "Insert", "Advanced") real semantic
+ * meaning to a screen-reader user navigating the list, which
+ * `role="presentation"` would discard outright (a presentational wrapper is
+ * pruned from the accessibility tree, taking its would-be group label with
+ * it). `aria-labelledby` (referencing the heading's own id below) is used
+ * rather than a second, literal `aria-label` string, so the two can never
+ * drift out of sync with each other.
+ */
+function groupHeadingDomId(group: SlashItemGroup): string {
+  return `pagedown-slash-group-${group}`
 }
 
 function SlashMenu({
@@ -205,12 +231,12 @@ function SlashMenu({
   // the unmeasured position anyway).
   const measured = size.width > 0
 
-  const activeItem = items[activeIndex]
   const width = Math.min(MENU_WIDTH_PX, placement.maxWidth)
 
   // Group items into fixed-order sections, carrying each item's own index
   // into the FLAT `items` array (not a per-section index) -- activeIndex,
-  // onHover, and aria-activedescendant all key off that flat index/id, so a
+  // onHover, and (via slash-plugin.ts, on view.dom -- see this file's own
+  // header) aria-activedescendant all key off that flat index, so a
   // section-local index would require translating back and forth for no
   // benefit.
   const sections = GROUP_ORDER.map((group) => ({
@@ -223,14 +249,18 @@ function SlashMenu({
   return (
     <div
       ref={measureSelf}
+      id={SLASH_LISTBOX_ID}
       role="listbox"
       aria-label="Slash commands"
-      aria-activedescendant={activeItem ? optionDomId(activeItem.id) : undefined}
-      // Load-bearing, not defensive -- see slash-plugin.ts's own comment on
-      // its `blur` handleDOMEvents: without this, a click anywhere in this
-      // palette moves DOM focus off the ProseMirror editor node first,
-      // which fires that blur handler and closes the whole session BEFORE
-      // this element's own onClick ever runs.
+      // Follow-up 1 fix: NO aria-activedescendant here any more.
+      // slash-plugin.ts now sets it on `view.dom` -- the ProseMirror
+      // contenteditable node, the one element that actually holds DOM focus
+      // while this palette is open -- because aria-activedescendant is only
+      // meaningful on the element that owns focus; on this listbox (which
+      // never receives focus, by design: focus deliberately stays in the
+      // editor so typing keeps extending the query) it was pure dead
+      // markup. `id` above is what lets view.dom's own aria-controls
+      // reference this exact element.
       onMouseDown={(event) => event.preventDefault()}
       style={{
         position: 'fixed',
@@ -250,44 +280,49 @@ function SlashMenu({
       // overflow-x-auto plays for SelectionBubble's horizontal axis.
       className="z-40 max-h-80 overflow-y-auto rounded-md border border-border-chrome bg-page py-1 shadow-float-sm"
     >
-      {sections.map((section) => (
-        <div key={section.group}>
-          <div className="px-3 pb-1 pt-2 text-eyebrow first:pt-1.5">{section.group}</div>
-          {section.entries.map(({ item, index }) => {
-            const active = index === activeIndex
-            return (
-              <div
-                key={item.id}
-                ref={active ? activeOptionRef : undefined}
-                id={optionDomId(item.id)}
-                role="option"
-                aria-selected={active}
-                // Fix round 1, IMPORTANT I1: onMouseMove, NOT onMouseEnter.
-                // activeOptionRef's own scrollIntoView (above) runs on every
-                // ArrowDown/Up, and this palette is max-h-80 over a
-                // ~600px-tall catalogue -- Chromium dispatches a synthetic
-                // mousemove after a scroll changes what sits under a
-                // STATIONARY cursor, so onMouseEnter fires for whatever item
-                // slides under the pointer mid-scroll, silently overwriting
-                // the index the arrow key just set. The pointer resting over
-                // the palette is the LIKELY case, not an edge case: it opens
-                // anchored at the caret, exactly where the user's mouse
-                // usually already is. onMouseMove only fires on genuine
-                // pointer motion, so a scroll with no real mouse movement
-                // cannot trigger it.
-                onMouseMove={() => onHover(index)}
-                onClick={() => onChoose(item)}
-                className={`flex cursor-pointer flex-col px-3 py-1.5 ${
-                  active ? 'bg-accent/9' : 'hover:bg-chrome-light'
-                }`}
-              >
-                <span className="truncate text-13 text-text-primary">{item.label}</span>
-                <span className="truncate text-11 text-text-tertiary">{item.description}</span>
-              </div>
-            )
-          })}
-        </div>
-      ))}
+      {sections.map((section) => {
+        const headingId = groupHeadingDomId(section.group)
+        return (
+          <div key={section.group} role="group" aria-labelledby={headingId}>
+            <div id={headingId} className="px-3 pb-1 pt-2 text-eyebrow first:pt-1.5">
+              {section.group}
+            </div>
+            {section.entries.map(({ item, index }) => {
+              const active = index === activeIndex
+              return (
+                <div
+                  key={item.id}
+                  ref={active ? activeOptionRef : undefined}
+                  id={slashOptionDomId(index)}
+                  role="option"
+                  aria-selected={active}
+                  // Fix round 1, IMPORTANT I1: onMouseMove, NOT onMouseEnter.
+                  // activeOptionRef's own scrollIntoView (above) runs on
+                  // every ArrowDown/Up, and this palette is max-h-80 over a
+                  // ~600px-tall catalogue -- Chromium dispatches a synthetic
+                  // mousemove after a scroll changes what sits under a
+                  // STATIONARY cursor, so onMouseEnter fires for whatever
+                  // item slides under the pointer mid-scroll, silently
+                  // overwriting the index the arrow key just set. The
+                  // pointer resting over the palette is the LIKELY case, not
+                  // an edge case: it opens anchored at the caret, exactly
+                  // where the user's mouse usually already is. onMouseMove
+                  // only fires on genuine pointer motion, so a scroll with
+                  // no real mouse movement cannot trigger it.
+                  onMouseMove={() => onHover(index)}
+                  onClick={() => onChoose(item)}
+                  className={`flex cursor-pointer flex-col px-3 py-1.5 ${
+                    active ? 'bg-accent/9' : 'hover:bg-chrome-light'
+                  }`}
+                >
+                  <span className="truncate text-13 text-text-primary">{item.label}</span>
+                  <span className="truncate text-11 text-text-tertiary">{item.description}</span>
+                </div>
+              )
+            })}
+          </div>
+        )
+      })}
     </div>
   )
 }
