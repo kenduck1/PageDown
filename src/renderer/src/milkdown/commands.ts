@@ -551,6 +551,32 @@ export const insertMermaidBlockCommand = $command(
 // All three are plain pass-throughs, so a dry run (no `dispatch`) stays a dry
 // run: prosemirror-tables' commands follow the standard convention.
 
+// COLUMN RESIZING IS DELIBERATELY NOT ADDED, and this is the place that
+// decision is recorded. `@milkdown/preset-gfm` exports a ready-made
+// `columnResizingPlugin` ($prose(() => columnResizing({}))) but pointedly does
+// NOT include it in its own composed `plugins` list, so `gfm` -- and therefore
+// this app -- does not mount it. Two independent reasons to keep it that way:
+//
+//  1. IT CANNOT SURVIVE A SAVE. prosemirror-tables' `tableNodes` always adds a
+//     `colwidth` cell attribute, and that is where a resize is stored -- but
+//     the preset's own table_cell/table_header `toMarkdown` runners emit
+//     `state.openNode('tableCell')` with no width of any kind, because GFM pipe
+//     tables have no column-width syntax at all. Every drag would be discarded
+//     by the next save and silently absent on reopen. In an editor whose entire
+//     premise is that the `.md` file is the document, a control that produces
+//     state the file cannot hold is the same category of thing as the dead
+//     toolbar buttons this pass removed.
+//  2. IT WOULD BREAK EDITOR/PAGINATOR PARITY. Even if the widths persisted in
+//     memory, they exist only in the ProseMirror DOM. The paginated preview,
+//     the exported PDF, and Home-screen thumbnails all render from
+//     `markdownToHtml`, which knows nothing about `colwidth` -- so the table
+//     the user drags would visibly differ from the table that prints. That is
+//     precisely the divergence Gate 10's 0.000px parity exists to prevent.
+//
+// Making it real would mean giving PageDown its own table-width representation
+// in frontmatter and teaching every rendering surface to read it -- a genuine
+// sub-project, not a plugin registration.
+
 export const deleteTableRowCommand = $command(
   'DeleteTableRow',
   () => () => (state, dispatch) => deleteRow(state, dispatch)

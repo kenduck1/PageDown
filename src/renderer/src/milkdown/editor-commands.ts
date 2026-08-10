@@ -168,7 +168,24 @@ export interface EditorCommands {
   // unlinkCommand (commands.ts) for why toggleLinkCommand cannot serve as
   // "unlink" (it splits a link in half on a partial selection, and does
   // nothing visible at all from a bare caret).
-  removeLink: () => void
+  //
+  // NOT BUILT, AND DELIBERATELY SO: "open link". Clicking a link in the
+  // Format canvas still does nothing -- there is no `handleClick` anywhere in
+  // this renderer -- and that is a disclosed scope decision rather than an
+  // oversight. Opening one safely means `shell.openExternal` in the MAIN
+  // process behind a new IPC handler, with strict scheme validation, because
+  // the URL is untrusted document content: `shell.openExternal` will happily
+  // hand `file:`, `smb:`, or a registered custom scheme to the OS, and this
+  // codebase's whole posture toward document-supplied URLs (image-security.ts,
+  // the remote-image consent gate, the sandboxed render context) is that they
+  // are attacker-controlled. The half-measures available WITHOUT touching main
+  // are all worse than nothing: navigating the privileged renderer to a
+  // document-supplied URL is exactly what src/renderer/index.html's CSP and
+  // Electron's own navigation denials exist to prevent. So this is real,
+  // separate, security-sensitive work with a real main-process surface, not a
+  // line of wiring -- and leaving the click inert regresses nothing, unlike
+  // the dead CONTROLS this pass removed, which actively lied about being
+  // actionable.
   // insertTableCommand, given `{ row: 2, col: 2 }` -- a minimal 2x2 table
   // (one header row + one body row, two columns; `row` counts the header
   // row, confirmed by reading @milkdown/preset-gfm's own createTable source).
