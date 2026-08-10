@@ -15,6 +15,10 @@
 //   registrations), not from memory of "what Milkdown usually binds" -- the
 //   installed version is 7.21.3, pinned in package.json, and that's the
 //   version actually in effect.
+// - "/" (slash command menu): src/renderer/src/lib/slash-query.ts's own
+//   findSlashTrigger -- start of a line, or immediately preceded by
+//   whitespace, matching this app's own trigger rule exactly rather than
+//   a generic "type / anywhere" claim.
 //
 // Format-mode-only shortcuts (everything except Find/Find & Replace/Escape,
 // which work from anywhere) are marked as such below -- Source mode is a
@@ -57,7 +61,8 @@ const CATEGORIES: ShortcutCategory[] = [
     shortcuts: [
       { keys: `${MOD}Z`, description: 'Undo' },
       { keys: `${MOD}${SHIFT}Z`, description: 'Redo' },
-      { keys: `${MOD}${SHIFT}M`, description: 'Add comment' }
+      { keys: `${MOD}${SHIFT}M`, description: 'Add comment' },
+      { keys: '/', description: 'Slash command menu (start of a line, or after a space)' }
     ]
   },
   {

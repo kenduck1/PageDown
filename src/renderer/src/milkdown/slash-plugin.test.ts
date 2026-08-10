@@ -11,6 +11,7 @@ import {
   createSlashPlugin,
   openSlashSessionAt,
   runSlashItemIn,
+  setActiveSlashIndexIn,
   slashPluginKey,
   type CountMatching,
   type SlashSession
@@ -572,6 +573,63 @@ describe('slash-plugin: runSlashItemIn', () => {
     })
     expect(view.state.doc.textContent).toBe('')
     expect(sawDocTextInRun).toBe('')
+  })
+})
+
+// Task 5 addition -- backs SlashMenu's onHover (pointer hover moves the SAME
+// plugin-owned activeIndex handleKeyDown's ArrowDown/Up already move, so a
+// subsequent keypress continues from wherever the mouse last left it). See
+// this function's own doc comment for why it deliberately does NOT
+// clamp/validate `index` the way handleKeyDown's own wraparound arithmetic
+// does.
+describe('slash-plugin: setActiveSlashIndexIn', () => {
+  it('moves activeIndex directly to the given value', async () => {
+    const { view } = await viewFor('', noop, () => 5)
+    openSlashSessionAt(view, 1)
+    expect(session(view)?.activeIndex).toBe(0)
+    setActiveSlashIndexIn(view, 3)
+    expect(session(view)?.activeIndex).toBe(3)
+  })
+
+  it('is a no-op when no session is open', async () => {
+    const { view } = await viewFor('')
+    const dispatchSpy = vi.spyOn(view, 'dispatch')
+    setActiveSlashIndexIn(view, 2)
+    expect(dispatchSpy).not.toHaveBeenCalled()
+  })
+
+  it('is a no-op when `index` already equals the current activeIndex -- no transaction dispatched for genuinely nothing', async () => {
+    const { view } = await viewFor('', noop, () => 5)
+    openSlashSessionAt(view, 1)
+    const dispatchSpy = vi.spyOn(view, 'dispatch')
+    setActiveSlashIndexIn(view, 0)
+    expect(dispatchSpy).not.toHaveBeenCalled()
+  })
+
+  it('dispatches only a doc-unchanged, no-stored-marks transaction -- cannot mark a clean document dirty', async () => {
+    const { view } = await viewFor('', noop, () => 5)
+    openSlashSessionAt(view, 1)
+    const dispatchSpy = vi.spyOn(view, 'dispatch')
+    setActiveSlashIndexIn(view, 2)
+    expect(dispatchSpy.mock.calls.length).toBeGreaterThan(0)
+    for (const [tr] of dispatchSpy.mock.calls) {
+      expect(tr.docChanged).toBe(false)
+      expect(tr.storedMarksSet).toBe(false)
+    }
+  })
+
+  it('reports the change through onStateChanged, same as an ArrowDown/Up-triggered move', async () => {
+    const seen: Array<SlashSession | null> = []
+    const { view } = await viewFor(
+      '',
+      (next) => seen.push(next),
+      () => 5
+    )
+    openSlashSessionAt(view, 1)
+    const countAfterOpen = seen.length
+    setActiveSlashIndexIn(view, 4)
+    expect(seen.length).toBeGreaterThan(countAfterOpen)
+    expect(seen.at(-1)?.activeIndex).toBe(4)
   })
 })
 

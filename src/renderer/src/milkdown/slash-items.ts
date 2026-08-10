@@ -18,6 +18,7 @@ import {
   isInsideTableCell
 } from './commands'
 import { findSlashTrigger } from '../lib/slash-query'
+import { filterSlashItems } from '../lib/slash-filter'
 
 // The item catalogue behind the slash-command palette (Task 4). Pure data +
 // small closures over a live Milkdown `Ctx` -- no React, no ProseMirror
@@ -363,3 +364,29 @@ export const SLASH_ITEMS: SlashItem[] = [
       ctx.get(commandsCtx).get(insertMermaidBlockCommand.key)(undefined)(state)
   }
 ]
+
+/**
+ * The catalogue's own single, authoritative "what's currently offered"
+ * computation -- filterSlashItems (by `query`) composed with each surviving
+ * item's own isEnabled(ctx, state), in that order. Added by Task 5 (wiring)
+ * because it turned out to be needed in TWO places that must never disagree:
+ * MilkdownEditor.tsx's countMatching closure (passed into slash-plugin.ts's
+ * createSlashPlugin, which clamps/wraps the plugin's own activeIndex against
+ * whatever count it's given) and editor-commands.ts's getSlashItems (which
+ * backs the palette's actually-rendered array via useSlashMenu.ts). Both
+ * MUST be built from the identical formula -- see slash-plugin.ts's own
+ * CountMatching doc comment for the exact desync this prevents (fix round 1,
+ * IMPORTANT I3, from the item-catalogue task): a count built from
+ * filterSlashItems alone, without the isEnabled half, is LARGER than the
+ * actually-rendered array, and arrow-key navigation can then walk
+ * activeIndex past the end of it -- `items[activeIndex]` undefined, nothing
+ * `aria-selected`, Enter picking nothing. Factoring this into one exported
+ * function (rather than two call sites each writing
+ * `filterSlashItems(SLASH_ITEMS, query).filter((item) => item.isEnabled(ctx,
+ * state))` by hand) makes that formula structurally impossible to drift
+ * apart, the same reasoning selection-plugin.ts's own findAncestorListType
+ * doc comment gives for living in one place rather than two.
+ */
+export function enabledSlashItems(ctx: Ctx, state: EditorState, query: string): SlashItem[] {
+  return filterSlashItems(SLASH_ITEMS, query).filter((item) => item.isEnabled(ctx, state))
+}

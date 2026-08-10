@@ -20,6 +20,8 @@ import { createTestEditor } from './test-editor'
 import MilkdownEditor, { type MilkdownEditorHandle } from './MilkdownEditor'
 import { buildEditorCommands } from './editor-commands'
 import { createFindPlugin } from './find-plugin'
+import { createSlashPlugin, openSlashSessionAt, slashPluginKey } from './slash-plugin'
+import { enabledSlashItems } from './slash-items'
 import { computePageGeometry } from '../../../typography/page-geometry'
 import { DEFAULT_DOCUMENT_STYLE } from '../../../typography/document-style'
 import { DEFAULT_PAGE_CONFIG } from '../../../markdown/page-config'
@@ -116,6 +118,26 @@ describe('MilkdownEditorHandle commands needing a real ranged selection — wire
   // (they read match state back out via getSelectedText/getMarkdown
   // instead), so a no-op is enough.
   const FIND_PLUGINS = [...PLUGINS, $prose(() => createFindPlugin(() => {}))]
+
+  // Same per-mount construction as FIND_PLUGINS above, for the slash plugin
+  // -- and built with the EXACT closure shape MilkdownEditor.tsx's own mount
+  // effect uses (a real ctx-closing countMatching built from
+  // enabledSlashItems), not a synthetic stand-in the way slash-plugin.test.ts's
+  // own `() => PLENTY` countMatching is. That's the whole point of this
+  // constant existing here rather than only in slash-plugin.test.ts: it
+  // proves the REAL wiring (the formula MilkdownEditor.tsx actually
+  // constructs), the same way buildEditorCommands itself is used directly
+  // above rather than a hand-rolled stand-in (see this describe block's own
+  // header comment for that precedent).
+  const SLASH_PLUGINS = [
+    ...PLUGINS,
+    $prose((ctx) =>
+      createSlashPlugin(
+        () => {},
+        (query, state) => enabledSlashItems(ctx, state, query).length
+      )
+    )
+  ]
 
   // Fix-round (second round) change: destroy is now handled by this
   // afterEach rather than inline at the end of each test body. Reviewer
@@ -418,6 +440,89 @@ describe('MilkdownEditorHandle commands needing a real ranged selection — wire
     const commands = buildEditorCommands(editor)
     expect(commands.getSelectedText()).toBe('')
   })
+
+  // Task 5 (wiring) -- runSlashItem/closeSlashMenu/getSlashItems/
+  // setActiveSlashIndex, exercised against SLASH_PLUGINS' own real
+  // countMatching closure (built from enabledSlashItems, exactly as
+  // MilkdownEditor.tsx's mount effect constructs it), so a wiring bug in
+  // either the handle's own delegation or the countMatching formula itself
+  // would fail here, not just in slash-plugin.test.ts's synthetic-count
+  // tests or slash-items.test.ts's plugin-free ones.
+  it('runSlashItem deletes the "/query" text then runs the chosen item against the post-delete document', async () => {
+    const editor = await createTestEditor('Buy milk', SLASH_PLUGINS)
+    currentEditor = editor
+    const commands = buildEditorCommands(editor)
+    const view = editor.action((ctx) => ctx.get(editorViewCtx))
+    // Opens right before "Buy milk" (position 1), then types "task" as the
+    // query -- the resulting document is "/taskBuy milk", with anchorPos=1
+    // and queryEnd=6 (matching runSlashItemIn's own test above), so
+    // deleting [1, 6) removes exactly "/task" and leaves "Buy milk" intact.
+    openSlashSessionAt(view, 1)
+    view.dispatch(view.state.tr.insertText('task', view.state.selection.from))
+    commands.runSlashItem('task-list')
+    // insertTaskListCommand's own exact, already-verified output (Task 2's
+    // "produces exactly `- [ ] Buy milk\n`" test) -- proving the deleted
+    // range left "Buy milk" untouched for the command to wrap.
+    expect(editor.action(getMarkdown())).toBe('- [ ] Buy milk\n')
+  })
+
+  it('runSlashItem is a no-op when no session is open or the id is unknown', async () => {
+    const editor = await createTestEditor('Buy milk', SLASH_PLUGINS)
+    currentEditor = editor
+    const commands = buildEditorCommands(editor)
+    const before = editor.action(getMarkdown())
+    commands.runSlashItem('task-list')
+    commands.runSlashItem('not-a-real-item-id')
+    expect(editor.action(getMarkdown())).toBe(before)
+  })
+
+  it('closeSlashMenu closes an open session WITHOUT touching the "/query" text itself', async () => {
+    const editor = await createTestEditor('', SLASH_PLUGINS)
+    currentEditor = editor
+    const commands = buildEditorCommands(editor)
+    const view = editor.action((ctx) => ctx.get(editorViewCtx))
+    openSlashSessionAt(view, 1)
+    expect(slashPluginKey.getState(view.state)?.session).not.toBeNull()
+    commands.closeSlashMenu()
+    expect(slashPluginKey.getState(view.state)?.session).toBeNull()
+    // The "/" itself must survive -- closing is not the same as choosing
+    // nothing and discarding the typed text (design doc: "Close on:
+    // Escape (leave the typed text...)").
+    expect(editor.action(getMarkdown())).toContain('/')
+  })
+
+  it('closeSlashMenu is a harmless no-op when no session is open', async () => {
+    const editor = await createTestEditor('Buy milk', SLASH_PLUGINS)
+    currentEditor = editor
+    const commands = buildEditorCommands(editor)
+    const before = editor.action(getMarkdown())
+    commands.closeSlashMenu()
+    expect(editor.action(getMarkdown())).toBe(before)
+  })
+
+  it("getSlashItems(query) returns the isEnabled-aware catalogue against the live document -- the exact array countMatching's own length must agree with", async () => {
+    const editor = await createTestEditor('/head', SLASH_PLUGINS)
+    currentEditor = editor
+    const commands = buildEditorCommands(editor)
+    const view = editor.action((ctx) => ctx.get(editorViewCtx))
+    view.dispatch(view.state.tr.setSelection(TextSelection.create(view.state.doc, 6)))
+    expect(commands.getSlashItems('head').map((item) => item.id)).toEqual([
+      'heading-1',
+      'heading-2',
+      'heading-3'
+    ])
+  })
+
+  it("setActiveSlashIndex moves the PLUGIN's own activeIndex, readable back from slashPluginKey state", async () => {
+    const editor = await createTestEditor('', SLASH_PLUGINS)
+    currentEditor = editor
+    const commands = buildEditorCommands(editor)
+    const view = editor.action((ctx) => ctx.get(editorViewCtx))
+    openSlashSessionAt(view, 1)
+    expect(slashPluginKey.getState(view.state)?.session?.activeIndex).toBe(0)
+    commands.setActiveSlashIndex(3)
+    expect(slashPluginKey.getState(view.state)?.session?.activeIndex).toBe(3)
+  })
 })
 
 describe('MilkdownEditor', () => {
@@ -469,6 +574,40 @@ describe('MilkdownEditor', () => {
     unmount()
     await waitFor(() => {
       expect(onSelectionChanged).toHaveBeenCalledWith(null)
+    })
+  })
+
+  it('reports a null slash session when it unmounts, so a stale palette cannot outlive the editor', async () => {
+    // Mirrors the onSelectionChanged test immediately above -- the SAME
+    // real component-level proof that slashProse's per-mount construction
+    // (MilkdownEditor.tsx's mount effect) genuinely threads its onStateChanged
+    // callback through onSlashStateChangedRef to the CURRENT prop, including
+    // on destroy. A real "/" keystroke reaching a genuinely open session is
+    // NOT exercised at this level -- jsdom's own DOM-mutation-to-transaction
+    // diffing does not reliably reproduce the exact single-character
+    // insertText step insertedSingleSlash (slash-plugin.ts) requires (probed
+    // directly while writing this test, not assumed); that real keypress
+    // proof is Gate 29's job (Task 6), per the design doc's own testing
+    // split. The "wired-implementation verification" describe block above
+    // covers the countMatching/handle-method wiring instead, via
+    // openSlashSessionAt against SLASH_PLUGINS' own real closure.
+    const onSlashStateChanged = vi.fn()
+    const { container, unmount } = render(
+      <MilkdownEditor
+        geometry={DEFAULT_GEOMETRY}
+        documentStyle={DEFAULT_DOCUMENT_STYLE}
+        content="# Hello World"
+        onChange={vi.fn()}
+        onError={vi.fn()}
+        onSlashStateChanged={onSlashStateChanged}
+      />
+    )
+    await waitFor(() => {
+      expect(container.querySelector('.ProseMirror')).toBeInTheDocument()
+    })
+    unmount()
+    await waitFor(() => {
+      expect(onSlashStateChanged).toHaveBeenCalledWith(null)
     })
   })
 

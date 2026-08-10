@@ -10,6 +10,8 @@ import { buildEditorCommands, type EditorCommands } from './editor-commands'
 import { createFindPlugin } from './find-plugin'
 import { createDropImagePlugin } from './drop-image'
 import { createSelectionPlugin, type SelectionSnapshot } from './selection-plugin'
+import { createSlashPlugin, type SlashSession } from './slash-plugin'
+import { enabledSlashItems } from './slash-items'
 import type { PageGeometry } from '../../../typography/page-geometry'
 import type { DocumentStyle } from '../../../typography/document-style'
 
@@ -52,6 +54,14 @@ interface MilkdownEditorProps {
   // (components/SelectionBubble.tsx) and EditorToolbar's live active-state.
   // Latest-ref captured below, exactly like every other callback prop here.
   onSelectionChanged?: (snapshot: SelectionSnapshot | null) => void
+  // Fired by the slash plugin (slash-plugin.ts) whenever its session
+  // actually changes -- opened, its query/activeIndex/itemCount changed, or
+  // closed (null) -- including the destroy-time null report so a stale
+  // palette can't outlive a key={revision} remount, mirroring
+  // onSelectionChanged's own identical contract. Latest-ref captured below,
+  // same as every other callback prop here. Task 5's hooks/useSlashMenu.ts
+  // is the one real consumer today.
+  onSlashStateChanged?: (session: SlashSession | null) => void
 }
 
 // Extends EditorCommands (editor-commands.ts) with flush() -- the one
@@ -102,7 +112,8 @@ const MilkdownEditor = forwardRef<MilkdownEditorHandle, MilkdownEditorProps>(
       onError,
       onFindMatchesChanged,
       onDropImage,
-      onSelectionChanged
+      onSelectionChanged,
+      onSlashStateChanged
     },
     ref
   ) {
@@ -163,12 +174,17 @@ const MilkdownEditor = forwardRef<MilkdownEditorHandle, MilkdownEditorProps>(
     // inside the mount effect below (see selectionProse), same reasoning as
     // onFindMatchesChangedRef above.
     const onSelectionChangedRef = useRef(onSelectionChanged)
+    // Same latest-ref treatment, for the slash plugin -- constructed once
+    // inside the mount effect below (see slashProse), same reasoning as
+    // onFindMatchesChangedRef/onSelectionChangedRef above.
+    const onSlashStateChangedRef = useRef(onSlashStateChanged)
     useEffect(() => {
       onChangeRef.current = onChange
       onErrorRef.current = onError
       onFindMatchesChangedRef.current = onFindMatchesChanged
       onDropImageRef.current = onDropImage
       onSelectionChangedRef.current = onSelectionChanged
+      onSlashStateChangedRef.current = onSlashStateChanged
     })
 
     // Set once the editor has finished constructing (inside the mount
@@ -204,7 +220,11 @@ const MilkdownEditor = forwardRef<MilkdownEditorHandle, MilkdownEditorProps>(
       getSelectedText: () => commandsRef.current?.getSelectedText() ?? '',
       getSelectionRect: () => commandsRef.current?.getSelectionRect() ?? null,
       addComment: (author, text) => commandsRef.current?.addComment(author, text) ?? false,
-      resolveComment: (id) => commandsRef.current?.resolveComment(id)
+      resolveComment: (id) => commandsRef.current?.resolveComment(id),
+      runSlashItem: (id) => commandsRef.current?.runSlashItem(id),
+      closeSlashMenu: () => commandsRef.current?.closeSlashMenu(),
+      getSlashItems: (query) => commandsRef.current?.getSlashItems(query) ?? [],
+      setActiveSlashIndex: (index) => commandsRef.current?.setActiveSlashIndex(index)
     }))
 
     useEffect(() => {
@@ -274,6 +294,26 @@ const MilkdownEditor = forwardRef<MilkdownEditorHandle, MilkdownEditorProps>(
         })
       )
 
+      // Same per-mount construction as findProse/dropImageProse above --
+      // closes over this mount's own latest-ref callback, exactly like
+      // findProse, and needs `ctx` for the SAME reason dropImageProse does:
+      // countMatching (slash-plugin.ts's own CountMatching type) must be
+      // isEnabled-aware, which needs a live Ctx to call
+      // ctx.get(commandsCtx).get(key)(...)(state) dry runs against -- see
+      // slash-items.ts's own enabledSlashItems doc comment for why this is
+      // the ONE formula both this closure and editor-commands.ts's
+      // getSlashItems (backing the palette's actually-rendered array) must
+      // share. Task 3's own design deliberately keeps slash-plugin.ts itself
+      // free of any dependency on the item catalogue or on Ctx (see that
+      // file's header) -- this closure is the seam where the two are wired
+      // together, at construction time, outside that file.
+      const slashProse = $prose((ctx) =>
+        createSlashPlugin(
+          (session) => onSlashStateChangedRef.current?.(session),
+          (query, state) => enabledSlashItems(ctx, state, query).length
+        )
+      )
+
       Editor.make()
         .config((ctx) => {
           ctx.set(rootCtx, root)
@@ -318,6 +358,7 @@ const MilkdownEditor = forwardRef<MilkdownEditorHandle, MilkdownEditorProps>(
         .use(findProse)
         .use(selectionProse)
         .use(dropImageProse)
+        .use(slashProse)
         .create()
         .then((created) => {
           if (cancelled) {
