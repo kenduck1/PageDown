@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
-import { render, screen, cleanup } from '@testing-library/react'
+import { render, screen, cleanup, fireEvent } from '@testing-library/react'
 import Toast from './Toast'
 
 beforeEach(() => {
@@ -67,5 +67,24 @@ describe('Toast', () => {
     // the timer must not have restarted at the rerender.
     expect(onDismiss2).toHaveBeenCalledTimes(1)
     expect(onDismiss1).not.toHaveBeenCalled()
+  })
+
+  it('renders no action button when action is omitted', () => {
+    render(<Toast message="Hello there" onDismiss={vi.fn()} />)
+    expect(screen.queryByRole('button')).not.toBeInTheDocument()
+  })
+
+  it('renders a real, clickable action button when action is provided', () => {
+    const onAction = vi.fn()
+    render(
+      <Toast
+        message="Exported PDF: report.pdf"
+        onDismiss={vi.fn()}
+        action={{ label: 'Show in Folder', onClick: onAction }}
+      />
+    )
+    const button = screen.getByRole('button', { name: 'Show in Folder' })
+    fireEvent.click(button)
+    expect(onAction).toHaveBeenCalledTimes(1)
   })
 })

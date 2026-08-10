@@ -124,6 +124,8 @@ beforeEach(() => {
     getPageCount: vi.fn().mockResolvedValue({ pageCount: 1 }),
     confirmDiscardChanges: vi.fn(),
     exportPdf: vi.fn(),
+    exportHtml: vi.fn(),
+    showItemInFolder: vi.fn(),
     print: vi.fn(),
     getPreferences: vi.fn(),
     setPreferences: vi.fn(),

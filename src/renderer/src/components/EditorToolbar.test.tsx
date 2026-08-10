@@ -76,6 +76,8 @@ beforeEach(() => {
     getPageCount: vi.fn(),
     confirmDiscardChanges: vi.fn(),
     exportPdf: vi.fn().mockResolvedValue({ filePath: '/tmp/document.pdf' }),
+    exportHtml: vi.fn(),
+    showItemInFolder: vi.fn(),
     print: vi.fn().mockResolvedValue({ cancelled: false }),
     getPreferences: vi.fn(),
     setPreferences: vi.fn(),
@@ -628,6 +630,77 @@ describe('EditorToolbar', () => {
     expect(useDocumentStore.getState().error).toBe(
       'Unrelated pre-existing error from a failed Save'
     )
+  })
+
+  it('Export as HTML calls window.api.exportHtml with content/path/consent, matching Export PDF', async () => {
+    useDocumentStore.setState({
+      content: '# Real document content',
+      filePath: '/Users/someone/notes/report.md'
+    })
+    const ref = createRef<MilkdownEditorHandle>()
+    const user = userEvent.setup()
+    render(<EditorToolbar editorRef={ref} />)
+
+    await user.click(screen.getByRole('button', { name: /Export as HTML/ }))
+
+    await waitFor(() => {
+      expect(window.api.exportHtml).toHaveBeenCalledWith(
+        '# Real document content',
+        '/Users/someone/notes/report.md',
+        false
+      )
+    })
+  })
+
+  // Product-completeness audit 2.3: "Export gives no feedback." A successful
+  // export (either format) now shows a real Toast naming the written file,
+  // with a real "Show in Folder" action -- previously the button just
+  // stopped saying "Exporting..." with no further signal at all.
+  it('shows a Toast naming the exported file after a successful PDF export', async () => {
+    vi.mocked(window.api.exportPdf).mockResolvedValue({ filePath: '/tmp/reports/q3.pdf' })
+    useDocumentStore.setState({ content: '# Doc' })
+    const ref = createRef<MilkdownEditorHandle>()
+    const user = userEvent.setup()
+    render(<EditorToolbar editorRef={ref} />)
+
+    await user.click(screen.getByRole('button', { name: /Export PDF/ }))
+
+    const toast = await screen.findByRole('status')
+    expect(toast).toHaveTextContent('Exported PDF: q3.pdf')
+    expect(screen.getByRole('button', { name: 'Show in Folder' })).toBeInTheDocument()
+  })
+
+  it('clicking "Show in Folder" reveals the real exported path and dismisses the toast', async () => {
+    vi.mocked(window.api.exportHtml).mockResolvedValue({ filePath: '/tmp/report.html' })
+    useDocumentStore.setState({ content: '# Doc' })
+    const ref = createRef<MilkdownEditorHandle>()
+    const user = userEvent.setup()
+    render(<EditorToolbar editorRef={ref} />)
+
+    await user.click(screen.getByRole('button', { name: /Export as HTML/ }))
+    await screen.findByRole('status')
+
+    await user.click(screen.getByRole('button', { name: 'Show in Folder' }))
+
+    expect(window.api.showItemInFolder).toHaveBeenCalledWith('/tmp/report.html')
+    // The toast has nothing left to offer once its one action was taken --
+    // see Toast.tsx/EditorToolbar's handleShowExportInFolder.
+    expect(screen.queryByRole('status')).not.toBeInTheDocument()
+  })
+
+  it('a cancelled Export PDF Save dialog shows no toast (the user chose to cancel, not a completed export)', async () => {
+    vi.mocked(window.api.exportPdf).mockResolvedValue(null)
+    useDocumentStore.setState({ content: '# Doc' })
+    const ref = createRef<MilkdownEditorHandle>()
+    const user = userEvent.setup()
+    render(<EditorToolbar editorRef={ref} />)
+
+    await user.click(screen.getByRole('button', { name: /Export PDF/ }))
+
+    await waitFor(() => {
+      expect(window.api.exportPdf).toHaveBeenCalled()
+    })
+    expect(screen.queryByRole('status')).not.toBeInTheDocument()
   })
 
   it('Print calls window.api.print with the current document content and file path', async () => {

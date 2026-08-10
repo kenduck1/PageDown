@@ -3,6 +3,7 @@ import { useAppStore, type ViewMode } from '../store/appStore'
 import { useDocumentStore } from '../store/documentStore'
 import { useFindStore } from '../store/findStore'
 import { isSourceEditing } from '../lib/editing-surface'
+import Toast from './Toast'
 import {
   PAGE_FONT_SIZES,
   resolvePageConfig,
@@ -218,8 +219,19 @@ function EditorToolbar({
   // for why a component-local useState guard stopped being sufficient.
   const isExporting = useDocumentStore((state) => state.isExporting)
   const isPrinting = useDocumentStore((state) => state.isPrinting)
+  const isExportingHtml = useDocumentStore((state) => state.isExportingHtml)
   const exportPdf = useDocumentStore((state) => state.exportPdf)
+  const exportHtml = useDocumentStore((state) => state.exportHtml)
   const print = useDocumentStore((state) => state.print)
+  // Product-completeness audit 2.3: "Export gives no feedback." exportNotice
+  // is store state (not this component's own useState) specifically because
+  // export has TWO independent triggers -- this toolbar's own buttons, and
+  // the File menu's Cmd+Shift+E accelerator (EditorScreen's useMenuCommands
+  // calls documentStore's exportPdf/exportHtml directly) -- only the store
+  // sees both, so rendering the Toast from whatever the store reports is
+  // what makes it fire regardless of which one the user actually used.
+  const exportNotice = useDocumentStore((state) => state.exportNotice)
+  const clearExportNotice = useDocumentStore((state) => state.clearExportNotice)
   // The document's own current font family, for the controlled select
   // below. resolvePageConfig does a real YAML parse, so it is memoized on
   // `content` for the same reason EditorScreen memoizes its own copy.
@@ -399,13 +411,28 @@ function EditorToolbar({
   // exportPdf/print actions verbatim -- see this component's header comment.
   // The buttons below call them directly.
 
+  // Product-completeness audit 2.3: the export success Toast, and the
+  // "Show in Folder" action it carries. Reveals via window.api.showItemInFolder
+  // -- validated on the MAIN process side against a small remembered set of
+  // paths this app itself just exported to (see that handler's own comment
+  // in src/main/index.ts), never a blind pass-through of a renderer-supplied
+  // path. Dismisses the notice immediately on click, same as letting the
+  // timer expire -- there is nothing more this toast has to offer once its
+  // one action has been taken.
+  const handleShowExportInFolder = (): void => {
+    if (!exportNotice) return
+    void window.api.showItemInFolder(exportNotice.filePath)
+    clearExportNotice()
+  }
+
   return (
-    <div
-      className="flex flex-none flex-nowrap items-center gap-x-3.5 border-b border-border-subtle bg-page px-3.5 py-1.5"
-      role="toolbar"
-      aria-label="Formatting toolbar"
-    >
-      {/* Everything except the right-aligned cluster lives in ONE scrollable
+    <>
+      <div
+        className="flex flex-none flex-nowrap items-center gap-x-3.5 border-b border-border-subtle bg-page px-3.5 py-1.5"
+        role="toolbar"
+        aria-label="Formatting toolbar"
+      >
+        {/* Everything except the right-aligned cluster lives in ONE scrollable
           region -- Undo/Redo through Find all scroll together as far as the
           browser is concerned. The "stay visible" behavior for Undo/Redo +
           paragraph-style/font/size is achieved with `sticky left-0` (below),
@@ -457,17 +484,17 @@ function EditorToolbar({
           per feedback) compresses the same transparent-to-opaque range
           into less horizontal space, so it reads as a bit more present
           without turning into a hard edge. */}
-      <div className="relative min-w-0 flex-1">
-        <div
-          ref={scrollRef}
-          className="scrollbar-hide flex items-center gap-x-2.5 overflow-x-auto"
-          style={
-            toolbarMaskImage
-              ? { WebkitMaskImage: toolbarMaskImage, maskImage: toolbarMaskImage }
-              : undefined
-          }
-        >
-          {/* Sticky left group: undo/redo + paragraph-style/font/size. z-10
+        <div className="relative min-w-0 flex-1">
+          <div
+            ref={scrollRef}
+            className="scrollbar-hide flex items-center gap-x-2.5 overflow-x-auto"
+            style={
+              toolbarMaskImage
+                ? { WebkitMaskImage: toolbarMaskImage, maskImage: toolbarMaskImage }
+                : undefined
+            }
+          >
+            {/* Sticky left group: undo/redo + paragraph-style/font/size. z-10
               so it paints above the content scrolling underneath it; bg-page
               (opaque, matching the toolbar's own background) so that
               underlying content is genuinely occluded rather than showing
@@ -477,84 +504,84 @@ function EditorToolbar({
               opaque -- toolbarMaskImage's gradient stays black (unmasked)
               across this group's own width (tracked via stickyRef), so it
               never fades regardless of scroll position. */}
-          <div
-            ref={stickyRef}
-            className="sticky left-0 z-10 flex flex-none items-center gap-x-2.5 bg-page"
-          >
-            {/* Undo / redo */}
-            <div className="flex items-center gap-0.5">
-              <ToolbarIconButton
-                label="Undo"
-                onClick={() => editorRef.current?.undo()}
-                disabled={isSourceMode}
-              >
-                <Icon strokeWidth={1.8}>
-                  <path d="M7 7 3 11l4 4" />
-                  <path d="M3 11h11.5A5.5 5.5 0 0 1 20 16.5v0" />
-                </Icon>
-              </ToolbarIconButton>
-              <ToolbarIconButton
-                label="Redo"
-                onClick={() => editorRef.current?.redo()}
-                disabled={isSourceMode}
-              >
-                <Icon strokeWidth={1.8}>
-                  <path d="M17 7l4 4-4 4" />
-                  <path d="M21 11H9.5A5.5 5.5 0 0 0 4 16.5v0" />
-                </Icon>
-              </ToolbarIconButton>
-            </div>
+            <div
+              ref={stickyRef}
+              className="sticky left-0 z-10 flex flex-none items-center gap-x-2.5 bg-page"
+            >
+              {/* Undo / redo */}
+              <div className="flex items-center gap-0.5">
+                <ToolbarIconButton
+                  label="Undo"
+                  onClick={() => editorRef.current?.undo()}
+                  disabled={isSourceMode}
+                >
+                  <Icon strokeWidth={1.8}>
+                    <path d="M7 7 3 11l4 4" />
+                    <path d="M3 11h11.5A5.5 5.5 0 0 1 20 16.5v0" />
+                  </Icon>
+                </ToolbarIconButton>
+                <ToolbarIconButton
+                  label="Redo"
+                  onClick={() => editorRef.current?.redo()}
+                  disabled={isSourceMode}
+                >
+                  <Icon strokeWidth={1.8}>
+                    <path d="M17 7l4 4-4 4" />
+                    <path d="M21 11H9.5A5.5 5.5 0 0 0 4 16.5v0" />
+                  </Icon>
+                </ToolbarIconButton>
+              </div>
 
-            <ToolbarDivider />
+              <ToolbarDivider />
 
-            {/* Paragraph style / font family / font size. Font family and
+              {/* Paragraph style / font family / font size. Font family and
               font size have no backing MilkdownEditorHandle command (this
               sub-project's brief scopes editing commands to bold/italic/
               heading/lists/link/table/pagebreak/undo/redo only) -- both
               selects below are real, interactive, native <select> elements,
               but intentionally unwired, matching the same "present but
               inert" treatment as the Find button. */}
-            <div className="flex items-center gap-2">
-              <div className="relative flex h-[30px] items-center">
-                <select
-                  key={headingSelectResetKey}
-                  aria-label="Paragraph style"
-                  className="h-full appearance-none rounded-sm bg-transparent pl-2.5 pr-6 text-12-5 text-text-primary hover:bg-chrome-light disabled:cursor-not-allowed disabled:opacity-40"
-                  defaultValue="paragraph"
-                  onChange={(e) => handleHeadingChange(e.target.value)}
-                  disabled={isSourceMode}
-                >
-                  <option value="paragraph">Normal text</option>
-                  <option value="1">Heading 1</option>
-                  <option value="2">Heading 2</option>
-                  <option value="3">Heading 3</option>
-                </select>
-                <span className="pointer-events-none absolute right-2 text-text-tertiary">
-                  <ChevronDownIcon />
-                </span>
-              </div>
-              <div className="relative flex h-[30px] items-center">
-                {/* Controlled off the document's own frontmatter, not local
+              <div className="flex items-center gap-2">
+                <div className="relative flex h-[30px] items-center">
+                  <select
+                    key={headingSelectResetKey}
+                    aria-label="Paragraph style"
+                    className="h-full appearance-none rounded-sm bg-transparent pl-2.5 pr-6 text-12-5 text-text-primary hover:bg-chrome-light disabled:cursor-not-allowed disabled:opacity-40"
+                    defaultValue="paragraph"
+                    onChange={(e) => handleHeadingChange(e.target.value)}
+                    disabled={isSourceMode}
+                  >
+                    <option value="paragraph">Normal text</option>
+                    <option value="1">Heading 1</option>
+                    <option value="2">Heading 2</option>
+                    <option value="3">Heading 3</option>
+                  </select>
+                  <span className="pointer-events-none absolute right-2 text-text-tertiary">
+                    <ChevronDownIcon />
+                  </span>
+                </div>
+                <div className="relative flex h-[30px] items-center">
+                  {/* Controlled off the document's own frontmatter, not local
                     state: reopening a document must show the family it
                     actually uses. The `font-serif` class the closed control
                     used to carry is deliberately gone -- it rendered the
                     selection in Source Serif regardless of what was
                     selected, which read as the control being broken the
                     moment a second family existed. */}
-                <select
-                  aria-label="Font family"
-                  className="h-full appearance-none rounded-sm bg-transparent pl-2.5 pr-6 text-12-5 text-text-primary hover:bg-chrome-light"
-                  value={fontFamily}
-                  onChange={(e) => onSetFontFamily?.(e.target.value as PageFontFamily)}
-                >
-                  <option value="source-serif-4">Source Serif 4</option>
-                  <option value="inter">Inter</option>
-                </select>
-                <span className="pointer-events-none absolute right-2 text-text-tertiary">
-                  <ChevronDownIcon />
-                </span>
-              </div>
-              {/* Real, controlled, and document-backed as of the capability-gap
+                  <select
+                    aria-label="Font family"
+                    className="h-full appearance-none rounded-sm bg-transparent pl-2.5 pr-6 text-12-5 text-text-primary hover:bg-chrome-light"
+                    value={fontFamily}
+                    onChange={(e) => onSetFontFamily?.(e.target.value as PageFontFamily)}
+                  >
+                    <option value="source-serif-4">Source Serif 4</option>
+                    <option value="inter">Inter</option>
+                  </select>
+                  <span className="pointer-events-none absolute right-2 text-text-tertiary">
+                    <ChevronDownIcon />
+                  </span>
+                </div>
+                {/* Real, controlled, and document-backed as of the capability-gap
               pass. This was the single worst control in the toolbar: it had
               `defaultValue="11"` and NO onChange at all, so it visibly moved to
               whatever the user picked and then changed nothing -- and 11 was not
@@ -564,36 +591,36 @@ function EditorToolbar({
               classes in document-typography.css, exactly like the font-family
               select beside it. "Default" means "whatever the document's theme
               says" and emits no class at all -- see PageFontSize. */}
-              <div className="relative flex h-[30px] items-center">
-                <select
-                  aria-label="Font size"
-                  className="h-full appearance-none rounded-sm bg-transparent pl-2 pr-6 text-12-5 text-text-primary hover:bg-chrome-light"
-                  value={String(fontSize)}
-                  onChange={(e) =>
-                    onSetFontSize?.(
-                      e.target.value === 'default'
-                        ? 'default'
-                        : (Number(e.target.value) as PageFontSize)
-                    )
-                  }
-                >
-                  <option value="default">Default</option>
-                  {PAGE_FONT_SIZES.map((size) => (
-                    <option key={size} value={String(size)}>
-                      {size}
-                    </option>
-                  ))}
-                </select>
-                <span className="pointer-events-none absolute right-1.5 text-text-tertiary">
-                  <ChevronDownIcon />
-                </span>
+                <div className="relative flex h-[30px] items-center">
+                  <select
+                    aria-label="Font size"
+                    className="h-full appearance-none rounded-sm bg-transparent pl-2 pr-6 text-12-5 text-text-primary hover:bg-chrome-light"
+                    value={String(fontSize)}
+                    onChange={(e) =>
+                      onSetFontSize?.(
+                        e.target.value === 'default'
+                          ? 'default'
+                          : (Number(e.target.value) as PageFontSize)
+                      )
+                    }
+                  >
+                    <option value="default">Default</option>
+                    {PAGE_FONT_SIZES.map((size) => (
+                      <option key={size} value={String(size)}>
+                        {size}
+                      </option>
+                    ))}
+                  </select>
+                  <span className="pointer-events-none absolute right-1.5 text-text-tertiary">
+                    <ChevronDownIcon />
+                  </span>
+                </div>
               </div>
+
+              <ToolbarDivider />
             </div>
 
-            <ToolbarDivider />
-          </div>
-
-          {/* Bold / Italic.
+            {/* Bold / Italic.
 
           UNDERLINE AND TEXT COLOUR WERE REMOVED HERE (capability-gap pass),
           deliberately, and should not come back. Neither has any
@@ -607,34 +634,34 @@ function EditorToolbar({
           renders at full opacity, takes hover styling and keyboard focus, and
           does nothing when clicked reads as BROKEN, not as unbuilt -- removing
           it is strictly more honest than shipping it. */}
-          <div className="flex items-center gap-0.5">
-            {/* Real, live pressed state as of the bubble menu sub-project --
+            <div className="flex items-center gap-0.5">
+              {/* Real, live pressed state as of the bubble menu sub-project --
             these two carried a hardcoded `active={false}` from the design
             handoff until then, which rendered an actively misleading
             aria-pressed="false" while the cursor sat inside bold text.
             (Underline, which used to sit here carrying that same hardcoded
             false, is gone -- see the block comment above.) */}
-            <ToolbarIconButton
-              label="Bold"
-              active={selection?.marks.bold ?? false}
-              onClick={() => editorRef.current?.toggleBold()}
-              disabled={isSourceMode}
-            >
-              <span className="text-14 font-bold leading-none">B</span>
-            </ToolbarIconButton>
-            <ToolbarIconButton
-              label="Italic"
-              active={selection?.marks.italic ?? false}
-              onClick={() => editorRef.current?.toggleItalic()}
-              disabled={isSourceMode}
-            >
-              <span className="text-14 italic leading-none">I</span>
-            </ToolbarIconButton>
-          </div>
+              <ToolbarIconButton
+                label="Bold"
+                active={selection?.marks.bold ?? false}
+                onClick={() => editorRef.current?.toggleBold()}
+                disabled={isSourceMode}
+              >
+                <span className="text-14 font-bold leading-none">B</span>
+              </ToolbarIconButton>
+              <ToolbarIconButton
+                label="Italic"
+                active={selection?.marks.italic ?? false}
+                onClick={() => editorRef.current?.toggleItalic()}
+                disabled={isSourceMode}
+              >
+                <span className="text-14 italic leading-none">I</span>
+              </ToolbarIconButton>
+            </div>
 
-          <ToolbarDivider />
+            <ToolbarDivider />
 
-          {/* Bullet / numbered / checkbox list -- the mockup renders these as
+            {/* Bullet / numbered / checkbox list -- the mockup renders these as
           three plain icon buttons side by side (verified against
           PageDown.dc.html's own markup: no chevron/dropdown panel actually
           exists for this group, despite the README's prose calling it a
@@ -648,69 +675,69 @@ function EditorToolbar({
           `selection.taskList`, NOT `listType === 'bullet_list'` -- every task
           item satisfies both, so the latter would light up the bullet button
           and this one together. */}
-          <div className="flex items-center gap-0.5">
-            <ToolbarIconButton
-              label="Bulleted list"
-              active={selection?.listType === 'bullet_list'}
-              onClick={() => editorRef.current?.toggleBulletList()}
-              disabled={isSourceMode}
-            >
-              <Icon strokeWidth={1.7}>
-                <circle cx="4.5" cy="7" r="1.3" fill="currentColor" stroke="none" />
-                <path d="M9 7h11" />
-                <circle cx="4.5" cy="12" r="1.3" fill="currentColor" stroke="none" />
-                <path d="M9 12h11" />
-                <circle cx="4.5" cy="17" r="1.3" fill="currentColor" stroke="none" />
-                <path d="M9 17h11" />
-              </Icon>
-            </ToolbarIconButton>
-            <ToolbarIconButton
-              label="Numbered list"
-              active={selection?.listType === 'ordered_list'}
-              onClick={() => editorRef.current?.toggleOrderedList()}
-              disabled={isSourceMode}
-            >
-              <Icon strokeWidth={1.7}>
-                <text x="2" y="8.5" fontSize="7" stroke="none" fill="currentColor">
-                  1
-                </text>
-                <path d="M9 7h11" />
-                <text x="2" y="13.5" fontSize="7" stroke="none" fill="currentColor">
-                  2
-                </text>
-                <path d="M9 12h11" />
-                <text x="2" y="18.5" fontSize="7" stroke="none" fill="currentColor">
-                  3
-                </text>
-                <path d="M9 17h11" />
-              </Icon>
-            </ToolbarIconButton>
-            <ToolbarIconButton
-              label="Checklist"
-              active={selection?.taskList ?? false}
-              onClick={() => editorRef.current?.toggleTaskList()}
-              disabled={isSourceMode}
-            >
-              <svg
-                width="15"
-                height="15"
-                viewBox="0 0 16 16"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth={2}
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                aria-hidden="true"
+            <div className="flex items-center gap-0.5">
+              <ToolbarIconButton
+                label="Bulleted list"
+                active={selection?.listType === 'bullet_list'}
+                onClick={() => editorRef.current?.toggleBulletList()}
+                disabled={isSourceMode}
               >
-                <rect x="2" y="2" width="10" height="10" rx="2" />
-                <path d="M4.3 7.3l1.8 1.8L10 5.8" />
-              </svg>
-            </ToolbarIconButton>
-          </div>
+                <Icon strokeWidth={1.7}>
+                  <circle cx="4.5" cy="7" r="1.3" fill="currentColor" stroke="none" />
+                  <path d="M9 7h11" />
+                  <circle cx="4.5" cy="12" r="1.3" fill="currentColor" stroke="none" />
+                  <path d="M9 12h11" />
+                  <circle cx="4.5" cy="17" r="1.3" fill="currentColor" stroke="none" />
+                  <path d="M9 17h11" />
+                </Icon>
+              </ToolbarIconButton>
+              <ToolbarIconButton
+                label="Numbered list"
+                active={selection?.listType === 'ordered_list'}
+                onClick={() => editorRef.current?.toggleOrderedList()}
+                disabled={isSourceMode}
+              >
+                <Icon strokeWidth={1.7}>
+                  <text x="2" y="8.5" fontSize="7" stroke="none" fill="currentColor">
+                    1
+                  </text>
+                  <path d="M9 7h11" />
+                  <text x="2" y="13.5" fontSize="7" stroke="none" fill="currentColor">
+                    2
+                  </text>
+                  <path d="M9 12h11" />
+                  <text x="2" y="18.5" fontSize="7" stroke="none" fill="currentColor">
+                    3
+                  </text>
+                  <path d="M9 17h11" />
+                </Icon>
+              </ToolbarIconButton>
+              <ToolbarIconButton
+                label="Checklist"
+                active={selection?.taskList ?? false}
+                onClick={() => editorRef.current?.toggleTaskList()}
+                disabled={isSourceMode}
+              >
+                <svg
+                  width="15"
+                  height="15"
+                  viewBox="0 0 16 16"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth={2}
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  aria-hidden="true"
+                >
+                  <rect x="2" y="2" width="10" height="10" rx="2" />
+                  <path d="M4.3 7.3l1.8 1.8L10 5.8" />
+                </svg>
+              </ToolbarIconButton>
+            </div>
 
-          <ToolbarDivider />
+            <ToolbarDivider />
 
-          {/* Link / image / table / page-break.
+            {/* Link / image / table / page-break.
 
           "Insert image" is real as of the capability-gap pass -- a hidden
           `<input type="file">` (below) opens the OS picker through Chromium
@@ -726,8 +753,8 @@ function EditorToolbar({
           against the installed 7.21.3: its command list has no such entry),
           and any merged state one produced would be silently destroyed on the
           next save. Same reasoning as Underline/text colour above. */}
-          <div className="flex items-center gap-0.5">
-            {/* Opens LinkComposer (a FindBar-style layout row, rendered by
+            <div className="flex items-center gap-0.5">
+              {/* Opens LinkComposer (a FindBar-style layout row, rendered by
             EditorScreen), exactly like "Add comment" below opens
             CommentComposer. This button used to call
             `window.prompt('Link URL')` directly -- which THROWS in Electron's
@@ -739,73 +766,73 @@ function EditorToolbar({
             dialog.showMessageBox over IPC (main process) or a real in-app row
             like this one works. Disabled in Source mode for the same reason as
             every other editorRef-bound button in this cluster. */}
-            <ToolbarIconButton
-              label="Insert link"
-              onClick={openLinkComposer}
-              disabled={isSourceMode}
-            >
-              <Icon strokeWidth={1.8}>
-                <path d="M9.5 14.5 14.5 9.5" />
-                <path d="M11 7.5l1-1a3.5 3.5 0 0 1 5 5l-1 1" />
-                <path d="M13 16.5l-1 1a3.5 3.5 0 0 1-5-5l1-1" />
-              </Icon>
-            </ToolbarIconButton>
-            <ToolbarIconButton
-              label="Insert image"
-              onClick={() => imageInputRef.current?.click()}
-              disabled={isSourceMode}
-            >
-              <Icon strokeWidth={1.7}>
-                <rect x="3.5" y="5" width="17" height="14" rx="2" />
-                <circle cx="9" cy="10" r="1.4" />
-                <path d="M4 16.5 9 12a2 2 0 0 1 2.7 0l5.3 4.7" />
-              </Icon>
-            </ToolbarIconButton>
-            <input
-              ref={imageInputRef}
-              type="file"
-              accept="image/*"
-              multiple
-              className="hidden"
-              // aria-hidden + tabIndex -1: the real, labelled control is the
-              // button above; this node exists only to open the OS picker.
-              // Leaving it in the accessibility tree would announce an
-              // unlabelled file input next to it.
-              aria-hidden="true"
-              tabIndex={-1}
-              onChange={(e) => {
-                const files = Array.from(e.target.files ?? [])
-                if (files.length > 0) editorRef.current?.insertImages(files)
-                // Cleared so picking the SAME file twice in a row still fires
-                // a change event the second time -- a real, standard
-                // <input type="file"> gotcha, not defensive padding.
-                e.target.value = ''
-              }}
-            />
-            <ToolbarIconButton
-              label="Insert table"
-              onClick={() => editorRef.current?.insertTable()}
-              disabled={isSourceMode}
-            >
-              <Icon strokeWidth={1.7}>
-                <rect x="3.5" y="5" width="17" height="14" rx="1.5" />
-                <path d="M3.5 10.3h17" />
-                <path d="M3.5 15.6h17" />
-                <path d="M10 5v14" />
-              </Icon>
-            </ToolbarIconButton>
-            <ToolbarIconButton
-              label="Insert page break"
-              onClick={() => editorRef.current?.insertPageBreak()}
-              disabled={isSourceMode}
-            >
-              <Icon strokeWidth={1.7}>
-                <rect x="5" y="3" width="14" height="18" rx="1.5" />
-                <path d="M6.5 12h3M14.5 12h3" />
-                <path d="M11 10.3v3.4" />
-              </Icon>
-            </ToolbarIconButton>
-            {/* Opens CommentComposer (a FindBar-style layout row, rendered by
+              <ToolbarIconButton
+                label="Insert link"
+                onClick={openLinkComposer}
+                disabled={isSourceMode}
+              >
+                <Icon strokeWidth={1.8}>
+                  <path d="M9.5 14.5 14.5 9.5" />
+                  <path d="M11 7.5l1-1a3.5 3.5 0 0 1 5 5l-1 1" />
+                  <path d="M13 16.5l-1 1a3.5 3.5 0 0 1-5-5l1-1" />
+                </Icon>
+              </ToolbarIconButton>
+              <ToolbarIconButton
+                label="Insert image"
+                onClick={() => imageInputRef.current?.click()}
+                disabled={isSourceMode}
+              >
+                <Icon strokeWidth={1.7}>
+                  <rect x="3.5" y="5" width="17" height="14" rx="2" />
+                  <circle cx="9" cy="10" r="1.4" />
+                  <path d="M4 16.5 9 12a2 2 0 0 1 2.7 0l5.3 4.7" />
+                </Icon>
+              </ToolbarIconButton>
+              <input
+                ref={imageInputRef}
+                type="file"
+                accept="image/*"
+                multiple
+                className="hidden"
+                // aria-hidden + tabIndex -1: the real, labelled control is the
+                // button above; this node exists only to open the OS picker.
+                // Leaving it in the accessibility tree would announce an
+                // unlabelled file input next to it.
+                aria-hidden="true"
+                tabIndex={-1}
+                onChange={(e) => {
+                  const files = Array.from(e.target.files ?? [])
+                  if (files.length > 0) editorRef.current?.insertImages(files)
+                  // Cleared so picking the SAME file twice in a row still fires
+                  // a change event the second time -- a real, standard
+                  // <input type="file"> gotcha, not defensive padding.
+                  e.target.value = ''
+                }}
+              />
+              <ToolbarIconButton
+                label="Insert table"
+                onClick={() => editorRef.current?.insertTable()}
+                disabled={isSourceMode}
+              >
+                <Icon strokeWidth={1.7}>
+                  <rect x="3.5" y="5" width="17" height="14" rx="1.5" />
+                  <path d="M3.5 10.3h17" />
+                  <path d="M3.5 15.6h17" />
+                  <path d="M10 5v14" />
+                </Icon>
+              </ToolbarIconButton>
+              <ToolbarIconButton
+                label="Insert page break"
+                onClick={() => editorRef.current?.insertPageBreak()}
+                disabled={isSourceMode}
+              >
+                <Icon strokeWidth={1.7}>
+                  <rect x="5" y="3" width="14" height="18" rx="1.5" />
+                  <path d="M6.5 12h3M14.5 12h3" />
+                  <path d="M11 10.3v3.4" />
+                </Icon>
+              </ToolbarIconButton>
+              {/* Opens CommentComposer (a FindBar-style layout row, rendered by
             EditorScreen) -- disabled the same way and for the same reason as
             every other editorRef-bound button in this cluster: Source mode
             unmounts MilkdownEditor, so editorRef.current is null there.
@@ -816,18 +843,18 @@ function EditorToolbar({
             button just opens the composer; addCommentCommand's own refusal
             is what the composer surfaces as a real inline error if the
             selection turns out not to qualify. */}
-            <ToolbarIconButton
-              label="Add comment"
-              onClick={openCommentComposer}
-              disabled={isSourceMode}
-            >
-              <Icon strokeWidth={1.7}>
-                <path d="M4 5.5h16v10H10l-4 3.5v-3.5H4z" />
-              </Icon>
-            </ToolbarIconButton>
-          </div>
+              <ToolbarIconButton
+                label="Add comment"
+                onClick={openCommentComposer}
+                disabled={isSourceMode}
+              >
+                <Icon strokeWidth={1.7}>
+                  <path d="M4 5.5h16v10H10l-4 3.5v-3.5H4z" />
+                </Icon>
+              </ToolbarIconButton>
+            </div>
 
-          {/* Wired as of the Find & Replace sub-project
+            {/* Wired as of the Find & Replace sub-project
           (docs/superpowers/specs/2026-08-08-find-replace-design.md) -- this
           was a placeholder trigger with no onClick since the design handoff.
           It takes `active` (and therefore renders aria-pressed) because it now
@@ -835,77 +862,77 @@ function EditorToolbar({
           see ToolbarIconButtonProps' own comment on when that prop belongs.
           Not disabled in Source mode -- Find works on BOTH editing surfaces,
           unlike the editorRef-bound cluster. */}
-          <ToolbarIconButton
-            label="Find"
-            active={findOpen}
-            onClick={() => (findOpen ? closeFind() : openFind())}
-          >
-            <Icon strokeWidth={1.8}>
-              <circle cx="10.5" cy="10.5" r="6" />
-              <path d="M19 19l-4.3-4.3" />
-            </Icon>
-          </ToolbarIconButton>
+            <ToolbarIconButton
+              label="Find"
+              active={findOpen}
+              onClick={() => (findOpen ? closeFind() : openFind())}
+            >
+              <Icon strokeWidth={1.8}>
+                <circle cx="10.5" cy="10.5" r="6" />
+                <path d="M19 19l-4.3-4.3" />
+              </Icon>
+            </ToolbarIconButton>
+          </div>
         </div>
-      </div>
 
-      {/* Right-aligned cluster: view-mode segmented control, page setup,
+        {/* Right-aligned cluster: view-mode segmented control, page setup,
           Export PDF. flex-none (not just the implicit default) so it never
           shrinks or scrolls, regardless of how narrow the window gets --
           the scrollable region above absorbs all the squeeze instead. */}
-      <div className="flex flex-none items-center gap-3.5">
-        <div className="flex items-center gap-0.5 rounded-md bg-chrome-dark p-0.5">
-          {(
-            [
-              {
-                mode: 'format' as const,
-                label: 'Format',
-                icon: (
-                  <Icon strokeWidth={1.6}>
-                    <rect x="6" y="3.5" width="12" height="17" rx="1.5" />
-                    <path d="M8.7 8h6.6M8.7 11h6.6M8.7 14h4" />
-                  </Icon>
-                )
-              },
-              {
-                mode: 'split' as const,
-                label: 'Split',
-                icon: (
-                  <Icon strokeWidth={1.6}>
-                    <rect x="4" y="4.5" width="16" height="15" rx="1.5" />
-                    <path d="M12 4.5v15" />
-                  </Icon>
-                )
-              },
-              {
-                mode: 'source' as const,
-                label: 'Source',
-                icon: (
-                  <Icon strokeWidth={1.7}>
-                    <path d="M9 8.5 5.5 12 9 15.5" />
-                    <path d="M15 8.5 18.5 12 15 15.5" />
-                  </Icon>
-                )
-              }
-            ] as const
-          ).map(({ mode, label, icon }) => (
-            <button
-              key={mode}
-              type="button"
-              aria-pressed={viewMode === mode}
-              onClick={() => (onSetViewMode ? onSetViewMode(mode) : setViewMode(mode))}
-              className={`flex items-center gap-1.5 rounded-sm px-2.5 py-1 text-12-5 ${
-                viewMode === mode
-                  ? 'bg-page text-text-primary shadow-flat'
-                  : 'text-text-secondary hover:text-text-primary'
-              }`}
-            >
-              {icon}
-              {label}
-            </button>
-          ))}
-        </div>
+        <div className="flex flex-none items-center gap-3.5">
+          <div className="flex items-center gap-0.5 rounded-md bg-chrome-dark p-0.5">
+            {(
+              [
+                {
+                  mode: 'format' as const,
+                  label: 'Format',
+                  icon: (
+                    <Icon strokeWidth={1.6}>
+                      <rect x="6" y="3.5" width="12" height="17" rx="1.5" />
+                      <path d="M8.7 8h6.6M8.7 11h6.6M8.7 14h4" />
+                    </Icon>
+                  )
+                },
+                {
+                  mode: 'split' as const,
+                  label: 'Split',
+                  icon: (
+                    <Icon strokeWidth={1.6}>
+                      <rect x="4" y="4.5" width="16" height="15" rx="1.5" />
+                      <path d="M12 4.5v15" />
+                    </Icon>
+                  )
+                },
+                {
+                  mode: 'source' as const,
+                  label: 'Source',
+                  icon: (
+                    <Icon strokeWidth={1.7}>
+                      <path d="M9 8.5 5.5 12 9 15.5" />
+                      <path d="M15 8.5 18.5 12 15 15.5" />
+                    </Icon>
+                  )
+                }
+              ] as const
+            ).map(({ mode, label, icon }) => (
+              <button
+                key={mode}
+                type="button"
+                aria-pressed={viewMode === mode}
+                onClick={() => (onSetViewMode ? onSetViewMode(mode) : setViewMode(mode))}
+                className={`flex items-center gap-1.5 rounded-sm px-2.5 py-1 text-12-5 ${
+                  viewMode === mode
+                    ? 'bg-page text-text-primary shadow-flat'
+                    : 'text-text-secondary hover:text-text-primary'
+                }`}
+              >
+                {icon}
+                {label}
+              </button>
+            ))}
+          </div>
 
-        {/* Split-left-pane toggle -- visible only in Split mode (Task 5,
+          {/* Split-left-pane toggle -- visible only in Split mode (Task 5,
         Split mode sub-project). Placement/style is a bounded judgment call:
         the design mockup (PageDown.dc.html) DOES show a Format/Source pill
         pair for this exact choice, but inside the split LEFT PANE's own
@@ -929,109 +956,138 @@ function EditorToolbar({
         would collide (against the pre-existing 'view-mode segmented
         control' test, which clicks 'Split' then immediately queries
         'Source' by exact name) before choosing distinct labels. */}
-        {viewMode === 'split' && (
-          <div className="flex items-center gap-0.5 rounded-md bg-chrome-dark p-0.5">
-            {(
-              [
-                { mode: 'format' as const, label: 'Format' },
-                { mode: 'source' as const, label: 'Source' }
-              ] as const
-            ).map(({ mode, label }) => (
-              <button
-                key={mode}
-                type="button"
-                aria-label={`Split left pane: ${label}`}
-                aria-pressed={splitLeftMode === mode}
-                // Deliberately calls setSplitLeftMode directly rather than
-                // going through a coordination function the way
-                // EditorScreen's own onSetViewMode prop does for the
-                // Format/Split/Source segmented control above -- this is NOT
-                // an oversight; see EditorScreen.tsx's handleSetViewMode doc
-                // comment (item 3) for the full mechanism. Short version:
-                // Split's own left-pane ternary (splitLeftMode === 'source'
-                // ? SourceEditor : the Milkdown page-card) is a real element-
-                // type swap, same as the Format/Source conditional
-                // elsewhere -- so toggling it always unmounts whichever
-                // editor was showing (MilkdownEditor's own unmount cleanup
-                // flushes any pending edit before destroy) and mounts a
-                // fresh instance of the other one, which reads the CURRENT
-                // store content regardless of key. That safety net is
-                // verified directly, not just argued from the mechanism, by
-                // EditorScreen.test.tsx's 'toggling splitLeftMode... does
-                // not lose an in-flight edit' tests (real MilkdownEditor, a
-                // real unflushed edit, a real click on this exact button). If
-                // this ternary's shape ever changes such that the outgoing
-                // and incoming editors could share one instance (no longer a
-                // type swap), this onClick would need to start routing
-                // through an EditorScreen-owned handleSetSplitLeftMode the
-                // same way onSetViewMode already works, not stay a bare
-                // store-action call.
-                onClick={() => setSplitLeftMode(mode)}
-                className={`rounded-sm px-2.5 py-1 text-12-5 ${
-                  splitLeftMode === mode
-                    ? 'bg-page text-text-primary shadow-flat'
-                    : 'text-text-secondary hover:text-text-primary'
-                }`}
-              >
-                {label}
-              </button>
-            ))}
-          </div>
-        )}
+          {viewMode === 'split' && (
+            <div className="flex items-center gap-0.5 rounded-md bg-chrome-dark p-0.5">
+              {(
+                [
+                  { mode: 'format' as const, label: 'Format' },
+                  { mode: 'source' as const, label: 'Source' }
+                ] as const
+              ).map(({ mode, label }) => (
+                <button
+                  key={mode}
+                  type="button"
+                  aria-label={`Split left pane: ${label}`}
+                  aria-pressed={splitLeftMode === mode}
+                  // Deliberately calls setSplitLeftMode directly rather than
+                  // going through a coordination function the way
+                  // EditorScreen's own onSetViewMode prop does for the
+                  // Format/Split/Source segmented control above -- this is NOT
+                  // an oversight; see EditorScreen.tsx's handleSetViewMode doc
+                  // comment (item 3) for the full mechanism. Short version:
+                  // Split's own left-pane ternary (splitLeftMode === 'source'
+                  // ? SourceEditor : the Milkdown page-card) is a real element-
+                  // type swap, same as the Format/Source conditional
+                  // elsewhere -- so toggling it always unmounts whichever
+                  // editor was showing (MilkdownEditor's own unmount cleanup
+                  // flushes any pending edit before destroy) and mounts a
+                  // fresh instance of the other one, which reads the CURRENT
+                  // store content regardless of key. That safety net is
+                  // verified directly, not just argued from the mechanism, by
+                  // EditorScreen.test.tsx's 'toggling splitLeftMode... does
+                  // not lose an in-flight edit' tests (real MilkdownEditor, a
+                  // real unflushed edit, a real click on this exact button). If
+                  // this ternary's shape ever changes such that the outgoing
+                  // and incoming editors could share one instance (no longer a
+                  // type swap), this onClick would need to start routing
+                  // through an EditorScreen-owned handleSetSplitLeftMode the
+                  // same way onSetViewMode already works, not stay a bare
+                  // store-action call.
+                  onClick={() => setSplitLeftMode(mode)}
+                  className={`rounded-sm px-2.5 py-1 text-12-5 ${
+                    splitLeftMode === mode
+                      ? 'bg-page text-text-primary shadow-flat'
+                      : 'text-text-secondary hover:text-text-primary'
+                  }`}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          )}
 
-        <ToolbarIconButton label="Page setup" onClick={openPageSetup}>
-          <Icon strokeWidth={1.6}>
-            <rect x="5" y="3" width="14" height="18" rx="1.5" />
-            <rect x="7.5" y="6" width="9" height="12" rx="0.5" strokeDasharray="1.8 1.8" />
-          </Icon>
-        </ToolbarIconButton>
+          <ToolbarIconButton label="Page setup" onClick={openPageSetup}>
+            <Icon strokeWidth={1.6}>
+              <rect x="5" y="3" width="14" height="18" rx="1.5" />
+              <rect x="7.5" y="6" width="9" height="12" rx="0.5" strokeDasharray="1.8 1.8" />
+            </Icon>
+          </ToolbarIconButton>
 
-        {/* Print, next to Page setup and Export PDF -- reuses the exact same
+          {/* Print, next to Page setup and Export PDF -- reuses the exact same
         pagination harness architecture PDF export does (a fresh, dedicated,
         hidden window per call), so on-screen preview / printed output /
         exported PDF all stay pixel-identical by construction. An icon-only
         button, not a labeled one like Export PDF -- it doesn't need to
         compete for the same visual weight as the primary accent action. */}
-        {/* Keyboard shortcuts reference (ShortcutsHelpModal.tsx). Mod-/ opens
+          {/* Keyboard shortcuts reference (ShortcutsHelpModal.tsx). Mod-/ opens
         the same modal (EditorScreen.tsx's own keydown effect) -- this button
         exists because that shortcut is itself undiscoverable without a
         visible entry point, the same reasoning Find's own toolbar button
         (further left) already established for Mod-F. */}
-        <ToolbarIconButton label="Keyboard shortcuts" onClick={openShortcutsHelp}>
-          <Icon strokeWidth={1.7}>
-            <circle cx="12" cy="12" r="8.5" />
-            <path d="M9.5 9.5a2.5 2.5 0 1 1 3.5 2.3c-.8.4-1 .9-1 1.7" />
-            <circle cx="12" cy="16.3" r="0.4" fill="currentColor" stroke="none" />
-          </Icon>
-        </ToolbarIconButton>
+          <ToolbarIconButton label="Keyboard shortcuts" onClick={openShortcutsHelp}>
+            <Icon strokeWidth={1.7}>
+              <circle cx="12" cy="12" r="8.5" />
+              <path d="M9.5 9.5a2.5 2.5 0 1 1 3.5 2.3c-.8.4-1 .9-1 1.7" />
+              <circle cx="12" cy="16.3" r="0.4" fill="currentColor" stroke="none" />
+            </Icon>
+          </ToolbarIconButton>
 
-        <ToolbarIconButton
-          label={isPrinting ? 'Printing…' : 'Print'}
-          onClick={() => void print()}
-          disabled={isPrinting}
-        >
-          <Icon strokeWidth={1.7}>
-            <rect x="6" y="3" width="12" height="6" rx="0.5" />
-            <rect x="4" y="9" width="16" height="8" rx="1.5" />
-            <rect x="7" y="14" width="10" height="7" rx="0.5" />
-          </Icon>
-        </ToolbarIconButton>
+          <ToolbarIconButton
+            label={isPrinting ? 'Printing…' : 'Print'}
+            onClick={() => void print()}
+            disabled={isPrinting}
+          >
+            <Icon strokeWidth={1.7}>
+              <rect x="6" y="3" width="12" height="6" rx="0.5" />
+              <rect x="4" y="9" width="16" height="8" rx="1.5" />
+              <rect x="7" y="14" width="10" height="7" rx="0.5" />
+            </Icon>
+          </ToolbarIconButton>
 
-        <button
-          type="button"
-          onClick={() => void exportPdf()}
-          disabled={isExporting}
-          className="flex h-8 items-center gap-1.5 rounded-md bg-accent px-3.5 text-12-5 font-semibold text-on-accent transition-colors hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-60"
-        >
-          <Icon strokeWidth={1.9}>
-            <path d="M12 3.5v11" />
-            <path d="M8 11l4 4 4-4" />
-            <path d="M5 18.5h14" />
-          </Icon>
-          {isExporting ? 'Exporting…' : 'Export PDF'}
-        </button>
+          {/* Product-completeness audit 2.3: HTML export. Icon-only, next to
+        Print, for the same reason Print itself is icon-only rather than a
+        labeled button matching Export PDF's own visual weight -- it doesn't
+        need to compete with the primary accent action. See
+        src/main/html-exporter.ts's own module comment for what this format
+        renders (real typography parity via the shared stylesheet) and what
+        it deliberately does not (Mermaid/math stay inert source-text code
+        blocks -- baking those into real output would mean driving the full
+        sandboxed render pipeline from the main process, real separate scope). */}
+          <ToolbarIconButton
+            label={isExportingHtml ? 'Exporting HTML…' : 'Export as HTML'}
+            onClick={() => void exportHtml()}
+            disabled={isExportingHtml}
+          >
+            <Icon strokeWidth={1.7}>
+              <path d="M8.5 8 4.5 12l4 4" />
+              <path d="M15.5 8l4 4-4 4" />
+              <path d="M13 6.5l-2 11" />
+            </Icon>
+          </ToolbarIconButton>
+
+          <button
+            type="button"
+            onClick={() => void exportPdf()}
+            disabled={isExporting}
+            className="flex h-8 items-center gap-1.5 rounded-md bg-accent px-3.5 text-12-5 font-semibold text-on-accent transition-colors hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            <Icon strokeWidth={1.9}>
+              <path d="M12 3.5v11" />
+              <path d="M8 11l4 4 4-4" />
+              <path d="M5 18.5h14" />
+            </Icon>
+            {isExporting ? 'Exporting…' : 'Export PDF'}
+          </button>
+        </div>
       </div>
-    </div>
+      <Toast
+        message={exportNotice?.message ?? null}
+        onDismiss={clearExportNotice}
+        action={
+          exportNotice ? { label: 'Show in Folder', onClick: handleShowExportInFolder } : undefined
+        }
+      />
+    </>
   )
 }
 

@@ -4,6 +4,14 @@ export interface ToastProps {
   message: string | null
   onDismiss: () => void
   durationMs?: number
+  // Optional single action button (e.g. "Show in Folder" on the export
+  // success notice, EditorToolbar.tsx) -- a plain label/onClick pair, kept
+  // deliberately generic (no export-specific naming anywhere in this file)
+  // so this stays the same reusable primitive the undo-barrier notice
+  // already uses unchanged, rather than growing a feature-specific special
+  // case. Omitted entirely renders exactly the plain message-only toast
+  // this component always has.
+  action?: { label: string; onClick: () => void }
 }
 
 // Minimal, reusable, auto-dismissing notification primitive -- deliberately
@@ -20,7 +28,12 @@ export interface ToastProps {
 // The two-pane row lives in the lower/main area of the screen, below the
 // toolbar and tab bar, so anchoring here keeps this toast entirely outside
 // the region that view's bounds can ever cover, regardless of viewMode.
-function Toast({ message, onDismiss, durationMs = 3000 }: ToastProps): React.JSX.Element | null {
+function Toast({
+  message,
+  onDismiss,
+  durationMs = 3000,
+  action
+}: ToastProps): React.JSX.Element | null {
   // Latest-ref treatment for onDismiss, same pattern as onChangeRef/onErrorRef
   // in MilkdownEditor.tsx: updated via its own no-deps effect (never assigned
   // during render -- react-hooks/refs forbids that) so the scheduling effect
@@ -50,9 +63,18 @@ function Toast({ message, onDismiss, durationMs = 3000 }: ToastProps): React.JSX
       <div
         role="status"
         aria-live="polite"
-        className="pointer-events-auto rounded-md bg-chrome-dark px-4 py-2 text-12 text-text-primary shadow-float-sm"
+        className="pointer-events-auto flex items-center gap-3 rounded-md bg-chrome-dark px-4 py-2 text-12 text-text-primary shadow-float-sm"
       >
-        {message}
+        <span>{message}</span>
+        {action && (
+          <button
+            type="button"
+            onClick={action.onClick}
+            className="rounded-sm text-accent underline-offset-2 hover:underline"
+          >
+            {action.label}
+          </button>
+        )}
       </div>
     </div>
   )
