@@ -46,7 +46,13 @@ beforeEach(() => {
     // EditorScreen both call it from an effect cleanup, and a bare vi.fn()
     // returning undefined would throw on unmount.
     onMenuCommand: vi.fn().mockReturnValue(() => {}),
-    setWindowState: vi.fn()
+    setWindowState: vi.fn(),
+    // The window-close guard's two channels. onWindowCloseRequest must
+    // return a real unsubscribe FUNCTION -- App.tsx calls it from an effect
+    // cleanup, same contract as onMenuCommand above.
+    onWindowCloseRequest: vi.fn().mockReturnValue(() => {}),
+    respondToWindowClose: vi.fn(),
+    getStartupWarnings: vi.fn().mockResolvedValue([])
   }
 })
 
@@ -730,16 +736,14 @@ describe('EditorScreen', () => {
     expect(useDocumentStore.getState().content).toBe('# B untouched')
   })
 
-  // Tab-close-confirmation: EditorTabBar's "x" button on a dirty ACTIVE tab
-  // now defers to handleCloseDirtyActiveTab instead of discarding directly.
-  // These mirror the handleGoHome dirty-check tests above -- same
-  // confirm/flush/save/clear-autosave sequence, applied to closing a tab
-  // instead of navigating Home. A dirty BACKGROUND tab's close is NOT
-  // covered here -- it's still a direct, unconfirmed closeTab (the
-  // disclosed, deliberately-unfixed gap), and is covered at the
-  // EditorTabBar level instead (EditorTabBar.test.tsx), since that's where
-  // the discriminator actually lives.
-  describe('closing a dirty active tab via its "x" button', () => {
+  // Tab-close-confirmation: EditorTabBar's "x" button now defers EVERY close
+  // to handleRequestCloseTab instead of discarding directly. These mirror the
+  // handleGoHome dirty-check tests above -- same confirm/flush/save/
+  // clear-autosave sequence, applied to closing a tab instead of navigating
+  // Home. A dirty BACKGROUND tab is covered here too now (it used to be a
+  // direct, unconfirmed closeTab -- and an unrecoverable one, since
+  // useAutosave only ever snapshots the ACTIVE tab).
+  describe('closing a dirty tab via its "x" button', () => {
     function setActiveTabDirty(filePath: string, content: string): void {
       useDocumentStore.setState((state) => ({
         filePath,
@@ -885,6 +889,86 @@ describe('EditorScreen', () => {
       const finalTabB = useDocumentStore.getState().tabs.find((tab) => tab.id === tabB.id)
       expect(finalTabB?.content).toBe('# B clean')
       expect(finalTabB?.isDirty).toBe(false)
+    })
+
+    // The 0.3 fix. Before it, this exact click discarded the tab outright with
+    // no prompt -- and unrecoverably, because useAutosave only ever sees the
+    // ACTIVE tab, so a dirty background tab has no version-history snapshot to
+    // fall back on either.
+    it('prompts before closing a dirty BACKGROUND tab, and keeps it when the user cancels', async () => {
+      const background = {
+        id: 'tab-bg',
+        filePath: '/tmp/background.md',
+        content: '# unsaved background work',
+        isDirty: true,
+        mtimeMs: null,
+        remoteImagesAllowed: null
+      }
+      const foreground = {
+        id: 'tab-fg',
+        filePath: '/tmp/foreground.md',
+        content: '# foreground',
+        isDirty: false,
+        mtimeMs: null,
+        remoteImagesAllowed: null
+      }
+      useDocumentStore.setState({
+        tabs: [background, foreground],
+        activeTabId: foreground.id,
+        content: foreground.content,
+        filePath: foreground.filePath,
+        isDirty: false
+      })
+      vi.mocked(window.api.confirmDiscardChanges).mockResolvedValue('cancel')
+      const user = userEvent.setup()
+      render(<EditorScreen />)
+
+      await user.click(screen.getByRole('button', { name: 'Close background.md' }))
+
+      await waitFor(() => {
+        // Named, so a prompt about a document that was not on screen a moment
+        // ago is answerable.
+        expect(window.api.confirmDiscardChanges).toHaveBeenCalledWith('background.md')
+      })
+      const survivor = useDocumentStore.getState().tabs.find((tab) => tab.id === background.id)
+      expect(survivor).toBeDefined()
+      expect(survivor?.content).toBe('# unsaved background work')
+    })
+
+    it('discards a dirty BACKGROUND tab only after the user says so', async () => {
+      const background = {
+        id: 'tab-bg',
+        filePath: '/tmp/background.md',
+        content: '# unsaved background work',
+        isDirty: true,
+        mtimeMs: null,
+        remoteImagesAllowed: null
+      }
+      const foreground = {
+        id: 'tab-fg',
+        filePath: '/tmp/foreground.md',
+        content: '# foreground',
+        isDirty: false,
+        mtimeMs: null,
+        remoteImagesAllowed: null
+      }
+      useDocumentStore.setState({
+        tabs: [background, foreground],
+        activeTabId: foreground.id,
+        content: foreground.content,
+        filePath: foreground.filePath,
+        isDirty: false
+      })
+      vi.mocked(window.api.confirmDiscardChanges).mockResolvedValue('discard')
+      const user = userEvent.setup()
+      render(<EditorScreen />)
+
+      await user.click(screen.getByRole('button', { name: 'Close background.md' }))
+
+      await waitFor(() => {
+        expect(useDocumentStore.getState().tabs.some((tab) => tab.id === background.id)).toBe(false)
+      })
+      expect(window.api.clearPendingAutosave).toHaveBeenCalledWith('/tmp/background.md')
     })
   })
 

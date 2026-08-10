@@ -1,8 +1,16 @@
 import { readFile, writeFile, rename } from 'node:fs/promises'
 import { join } from 'node:path'
+import { recordConfigWarning } from './config-warnings'
 import type { PageSize, Orientation, PageTheme, PageFontFamily } from '../markdown/page-config'
 
 const PREFERENCES_FILENAME = 'preferences.json'
+
+// Names the consequence AND the fact that the damaged file is still sitting
+// there: nothing rewrites preferences.json until the user next changes a
+// setting, so "everything reset itself" persists across restarts until then.
+const PREFERENCES_UNREADABLE_WARNING =
+  'Your preferences could not be read, so PageDown is using its default settings. ' +
+  'They will be saved again the next time you change a setting.'
 
 // Deliberately a NARROW subset of PageConfig's own fields -- margins/header/
 // footer/pageNumberFormat/customWidth/customHeight are real per-document
@@ -133,10 +141,27 @@ function sanitizePreferences(value: unknown): Preferences {
 // Electron-free (like recent-files.ts's own readRecentFiles/writeRecentFiles)
 // so it stays directly unit-testable against a real temp directory.
 export async function readPreferences(userDataDir: string): Promise<Preferences> {
+  let raw: string
   try {
-    const raw = await readFile(join(userDataDir, PREFERENCES_FILENAME), 'utf8')
+    raw = await readFile(join(userDataDir, PREFERENCES_FILENAME), 'utf8')
+  } catch (err) {
+    // A missing file is the normal first-run state -- see readRecentFiles's
+    // own version of this split for why the read and the parse are separated
+    // rather than sharing one catch.
+    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+      recordConfigWarning(PREFERENCES_UNREADABLE_WARNING)
+    }
+    return { ...DEFAULT_PREFERENCES }
+  }
+  try {
     return sanitizePreferences(JSON.parse(raw))
   } catch {
+    // Only a genuinely unparseable file lands here. sanitizePreferences's own
+    // per-field fallback is deliberately NOT reported: a preferences.json
+    // written by an older version that simply lacks a field is a normal
+    // upgrade, not damage, and warning about it would cry wolf on every
+    // release that adds a preference.
+    recordConfigWarning(PREFERENCES_UNREADABLE_WARNING)
     return { ...DEFAULT_PREFERENCES }
   }
 }

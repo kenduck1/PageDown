@@ -1,4 +1,12 @@
-import { app, shell, BrowserWindow, ipcMain, Menu, type MenuItemConstructorOptions } from 'electron'
+import {
+  app,
+  shell,
+  dialog,
+  BrowserWindow,
+  ipcMain,
+  Menu,
+  type MenuItemConstructorOptions
+} from 'electron'
 import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
@@ -36,7 +44,12 @@ import {
 } from './version-history'
 import { PAGE_WIDTH_PX, PAGE_HEIGHT_PX } from '../typography/page-geometry'
 import { applyWindowUiState, initApplicationMenu, refreshApplicationMenu } from './app-menu'
+import { drainConfigWarnings } from './config-warnings'
 import { MENU_COMMAND_CHANNEL, WINDOW_STATE_CHANNEL, type MenuCommand } from '../menu/commands'
+import {
+  WINDOW_CLOSE_REQUEST_CHANNEL,
+  WINDOW_CLOSE_RESPONSE_CHANNEL
+} from '../window/close-request'
 
 // Must run before app.whenReady() is awaited anywhere — Electron requires
 // protocol.registerSchemesAsPrivileged() to be called before the `ready`
@@ -196,6 +209,123 @@ function destroySplitPreviewHarness(): Promise<void> {
 // per-window Split mode support.
 const documentWindows = new Set<BrowserWindow>()
 
+// ---------------------------------------------------------------------------
+// Window-close / app-quit guard.
+//
+// Before this existed there was NO `close` handler and NO `before-quit`
+// handler anywhere in this file, and no `beforeunload` anywhere in `src/` or
+// `resources/` either -- so closing a window (Cmd+W, the red button, File >
+// Close Window) or quitting (Cmd+Q, File > Exit) discarded every unsaved
+// document with no prompt at all. The app already knew how to ask (the
+// Save/Don't Save/Cancel dialog EditorScreen's "<- Home" button and its
+// dirty-tab close both run); the guard was simply absent from the two exits
+// users actually use.
+//
+// Worst case was TOTAL loss rather than partial: `useAutosave` only fires for
+// a document that already has a file path, so a never-saved "Untitled" tab has
+// no autosave snapshot and nothing in version history to recover from.
+//
+// The renderer, not this process, runs the actual confirmation -- see
+// src/window/close-request.ts for why that direction is forced.
+// ---------------------------------------------------------------------------
+
+// Windows whose close has ALREADY been approved. `win.on('close')` is
+// re-entered when we close the window a second time after approval, and this
+// is what lets that second pass through instead of asking again. A WeakSet so
+// an entry cannot outlive its window.
+const closeApproved = new WeakSet<BrowserWindow>()
+
+// One in-flight approval round trip per window, so mashing Cmd+W while a
+// confirmation dialog is already up cannot start a second round of prompts.
+const pendingCloseApprovals = new WeakMap<BrowserWindow, Promise<boolean>>()
+
+// The `resolve` of the promise above, looked up when the renderer answers.
+const closeResponders = new WeakMap<BrowserWindow, (allow: boolean) => void>()
+
+// Asks a window's renderer whether it is safe to close, resolving true when it
+// is. Never rejects and never hangs on a dead renderer.
+//
+// The three short-circuits are all "there is no unsaved state left to lose, so
+// asking is both impossible and pointless": a destroyed or crashed webContents
+// no longer holds the document store at all, and a window still loading its
+// main frame has not yet had a chance to accumulate an edit. Without them a
+// window closed during startup, or one whose renderer has crashed, would have
+// its close cancelled forever with nothing able to answer -- an unclosable
+// window, which is a worse bug than the one this guard fixes.
+function requestCloseApproval(win: BrowserWindow): Promise<boolean> {
+  const inFlight = pendingCloseApprovals.get(win)
+  if (inFlight) return inFlight
+
+  if (win.isDestroyed()) return Promise.resolve(true)
+  const contents = win.webContents
+  if (contents.isDestroyed() || contents.isCrashed() || contents.isLoadingMainFrame()) {
+    return Promise.resolve(true)
+  }
+
+  const approval = new Promise<boolean>((resolve) => {
+    closeResponders.set(win, resolve)
+    // A renderer that dies mid-prompt must not trap its own window. Both
+    // events are one-shot and harmless if they never fire.
+    contents.once('render-process-gone', () => resolve(true))
+    contents.once('destroyed', () => resolve(true))
+    contents.send(WINDOW_CLOSE_REQUEST_CHANNEL)
+  }).finally(() => {
+    pendingCloseApprovals.delete(win)
+    closeResponders.delete(win)
+  })
+  pendingCloseApprovals.set(win, approval)
+  return approval
+}
+
+// Closes a window through the guard, resolving true once it is genuinely
+// closing. Shared by `win.on('close')` and the quit sequence below so both
+// exits run one implementation.
+async function closeWindowWithApproval(win: BrowserWindow): Promise<boolean> {
+  const allow = await requestCloseApproval(win)
+  if (!allow) return false
+  closeApproved.add(win)
+  if (!win.isDestroyed()) win.close()
+  return true
+}
+
+// Quit is guarded SEPARATELY from window close, because `before-quit` fires
+// BEFORE any window gets a `close` event -- a quit that only relied on the
+// per-window guard would tear every window down without asking anything.
+//
+// The two cannot double-prompt: the loop below marks each window approved
+// before calling close(), so the `close` handler's own first line returns
+// immediately for it.
+let quitApproved = false
+let quitInProgress = false
+
+app.on('before-quit', (event) => {
+  // Second pass, after every window has already confirmed -- let it through.
+  if (quitApproved) return
+  event.preventDefault()
+  // A second Cmd+Q while the first quit is still asking must not restart the
+  // prompts; the in-flight round trip is already covering every window.
+  if (quitInProgress) return
+  quitInProgress = true
+
+  void (async () => {
+    try {
+      // A copied array, not the live Set: closing a window mutates
+      // `documentWindows` from its own 'closed' handler mid-iteration.
+      for (const win of [...documentWindows]) {
+        if (win.isDestroyed()) continue
+        // ONE window cancelling cancels the whole quit -- the same semantics
+        // every document-based app has, and the only safe reading of "Cancel"
+        // when the alternative is discarding that window's work anyway.
+        if (!(await closeWindowWithApproval(win))) return
+      }
+      quitApproved = true
+      app.quit()
+    } finally {
+      quitInProgress = false
+    }
+  })()
+})
+
 // Routes an application-menu command to the window that should act on it.
 //
 // The FOCUSED window, matching the `BrowserWindow.fromWebContents(event.sender)`
@@ -302,6 +432,54 @@ function createWindow(openPath?: string): BrowserWindow {
   })
 
   documentWindows.add(win)
+
+  // The cancelable half of the close guard (see the block above
+  // `documentWindows` for the full rationale). `'close'` -- present tense,
+  // cancelable -- not the pre-existing `'closed'` handler below, which fires
+  // after the window is already destroyed and can no longer stop anything.
+  //
+  // Works with the application menu rather than against it: File > Close
+  // Window is `role: 'close'` and Cmd+Q is `role: 'quit'`, which are exactly
+  // `win.close()` and `app.quit()`, so both arrive here (or at `before-quit`)
+  // with nothing menu-specific to special-case.
+  win.on('close', (event) => {
+    if (closeApproved.has(win)) return
+    event.preventDefault()
+    void closeWindowWithApproval(win)
+  })
+
+  // A renderer crash takes the whole in-memory document store with it, so the
+  // user must at least be TOLD -- before this, `render-process-gone` had no
+  // handler anywhere and a crashed window simply went blank and stayed blank.
+  // Reload is offered rather than performed automatically because reloading is
+  // itself destructive to anything the crash left behind; recovery of a saved
+  // document's unsaved edits goes through the existing autosave-on-open path,
+  // which is what the detail text points at.
+  win.webContents.on('render-process-gone', (_event, details) => {
+    console.error('Renderer process gone', details)
+    if (win.isDestroyed()) return
+    void dialog
+      .showMessageBox(win, {
+        type: 'error',
+        buttons: ['Reload', 'Close Window'],
+        defaultId: 0,
+        cancelId: 1,
+        message: 'This window stopped working and its document view was lost.',
+        detail:
+          'Reload to start this window again. PageDown offers to recover a saved document ' +
+          'from its most recent autosave when you reopen it.'
+      })
+      .then(({ response }) => {
+        if (win.isDestroyed()) return
+        if (response === 0) win.reload()
+        // destroy(), not close(): the close guard would try to ask a renderer
+        // that has already proven it cannot answer.
+        else win.destroy()
+      })
+      .catch((err) => {
+        console.error('Failed to prompt after a renderer crash', err)
+      })
+  })
 
   // Both the thumbnail generator's and the page-count generator's
   // pagination harnesses now live on their own dedicated, never-shown
@@ -479,6 +657,22 @@ app.whenReady().then(() => {
     const win = BrowserWindow.fromWebContents(event.sender)
     if (win) applyWindowUiState(win, state)
   })
+
+  // The renderer's answer to the close guard's question (see the block above
+  // `documentWindows`). Keyed on `event.sender`, so a renderer can only ever
+  // answer for its OWN window -- it never names a window, and cannot approve
+  // anyone else's close. A reply for a window with no pending question (a
+  // duplicate send, or one that arrives after the requester already gave up on
+  // a dead renderer) finds no responder and is dropped.
+  ipcMain.on(WINDOW_CLOSE_RESPONSE_CHANNEL, (event, allow: unknown) => {
+    const win = BrowserWindow.fromWebContents(event.sender)
+    if (!win) return
+    closeResponders.get(win)?.(allow === true)
+  })
+
+  // See src/main/config-warnings.ts. Drains rather than reads, so a corrupt
+  // preferences/recent-files file is surfaced exactly once per app run.
+  ipcMain.handle('app:getStartupWarnings', () => drainConfigWarnings())
 
   const mainWindow = createWindow()
 
@@ -866,8 +1060,14 @@ app.whenReady().then(() => {
   // finds nothing (a request from an already-destroyed window), so this
   // never throws where the old unconditional mainWindow reference never
   // could either.
-  ipcMain.handle('dialog:confirmDiscard', (event) =>
-    confirmDiscardChanges(BrowserWindow.fromWebContents(event.sender) ?? mainWindow)
+  // `documentName` is display-only dialog text (which document is this about),
+  // never a path -- see confirmDiscardChanges in file-io.ts, which coerces and
+  // length-caps it. No isKnownPath rule applies: nothing here touches disk.
+  ipcMain.handle('dialog:confirmDiscard', (event, documentName?: unknown) =>
+    confirmDiscardChanges(
+      BrowserWindow.fromWebContents(event.sender) ?? mainWindow,
+      typeof documentName === 'string' ? documentName : undefined
+    )
   )
 
   // Real Export PDF plumbing (see src/main/pdf-exporter.ts): no isKnownPath

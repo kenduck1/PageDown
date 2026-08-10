@@ -1,8 +1,9 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { DEFAULT_PREFERENCES, readPreferences, writePreferences } from './preferences'
+import { drainConfigWarnings, resetConfigWarningsForTest } from './config-warnings'
 
 describe('readPreferences / writePreferences', () => {
   it('round-trips a real preferences object through a real temp directory', async () => {
@@ -162,6 +163,56 @@ describe('readPreferences / writePreferences', () => {
       )
       const valid = await readPreferences(dir)
       expect(valid.authorName).toBe('Kai')
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+})
+
+// See recent-files.test.ts's own version of these -- same corrupt-config
+// notice, same missing-file-is-normal distinction.
+describe('readPreferences corrupt-file reporting', () => {
+  beforeEach(() => {
+    resetConfigWarningsForTest()
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+  })
+
+  afterEach(() => {
+    vi.restoreAllMocks()
+    resetConfigWarningsForTest()
+  })
+
+  it('records a warning for an unparseable file', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'pagedown-preferences-'))
+    try {
+      await writeFile(join(dir, 'preferences.json'), '{ broken', 'utf8')
+
+      expect(await readPreferences(dir)).toEqual(DEFAULT_PREFERENCES)
+      expect(drainConfigWarnings()).toHaveLength(1)
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('stays SILENT when the file simply does not exist yet', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'pagedown-preferences-'))
+    try {
+      expect(await readPreferences(dir)).toEqual(DEFAULT_PREFERENCES)
+      expect(drainConfigWarnings()).toEqual([])
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('stays SILENT for a well-formed file that is merely missing a field', async () => {
+    // An older release's preferences.json is an ordinary upgrade, not damage.
+    // Warning about it would cry wolf on every release that adds a preference.
+    const dir = await mkdtemp(join(tmpdir(), 'pagedown-preferences-'))
+    try {
+      await writeFile(join(dir, 'preferences.json'), JSON.stringify({ authorName: 'Kai' }), 'utf8')
+
+      expect(await readPreferences(dir)).toEqual({ ...DEFAULT_PREFERENCES, authorName: 'Kai' })
+      expect(drainConfigWarnings()).toEqual([])
     } finally {
       await rm(dir, { recursive: true, force: true })
     }

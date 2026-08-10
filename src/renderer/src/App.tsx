@@ -1,9 +1,11 @@
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { useAppStore } from './store/appStore'
 import { useDocumentStore } from './store/documentStore'
 import { usePreferencesStore } from './store/preferencesStore'
 import { useMenuCommands } from './hooks/useMenuCommands'
 import { useCreateDocument } from './hooks/useCreateDocument'
+import { confirmWindowClose } from './lib/close-guard'
+import Toast from './components/Toast'
 import HomeScreen from './screens/HomeScreen'
 import EditorScreen from './screens/EditorScreen'
 import SettingsScreen from './screens/SettingsScreen'
@@ -20,6 +22,46 @@ function App(): React.JSX.Element {
   const preferences = usePreferencesStore((state) => state.preferences)
   const setPreferences = usePreferencesStore((state) => state.setPreferences)
   const createDocument = useCreateDocument()
+  const [startupWarning, setStartupWarning] = useState<string | null>(null)
+
+  // The renderer half of the window-close / app-quit guard. Subscribed HERE,
+  // not in EditorScreen, because a close request can arrive on any screen --
+  // Home and Settings both leave documentStore's dirty tabs fully intact while
+  // EditorScreen is unmounted, and an effect inside EditorScreen cannot fire
+  // once EditorScreen is gone.
+  //
+  // The response is mandatory in every branch: until it is sent, the main
+  // process keeps this window's close cancelled. A thrown error therefore
+  // answers `false` (stay open) rather than `true` -- refusing to close is
+  // recoverable (the user can fix the problem, save, and close again), while
+  // closing on an error is the exact silent data loss this guard exists to
+  // prevent.
+  useEffect(() => {
+    return window.api.onWindowCloseRequest(() => {
+      confirmWindowClose().then(
+        (allow) => window.api.respondToWindowClose(allow),
+        (err) => {
+          console.error('Failed to confirm window close', err)
+          useDocumentStore.setState({
+            error: 'Could not check for unsaved changes, so this window was kept open.'
+          })
+          window.api.respondToWindowClose(false)
+        }
+      )
+    })
+  }, [])
+
+  // "Your preferences / recent documents could not be read" (see
+  // src/main/config-warnings.ts). Drained, so whichever window asks first is
+  // the one that shows them, once per app run -- a corrupt recents file
+  // silently empties the isKnownPath allowlist, which then makes previously
+  // openable documents fail with "Requested path is not a known recent file"
+  // and no explanation anywhere.
+  useEffect(() => {
+    window.api.getStartupWarnings().then((warnings) => {
+      if (warnings.length > 0) setStartupWarning(warnings.join(' '))
+    })
+  }, [])
 
   // Reports this window's own state to the main process, which is the only
   // place that can act on it: the real OS window title (plus macOS's
@@ -137,9 +179,23 @@ function App(): React.JSX.Element {
     return () => media.removeEventListener('change', applyEffectiveTheme)
   }, [preferences?.colorScheme])
 
-  if (screen === 'editor') return <EditorScreen />
-  if (screen === 'settings') return <SettingsScreen />
-  return <HomeScreen />
+  return (
+    <>
+      {screen === 'editor' ? <EditorScreen /> : null}
+      {screen === 'settings' ? <SettingsScreen /> : null}
+      {screen === 'home' ? <HomeScreen /> : null}
+      {/* Rendered at App level rather than inside a screen: a config-read
+          failure happens at startup, before the user has navigated anywhere,
+          and the notice must not disappear the moment they open a document.
+          Longer than Toast's 3s default -- this one names an action the user
+          may have to take (reopen a document via File > Open). */}
+      <Toast
+        message={startupWarning}
+        onDismiss={() => setStartupWarning(null)}
+        durationMs={12_000}
+      />
+    </>
+  )
 }
 
 export default App

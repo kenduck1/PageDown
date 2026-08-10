@@ -19,6 +19,8 @@ import SelectionBubble from '../components/SelectionBubble'
 import SlashMenu from '../components/SlashMenu'
 import Toast from '../components/Toast'
 import { intersectRect, sameRect, type Rect } from '../lib/floating-position'
+import { setCloseGuardFlush } from '../lib/close-guard'
+import { tabLabel } from '../lib/tab-label'
 import type { SelectionSnapshot } from '../milkdown/selection-plugin'
 import { extractOutline } from '../lib/extractOutline'
 import { isFormatEditing, isSourceEditing } from '../lib/editing-surface'
@@ -76,6 +78,7 @@ function EditorScreen(): React.JSX.Element {
   const replaceContent = useDocumentStore((state) => state.replaceContent)
   const replaceContentForTab = useDocumentStore((state) => state.replaceContentForTab)
   const closeTab = useDocumentStore((state) => state.closeTab)
+  const switchTab = useDocumentStore((state) => state.switchTab)
   const isDirty = useDocumentStore((state) => state.isDirty)
   const error = useDocumentStore((state) => state.error)
   const clearError = useDocumentStore((state) => state.clearError)
@@ -305,6 +308,18 @@ function EditorScreen(): React.JSX.Element {
     }
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [])
+
+  // Publishes the live Milkdown flush to the window-close guard, which runs
+  // from App.tsx (the only component mounted on every screen) and so has no
+  // way to reach `editorRef` itself. Without it, closing the window within
+  // 200ms of a keystroke would read a stale `isDirty: false` and close with no
+  // prompt -- the same debounce race handleSave's own flush() call exists for.
+  // Cleared on unmount so a stale handle can never be called against a
+  // destroyed editor.
+  useEffect(() => {
+    setCloseGuardFlush(() => editorRef.current?.flush())
+    return () => setCloseGuardFlush(null)
   }, [])
 
   const handleSave = async (): Promise<void> => {
@@ -728,49 +743,73 @@ function EditorScreen(): React.JSX.Element {
   }
 
   // Mirrors handleGoHome above -- same confirm/flush/save/clear-autosave
-  // sequence -- but for closing the active tab via EditorTabBar's own "x"
-  // button instead of navigating to Home. Only ever invoked for the
-  // ACTIVE, dirty tab (EditorTabBar's own guard on `onCloseDirtyActiveTab`
-  // ensures that).
+  // sequence -- but for closing a tab via EditorTabBar's own "x" button
+  // instead of navigating to Home.
   //
-  // The 'discard' branch's `filePath` read below is the top-level mirror,
-  // same as handleGoHome, and that IS safe: the only await before it is
-  // confirmDiscardChanges' own native dialog, and Electron makes that modal
-  // to this window (disables it on Windows, sheets it on macOS -- see
-  // file-io.ts's confirmDiscardChanges, which passes `win` as the dialog's
-  // parent), so no tab switch can happen in that gap.
+  // Handles EVERY close now, not just a dirty ACTIVE tab's, and both halves of
+  // that widening close a real silent-data-loss path:
   //
-  // The 'save' branch's post-save check is NOT safe to treat the same way,
-  // and must NOT read the top-level isDirty mirror. save() itself is a
-  // plain async IPC round trip with no modal dialog whenever the document
-  // already has a known path (file-io.ts's saveFile calls writeFile
-  // directly; even its Save-As fallback opens dialog.showSaveDialog with no
-  // parent window, so it isn't modal either) -- the always-visible
-  // EditorTabBar lets the user switch to a DIFFERENT tab while it's in
-  // flight. If they do, and THIS tab's save actually failed, the top-level
-  // mirror reflects the NEWLY active tab by the time save() resolves: if
-  // that other tab happens to be clean, `isDirty` reads false even though
-  // the tab actually being closed is still genuinely dirty, and the old
-  // mirror-based check would fall through to closeTab(tabId) below --
-  // silently discarding real unsaved content whose save just failed. This
-  // is the exact race class replaceContentForTab/updateContentForTab and
-  // handleRestoreVersion's own post-save guard already exist to close (see
-  // their doc comments) -- re-reading the TARGET tab's own entry from the
-  // live `tabs` array by id, not the mirror, is required here too.
-  const handleCloseDirtyActiveTab = async (tabId: string): Promise<void> => {
-    const choice = await window.api.confirmDiscardChanges()
+  //   - A dirty BACKGROUND tab used to go straight to closeTab with no
+  //     confirmation at all. That is unrecoverable rather than merely
+  //     unconfirmed: useAutosave only ever sees the ACTIVE tab (its own
+  //     documented limitation), so a background tab has no version-history
+  //     snapshot to fall back on either.
+  //   - Dirtiness itself was read by EditorTabBar, which cannot know it.
+  //     @milkdown/plugin-listener's onChange is 200ms-debounced, so clicking
+  //     "x" within 200ms of a keystroke read isDirty: false and discarded the
+  //     edit with no prompt. flush() below is what makes the check honest --
+  //     it is a documented no-op when nothing changed since mount, so calling
+  //     it on every close costs nothing.
+  //
+  // The flush is scoped to the ACTIVE tab because that is the only tab the
+  // live Milkdown instance is bound to; a background tab's content is already
+  // fully synced in the store by construction.
+  //
+  // The target tab is re-read from `tabs` BY ID at every decision point,
+  // never from the top-level mirror. For the 'save' branch specifically that
+  // is required, not stylistic: save() is a plain async IPC round trip with no
+  // modal dialog whenever the document already has a known path (file-io.ts's
+  // saveFile calls writeFile directly; even its Save-As fallback opens
+  // dialog.showSaveDialog with no parent window, so it isn't modal either), so
+  // the always-visible EditorTabBar lets the user switch to a DIFFERENT tab
+  // while it's in flight. If they do, and THIS tab's save actually failed, the
+  // mirror describes the NEWLY active tab: if that one happens to be clean,
+  // `isDirty` reads false even though the tab being closed is still genuinely
+  // dirty, and a mirror-based check would fall through to closeTab --
+  // silently discarding real unsaved content whose save just failed. Same race
+  // class replaceContentForTab/updateContentForTab and handleRestoreVersion's
+  // own post-save guard already exist to close.
+  const handleRequestCloseTab = async (tabId: string): Promise<void> => {
+    if (tabId === useDocumentStore.getState().activeTabId) editorRef.current?.flush()
+
+    const target = useDocumentStore.getState().tabs.find((tab) => tab.id === tabId)
+    if (!target) return
+    if (!target.isDirty) {
+      closeTab(tabId)
+      return
+    }
+
+    // Show the document being asked about before asking. Also load-bearing
+    // rather than cosmetic for the 'save' branch: documentStore.save() only
+    // ever writes the ACTIVE tab, so saving a background tab is only reachable
+    // by making it active first. A cancel therefore leaves this tab selected
+    // rather than the one the user was on -- a visible consequence of having
+    // shown what was at stake, preferred over prompting about an invisible
+    // document.
+    if (tabId !== useDocumentStore.getState().activeTabId) switchTab(tabId)
+
+    const choice = await window.api.confirmDiscardChanges(tabLabel(target.filePath))
     if (choice === 'cancel') return
     if (choice === 'save') {
-      editorRef.current?.flush()
       await save()
       const targetTab = useDocumentStore.getState().tabs.find((tab) => tab.id === tabId)
       if (targetTab?.isDirty) return
     }
-    if (choice === 'discard' && filePath) {
+    if (choice === 'discard' && target.filePath) {
       // Same reasoning as handleGoHome's own clearPendingAutosave call --
       // a discarded edit must never silently reappear as "recovered" the
       // next time this file is opened.
-      void window.api.clearPendingAutosave(filePath)
+      void window.api.clearPendingAutosave(target.filePath)
     }
     closeTab(tabId)
   }
@@ -1271,7 +1310,7 @@ function EditorScreen(): React.JSX.Element {
           </button>
         </div>
       )}
-      <EditorTabBar onCloseDirtyActiveTab={handleCloseDirtyActiveTab} />
+      <EditorTabBar onRequestCloseTab={(tabId) => void handleRequestCloseTab(tabId)} />
       <EditorToolbar
         editorRef={editorRef}
         onSetViewMode={handleSetViewMode}

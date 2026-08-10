@@ -7,6 +7,10 @@ import {
   isMenuCommand,
   type MenuCommand
 } from '../menu/commands'
+import {
+  WINDOW_CLOSE_REQUEST_CHANNEL,
+  WINDOW_CLOSE_RESPONSE_CHANNEL
+} from '../window/close-request'
 import type { WindowUiState } from '../menu/window-state'
 
 // Custom APIs for renderer
@@ -27,7 +31,11 @@ const api = {
   // (blocked), matching pipeline.ts's own default-closed posture.
   getPageCount: (content: string, filePath: string | null = null, allowRemoteImages = false) =>
     ipcRenderer.invoke('file:getPageCount', content, filePath, allowRemoteImages),
-  confirmDiscardChanges: () => ipcRenderer.invoke('dialog:confirmDiscard'),
+  // `documentName` is a display-only label for the dialog (which document is
+  // this about) -- see confirmDiscardChanges in src/main/file-io.ts. Omitting
+  // it keeps the original, document-agnostic wording.
+  confirmDiscardChanges: (documentName?: string) =>
+    ipcRenderer.invoke('dialog:confirmDiscard', documentName),
   // `filePath` is optional and used ONLY to resolve the document's local
   // asset references against its own directory (see getPageCount's own
   // comment above) -- the main-process handler validates it with
@@ -125,7 +133,32 @@ const api = {
   // this fires on ordinary UI state changes (screen navigation, view-mode
   // switches, the dirty flag flipping), the same high-frequency-no-result
   // shape as setSplitPreviewBounds above.
-  setWindowState: (state: WindowUiState) => ipcRenderer.send(WINDOW_STATE_CHANNEL, state)
+  setWindowState: (state: WindowUiState) => ipcRenderer.send(WINDOW_STATE_CHANNEL, state),
+  // The window-close guard's two halves (src/window/close-request.ts). This is
+  // this surface's SECOND push channel, and it follows onMenuCommand's own
+  // three rules verbatim: no raw `ipcRenderer.on` is exposed, the
+  // `IpcRendererEvent` (which carries a live privileged `sender` handle) is
+  // stripped rather than forwarded, and a real unsubscribe function is
+  // returned because a bridged callback is never reference-identical to the
+  // one the caller passed, so an `off`-by-function API could never match.
+  //
+  // There is no payload in either direction: the request is "may I close?",
+  // and the answer is one boolean. The main process keys the answer on
+  // `BrowserWindow.fromWebContents(event.sender)`, so a renderer can only ever
+  // answer for its own window -- the renderer cannot name a window to close.
+  onWindowCloseRequest: (callback: () => void) => {
+    const listener = (): void => callback()
+    ipcRenderer.on(WINDOW_CLOSE_REQUEST_CHANNEL, listener)
+    return () => {
+      ipcRenderer.removeListener(WINDOW_CLOSE_REQUEST_CHANNEL, listener)
+    }
+  },
+  respondToWindowClose: (allow: boolean) =>
+    ipcRenderer.send(WINDOW_CLOSE_RESPONSE_CHANNEL, allow === true),
+  // Drains the main process's "your configuration could not be read" notices
+  // (src/main/config-warnings.ts). Deliberately a DRAIN, not a read: the first
+  // window to ask shows them, once per app run.
+  getStartupWarnings: (): Promise<string[]> => ipcRenderer.invoke('app:getStartupWarnings')
 }
 
 // Use `contextBridge` APIs to expose Electron APIs to

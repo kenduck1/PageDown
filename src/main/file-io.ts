@@ -312,13 +312,35 @@ export async function saveDroppedImage(
 
 export type DiscardChangesChoice = 'save' | 'discard' | 'cancel'
 
-export async function confirmDiscardChanges(win: BrowserWindow): Promise<DiscardChangesChoice> {
+// `documentName` names WHICH document is being asked about. Optional, and
+// omitting it reproduces the original wording exactly, because the two
+// original callers (Home navigation, closing the tab you are looking at) are
+// unambiguous on their own -- the document in question is the one on screen.
+// It exists for the window-close/quit guard, which can prompt several times in
+// a row for several different tabs; three identical "Do you want to save the
+// changes you made?" dialogs with nothing distinguishing them is how a user
+// ends up discarding the wrong document.
+//
+// It is renderer-supplied, but it is a display string in a native dialog and
+// nothing else -- it never reaches disk, a path join, or a shell. Coerced to a
+// string and length-capped anyway (a document basename is short; a pathological
+// value should not be able to produce a dialog taller than the screen).
+const MAX_DIALOG_DOCUMENT_NAME = 80
+
+export async function confirmDiscardChanges(
+  win: BrowserWindow,
+  documentName?: string
+): Promise<DiscardChangesChoice> {
+  const name =
+    typeof documentName === 'string' ? documentName.slice(0, MAX_DIALOG_DOCUMENT_NAME) : ''
   const result = await dialog.showMessageBox(win, {
     type: 'warning',
     buttons: ['Save', "Don't Save", 'Cancel'],
     defaultId: 0,
     cancelId: 2,
-    message: 'Do you want to save the changes you made?',
+    message: name
+      ? `Do you want to save the changes you made to “${name}”?`
+      : 'Do you want to save the changes you made?',
     detail: "Your changes will be lost if you don't save them."
   })
   return (['save', 'discard', 'cancel'] as const)[result.response]

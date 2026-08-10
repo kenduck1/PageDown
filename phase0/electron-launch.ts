@@ -42,6 +42,12 @@ export interface IsolatedApp {
 // still well inside Playwright's own worker-teardown budget.
 const CLOSE_TIMEOUT_MS = 15_000
 
+// Upper bound on the pre-close "destroy every window" step (see close()
+// below). Short on purpose: destroying windows is a synchronous main-process
+// operation, so anything slower than this means the app is already wedged and
+// the SIGKILL path is the right answer.
+const DESTROY_WINDOWS_TIMEOUT_MS = 5_000
+
 // Every launch that has not yet been closed, so the worker-exit sweep below
 // can find it. Entries are added BEFORE electron.launch() is awaited (the
 // temp directory already exists by then) and removed by close().
@@ -161,6 +167,41 @@ export async function launchIsolatedApp(args: string[]): Promise<IsolatedApp> {
     userDataDir,
     close: async () => {
       try {
+        // Destroy every window BEFORE app.close(), which is implemented as
+        // `app.quit()` (read from playwright-core's own bundled electron
+        // driver: its custom close handler evaluates `app.quit()` in the node
+        // context). The app now guards quitting: `before-quit` cancels the
+        // quit and asks each window's renderer to confirm any unsaved work,
+        // which for a dirty document opens a genuine native
+        // dialog.showMessageBox that NOTHING in Playwright can dismiss. Many
+        // gates legitimately end with a dirty document on screen, so without
+        // this every one of them would burn the full CLOSE_TIMEOUT_MS below
+        // and end in a SIGKILL.
+        //
+        // `destroy()` rather than `close()` is what makes this work: it is
+        // documented to skip the `close` event entirely, so it bypasses the
+        // guard by construction rather than racing it. That is exactly right
+        // for a test harness -- the assertions have already run, and a gate
+        // deliberately discards its throwaway fixture documents. It is also
+        // honest about what it gives up: this path no longer exercises the
+        // quit guard, which is instead covered by unit tests against the real
+        // decision function (src/renderer/src/lib/close-guard.test.ts), for
+        // the same reason Print and the mtime-conflict feature have no gate.
+        //
+        // BOUNDED, for the same reason app.close() below is: an app that is
+        // already wedged would never service this evaluate either, and an
+        // unbounded await here would reintroduce exactly the "close() never
+        // returns, worker teardown times out, temp directory leaks" failure
+        // the rest of this function exists to prevent. On expiry it simply
+        // falls through to the SIGKILL path.
+        await Promise.race([
+          app
+            .evaluate(({ BrowserWindow }) => {
+              for (const win of BrowserWindow.getAllWindows()) win.destroy()
+            })
+            .catch(() => undefined),
+          new Promise((resolve) => setTimeout(resolve, DESTROY_WINDOWS_TIMEOUT_MS))
+        ])
         // Attach the settle handlers immediately, regardless of which side of
         // the race wins, so a close() that rejects LATER (after the timeout
         // already resolved) can never surface as an unhandled rejection.
