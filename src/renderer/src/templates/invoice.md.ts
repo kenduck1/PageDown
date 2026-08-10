@@ -8,11 +8,11 @@ export const INVOICE_TEMPLATE = `# Invoice
 
 ## Items
 
-| Description | Qty | Rate | Amount |
-| --- | --- | --- | --- |
-| Brand identity design | 1 | $3,200.00 | $3,200.00 |
-| Website homepage mockup | 2 | $850.00 | $1,700.00 |
-| Revisions (hourly) | 4 | $95.00 | $380.00 |
+| Description             | Qty | Rate      | Amount    |
+| ----------------------- | --- | --------- | --------- |
+| Brand identity design   | 1   | $3,200.00 | $3,200.00 |
+| Website homepage mockup | 2   | $850.00   | $1,700.00 |
+| Revisions (hourly)      | 4   | $95.00    | $380.00   |
 
 **Subtotal:** $5,280.00
 

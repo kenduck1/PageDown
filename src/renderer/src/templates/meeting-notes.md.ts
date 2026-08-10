@@ -1,3 +1,12 @@
+// This template is deliberately NOT byte-canonical against Milkdown's
+// round-trip serialization. The sole remaining difference (verified via
+// createTestEditor + EDITOR_SCHEMA_PLUGINS.flat() + getMarkdown()) is that
+// its tight "- [ ] ..." task list comes back LOOSE (a blank line inserted
+// between each item) -- Milkdown's schema doesn't preserve list `spread`
+// (tight vs. loose) on round trip. That's a known Milkdown schema fidelity
+// gap, not a defect in this template, and the list is left exactly as
+// authored rather than pre-loosened to mask the gap. Revisit once `spread`
+// preservation lands; see also newsletter.md.ts.
 export const MEETING_NOTES_TEMPLATE = `# Weekly Sync — Product & Engineering
 
 **Date:** March 3, 2026

@@ -6,11 +6,11 @@ This report covers performance for the most recent quarter across the three main
 
 ## Results
 
-| Product Line | Revenue | Growth |
-| --- | --- | --- |
-| Core Platform | $1.2M | +8% |
-| Mobile | $640K | +15% |
-| Enterprise | $2.1M | +3% |
+| Product Line  | Revenue | Growth |
+| ------------- | ------- | ------ |
+| Core Platform | $1.2M   | +8%    |
+| Mobile        | $640K   | +15%   |
+| Enterprise    | $2.1M   | +3%    |
 
 ## Notes
 
