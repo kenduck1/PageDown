@@ -74,7 +74,15 @@ export interface SlashMenuProps {
   safe: Rect | null
   /** Called when the user picks an item, by click or by the controller's own Enter/Tab handling. */
   onChoose: (item: SlashItem) => void
-  /** Called on pointer hover, so the controller can move activeIndex to match -- mirrors onChoose in shape, not fired on every render. */
+  /**
+   * Called on genuine pointer MOVEMENT over an option, so the controller can
+   * move activeIndex to match -- mirrors onChoose in shape, not fired on
+   * every render. Fix round 1, IMPORTANT I1: wired to `onMouseMove`
+   * specifically, NOT `onMouseEnter` -- see this component's own per-option
+   * handler comment below for the real, reachable bug that distinction
+   * closes (a stationary cursor hijacking keyboard navigation once
+   * scrollIntoView moves the list underneath it).
+   */
   onHover: (index: number) => void
 }
 
@@ -254,7 +262,20 @@ function SlashMenu({
                 id={optionDomId(item.id)}
                 role="option"
                 aria-selected={active}
-                onMouseEnter={() => onHover(index)}
+                // Fix round 1, IMPORTANT I1: onMouseMove, NOT onMouseEnter.
+                // activeOptionRef's own scrollIntoView (above) runs on every
+                // ArrowDown/Up, and this palette is max-h-80 over a
+                // ~600px-tall catalogue -- Chromium dispatches a synthetic
+                // mousemove after a scroll changes what sits under a
+                // STATIONARY cursor, so onMouseEnter fires for whatever item
+                // slides under the pointer mid-scroll, silently overwriting
+                // the index the arrow key just set. The pointer resting over
+                // the palette is the LIKELY case, not an edge case: it opens
+                // anchored at the caret, exactly where the user's mouse
+                // usually already is. onMouseMove only fires on genuine
+                // pointer motion, so a scroll with no real mouse movement
+                // cannot trigger it.
+                onMouseMove={() => onHover(index)}
                 onClick={() => onChoose(item)}
                 className={`flex cursor-pointer flex-col px-3 py-1.5 ${
                   active ? 'bg-accent/9' : 'hover:bg-chrome-light'

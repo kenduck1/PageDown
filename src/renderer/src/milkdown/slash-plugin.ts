@@ -27,14 +27,18 @@ import { findSlashTrigger, MAX_QUERY_LENGTH } from '../lib/slash-query'
 // (slash-items.ts, Task 4) or filterSlashItems (slash-filter.ts, Task 1) --
 // forcing that dependency here would mean every future catalogue change
 // touches this file too. Instead, whoever DOES hold the filtered list
-// (Task 5's useSlashMenu controller) supplies a `countMatching(query)`
-// closure at construction time -- see createSlashPlugin's own comment for
-// why this is dependency injection rather than an external report channel
-// (an earlier version of this file used the latter; fix round 1 replaced it
-// after review found two real, measured costs: a stale-count window between
-// a query changing and the next report, and silent failure -- arrows
-// permanently inert, the empty-list close never firing -- if a caller ever
-// forgot to report).
+// (Task 5's MilkdownEditor.tsx mount effect, which has the live Ctx a
+// catalogue lookup needs) supplies a `countMatching(query, state)` closure
+// AND an `onChooseActive(activeIndex)` closure at construction time -- see
+// createSlashPlugin's own comment for why this is dependency injection
+// rather than an external report channel (an earlier version of this file
+// used the latter for itemCount; fix round 1 replaced it after review found
+// two real, measured costs: a stale-count window between a query changing
+// and the next report, and silent failure -- arrows permanently inert, the
+// empty-list close never firing -- if a caller ever forgot to report).
+// `onChooseActive` closes the equivalent gap for CHOOSING an item -- see its
+// own doc comment (fix round 1, CRITICAL C1) for the real bug it fixes:
+// Enter/Tab were previously swallowed with nothing behind them at all.
 
 /** A live slash-command session: the palette is open and tracking a query. */
 export interface SlashSession {
@@ -105,6 +109,25 @@ export interface SlashPluginState {
 // already had in hand for their own use, just also handed to the injected
 // callback now.
 export type CountMatching = (query: string, state: EditorState) => number
+
+// Fix round 1, CRITICAL C1: Enter/Tab were swallow-ONLY (this file's own
+// header called that out as deliberate -- "this file has no catalogue to
+// run one from" -- but the caller this comment pointed at, useSlashMenu.ts,
+// never actually implemented the other half). Net effect: the palette was
+// mouse-only -- ArrowDown/Up moved the highlight, but Enter/Tab did nothing
+// visible at all, no block inserted, no paragraph split, no feedback.
+// `onChooseActive(activeIndex)` is the fix: called from the Enter/Tab
+// branch with the session's OWN activeIndex, right before `return true`,
+// so choosing-by-keyboard reads the exact same plugin-owned pointer
+// ArrowDown/Up already moves -- no separate, potentially-stale React copy
+// of "which item is active" is ever consulted. This file still resolves
+// nothing about WHICH item that index maps to (see this file's header for
+// why it stays catalogue-free) -- the caller (MilkdownEditor.tsx's mount
+// effect) is expected to re-derive the enabled item list from the LIVE
+// state in the SAME synchronous call this fires from, exactly the way
+// countMatching already does, so the index and the list it indexes into
+// can never disagree.
+export type OnChooseActive = (activeIndex: number) => void
 
 export const slashPluginKey = new PluginKey<SlashPluginState>('pagedownSlash')
 
@@ -343,18 +366,21 @@ function advanceSession(
 }
 
 // Constructed per MOUNT (in MilkdownEditor.tsx, alongside findProse /
-// selectionProse / dropImageProse, Task 5), because it closes over a
-// per-mount callback -- same reasoning as createFindPlugin/
+// selectionProse / dropImageProse, Task 5), because it closes over
+// per-mount callbacks -- same reasoning as createFindPlugin/
 // createSelectionPlugin.
 //
 // `countMatching(query, state)` is supplied by the caller (Task 5's
-// useSlashMenu, which owns the item catalogue, slash-filter.ts's
-// filterSlashItems, AND the live Ctx isEnabled needs) and is expected to be
-// `(query, state) => filterSlashItems(SLASH_ITEMS, query).filter((item) =>
-// item.isEnabled(ctx, state)).length` or equivalent -- see CountMatching's
-// own doc comment above for why `state` was added in fix round 1 (an
-// isEnabled-aware count is NOT a pure function of the query string alone).
-// This file still takes no dependency on the catalogue or on
+// MilkdownEditor.tsx mount effect, which owns the item catalogue,
+// slash-filter.ts's filterSlashItems, AND the live Ctx isEnabled needs) and
+// is expected to be `(query, state) => filterSlashItems(SLASH_ITEMS,
+// query).filter((item) => item.isEnabled(ctx, state)).length` or
+// equivalent -- see CountMatching's own doc comment above for why `state`
+// was added in fix round 1 (an isEnabled-aware count is NOT a pure function
+// of the query string alone). `onChooseActive(activeIndex)` is the SAME
+// caller's second, symmetric obligation -- see OnChooseActive's own doc
+// comment above (fix round 1, CRITICAL C1) for why Enter/Tab were dead keys
+// without it. This file still takes no dependency on the catalogue or on
 // slash-filter.ts/Ctx itself (see this file's header for why); dependency
 // injection is the seam that keeps that true while still letting itemCount
 // be computed synchronously, in the SAME apply that changes the query,
@@ -366,7 +392,8 @@ function advanceSession(
 // reporter.
 export function createSlashPlugin(
   onStateChanged: (session: SlashSession | null) => void,
-  countMatching: CountMatching
+  countMatching: CountMatching,
+  onChooseActive: OnChooseActive
 ): Plugin {
   return new Plugin<SlashPluginState>({
     key: slashPluginKey,
@@ -437,21 +464,28 @@ export function createSlashPlugin(
           }
           case 'Enter':
           case 'Tab':
-            // Swallow ONLY. Which item actually runs is decided by whoever
-            // holds the filtered catalogue (Task 5's useSlashMenu, via its own
-            // keydown handling -- the DOM event still bubbles to it, same
-            // propagates-after-preventDefault behavior the Escape branch below
-            // relies on) -- this file has no catalogue to run one from (see
-            // this file's own header). Returning true here is what stops the
-            // underlying keymap's Enter -> splitBlock/splitListItem/
-            // goToNextTableCell from ever firing while a session is open,
-            // per the design doc's "Keys intercepted while open" section --
-            // that ordering is structural (see the design doc's "Keymap
-            // priority" section), not something tuned here. Directly proven,
-            // not just asserted: this file's own test suite fires a real
-            // Enter with no session open (the paragraph really splits,
-            // childCount 1 -> 2) as the control for the same real Enter with
-            // a session open (it does not split, childCount stays 1).
+            // Fix round 1, CRITICAL C1: this used to be swallow-ONLY, with
+            // no way to actually choose an item by keyboard at all -- see
+            // OnChooseActive's own doc comment for the full writeup of that
+            // bug and why this call is the fix. `session.activeIndex` is
+            // read HERE, synchronously, from this file's own plugin state --
+            // not from any React-mirrored copy that could have drifted
+            // (there is no window for it to: ArrowDown/Up's own dispatch
+            // above and this handler both run inside the same
+            // handleKeyDown, and nothing else in this plugin's own state can
+            // move activeIndex between two keystrokes).
+            //
+            // Returning true is what stops the underlying keymap's Enter ->
+            // splitBlock/splitListItem/goToNextTableCell from ever firing
+            // while a session is open, per the design doc's "Keys
+            // intercepted while open" section -- that ordering is structural
+            // (see the design doc's "Keymap priority" section), not
+            // something tuned here. Directly proven, not just asserted:
+            // this file's own test suite fires a real Enter with no session
+            // open (the paragraph really splits, childCount 1 -> 2) as the
+            // control for the same real Enter with a session open (it does
+            // not split, childCount stays 1).
+            onChooseActive(session.activeIndex)
             return true
           case 'Escape':
             // stopPropagation is load-bearing, not defensive: ProseMirror's

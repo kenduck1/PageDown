@@ -14,6 +14,7 @@ import {
   setActiveSlashIndexIn,
   slashPluginKey,
   type CountMatching,
+  type OnChooseActive,
   type SlashSession
 } from './slash-plugin'
 import { SLASH_ITEMS } from './slash-items'
@@ -57,13 +58,17 @@ const PLENTY = 8
 // old setSlashItemCount external-report channel with this constructor-time
 // dependency injection -- see slash-plugin.ts's own header for why) so tests
 // that don't care about the exact filtered count don't have to supply one.
+// `onChooseActive` (fix round 1, CRITICAL C1) defaults to a no-op for the
+// same reason -- most tests below don't care whether Enter/Tab actually
+// chose anything, only the dedicated describe block further down does.
 async function viewFor(
   markdown: string,
   onStateChanged: (session: SlashSession | null) => void = noop,
-  countMatching: CountMatching = () => PLENTY
+  countMatching: CountMatching = () => PLENTY,
+  onChooseActive: OnChooseActive = noop
 ): Promise<{ view: EditorView; editor: Awaited<ReturnType<typeof createTestEditor>> }> {
   const editor = await createTestEditor(markdown, [
-    $prose(() => createSlashPlugin(onStateChanged, countMatching)),
+    $prose(() => createSlashPlugin(onStateChanged, countMatching, onChooseActive)),
     ...EDITOR_COMMAND_PLUGINS
   ])
   const view = editor.action((ctx) => ctx.get(editorViewCtx)) as EditorView
@@ -441,6 +446,65 @@ describe("slash-plugin: handleKeyDown (real DOM keydowns -- see this file's own 
   })
 })
 
+// === CRITICAL C1 regression, fix round 1 ===
+// Before this fix, Enter/Tab were swallow-ONLY: the "Enter and Tab are
+// swallowed" test above proves defaultPrevented/bubbling, but nothing
+// proved anything downstream of that swallow ever ran -- the palette was
+// mouse-only in the shipped app (ArrowDown/Up moved the highlight, Enter/Tab
+// visibly did nothing). onChooseActive(activeIndex) is the fix; these tests
+// prove the plugin genuinely calls it, with the CURRENT (not stale/initial)
+// activeIndex, only for Enter/Tab, and only while a session is open.
+describe('slash-plugin: onChooseActive (fix round 1, CRITICAL C1)', () => {
+  it('Enter calls onChooseActive with the CURRENT activeIndex, after ArrowDown moved it', async () => {
+    const onChooseActive = vi.fn()
+    const { view } = await viewFor('', noop, () => 5, onChooseActive)
+    openSlashSessionAt(view, 1)
+    fireEvent.keyDown(view.dom, { key: 'ArrowDown' })
+    fireEvent.keyDown(view.dom, { key: 'ArrowDown' })
+    expect(session(view)?.activeIndex).toBe(2)
+    fireEvent.keyDown(view.dom, { key: 'Enter' })
+    expect(onChooseActive).toHaveBeenCalledTimes(1)
+    expect(onChooseActive).toHaveBeenCalledWith(2)
+  })
+
+  it('Tab calls onChooseActive too, with the same activeIndex Enter would use', async () => {
+    const onChooseActive = vi.fn()
+    const { view } = await viewFor('', noop, () => 5, onChooseActive)
+    openSlashSessionAt(view, 1)
+    fireEvent.keyDown(view.dom, { key: 'ArrowUp' }) // wraps backward: 0 -> 4
+    expect(session(view)?.activeIndex).toBe(4)
+    fireEvent.keyDown(view.dom, { key: 'Tab' })
+    expect(onChooseActive).toHaveBeenCalledTimes(1)
+    expect(onChooseActive).toHaveBeenCalledWith(4)
+  })
+
+  it('is called with activeIndex 0 when the session was never navigated -- the common "type / then Enter immediately" case', async () => {
+    const onChooseActive = vi.fn()
+    const { view } = await viewFor('', noop, () => 5, onChooseActive)
+    openSlashSessionAt(view, 1)
+    fireEvent.keyDown(view.dom, { key: 'Enter' })
+    expect(onChooseActive).toHaveBeenCalledWith(0)
+  })
+
+  it('is NOT called for any other key -- ArrowDown/Up, Escape, or a printable character', async () => {
+    const onChooseActive = vi.fn()
+    const { view } = await viewFor('', noop, () => 5, onChooseActive)
+    openSlashSessionAt(view, 1)
+    fireEvent.keyDown(view.dom, { key: 'ArrowDown' })
+    fireEvent.keyDown(view.dom, { key: 'a' })
+    fireEvent.keyDown(view.dom, { key: 'Escape' })
+    expect(onChooseActive).not.toHaveBeenCalled()
+  })
+
+  it('is NOT called when no session is open', async () => {
+    const onChooseActive = vi.fn()
+    const { view } = await viewFor('', noop, () => 5, onChooseActive)
+    fireEvent.keyDown(view.dom, { key: 'Enter' })
+    fireEvent.keyDown(view.dom, { key: 'Tab' })
+    expect(onChooseActive).not.toHaveBeenCalled()
+  })
+})
+
 describe('slash-plugin: itemCount is computed synchronously via the injected countMatching', () => {
   // === IMPORTANT I3, fix round 1 (replacing the old setSlashItemCount tests) ===
   // The previous design reported itemCount IN from outside via a separate
@@ -501,7 +565,7 @@ describe('slash-plugin: itemCount agrees with the real, isEnabled-aware catalogu
       $prose((ctx) => {
         const realCountMatching: CountMatching = (query, state) =>
           filterSlashItems(SLASH_ITEMS, query).filter((item) => item.isEnabled(ctx, state)).length
-        return createSlashPlugin(noop, realCountMatching)
+        return createSlashPlugin(noop, realCountMatching, noop)
       }),
       ...EDITOR_SCHEMA_PLUGINS.flat(),
       ...EDITOR_COMMAND_PLUGINS
@@ -539,7 +603,7 @@ describe('slash-plugin: itemCount agrees with the real, isEnabled-aware catalogu
       $prose((ctx) => {
         const realCountMatching: CountMatching = (query, state) =>
           filterSlashItems(SLASH_ITEMS, query).filter((item) => item.isEnabled(ctx, state)).length
-        return createSlashPlugin(noop, realCountMatching)
+        return createSlashPlugin(noop, realCountMatching, noop)
       }),
       ...EDITOR_SCHEMA_PLUGINS.flat(),
       ...EDITOR_COMMAND_PLUGINS
