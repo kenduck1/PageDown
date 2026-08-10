@@ -17,6 +17,12 @@ export interface CommentComposerProps {
   onAddComment: (text: string) => boolean
 }
 
+// A static id, not one generated via `useId()`, is safe here: appStore's
+// `commentComposerOpen` is a single boolean, so at most one CommentComposer
+// is ever mounted at a time -- there is no second instance a static id could
+// collide with the way there would be for a component rendered in a list.
+const COMMENT_ERROR_ID = 'comment-composer-error'
+
 function CommentComposer({ onAddComment }: CommentComposerProps): ReactElement | null {
   const isOpen = useAppStore((state) => state.commentComposerOpen)
   const closeComposer = useAppStore((state) => state.closeCommentComposer)
@@ -61,6 +67,12 @@ function CommentComposer({ onAddComment }: CommentComposerProps): ReactElement |
         <input
           type="text"
           aria-label="Comment text"
+          // Product-completeness audit Tier 3, B.1: only set (never a bare
+          // `undefined`-vs-omitted split) while an error is actually showing,
+          // so a screen reader user tabbing into this field is told there is
+          // a related description to read (via the id below) exactly when
+          // there is one, and hears nothing extra otherwise.
+          aria-describedby={error ? COMMENT_ERROR_ID : undefined}
           placeholder="Add a comment…"
           autoFocus
           value={text}
@@ -87,7 +99,19 @@ function CommentComposer({ onAddComment }: CommentComposerProps): ReactElement |
           Cancel
         </button>
       </div>
-      {error && <span className="text-11-5 text-red-600">{error}</span>}
+      {/* Product-completeness audit Tier 3, B.1: `role="alert"` announces
+      this the instant it appears (a genuinely discrete failure -- the
+      selection was empty or spanned multiple blocks, see addCommentCommand's
+      own doc comment -- not a value that updates continuously the way
+      FindBar's match count does), and `id`+`aria-describedby` above ties it
+      to the input it's actually ABOUT, so a screen reader reports it as part
+      of that field's own description too, not just as an unrelated aside
+      that happened to be announced around the same time. */}
+      {error && (
+        <span id={COMMENT_ERROR_ID} role="alert" className="text-11-5 text-red-600">
+          {error}
+        </span>
+      )}
     </div>
   )
 }

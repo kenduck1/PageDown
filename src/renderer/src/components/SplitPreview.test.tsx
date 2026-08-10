@@ -238,6 +238,104 @@ describe('SplitPreview', () => {
     consoleError.mockRestore()
   })
 
+  // Product-completeness audit Tier 3, B.3: the console.error above was the
+  // only trace of a failure -- nothing told the USER anything was wrong,
+  // even though the preview kept silently showing stale content.
+  describe('onRenderError', () => {
+    it('reports the failure message when the mount send rejects', async () => {
+      vi.spyOn(console, 'error').mockImplementation(() => {})
+      const error = new Error('harness timed out')
+      window.api.sendSplitPreviewDocument = vi.fn().mockRejectedValue(error)
+      const onRenderError = vi.fn()
+
+      render(
+        <SplitPreview
+          content="# Hi"
+          filePath={null}
+          overlayOpen={false}
+          targetPage={1}
+          onPageChange={vi.fn()}
+          remoteImagesAllowed={false}
+          onRenderError={onRenderError}
+        />
+      )
+
+      await waitFor(() => {
+        expect(onRenderError).toHaveBeenCalledWith('harness timed out')
+      })
+      vi.restoreAllMocks()
+    })
+
+    it('reports null (clears) once a subsequent debounced send succeeds after a failure', async () => {
+      vi.useFakeTimers()
+      vi.spyOn(console, 'error').mockImplementation(() => {})
+      const sendDocument = vi
+        .fn()
+        .mockRejectedValueOnce(new Error('harness timed out'))
+        .mockResolvedValue({ pageCount: 1 })
+      window.api.sendSplitPreviewDocument = sendDocument
+      const onRenderError = vi.fn()
+
+      const { rerender } = render(
+        <SplitPreview
+          content="# Hi"
+          filePath={null}
+          overlayOpen={false}
+          targetPage={1}
+          onPageChange={vi.fn()}
+          remoteImagesAllowed={false}
+          onRenderError={onRenderError}
+        />
+      )
+      await vi.advanceTimersByTimeAsync(0)
+      expect(onRenderError).toHaveBeenLastCalledWith('harness timed out')
+
+      // A real edit (a same-content rerender would be deduped and never
+      // resend at all -- see the dedup tests above) triggers the debounced
+      // retry, which this time succeeds.
+      rerender(
+        <SplitPreview
+          content="# Hi, edited"
+          filePath={null}
+          overlayOpen={false}
+          targetPage={1}
+          onPageChange={vi.fn()}
+          remoteImagesAllowed={false}
+          onRenderError={onRenderError}
+        />
+      )
+      await vi.advanceTimersByTimeAsync(500)
+
+      expect(onRenderError).toHaveBeenLastCalledWith(null)
+      vi.useRealTimers()
+      vi.restoreAllMocks()
+    })
+
+    it('never calls onRenderError when the prop is omitted (optional, no crash)', async () => {
+      const error = new Error('harness timed out')
+      vi.spyOn(console, 'error').mockImplementation(() => {})
+      window.api.sendSplitPreviewDocument = vi.fn().mockRejectedValue(error)
+
+      expect(() => {
+        render(
+          <SplitPreview
+            content="# Hi"
+            filePath={null}
+            overlayOpen={false}
+            targetPage={1}
+            onPageChange={vi.fn()}
+            remoteImagesAllowed={false}
+          />
+        )
+      }).not.toThrow()
+
+      await waitFor(() => {
+        expect(console.error).toHaveBeenCalledWith('Split preview render failed', error)
+      })
+      vi.restoreAllMocks()
+    })
+  })
+
   // Final whole-branch review finding, I2 (Important): a WebContentsView
   // composites above ALL DOM, so the native preview was painting over Page
   // Setup's modal, including its own Apply/Cancel buttons. No setVisible

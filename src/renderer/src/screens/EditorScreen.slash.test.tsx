@@ -147,6 +147,8 @@ beforeEach(() => {
     getPageCount: vi.fn().mockResolvedValue({ pageCount: 1 }),
     confirmDiscardChanges: vi.fn(),
     exportPdf: vi.fn(),
+    exportHtml: vi.fn(),
+    showItemInFolder: vi.fn(),
     print: vi.fn(),
     getPreferences: vi.fn(),
     setPreferences: vi.fn(),
@@ -208,13 +210,21 @@ describe('EditorScreen slash-menu wiring', () => {
   // only fires on blur (or Escape, or the selection leaving the tracked
   // range). Without this call, a palette left open when Mod-/ fires stays
   // open (and focused) underneath the newly-opened modal.
-  it('Mod-/ calls closeSlashMenu() on the handle before opening ShortcutsHelpModal', () => {
+  //
+  // Product-completeness audit Tier 3, C: ShortcutsHelpModal itself is now
+  // rendered by App.tsx, not this screen (a document-scoped tree by
+  // construction, since it renders ONLY `<EditorScreen />` -- App.tsx isn't
+  // mounted here at all), so this asserts on `shortcutsHelpOpen` store state
+  // -- the real, observable effect of this screen's own listener firing --
+  // rather than a dialog element that has no reason to exist in this render
+  // tree. The real dialog-appears proof lives in App.test.tsx.
+  it('Mod-/ calls closeSlashMenu() on the handle and sets shortcutsHelpOpen', () => {
     render(<EditorScreen />)
 
     fireEvent.keyDown(window, { key: '/', metaKey: true })
 
     expect(mockEditorHandle.closeSlashMenu).toHaveBeenCalledTimes(1)
-    expect(screen.getByRole('dialog', { name: 'Keyboard shortcuts' })).toBeInTheDocument()
+    expect(useAppStore.getState().shortcutsHelpOpen).toBe(true)
   })
 
   it('Ctrl-/ also calls closeSlashMenu() -- same handler, non-Mac convention', () => {

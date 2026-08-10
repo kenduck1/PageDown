@@ -23,6 +23,8 @@ beforeEach(() => {
     getPageCount: vi.fn().mockResolvedValue({ pageCount: 1 }),
     confirmDiscardChanges: vi.fn(),
     exportPdf: vi.fn(),
+    exportHtml: vi.fn(),
+    showItemInFolder: vi.fn(),
     print: vi.fn(),
     // HomeScreen.tsx never calls these directly -- App.tsx's own
     // getPreferences() call feeds usePreferencesStore, which HomeScreen only
@@ -42,7 +44,15 @@ beforeEach(() => {
     scrollSplitPreviewToPage: vi.fn(),
     getSplitPreviewPage: vi.fn(),
     saveDroppedImage: vi.fn(),
-    openInNewWindow: vi.fn(),
+    // Resolved, not a bare `vi.fn()` (which returns `undefined`) -- this
+    // file's own tests click the real "Open in new window" button, and
+    // handleOpenInNewWindow now calls `.catch()` on the real return value
+    // (product-completeness audit Tier 3, B.2), matching the real preload
+    // API's actual `Promise<void>` contract. A bare `vi.fn()` here made even
+    // the pre-existing success-path test throw `Cannot read properties of
+    // undefined (reading 'catch')` -- caught by running this file's suite,
+    // not assumed.
+    openInNewWindow: vi.fn().mockResolvedValue(undefined),
     // The application menu's two channels. Both are stubbed in every
     // window.api fixture because window.api is a fully-typed FileApi here --
     // a missing method is a compile error, not just a runtime one.
@@ -114,6 +124,18 @@ describe('HomeScreen', () => {
 
     expect(await screen.findByText('Permission denied')).toBeInTheDocument()
     expect(useAppStore.getState().screen).toBe('home')
+  })
+
+  // Product-completeness audit Tier 3, B.1: this banner had no role at all,
+  // so a failed open was invisible to a screen-reader user.
+  it('announces the error banner via role="alert"', async () => {
+    vi.mocked(window.api.openFile).mockRejectedValue(new Error('Permission denied'))
+    const user = userEvent.setup()
+    render(<HomeScreen />)
+
+    await user.click(screen.getByRole('button', { name: 'Open file…' }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Permission denied')
   })
 
   it('clears the error when "Dismiss" is clicked', async () => {
@@ -204,6 +226,32 @@ describe('HomeScreen', () => {
     expect(window.api.openPath).not.toHaveBeenCalled()
     expect(useAppStore.getState().screen).toBe('home')
     expect(useDocumentStore.getState().filePath).toBeNull()
+  })
+
+  // Product-completeness audit Tier 3, B.2: a rejected openInNewWindow() used
+  // to vanish as an unhandled promise rejection -- the button looked dead,
+  // with not even a console.error. Real regression test, not just a
+  // `.catch()` existing: this asserts the observable failure surface.
+  it('"Open in new window" surfaces a real error, and logs it, when the IPC call rejects', async () => {
+    vi.mocked(window.api.getRecentFiles).mockResolvedValue([
+      { filePath: '/tmp/report.md', editedAt: new Date().toISOString(), exists: true }
+    ])
+    vi.mocked(window.api.openInNewWindow).mockRejectedValue(new Error('window creation failed'))
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const user = userEvent.setup()
+    render(<HomeScreen />)
+
+    await screen.findByText('report.md')
+    await user.click(screen.getByRole('button', { name: 'Open in new window' }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'Could not open this document in a new window.'
+    )
+    expect(consoleError).toHaveBeenCalledWith('Failed to open in new window', expect.any(Error))
+    // Still hasn't navigated or loaded anything into THIS window.
+    expect(useAppStore.getState().screen).toBe('home')
+    expect(useDocumentStore.getState().filePath).toBeNull()
+    consoleError.mockRestore()
   })
 
   // Product-completeness audit 0.6: "Remove from recents" / "Clear recents".

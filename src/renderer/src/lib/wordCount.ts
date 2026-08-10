@@ -4,7 +4,7 @@ import remarkGfm from 'remark-gfm'
 import remarkFrontmatter from 'remark-frontmatter'
 import { visit, SKIP } from 'unist-util-visit'
 import type { Node } from 'unist'
-import type { Root, Text, InlineCode } from 'mdast'
+import type { Root, Text, InlineCode, Html } from 'mdast'
 
 // Same parser configuration `src/markdown/pipeline.ts`'s own `markdownToHtml`
 // uses for parsing (remark-parse + remark-gfm + remark-frontmatter) -- this
@@ -48,6 +48,29 @@ const processor = unified().use(remarkParse).use(remarkGfm).use(remarkFrontmatte
 // not by further top-level matches).
 const TEXT_CONTAINER_TYPES = new Set(['paragraph', 'heading', 'tableCell'])
 
+// Extracts the reader-visible plain text out of a raw-HTML mdast node's
+// literal `value` -- fixing a real, disclosed counting gap: a bare `html`
+// node (a block-level `<div>...</div>`, or one half of an inline tag pair
+// split out by remark-parse -- see the two call sites below) previously
+// contributed nothing at all to the count, even though `pipeline.ts`
+// (CLAUDE.md's "Raw HTML and the <!-- pagebreak --> marker survive
+// markdownToHtml" section) renders this exact text as real, visible document
+// content. Comments are stripped FIRST, and ENTIRELY (delimiters and
+// content, non-greedily so two adjacent comments -- e.g. the Comments
+// feature's own `<!--comment ...-->marked text<!--/comment ...-->` marker
+// pair, which CommonMark's HTML-block-type-2 rule can collapse into a
+// SINGLE html node when it opens a line, see CLAUDE.md's Comments section --
+// don't merge into one over-greedy match) -- a comment is never reader-
+// visible, regardless of what text it contains (this is also what keeps the
+// existing `<!-- pagebreak -->` test at 0 words: the whole marker IS one
+// comment, so it fully disappears here before tag-stripping even runs).
+// Remaining tags are then replaced with a single space rather than deleted
+// outright, so "<div>Real text</div>" doesn't glue onto adjacent content
+// with no boundary between them.
+function htmlNodeText(value: string): string {
+  return value.replace(/<!--[\s\S]*?-->/g, ' ').replace(/<[^>]*>/g, ' ')
+}
+
 // Recursively concatenates ALL inline text within a single leaf-block node
 // (paragraph/heading/tableCell) into one string, BEFORE any word-splitting
 // happens. This is the fix for a real counting bug: splitting each `text`/
@@ -75,6 +98,20 @@ function concatenateInlineText(node: Node): string {
   if (node.type === 'break') {
     return ' '
   }
+  // Inline raw HTML -- e.g. the lone `<span>`/`</span>` delimiter nodes
+  // remark-parse splits out around real markdown ("Before <span>text
+  // **bold**...") sit as siblings of ordinary `text`/`strong` nodes, which
+  // already count the visible words between them correctly with no help
+  // from this branch (this is a no-op for a bare tag: stripping tags from
+  // "<span>" alone leaves nothing). It matters for the case CommonMark
+  // folds an ENTIRE tag-plus-text run into one `html` node's `value`
+  // instead of splitting it (a comment-marker pair opening a line -- see
+  // htmlNodeText's own comment) -- without this branch, the real words
+  // sitting inside that one node's value were invisible to this function
+  // entirely.
+  if (node.type === 'html') {
+    return htmlNodeText((node as Html).value)
+  }
   const children = (node as { children?: Node[] }).children
   if (Array.isArray(children)) {
     return children.map(concatenateInlineText).join('')
@@ -94,6 +131,68 @@ function concatenateInlineText(node: Node): string {
 // tools like Word/Google Docs) think about "word count" for real prose.
 const WORD_RE = /\S+/g
 
+export interface TextStats {
+  words: number
+  /**
+   * Count of characters in the same rendered, reader-visible text `words`
+   * is drawn from -- i.e. the concatenated text of every paragraph/heading/
+   * table-cell leaf block, not `markdown.length`. Deliberately mirrors
+   * `words`'s own exclusions (frontmatter, fenced/indented code) rather than
+   * a raw byte count of the source: a "1,234 characters" reading that
+   * counted `**`/`#`/frontmatter YAML/code-fence backticks as "characters"
+   * would disagree with the word count sitting right next to it in the
+   * status bar over what "this document" even means, for no benefit -- a
+   * raw source byte count is one keystroke away already (most OS file
+   * managers report it), and isn't the number a writer means by "character
+   * count" anyway (Word/Google Docs both count the rendered document, not
+   * its underlying markup).
+   */
+  characters: number
+}
+
+// Single parse, single tree walk, both counts -- extracted out of countWords
+// once EditorStatusBar needed a second statistic (characters) computed from
+// the SAME already-expensive remark parse of the SAME content on the SAME
+// render. Two independent exported functions each doing their own
+// `processor.parse` would silently double this module's per-call cost right
+// as the point of debouncing it (see EditorStatusBar.tsx) was to reduce how
+// often that cost is paid at all.
+function computeTextStats(markdown: string): TextStats {
+  const tree = processor.parse(markdown) as Root
+  let words = 0
+  let characters = 0
+  visit(tree, (node) => {
+    // A BLOCK-level raw-HTML node (a `<div>...</div>` on its own, a sibling
+    // of `paragraph`/`heading` at the root or inside a list item/blockquote)
+    // -- not reachable through TEXT_CONTAINER_TYPES below at all, since it
+    // never matches 'paragraph'/'heading'/'tableCell' itself. An INLINE
+    // `html` node (nested inside a paragraph's own children) never reaches
+    // this branch in the first place: the paragraph is visited first, is
+    // handled below, and returns SKIP, so `visit` never separately descends
+    // into its children to find this node independently -- it was already
+    // folded in via concatenateInlineText's own 'html' handling above.
+    if (node.type === 'html') {
+      const text = htmlNodeText((node as Html).value)
+      const matches = text.match(WORD_RE)
+      if (matches) words += matches.length
+      characters += text.length
+      return
+    }
+    if (!TEXT_CONTAINER_TYPES.has(node.type)) return
+    const text = concatenateInlineText(node)
+    const matches = text.match(WORD_RE)
+    if (matches) words += matches.length
+    characters += text.length
+    // Already consumed this whole subtree via concatenateInlineText above
+    // -- no need for `visit`'s own traversal to separately descend into
+    // it too (and structurally, none of paragraph/heading/tableCell can
+    // nest inside another one anyway, so this is a pure efficiency gain,
+    // not load-bearing for correctness).
+    return SKIP
+  })
+  return { words, characters }
+}
+
 /**
  * Returns an accurate count of the real prose words in a raw Markdown
  * document -- i.e. what a reader would see once the document is rendered,
@@ -106,21 +205,31 @@ const WORD_RE = /\S+/g
  * whitespace between them (a bold/italic/linked/coded word at the end of a
  * sentence, or an emphasized word-fragment) is counted correctly instead of
  * being split into extra spurious tokens.
+ *
+ * Signature/behavior unchanged from before `computeTextStats` was extracted
+ * -- this is still a single-purpose "give me the word count" entry point,
+ * kept for every existing caller/test. A caller that also wants the
+ * character count should call `analyzeText` instead of calling this AND
+ * `countCharacters` separately, which would parse the same document twice.
  */
 export function countWords(markdown: string): number {
-  const tree = processor.parse(markdown) as Root
-  let count = 0
-  visit(tree, (node) => {
-    if (!TEXT_CONTAINER_TYPES.has(node.type)) return
-    const text = concatenateInlineText(node)
-    const matches = text.match(WORD_RE)
-    if (matches) count += matches.length
-    // Already consumed this whole subtree via concatenateInlineText above
-    // -- no need for `visit`'s own traversal to separately descend into
-    // it too (and structurally, none of paragraph/heading/tableCell can
-    // nest inside another one anyway, so this is a pure efficiency gain,
-    // not load-bearing for correctness).
-    return SKIP
-  })
-  return count
+  return computeTextStats(markdown).words
+}
+
+/** Character-count-only counterpart to `countWords` -- see `TextStats.characters`
+ * for exactly what is/isn't counted. Prefer `analyzeText` over calling this
+ * alongside `countWords` for the same content; each call here is a fresh,
+ * independent parse.
+ */
+export function countCharacters(markdown: string): number {
+  return computeTextStats(markdown).characters
+}
+
+/**
+ * Both statistics from one parse -- the entry point EditorStatusBar actually
+ * uses, since it always wants both numbers together and a single shared
+ * parse is strictly cheaper than `countWords(x)` plus `countCharacters(x)`.
+ */
+export function analyzeText(markdown: string): TextStats {
+  return computeTextStats(markdown)
 }

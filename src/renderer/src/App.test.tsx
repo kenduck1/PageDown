@@ -1,6 +1,6 @@
 import { act } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import App from './App'
 import { useAppStore, initialAppState } from './store/appStore'
@@ -34,6 +34,8 @@ beforeEach(() => {
     getPageCount: vi.fn().mockResolvedValue({ pageCount: 1 }),
     confirmDiscardChanges: vi.fn(),
     exportPdf: vi.fn(),
+    exportHtml: vi.fn(),
+    showItemInFolder: vi.fn(),
     print: vi.fn(),
     getPreferences: vi.fn().mockResolvedValue({
       spellcheckEnabled: true,
@@ -467,6 +469,107 @@ describe('App', () => {
       await screen.findByText('PageDown')
 
       expect(screen.queryByRole('status')).not.toBeInTheDocument()
+    })
+  })
+
+  // Product-completeness audit Tier 3, C: ShortcutsHelpModal (and its Mod-/
+  // shortcut) used to be owned entirely by EditorScreen -- unreachable from
+  // Home or Settings, where "there is no way to see the keyboard reference"
+  // and "nothing on Home says what this app is or that Split/Source modes
+  // exist" (the audit's own framing). Hoisted here so it works from every
+  // screen; these tests are the proof, one per screen, not just "it works
+  // somewhere."
+  describe('keyboard shortcuts reference modal (works from every screen)', () => {
+    it('Mod-/ opens it from the Home screen', async () => {
+      render(<App />)
+      await screen.findByText('PageDown')
+      expect(screen.queryByRole('dialog', { name: 'Keyboard shortcuts' })).not.toBeInTheDocument()
+
+      fireEvent.keyDown(window, { key: '/', metaKey: true })
+
+      expect(screen.getByRole('dialog', { name: 'Keyboard shortcuts' })).toBeInTheDocument()
+      expect(useAppStore.getState().shortcutsHelpOpen).toBe(true)
+    })
+
+    it('Ctrl-/ (non-Mac convention) also opens it from Home', async () => {
+      render(<App />)
+      await screen.findByText('PageDown')
+
+      fireEvent.keyDown(window, { key: '/', ctrlKey: true })
+
+      expect(screen.getByRole('dialog', { name: 'Keyboard shortcuts' })).toBeInTheDocument()
+    })
+
+    it('a bare "/" with no modifier does not open it', async () => {
+      render(<App />)
+      await screen.findByText('PageDown')
+
+      fireEvent.keyDown(window, { key: '/' })
+
+      expect(screen.queryByRole('dialog', { name: 'Keyboard shortcuts' })).not.toBeInTheDocument()
+    })
+
+    it('Mod-/ opens it from the Settings screen', async () => {
+      render(<App />)
+      await screen.findByText('PageDown')
+      act(() => {
+        useAppStore.setState({ screen: 'settings' })
+      })
+
+      fireEvent.keyDown(window, { key: '/', metaKey: true })
+
+      expect(screen.getByRole('dialog', { name: 'Keyboard shortcuts' })).toBeInTheDocument()
+    })
+
+    it('Mod-/ still opens it from the Editor screen', async () => {
+      render(<App />)
+      await screen.findByText('PageDown')
+      act(() => {
+        useAppStore.setState({ screen: 'editor' })
+      })
+
+      fireEvent.keyDown(window, { key: '/', metaKey: true })
+
+      expect(screen.getByRole('dialog', { name: 'Keyboard shortcuts' })).toBeInTheDocument()
+    })
+
+    it('the app:shortcuts menu command opens it from Home, not just the keyboard shortcut', async () => {
+      render(<App />)
+      await screen.findByText('PageDown')
+
+      emitMenuCommand('app:shortcuts')
+
+      expect(screen.getByRole('dialog', { name: 'Keyboard shortcuts' })).toBeInTheDocument()
+    })
+
+    it('closing it (Close button) restores focus and leaves the underlying screen usable', async () => {
+      const user = userEvent.setup()
+      render(<App />)
+      await screen.findByText('PageDown')
+
+      fireEvent.keyDown(window, { key: '/', metaKey: true })
+      expect(screen.getByRole('dialog', { name: 'Keyboard shortcuts' })).toBeInTheDocument()
+
+      await user.click(screen.getByRole('button', { name: 'Close' }))
+
+      expect(screen.queryByRole('dialog', { name: 'Keyboard shortcuts' })).not.toBeInTheDocument()
+      expect(useAppStore.getState().shortcutsHelpOpen).toBe(false)
+    })
+
+    // Rendered exactly ONCE, at App level -- EditorScreen used to render its
+    // own copy too. Two simultaneous instances would mean two independent
+    // useModalDialog focus traps fighting over the same Escape keystroke and
+    // the same focus-restore target.
+    it('renders only ONE instance of the modal while a document is open', async () => {
+      render(<App />)
+      await screen.findByText('PageDown')
+      act(() => {
+        useAppStore.setState({ screen: 'editor' })
+      })
+
+      fireEvent.keyDown(window, { key: '/', metaKey: true })
+
+      expect(screen.getAllByRole('dialog', { name: 'Keyboard shortcuts' })).toHaveLength(1)
     })
   })
 })
