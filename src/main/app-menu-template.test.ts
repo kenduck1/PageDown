@@ -238,12 +238,21 @@ describe('buildAppMenuTemplate: enablement', () => {
     expect(itemIn(submenuOf(template, 'PageDown'), 'Preferences…').enabled).not.toBe(false)
   })
 
-  it('gates Keyboard Shortcuts on a document being open, because its modal lives there', () => {
-    // Not symmetry with the File items -- ShortcutsHelpModal is rendered by
-    // EditorScreen alone, so `app:shortcuts` reaches no handler at all on
-    // Home or Settings. Enabled-but-silent is worse than greyed.
+  it('leaves Keyboard Shortcuts enabled on EVERY screen, unlike the File and View items', () => {
+    // This deliberately inverts what it used to assert. The item was
+    // originally gated on documentOpen for a real reason -- ShortcutsHelpModal
+    // was rendered by EditorScreen alone, so `app:shortcuts` reached no
+    // handler at all on Home or Settings, and enabled-but-silent is worse
+    // than greyed. That reason is gone: the modal is now hoisted to App.tsx,
+    // which owns a screen-agnostic Mod-/ listener and registers the command
+    // with useMenuCommands, so a handler exists everywhere.
+    //
+    // Keeping it enabled matters more here than for any other item: this is
+    // the app's only in-product documentation, and gating it made that
+    // documentation unreachable until the user was already inside a document
+    // -- precisely when they least need to look up how to open one.
     const closed = build({ state: DEFAULT_WINDOW_UI_STATE }).template
-    expect(itemIn(submenuOf(closed, 'Help'), 'Keyboard Shortcuts').enabled).toBe(false)
+    expect(itemIn(submenuOf(closed, 'Help'), 'Keyboard Shortcuts').enabled).toBe(true)
     const open = build({ state: EDITING }).template
     expect(itemIn(submenuOf(open, 'Help'), 'Keyboard Shortcuts').enabled).toBe(true)
   })
