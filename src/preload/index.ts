@@ -158,7 +158,10 @@ const api = {
   // Drains the main process's "your configuration could not be read" notices
   // (src/main/config-warnings.ts). Deliberately a DRAIN, not a read: the first
   // window to ask shows them, once per app run.
-  getStartupWarnings: (): Promise<string[]> => ipcRenderer.invoke('app:getStartupWarnings')
+  getStartupWarnings: (): Promise<string[]> => ipcRenderer.invoke('app:getStartupWarnings'),
+  // package.json's real version, via the main process's own app.getVersion()
+  // -- the renderer has no direct Node/Electron access to read it itself.
+  getAppVersion: (): Promise<string> => ipcRenderer.invoke('app:getVersion')
 }
 
 // Use `contextBridge` APIs to expose Electron APIs to

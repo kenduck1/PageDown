@@ -177,6 +177,8 @@ export interface FileApi {
   // "Your configuration could not be read" notices collected during startup
   // (src/main/config-warnings.ts). Drains: the first caller gets them, once.
   getStartupWarnings: () => Promise<string[]>
+  // package.json's real, running version (main process's app.getVersion()).
+  getAppVersion: () => Promise<string>
 }
 
 declare global {
