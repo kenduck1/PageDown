@@ -116,5 +116,53 @@
     "splitTableCount": 0,
     "orderedListCount": 4,
     "diagramBoxes": []
+  },
+  "code-blocks-spanning-pages.md": {
+    "pageCount": 6,
+    "perPageHeadings": [
+      [
+        {
+          "tag": "H1",
+          "text": "API Client Integration Guide",
+          "breakAfterAvoid": true
+        },
+        {
+          "tag": "H2",
+          "text": "Installation",
+          "breakAfterAvoid": true
+        },
+        {
+          "tag": "H2",
+          "text": "Configuration",
+          "breakAfterAvoid": true
+        }
+      ],
+      [
+        {
+          "tag": "H2",
+          "text": "Example: A Rate-Limited Request Queue",
+          "breakAfterAvoid": true
+        }
+      ],
+      [],
+      [],
+      [],
+      [
+        {
+          "tag": "H2",
+          "text": "Handling 429 Responses",
+          "breakAfterAvoid": true
+        },
+        {
+          "tag": "H2",
+          "text": "Summary",
+          "breakAfterAvoid": true
+        }
+      ]
+    ],
+    "tableCount": 0,
+    "splitTableCount": 0,
+    "orderedListCount": 0,
+    "diagramBoxes": []
   }
 }
