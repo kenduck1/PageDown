@@ -92,6 +92,11 @@ const CATEGORIES: ShortcutCategory[] = [
       // against this list and pinned by app-menu-template.test.ts's
       // "never reuses one accelerator" sweep.
       { keys: `${MOD}${ALT}E`, description: 'Export as HTML…' },
+      // Third on the same base key. Listed because the File menu is .docx
+      // export's ONLY trigger -- it has no toolbar button to discover it by --
+      // so an omission here would leave the feature's only keyboard route
+      // undocumented in the app's only in-product documentation.
+      { keys: `${MOD}${ALT}${SHIFT}E`, description: 'Export as Word…' },
       { keys: `${MOD}P`, description: 'Print…' },
       { keys: `${MOD}${SHIFT}P`, description: 'Page setup…' },
       // Second-pass product-completeness audit: Cmd+W used to BE Close

@@ -51,7 +51,6 @@ import remarkMath from 'remark-math'
 import { visit } from 'unist-util-visit'
 import type {
   Blockquote,
-  Code,
   Definition,
   FootnoteDefinition,
   Heading,
@@ -94,6 +93,7 @@ import {
   TableRow,
   TextRun,
   WidthType,
+  type ILevelsOptions,
   type IParagraphOptions,
   type IRunPropertiesOptions,
   type ParagraphChild
@@ -356,7 +356,7 @@ class DocxBuilder {
   private readonly footnoteNumbers = new Map<string, number>()
   private readonly footnoteDefinitions = new Map<string, FootnoteDefinition>()
   /** One numbering config per ordered list, so each restarts at its own `start`. */
-  private readonly numberingConfigs: { reference: string; levels: object[] }[] = []
+  private readonly numberingConfigs: { reference: string; levels: ILevelsOptions[] }[] = []
   private orderedListCount = 0
   private quoteDepth = 0
 
@@ -564,9 +564,10 @@ class DocxBuilder {
   private renderBlock(node: RootContent): (Paragraph | Table)[] {
     switch (node.type) {
       // Frontmatter must never appear as body text -- it is configuration,
-      // and it is already consumed above via resolvePageConfig.
+      // and it is already consumed above via resolvePageConfig. Only `yaml` is
+      // listed because parseDocxTree enables remark-frontmatter for yaml only
+      // (matching pipeline.ts), so a `toml` node cannot occur.
       case 'yaml':
-      case 'toml':
         return []
       // Reference-link definitions are resolved inline (collectDefinitions);
       // the definition line itself is not document text.
@@ -602,14 +603,14 @@ class DocxBuilder {
       case 'list':
         return this.renderList(node as List, 0)
       case 'code':
-        return [this.renderCode(node as Code)]
+        return [this.renderCode(node as { value: string })]
       case 'math':
         // Matches HTML export's own disclosed choice exactly: math stays an
         // inert source-text block. Converting LaTeX to OOXML's OMML is a real
         // project (a second, independent maths typesetter), not something to
         // half-build inside an exporter -- and silently DROPPING an equation
         // would be strictly worse than showing its source.
-        return [this.renderCode({ type: 'code', lang: 'math', value: (node as Code).value })]
+        return [this.renderCode({ value: (node as { value: string }).value })]
       case 'table':
         return [this.renderTable(node as MdTable)]
       case 'comment':
@@ -795,7 +796,10 @@ class DocxBuilder {
     return { bullet: { level: Math.min(depth, 8) } }
   }
 
-  private renderCode(node: Code): Paragraph {
+  // Takes the narrow shape it actually uses rather than a `Code` node, so the
+  // block-math case can reuse it without a cast between two unrelated mdast
+  // types.
+  private renderCode(node: { value: string }): Paragraph {
     // ONE paragraph with hard line breaks between lines, not one paragraph per
     // line. Shading is a paragraph property, so per-line paragraphs would
     // produce a stack of separately-shaded strips with visible seams between
@@ -985,17 +989,34 @@ class DocxBuilder {
         // See renderBlock's own `html` case: the tags go, the prose between
         // them is a sibling node and stays.
         return []
-      case 'footnoteDefinition':
-        return []
       default:
-        if ('children' in node && Array.isArray(node.children)) {
-          return this.renderInline(node.children as PhrasingContent[], inherited)
-        }
-        if ('value' in node && typeof node.value === 'string') {
-          return [new TextRun({ ...inherited, text: node.value })]
-        }
-        return []
+        return this.renderUnknownInline(node, inherited)
     }
+  }
+
+  /**
+   * The catch-all for a phrasing node type this switch does not name.
+   *
+   * Takes `unknown` on purpose. TypeScript narrows an exhaustive switch's
+   * `default` to `never`, so reading `.children`/`.value` off the narrowed
+   * binding is a compile error the moment the cases happen to cover every
+   * member of `PhrasingContent` -- and that union GROWS whenever any module in
+   * this program adds a `declare module 'mdast'` augmentation, which several
+   * already do (pagebreak, comment, math) and more will. Widening here keeps
+   * this branch compiling either way, and keeps its actual job intact: a node
+   * type nobody taught this exporter about still contributes its text rather
+   * than silently vanishing from the document.
+   */
+  private renderUnknownInline(node: unknown, inherited: IRunPropertiesOptions): ParagraphChild[] {
+    if (typeof node !== 'object' || node === null) return []
+    const candidate = node as { children?: unknown; value?: unknown }
+    if (Array.isArray(candidate.children)) {
+      return this.renderInline(candidate.children as PhrasingContent[], inherited)
+    }
+    if (typeof candidate.value === 'string') {
+      return [new TextRun({ ...inherited, text: candidate.value })]
+    }
+    return []
   }
 
   private renderLink(

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type ReactElement, type RefObject } from 'react'
 import { useAppStore, type ViewMode } from '../store/appStore'
+import { useMenuCommands } from '../hooks/useMenuCommands'
 import { useDocumentStore } from '../store/documentStore'
 import { useFindStore } from '../store/findStore'
 import { isSourceEditing } from '../lib/editing-surface'
@@ -287,6 +288,22 @@ function EditorToolbar({
   // what makes it fire regardless of which one the user actually used.
   const exportNotice = useDocumentStore((state) => state.exportNotice)
   const clearExportNotice = useDocumentStore((state) => state.clearExportNotice)
+  // File > Export as Word. Registered HERE rather than beside its
+  // Export-as-PDF/HTML siblings in EditorScreen's own handler map, and the
+  // difference is deliberate: those two are grouped there because that screen
+  // also owns handlers that genuinely need its editorRef and view-mode
+  // coordination, whereas this one needs nothing from it at all -- and this
+  // component already owns the export Toast and its "Show in Folder" action,
+  // so the action that produces a notice now sits beside the thing that
+  // renders it. useMenuCommands is explicitly partial and multi-subscriber
+  // (see its own header): every subscriber receives every command and ignores
+  // the ones it has no handler for, so a second registration is the supported
+  // shape, not a workaround. This component is mounted exactly when a document
+  // is open, which is the same condition the menu item's own `enabled` gate
+  // uses -- so there is no window in which the item is clickable with no
+  // handler listening.
+  const exportDocx = useDocumentStore((state) => state.exportDocx)
+  useMenuCommands({ 'file:exportDocx': () => void exportDocx() })
   // A real, hidden <input type="file">, clicked programmatically by the
   // "Insert image" button. Chromium opens the genuine OS picker for it, which
   // is why this feature needed NO new main-process IPC handler at all -- worth

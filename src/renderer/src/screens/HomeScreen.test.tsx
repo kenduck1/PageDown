@@ -24,6 +24,7 @@ beforeEach(() => {
     confirmDiscardChanges: vi.fn(),
     exportPdf: vi.fn(),
     exportHtml: vi.fn(),
+    exportDocx: vi.fn(),
     showItemInFolder: vi.fn(),
     print: vi.fn(),
     // HomeScreen.tsx never calls these directly -- App.tsx's own

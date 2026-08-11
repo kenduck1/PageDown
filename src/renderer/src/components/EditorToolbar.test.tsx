@@ -77,6 +77,7 @@ beforeEach(() => {
     confirmDiscardChanges: vi.fn(),
     exportPdf: vi.fn().mockResolvedValue({ filePath: '/tmp/document.pdf' }),
     exportHtml: vi.fn(),
+    exportDocx: vi.fn(),
     // Defaults to a successful reveal -- handleShowExportInFolder now awaits
     // this call's own resolved boolean (second-pass product-completeness
     // audit: a moved/deleted export must surface a real failure, see that
@@ -1078,5 +1079,38 @@ describe('EditorToolbar', () => {
     // have passed). Nothing is dropped; see EditorToolbar.tsx's header for why
     // a document-wide PageConfig field does not belong on a
     // selection-formatting toolbar in the first place.
+  })
+
+  describe('File > Export as Word', () => {
+    // There is NO toolbar button for .docx export -- the File menu is its only
+    // trigger -- so this subscription IS the feature's user-facing wiring. If
+    // it stops being registered the menu item is enabled and silently inert,
+    // which is the exact failure mode this app's own menu rule forbids.
+    function emitMenuCommand(command: string): void {
+      const subscribe = vi.mocked(window.api.onMenuCommand)
+      for (const [handler] of subscribe.mock.calls) {
+        handler(command as Parameters<typeof handler>[0])
+      }
+    }
+
+    it('runs documentStore.exportDocx when the menu command arrives', () => {
+      const exportDocx = vi.fn()
+      useDocumentStore.setState({ exportDocx })
+      const ref = createRef<MilkdownEditorHandle>()
+      render(<EditorToolbar editorRef={ref} />)
+
+      emitMenuCommand('file:exportDocx')
+
+      expect(exportDocx).toHaveBeenCalledTimes(1)
+    })
+
+    it('ignores commands it has no handler for', () => {
+      // Every subscriber receives EVERY command, so an unhandled one must be a
+      // silent no-op here rather than a crash on `undefined(...)`.
+      const ref = createRef<MilkdownEditorHandle>()
+      render(<EditorToolbar editorRef={ref} />)
+
+      expect(() => emitMenuCommand('file:new')).not.toThrow()
+    })
   })
 })

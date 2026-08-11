@@ -184,6 +184,23 @@ describe('buildAppMenuTemplate: accelerators', () => {
     expect(itemIn(fileMenu, 'Page Setup…').accelerator).toBe('CmdOrCtrl+Shift+P')
   })
 
+  it('sends file:exportDocx from a File > Export as Word item gated on a document', () => {
+    // The File menu is the ONLY route to .docx export -- there is no toolbar
+    // button and never was one -- so an item that is missing, mislabelled or
+    // wired to nothing makes the whole feature unreachable.
+    const { template, send } = build({ state: EDITING })
+    const item = itemIn(submenuOf(template, 'File'), 'Export as Word…')
+    expect(item.accelerator).toBe('CmdOrCtrl+Alt+Shift+E')
+    expect(item.enabled).toBe(true)
+    item.click?.(undefined as never, undefined as never, undefined as never)
+    expect(send).toHaveBeenCalledWith('file:exportDocx')
+
+    // Disabled with no document, matching every other document-scoped item --
+    // this menu's own rule is "disabled, never enabled-and-inert".
+    const home = build()
+    expect(itemIn(submenuOf(home.template, 'File'), 'Export as Word…').enabled).toBe(false)
+  })
+
   it('does NOT bind Cmd+E to Export as PDF', () => {
     // Load-bearing, not stylistic: @milkdown/preset-commonmark binds Mod-e to
     // inline code, and a menu accelerator on a non-role item consumes the

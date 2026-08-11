@@ -16,6 +16,7 @@ beforeEach(() => {
     confirmDiscardChanges: vi.fn(),
     exportPdf: vi.fn(),
     exportHtml: vi.fn(),
+    exportDocx: vi.fn(),
     showItemInFolder: vi.fn(),
     print: vi.fn(),
     getPreferences: vi.fn(),

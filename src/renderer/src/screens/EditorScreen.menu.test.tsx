@@ -109,6 +109,7 @@ beforeEach(() => {
     confirmDiscardChanges: vi.fn(),
     exportPdf: vi.fn().mockResolvedValue({ filePath: '/tmp/report.pdf' }),
     exportHtml: vi.fn(),
+    exportDocx: vi.fn(),
     showItemInFolder: vi.fn(),
     print: vi.fn().mockResolvedValue({ cancelled: false }),
     getPreferences: vi.fn(),
@@ -431,16 +432,26 @@ describe('EditorScreen: application-menu commands', () => {
     expect(mockEditorHandle.closeSlashMenu).toHaveBeenCalled()
   })
 
-  it('unsubscribes from menu commands on unmount', () => {
+  it('unsubscribes EVERY menu-command listener in this subtree on unmount', () => {
     // Not theoretical: this screen is remounted by ordinary navigation, so a
     // leaked listener per mount accumulates for the life of the window.
+    //
+    // Asserted as "every subscription is released", not "there is exactly one
+    // subscription". useMenuCommands is explicitly multi-subscriber (see its
+    // own header) -- App.tsx and this screen were already two, and EditorToolbar
+    // became a third when File > Export as Word landed there. Pinning the COUNT
+    // would fail the next time a handler legitimately moves to whichever
+    // component owns the action, while proving nothing extra: what protects
+    // against a leak is that subscriptions and unsubscriptions BALANCE, which
+    // is what this now checks.
     const { unmount } = render(<EditorScreen />)
-    expect(window.api.onMenuCommand).toHaveBeenCalledTimes(1)
+    const subscriptions = vi.mocked(window.api.onMenuCommand).mock.calls.length
+    expect(subscriptions).toBeGreaterThan(0)
     expect(unsubscribe).not.toHaveBeenCalled()
 
     unmount()
 
-    expect(unsubscribe).toHaveBeenCalledTimes(1)
+    expect(unsubscribe).toHaveBeenCalledTimes(subscriptions)
   })
 
   it('ignores a command it has no handler for', () => {

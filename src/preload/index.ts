@@ -64,6 +64,10 @@ const api = {
   // own comment.
   exportHtml: (content: string, filePath: string | null = null, allowRemoteImages = false) =>
     ipcRenderer.invoke('file:exportHtml', content, filePath, allowRemoteImages),
+  // .docx export. Same optional/validated filePath treatment as exportPdf
+  // above -- see that entry's own comment.
+  exportDocx: (content: string, filePath: string | null = null, allowRemoteImages = false) =>
+    ipcRenderer.invoke('file:exportDocx', content, filePath, allowRemoteImages),
   // "Show in folder" for a just-written export. Deliberately takes the
   // FULL path back from the renderer (documentStore already has it, off the
   // exportPdf/exportHtml result) rather than the main process guessing "the

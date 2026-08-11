@@ -40,6 +40,7 @@ import { createSplitPreviewHarness, type SplitPreviewHarness } from './split-pre
 import type { PageNavState } from '../pagination/page-nav'
 import { exportDocumentToPdf } from './pdf-exporter'
 import { exportDocumentToHtml } from './html-exporter'
+import { exportDocumentToDocx } from './docx-exporter'
 import { resolveDocumentLocalImage } from './inline-local-images'
 import { printDocument } from './print-exporter'
 import {
@@ -1975,6 +1976,30 @@ app.whenReady().then(async () => {
         filePath && (await isKnownPath(userDataDir, filePath)) ? filePath : undefined
       const win = BrowserWindow.fromWebContents(event.sender) ?? mainWindow
       const result = await exportDocumentToHtml(win, content, documentPath, allowRemoteImages)
+      if (result) rememberRevealablePath(result.filePath)
+      return result
+    }
+  )
+
+  // .docx export. Identical shape and reasoning to file:exportPdf/exportHtml
+  // above -- the SAVE destination comes from a real dialog inside
+  // exportDocumentToDocx and needs no allowlist check, while `filePath` (the
+  // SOURCE document, used only to resolve local image references) is
+  // renderer-supplied and gets the same drop-not-throw isKnownPath treatment:
+  // a document aged out of the recents allowlist still exports, its local
+  // images just resolve to alt text.
+  //
+  // See src/export/markdown-to-docx.ts's own header for what this format
+  // preserves. It is a content export -- Word repaginates it -- so it is
+  // NOT a substitute for file:exportPdf, which remains the fidelity path.
+  ipcMain.handle(
+    'file:exportDocx',
+    async (event, content: string, filePath: string | null = null, allowRemoteImages = false) => {
+      const userDataDir = app.getPath('userData')
+      const documentPath =
+        filePath && (await isKnownPath(userDataDir, filePath)) ? filePath : undefined
+      const win = BrowserWindow.fromWebContents(event.sender) ?? mainWindow
+      const result = await exportDocumentToDocx(win, content, documentPath, allowRemoteImages)
       if (result) rememberRevealablePath(result.filePath)
       return result
     }
