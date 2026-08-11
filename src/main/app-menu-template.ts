@@ -217,6 +217,33 @@ export function buildAppMenuTemplate(params: AppMenuTemplateParams): MenuItemCon
         click: clickCommand('file:pageSetup')
       },
       { type: 'separator' },
+      // Second-pass product-completeness audit: "There is no Close Tab; Cmd+W
+      // closes the whole window." Every other tabbed editor closes the TAB on
+      // Cmd+W and the WINDOW on Cmd+Shift+W -- this app shipped only the
+      // latter, at the FORMER's accelerator, which is the wrong reflex to
+      // punish in an app with an always-visible tab bar (one stray Cmd+W
+      // used to take out every open tab at once). `documentOpen`, the same
+      // coarse gate every other document-scoped item here uses -- there is
+      // no tab bar at all on Home, so an enabled-but-silent item there would
+      // violate this menu's own "disabled, never enabled-and-inert" rule.
+      //
+      // Routes to `handleRequestCloseTab` (EditorScreen.tsx) -- the EXACT
+      // function the tab bar's own "x" button already calls, not a second
+      // closing path -- so a dirty active tab gets the identical
+      // confirm/flush/save/clear-autosave sequence regardless of which
+      // control asked. On the last remaining tab it does exactly what that
+      // button already does: documentStore.closeTab never leaves zero tabs,
+      // replacing a closed last tab with a fresh blank "Untitled" one rather
+      // than falling back to Close Window -- so Cmd+W on a single-tab window
+      // clears it instead of closing the window, matching a browser tab's
+      // own "last tab left standing" behavior rather than Electron's role
+      // default.
+      {
+        label: 'Close Tab',
+        accelerator: 'CmdOrCtrl+W',
+        enabled: documentOpen,
+        click: clickCommand('file:closeTab')
+      },
       // Non-macOS convention puts Preferences under File (macOS puts it in
       // the application menu, built below) and ends File with Quit/Exit.
       ...(isMac
@@ -231,10 +258,17 @@ export function buildAppMenuTemplate(params: AppMenuTemplateParams): MenuItemCon
           ] as MenuItemConstructorOptions[])),
       // "Close Window" lives here, and NOT also in the Window menu, on
       // purpose: macOS's own HIG puts Close in File (Window carries
-      // Minimize/Zoom/Bring All to Front), and listing the same Cmd+W
-      // accelerator on two items would register it twice with only one of
-      // them able to fire.
-      { role: 'close', label: 'Close Window' },
+      // Minimize/Zoom/Bring All to Front), and listing the same accelerator
+      // on two items would register it twice with only one of them able to
+      // fire.
+      //
+      // Accelerator moved to CmdOrCtrl+Shift+W (from the role's own default
+      // CmdOrCtrl+W, which Close Tab above now claims) by the same
+      // second-pass audit fix -- an explicit `accelerator` on a role item
+      // overrides the role's platform default, same mechanism `role: 'close'`
+      // on non-mac's Window menu below already doesn't need because it's
+      // never listed alongside a competing claim on the same key.
+      { role: 'close', label: 'Close Window', accelerator: 'CmdOrCtrl+Shift+W' },
       ...(isMac ? [] : ([{ role: 'quit' }] as MenuItemConstructorOptions[]))
     ]
   }

@@ -241,17 +241,19 @@ function EditorToolbar({
   // unmounted there and editorRef.current is null -- but before this guard
   // they still rendered fully enabled, with no visual signal that clicking
   // them did nothing. Disabling exactly the editorRef-bound cluster
-  // (undo/redo, paragraph style, bold/italic, both list buttons, link,
-  // table, page break) removes a dead control rather than a capability --
-  // Undo/Redo in particular: a plain <textarea> has real browser-native
-  // undo/redo of its own, so disabling THIS toolbar's Undo/Redo buttons
-  // doesn't remove undo capability in Source mode, just the redundant/dead
-  // duplicate control. Everything else (view-mode switcher, Export PDF, the
-  // now-wired Find button, and the still-unwired placeholder buttons like
-  // Underline/Insert image) is independent of the Milkdown instance and stays
-  // enabled. Find in particular MUST stay enabled in Source mode -- it works
-  // on both editing surfaces (see useFindController.ts), so disabling it here
-  // would remove a real capability rather than a dead control.
+  // (undo/redo, paragraph style, bold/italic, both list buttons, checklist,
+  // link, image, table, page break -- Insert image included, since its
+  // hidden file input's onChange calls editorRef.current?.insertImages)
+  // removes a dead control rather than a capability -- Undo/Redo in
+  // particular: a plain <textarea> has real browser-native undo/redo of its
+  // own, so disabling THIS toolbar's Undo/Redo buttons doesn't remove undo
+  // capability in Source mode, just the redundant/dead duplicate control.
+  // Everything else -- the view-mode switcher and Export PDF, neither of
+  // which ever touched editorRef, and the now-wired Find button -- is
+  // independent of the Milkdown instance and stays enabled. Find in
+  // particular MUST stay enabled in Source mode -- it works on both editing
+  // surfaces (see useFindController.ts), so disabling it here would remove a
+  // real capability rather than a dead control.
   // Uses the shared isSourceEditing predicate, NOT a bare
   // `viewMode === 'source'` — that was a real bug, found while fixing Insert
   // link. Split mode's LEFT PANE is Format or Source editing per
@@ -474,12 +476,32 @@ function EditorToolbar({
   // paths this app itself just exported to (see that handler's own comment
   // in src/main/index.ts), never a blind pass-through of a renderer-supplied
   // path. Dismisses the notice immediately on click, same as letting the
-  // timer expire -- there is nothing more this toast has to offer once its
-  // one action has been taken.
+  // timer expire -- there is nothing more THIS toast has to offer once its
+  // one action has been taken, win or lose.
+  //
+  // Second-pass product-completeness audit Tier 3: the reveal used to be
+  // truly fire-and-forget (a bare `void`, result discarded), so a
+  // since-moved-or-deleted export dismissed the toast and did nothing else
+  // visible anywhere -- shell.showItemInFolder is a silent no-op on a
+  // vanished path, so "nothing happened" was the only signal a user ever
+  // got. The main-process handler now stat()s before revealing and resolves
+  // `false` on a genuine failure (see its own comment); surfaced here
+  // through the SAME error banner every other real failure in this app
+  // uses (documentStore's `error`, rendered by EditorScreen -- e.g.
+  // MilkdownEditor's onError callback sets it the identical direct way),
+  // rather than inventing a second notice mechanism for one more failure
+  // mode.
   const handleShowExportInFolder = (): void => {
     if (!exportNotice) return
-    void window.api.showItemInFolder(exportNotice.filePath)
+    const { filePath } = exportNotice
     clearExportNotice()
+    void window.api.showItemInFolder(filePath).then((revealed) => {
+      if (!revealed) {
+        useDocumentStore.setState({
+          error: 'Could not locate the exported file. It may have been moved or deleted.'
+        })
+      }
+    })
   }
 
   return (

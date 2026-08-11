@@ -26,6 +26,11 @@ const api = {
   // returns the resulting list so HomeScreen can update its own state
   // straight from the response instead of a second getRecentFiles round trip.
   removeRecentFile: (filePath: string) => ipcRenderer.invoke('file:removeRecent', filePath),
+  // Returns the SURVIVING list, not necessarily [] -- second-pass
+  // product-completeness audit: main preserves any path currently open in
+  // any window (see the file:clearRecents handler's own comment), so the
+  // caller must set its state from the real response rather than assuming
+  // an empty list.
   clearRecentFiles: () => ipcRenderer.invoke('file:clearRecents'),
   getThumbnail: (filePath: string) => ipcRenderer.invoke('file:getThumbnail', filePath),
   getTemplateThumbnail: (content: string) => ipcRenderer.invoke('template:getThumbnail', content),

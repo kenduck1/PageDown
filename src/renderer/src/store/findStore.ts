@@ -69,7 +69,25 @@ const CURSOR_RESET = { activeIndex: 0 }
 
 export const useFindStore = create<FindState>()((set) => ({
   ...initialFindState,
-  openFind: () => set({ isOpen: true }),
+  // Second-pass product-completeness audit Tier 3: plain Find used to leave
+  // `replaceExpanded` completely untouched, so once a session had opened
+  // Find and Replace even once, every SUBSEQUENT plain Cmd+F -- including
+  // after closing and reopening the bar -- kept reopening with the Replace
+  // row still expanded. Cmd+F asks for Find, not Find and Replace, so a
+  // fresh (closed -> open) plain-Find open collapses it. But `state.isOpen`
+  // is checked first, not unconditionally forced to false, because Cmd+F is
+  // ALSO how a user re-selects the query text while the bar is already
+  // open (openFindFromShortcut's own doc comment) -- collapsing an
+  // already-expanded Replace row out from under someone actively using it,
+  // just because they pressed Cmd+F again, would be its own bug in the
+  // other direction. So this only resets replaceExpanded on the genuinely
+  // CLOSED -> OPEN transition; opening (or re-"opening" while already open)
+  // when Replace is already expanded leaves it alone either way.
+  openFind: () =>
+    set((state) => ({
+      isOpen: true,
+      replaceExpanded: state.isOpen ? state.replaceExpanded : false
+    })),
   openFindAndReplace: () => set({ isOpen: true, replaceExpanded: true }),
   // The query survives a close so reopening remembers it (every editor does
   // this); the derived match state does NOT, so a stale count can never be

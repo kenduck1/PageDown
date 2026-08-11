@@ -114,11 +114,33 @@ describe('buildAppMenuTemplate: structure', () => {
   })
 
   it('shows Close Window in File and NOT also in the Window menu', () => {
-    // Both would register the same Cmd+W accelerator, with only one able to
+    // Both would register the same accelerator, with only one able to
     // fire -- and File is where macOS's own HIG puts Close.
     const template = build({ platform: 'darwin' }).template
     expect(submenuOf(template, 'File').some((item) => item.role === 'close')).toBe(true)
     expect(submenuOf(template, 'Window').some((item) => item.role === 'close')).toBe(false)
+  })
+
+  // Second-pass product-completeness audit: "There is no Close Tab; Cmd+W
+  // closes the whole window." Close Tab now claims the conventional Cmd+W
+  // slot, which forced Close Window off its role default -- see
+  // app-menu-template.ts's own comment on both items for the full reasoning.
+  it('adds Close Tab to File (CmdOrCtrl+W) and moves Close Window to CmdOrCtrl+Shift+W', () => {
+    const fileMenu = submenuOf(build({ platform: 'darwin', state: EDITING }).template, 'File')
+    expect(itemIn(fileMenu, 'Close Tab').accelerator).toBe('CmdOrCtrl+W')
+    expect(itemIn(fileMenu, 'Close Window').accelerator).toBe('CmdOrCtrl+Shift+W')
+    // role: 'close' has its own platform-default accelerator (CmdOrCtrl+W)
+    // that an explicit `accelerator` overrides -- asserting the role itself
+    // is still there guards against the override having silently replaced
+    // the whole item instead of just its accelerator.
+    expect(itemIn(fileMenu, 'Close Window').role).toBe('close')
+  })
+
+  it('disables Close Tab with no document open, and enables it once one is', () => {
+    const closedFile = submenuOf(build({ state: DEFAULT_WINDOW_UI_STATE }).template, 'File')
+    expect(itemIn(closedFile, 'Close Tab').enabled).toBe(false)
+    const openFile = submenuOf(build({ state: EDITING }).template, 'File')
+    expect(itemIn(openFile, 'Close Tab').enabled).toBe(true)
   })
 
   it('hides Reload/DevTools outside development', () => {
@@ -411,6 +433,10 @@ describe('buildAppMenuTemplate: command dispatch', () => {
     click('File', 'New')
     click('File', 'Save')
     click('File', 'Save As…')
+    // Second-pass product-completeness audit: Close Tab, now File's own
+    // Cmd+W item -- see app-menu-template.ts's own comment on the accelerator
+    // move this required.
+    click('File', 'Close Tab')
     click('File', 'Export as PDF…')
     // The three items that are now these commands' ONLY trigger, since the
     // single-row-toolbar pass removed their toolbar buttons.
@@ -426,6 +452,7 @@ describe('buildAppMenuTemplate: command dispatch', () => {
       'file:new',
       'file:save',
       'file:saveAs',
+      'file:closeTab',
       'file:exportPdf',
       'file:exportHtml',
       'file:print',

@@ -113,12 +113,17 @@ export async function writeRecentFiles(
 // SECURITY, both functions: this list IS the isKnownPath allowlist (see that
 // function's own comment above) -- every renderer-supplied path this app
 // ever touches disk with is validated against it. Both operations below can
-// only ever NARROW the list (drop one entry, or drop all of them); neither
-// accepts, nor could be made to accept without changing its signature, a
-// path to ADD. Removing an entry therefore only ever REVOKES this app's own
-// willingness to write to that path again via saveFileToKnownOrChosenPath's
-// fast path -- it can never grant new access, and a user can always restore
-// access to a removed path by opening it again through a real native dialog.
+// only ever NARROW the list -- drop one entry, or drop every entry except
+// whichever ones the caller says to keep (clearRecentFiles' own
+// `preservePaths`, added by the second-pass product-completeness audit's
+// "don't silently degrade an open document" fix below -- see that
+// function's own comment for why accepting a second argument still doesn't
+// reopen this into a path-ADDING primitive: a preserved path can only ever
+// be one that was ALREADY in the list, never a new one). Removing an entry
+// therefore only ever REVOKES this app's own willingness to write to that
+// path again via saveFileToKnownOrChosenPath's fast path -- it can never
+// grant new access, and a user can always restore access to a removed path
+// by opening it again through a real native dialog.
 
 // Removes a single entry by exact filePath match and persists the result.
 // Returns the resulting list so the caller (the file:removeRecent IPC
@@ -138,11 +143,60 @@ export async function removeRecentFile(
   return updated
 }
 
-// Wipes the entire allowlist. Takes no filePath argument at all -- unlike
-// removeRecentFile, there is no per-entry input here for a hostile or
-// malformed value to hide in.
-export async function clearRecentFiles(userDataDir: string): Promise<void> {
-  await writeRecentFiles(userDataDir, [])
+// Wipes the allowlist, except for any path in `preservePaths`. Second-pass
+// product-completeness audit: "Clear all recents silently degrades an
+// already-open document." isKnownPath IS this list (see its own comment
+// above), so wiping it out from under a document that's open RIGHT NOW --
+// in this window or any other -- was never cosmetic list-tidying: version
+// history starts returning empty, the four autosave/version-history IPC
+// handlers all drop-not-throw with no message (so autosave silently stops),
+// the next Cmd+S downgrades to a Save-As dialog with no explanation, and a
+// dropped image fails with the misleading "Save the document before adding
+// images." None of that is covered by "you can always reopen it," the
+// rationale that genuinely does justify skipping a confirmation for the
+// single-item remove above -- because the document in question never
+// closed.
+//
+// Three fixes were weighed: a confirmation dialog naming the consequence
+// when a document is open, re-adding an open path immediately after wiping
+// the list, or excluding open paths from the clear in the first place.
+// Excluding won, for two reasons. First, it's a strictly better OUTCOME than
+// re-add-after: re-adding leaves a real (if brief) window, between the wipe
+// and the re-add, where isKnownPath does not recognize a path this app
+// itself still has open -- a Save landing in exactly that window would still
+// hit the Save-As fallback. Excluding never creates that window at all.
+// Second, it's genuinely CHEAP rather than a new mechanism: Multi-window
+// support already made every window report its own open tabs' paths to main
+// over WINDOW_STATE_CHANNEL (WindowUiState.openFilePaths), so the caller
+// (src/main/index.ts's file:clearRecents handler) can compute "which paths
+// are open ANYWHERE" -- not just in the requesting window; a document open
+// only in a BACKGROUND window is exactly as exposed to this bug -- from
+// state it already has. A confirmation dialog was rejected because it would
+// need to re-explain isKnownPath's consequences in prose every time, for an
+// action a user reasonably expects to be as low-stakes as the single-item
+// remove just above; excluding open paths is what makes that expectation
+// true again instead of merely asserted.
+//
+// `preservePaths` is NOT renderer-supplied -- see the SECURITY paragraph
+// above for why a second argument here still can't be made to ADD a path.
+//
+// Skips the write when nothing would actually change (every remaining entry
+// happens to be preserved), matching removeRecentFile's own "don't touch
+// disk for a no-op" discipline. Returns the surviving list, mirroring
+// removeRecentFile's own return-what-actually-happened shape, so a caller
+// can set UI state directly from it rather than assuming the list is now
+// empty.
+export async function clearRecentFiles(
+  userDataDir: string,
+  preservePaths: readonly string[] = []
+): Promise<RecentFileEntry[]> {
+  const preserve = new Set(preservePaths)
+  const existing = await readRecentFiles(userDataDir)
+  const kept = existing.filter((entry) => preserve.has(entry.filePath))
+  if (kept.length !== existing.length) {
+    await writeRecentFiles(userDataDir, kept)
+  }
+  return kept
 }
 
 export interface RecentFileEntryWithStatus extends RecentFileEntry {

@@ -123,7 +123,12 @@ export interface FileApi {
   // handlers' own comments in src/main/index.ts. removeRecentFile returns
   // the resulting list so the caller can update its own state directly.
   removeRecentFile: (filePath: string) => Promise<RecentFileEntry[]>
-  clearRecentFiles: () => Promise<void>
+  // Second-pass product-completeness audit: returns the SURVIVING entries
+  // (any path currently open in any window is preserved, not wiped -- see
+  // the file:clearRecents handler's own comment in src/main/index.ts), not
+  // necessarily [] -- callers must set UI state from this response rather
+  // than assuming the list is now empty.
+  clearRecentFiles: () => Promise<RecentFileEntry[]>
   getThumbnail: (filePath: string) => Promise<{ dataUrl: string; pageCount: number }>
   getTemplateThumbnail: (content: string) => Promise<{ dataUrl: string; pageCount: number }>
   // allowRemoteImages mirrors the active tab's own remote-image consent

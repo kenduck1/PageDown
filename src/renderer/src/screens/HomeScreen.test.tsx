@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, render, screen } from '@testing-library/react'
+import { cleanup, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import HomeScreen from './HomeScreen'
 import { useAppStore } from '../store/appStore'
@@ -289,7 +289,14 @@ describe('HomeScreen', () => {
       { filePath: '/tmp/report.md', editedAt: new Date().toISOString(), exists: true },
       { filePath: '/tmp/letter.md', editedAt: new Date().toISOString(), exists: true }
     ])
-    vi.mocked(window.api.clearRecentFiles).mockResolvedValue(undefined)
+    // Second-pass product-completeness audit: clearRecentFiles now resolves
+    // the SURVIVING list (any path open in some window is preserved -- see
+    // that IPC method's own comment), not void -- an empty array here is
+    // the real "nothing was open anywhere" case, matching what the real
+    // main-process handler returns. Asserting against this resolved value
+    // (rather than the old bare `undefined`) is what proves HomeScreen sets
+    // its state from the actual response instead of assuming an empty list.
+    vi.mocked(window.api.clearRecentFiles).mockResolvedValue([])
     const user = userEvent.setup()
     render(<HomeScreen />)
 
@@ -299,6 +306,33 @@ describe('HomeScreen', () => {
     expect(window.api.clearRecentFiles).toHaveBeenCalled()
     expect(await screen.findByText('No recent documents yet')).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Clear all' })).not.toBeInTheDocument()
+  })
+
+  // Second-pass product-completeness audit: proves HomeScreen genuinely sets
+  // its list from clearRecentFiles' own response rather than hardcoding [].
+  // The real preservation logic (which paths survive) lives entirely in main
+  // (see recent-files.ts's clearRecentFiles and the file:clearRecents
+  // handler in src/main/index.ts) -- this only has to prove the renderer
+  // doesn't discard a non-empty response.
+  it('"Clear all" keeps showing a row the main process reports as preserved (currently open elsewhere)', async () => {
+    vi.mocked(window.api.getRecentFiles).mockResolvedValue([
+      { filePath: '/tmp/report.md', editedAt: new Date().toISOString(), exists: true },
+      { filePath: '/tmp/letter.md', editedAt: new Date().toISOString(), exists: true }
+    ])
+    vi.mocked(window.api.clearRecentFiles).mockResolvedValue([
+      { filePath: '/tmp/report.md', editedAt: new Date().toISOString(), exists: true }
+    ])
+    const user = userEvent.setup()
+    render(<HomeScreen />)
+
+    await screen.findByText('report.md')
+    await user.click(screen.getByRole('button', { name: 'Clear all' }))
+
+    expect(window.api.clearRecentFiles).toHaveBeenCalled()
+    await waitFor(() => {
+      expect(screen.queryByText('letter.md')).not.toBeInTheDocument()
+    })
+    expect(screen.getByText('report.md')).toBeInTheDocument()
   })
 
   it('does not render "Clear all" when there are no recent documents', async () => {

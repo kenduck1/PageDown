@@ -206,7 +206,7 @@ describe('removeRecentFile', () => {
 })
 
 describe('clearRecentFiles', () => {
-  it('wipes every entry and revokes isKnownPath access to all of them', async () => {
+  it('wipes every entry and revokes isKnownPath access to all of them, with no preservePaths', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'pagedown-recent-files-'))
     try {
       await writeRecentFiles(dir, [
@@ -222,6 +222,61 @@ describe('clearRecentFiles', () => {
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
+  })
+
+  // Second-pass product-completeness audit: "Clear all recents silently
+  // degrades an already-open document." A path in `preservePaths` survives
+  // the clear -- isKnownPath stays true for it, and readRecentFiles keeps
+  // its entry -- while everything else is still wiped exactly as before.
+  describe('preservePaths', () => {
+    it('keeps only the entries whose path is in preservePaths, dropping everything else', async () => {
+      const dir = await mkdtemp(join(tmpdir(), 'pagedown-recent-files-'))
+      try {
+        await writeRecentFiles(dir, [
+          { filePath: '/a.md', editedAt: '2026-01-01T00:00:00.000Z' },
+          { filePath: '/b.md', editedAt: '2026-01-02T00:00:00.000Z' },
+          { filePath: '/c.md', editedAt: '2026-01-03T00:00:00.000Z' }
+        ])
+
+        const result = await clearRecentFiles(dir, ['/b.md'])
+
+        expect(result).toEqual([{ filePath: '/b.md', editedAt: '2026-01-02T00:00:00.000Z' }])
+        expect(await readRecentFiles(dir)).toEqual(result)
+        expect(await isKnownPath(dir, '/a.md')).toBe(false)
+        expect(await isKnownPath(dir, '/b.md')).toBe(true)
+        expect(await isKnownPath(dir, '/c.md')).toBe(false)
+      } finally {
+        await rm(dir, { recursive: true, force: true })
+      }
+    })
+
+    it('cannot ADD a path -- a preservePaths entry with no matching existing entry is silently ignored', async () => {
+      const dir = await mkdtemp(join(tmpdir(), 'pagedown-recent-files-'))
+      try {
+        await writeRecentFiles(dir, [{ filePath: '/a.md', editedAt: '2026-01-01T00:00:00.000Z' }])
+
+        const result = await clearRecentFiles(dir, ['/a.md', '/never-opened.md'])
+
+        expect(result).toEqual([{ filePath: '/a.md', editedAt: '2026-01-01T00:00:00.000Z' }])
+        expect(await isKnownPath(dir, '/never-opened.md')).toBe(false)
+      } finally {
+        await rm(dir, { recursive: true, force: true })
+      }
+    })
+
+    it('is a no-op (and does not write) when every entry is preserved', async () => {
+      const dir = await mkdtemp(join(tmpdir(), 'pagedown-recent-files-'))
+      try {
+        await writeRecentFiles(dir, [{ filePath: '/a.md', editedAt: '2026-01-01T00:00:00.000Z' }])
+
+        const result = await clearRecentFiles(dir, ['/a.md'])
+
+        expect(result).toEqual([{ filePath: '/a.md', editedAt: '2026-01-01T00:00:00.000Z' }])
+        expect(await readRecentFiles(dir)).toEqual(result)
+      } finally {
+        await rm(dir, { recursive: true, force: true })
+      }
+    })
   })
 })
 
