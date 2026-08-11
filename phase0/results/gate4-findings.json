@@ -1,6 +1,19 @@
 {
   "perFileResults": [
     {
+      "file": "code-blocks-spanning-pages.md",
+      "onscreenPageCount": 6,
+      "pdfLibPageCount": 6,
+      "pdfjsPageCount": 6,
+      "pageCountMatch": true,
+      "textCategory": "pre-split-truncation",
+      "textMatch": true,
+      "firstMismatchDetail": null,
+      "textDeltaSample": "",
+      "exportMs": 76,
+      "imgInfo": []
+    },
+    {
       "file": "continuation-prefixes.md",
       "onscreenPageCount": 1,
       "pdfLibPageCount": 1,
@@ -10,7 +23,7 @@
       "textMatch": true,
       "firstMismatchDetail": null,
       "textDeltaSample": "1.1.2.1.",
-      "exportMs": 64,
+      "exportMs": 60,
       "imgInfo": []
     },
     {
@@ -23,7 +36,7 @@
       "textMatch": true,
       "firstMismatchDetail": null,
       "textDeltaSample": "",
-      "exportMs": 67,
+      "exportMs": 65,
       "imgInfo": []
     },
     {
@@ -36,7 +49,7 @@
       "textMatch": true,
       "firstMismatchDetail": null,
       "textDeltaSample": "",
-      "exportMs": 58,
+      "exportMs": 59,
       "imgInfo": []
     },
     {
@@ -49,7 +62,7 @@
       "textMatch": true,
       "firstMismatchDetail": null,
       "textDeltaSample": "",
-      "exportMs": 64,
+      "exportMs": 59,
       "imgInfo": []
     },
     {
@@ -62,7 +75,7 @@
       "textMatch": true,
       "firstMismatchDetail": null,
       "textDeltaSample": "Diagramoftheproposedsitelayout,showingthemainentranceonthenorthsideandparkingtotheeast.",
-      "exportMs": 55,
+      "exportMs": 58,
       "imgInfo": [
         {
           "src": "pagedown-render://render/assets/diagram-placeholder.png",
@@ -83,7 +96,7 @@
       "textMatch": true,
       "firstMismatchDetail": null,
       "textDeltaSample": "",
-      "exportMs": 247,
+      "exportMs": 255,
       "imgInfo": []
     },
     {
@@ -96,7 +109,7 @@
       "textMatch": true,
       "firstMismatchDetail": null,
       "textDeltaSample": "",
-      "exportMs": 65,
+      "exportMs": 66,
       "imgInfo": []
     },
     {
@@ -130,7 +143,7 @@
       "textMatch": true,
       "firstMismatchDetail": null,
       "textDeltaSample": "1.1.2.2.1.2.3.1.2.",
-      "exportMs": 63,
+      "exportMs": 65,
       "imgInfo": []
     },
     {
@@ -143,7 +156,7 @@
       "textMatch": true,
       "firstMismatchDetail": null,
       "textDeltaSample": "",
-      "exportMs": 57,
+      "exportMs": 60,
       "imgInfo": []
     },
     {
@@ -182,7 +195,7 @@
       "textMatch": true,
       "firstMismatchDetail": null,
       "textDeltaSample": "",
-      "exportMs": 73,
+      "exportMs": 66,
       "imgInfo": []
     },
     {
@@ -195,7 +208,7 @@
       "textMatch": true,
       "firstMismatchDetail": null,
       "textDeltaSample": "",
-      "exportMs": 657,
+      "exportMs": 681,
       "imgInfo": []
     }
   ],
@@ -225,5 +238,10 @@
       "texts": 0,
       "paths": 9
     }
+  ],
+  "preSplitTruncationPages": [
+    3,
+    4,
+    5
   ]
 }

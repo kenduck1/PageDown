@@ -56,18 +56,35 @@ import { LETTER_GEOMETRY, DEFAULT_STYLE } from './gate-geometry'
 // tables-spanning-pages.md has joined mermaid-diagrams.md as a fixture
 // that naturally spans pages. Following Gate 4's own
 // established precedent for exactly this situation (its synthetic long
-// table), this file renders the four PINNED corpus fixtures for the
+// table), this file renders the PINNED corpus fixtures for the
 // record (Test 1, matching the brief's literal ask) AND builds synthetic,
 // deliberately-page-spanning content for the handlers that the pinned
 // fixtures can't actually exercise (Tests 3-4) — without that, this gate
 // could not honestly claim to have observed anything about table/list
 // break behavior at all.
+//
+// A fifth pinned fixture, `code-blocks-spanning-pages.md`, was added by the
+// code-block corpus-coverage task (found while fixing a `--font-mono`
+// cross-machine-determinism bug: no pinned fixture anywhere contained a
+// real page-spanning code block, so a future change to the monospace font
+// or the `pre`/`code` box model would have moved zero pinned page counts
+// across Gates 2, 4, and 6). Its own pinned assertion sits alongside the
+// other four below.
 
 const fixtures = [
   'tables-spanning-pages.md',
   'headings-near-page-bottom.md',
   'mermaid-diagrams.md',
-  'nested-lists.md'
+  'nested-lists.md',
+  // Added by the code-block corpus-coverage task: a plain, page-spanning
+  // `<pre>` block is exactly the same class of "block splits across a page
+  // boundary" scenario `tables-spanning-pages.md` already covers for
+  // tables, and no pinned fixture previously exercised it — see this
+  // fixture's own frontmatter-adjacent comment in phase0/corpus/code-
+  // blocks-spanning-pages.md and PRE_SPLIT_TRUNCATION_FILES in
+  // gate4-export.spec.ts for the real, disclosed PDF-export content-loss
+  // finding this same split also surfaced there.
+  'code-blocks-spanning-pages.md'
 ]
 
 interface PerPageHeadingInfo {
@@ -211,6 +228,20 @@ test('Gate 6: render every break-quality fixture and capture per-page structure 
     expect(
       observations['mermaid-diagrams.md'].pageCount,
       "mermaid-diagrams.md is the one fixture that DOES span multiple pages (see Task 8/Gate 3 and this gate's own keep-with-next test below) — still 6 pages after the Document Typography sub-project's shared typography, unchanged from Task 10's KeepWithNextHandler baseline (was 5 before THAT; see phase0/gate3-mermaid.spec.ts's updated oversizedWrapperCount comment for why)"
+    ).toBe(6)
+    // Added by the code-block corpus-coverage task, measured directly (not
+    // guessed): `code-blocks-spanning-pages.md`'s one long `<pre>` block
+    // spans multiple internal page splits at this harness's Letter/1in-
+    // margin page box with the shared document typography's monospace
+    // font/line-height/padding applied. This is the pin the whole task
+    // exists to add — a future change to `--font-mono`, `pre`/`code`'s
+    // font-size, line-height, or padding that shifts this count is exactly
+    // the class of regression this gate previously could not see, because
+    // no other pinned fixture here contained a real page-spanning code
+    // block.
+    expect(
+      observations['code-blocks-spanning-pages.md'].pageCount,
+      "code-blocks-spanning-pages.md's one long <pre> block genuinely spans several internal page splits at this harness's current typography — this is the pinned regression guard for code-block box-model/typography metrics this task added; a future font/line-height/padding change to --font-mono or the pre/code rules in document-typography.css is expected to move this number, and re-measuring it (not just restoring 6) is the correct response"
     ).toBe(6)
   } finally {
     await close()

@@ -201,9 +201,9 @@ const RESULTS_DIR = join(__dirname, 'results')
 // on-screen `.pagedjs_page` element's `textContent` (after cloning and
 // stripping any `<style>` descendants — see that fix's own comment below)
 // against the exported PDF's `pdfjs-dist`-extracted per-page text, both
-// normalized by stripping all whitespace: 9 of 14 files match EXACTLY,
-// character-for-character. The other 5 do not match exactly, but in EVERY
-// case the on-screen text is a subsequence of the exported PDF's text (see
+// normalized by stripping all whitespace: 9 of 15 files match EXACTLY,
+// character-for-character. 5 more do not match exactly, but in EVERY case
+// the on-screen text is a subsequence of the exported PDF's text (see
 // `isSubsequence` above) — i.e. the export never DROPS anything the preview
 // shows, it only ever ADDS real, legitimately-printed content that
 // `element.textContent` never includes by DOM spec:
@@ -231,11 +231,20 @@ const RESULTS_DIR = join(__dirname, 'results')
 // swept under an automatic normalization rule (a blanket "strip digits" or
 // "strip alt text" rule would risk silently absorbing an unrelated real
 // content-loss bug the same way Gate 1's own review history warns about
-// conditional checks doing — see that gate's Meta-finding). Every corpus
-// file discovered on disk must appear in exactly one of these two sets;
-// `readdirSync`'s own use (rather than a hardcoded file list) here, plus
-// the "categorized exactly once" check below, means a future new corpus
-// fixture can't silently sail through this gate uncategorized.
+// conditional checks doing — see that gate's Meta-finding).
+//
+// The 15th file, `code-blocks-spanning-pages.md`, fits NEITHER bucket above
+// — both assume the PDF is a superset of the on-screen text (equal, or with
+// legitimate PDF-only extras); this file's one long, page-spanning `<pre>`
+// block has the relationship reversed (the PDF is a bounded, genuine
+// SUBSET). See `PRE_SPLIT_TRUNCATION_FILES`'s own comment below for the
+// full investigation and why this earned a third category rather than
+// being forced into one of the first two or dropped from the corpus.
+//
+// Every corpus file discovered on disk must appear in exactly one of these
+// three sets; `readdirSync`'s own use (rather than a hardcoded file list)
+// here, plus the "categorized exactly once" check below, means a future new
+// corpus fixture can't silently sail through this gate uncategorized.
 const EXACT_MATCH_FILES = new Set([
   'short.md',
   'tables-spanning-pages.md',
@@ -269,6 +278,46 @@ const SUBSEQUENCE_ONLY_FILES = new Set([
   'continuation-prefixes.md'
 ])
 
+// A THIRD category, added by the code-block corpus-coverage task, for a
+// real finding that fits neither bucket above — both existing categories
+// assume the PDF side is a SUPERSET of the on-screen side (equal, or with
+// legitimate PDF-only extras like `::marker`/alt-text). `code-blocks-
+// spanning-pages.md` is the opposite: the on-screen side is a SUPERSET of
+// the PDF side. Investigated directly, not assumed:
+//   - The raw `markdownToHtml` output (checked before this file's HTML ever
+//     reaches the sandboxed render context) has every character intact —
+//     this is not a pipeline/sanitize bug.
+//   - The loss is confined to PAGES CONTAINING AN INTERNAL SPLIT of the
+//     fixture's one long, page-spanning `<pre>` block (its `data-split-
+//     from`/`data-last-split-element` fragments, per Paged.js's own
+//     `Splits` handler, node_modules/pagedjs/src/modules/paged-media/
+//     splits.js) — never on a page before the block starts, and never on
+//     the block's OWN LAST fragment (which ends the element normally, not
+//     at a further split). A same-shaped synthetic `<table>` split (Gate
+//     4's own "split-block fragmentation" test below, and the pinned
+//     `tables-spanning-pages.md` fixture) shows no equivalent loss, so this
+//     is specific to a split `<pre>`, not split content in general.
+//   - Whole-document (not per-page) comparison confirms the exact shape:
+//     the exported PDF's text, taken as a whole, is a clean, complete
+//     SUBSEQUENCE of the on-screen text (every PDF character is found, in
+//     order, on screen — zero reordering, zero extraneous PDF content), but
+//     on-screen carries real, substantive, non-whitespace content (a few
+//     dozen characters per internal split — a trailing word or short phrase
+//     right at the split point, e.g. "blocking indefinitely.") that the PDF
+//     never shows at all. This is a genuine, bounded, print-fidelity
+//     content-loss bug in Paged.js's own page-splitting of a `<pre>`
+//     element — not a rendering-pipeline bug this codebase owns, and not
+//     something a fixture can design around, since it reproduces on ANY
+//     `<pre>` block (highlighted or not, any content) once it spans more
+//     than one internal page split. Recorded here rather than silently
+//     worked around, per this task's own explicit brief: a fixture that
+//     genuinely can't fit EXACT_MATCH_FILES or SUBSEQUENCE_ONLY_FILES's
+//     existing (PDF-is-a-superset) shape is a real finding worth a real,
+//     checked category, not a reason to drop the fixture or weaken either
+//     existing check. See the dedicated assertion after the main loop
+//     below for the non-vacuousness proof.
+const PRE_SPLIT_TRUNCATION_FILES = new Set(['code-blocks-spanning-pages.md'])
+
 test('Gate 4: exported PDF page count and per-page text match the on-screen Paged.js rendering across the reference corpus', async () => {
   test.setTimeout(90_000)
   const { app, close } = await launchIsolatedApp(['.'])
@@ -283,14 +332,19 @@ test('Gate 4: exported PDF page count and per-page text match the on-screen Page
 
     // Every discovered corpus file must be categorized exactly once — see the
     // comment above EXACT_MATCH_FILES for why an uncategorized file is a real
-    // gap in this test rather than something to silently default past.
+    // gap in this test rather than something to silently default past. Three
+    // sets, not two, as of the code-block corpus-coverage task — see
+    // PRE_SPLIT_TRUNCATION_FILES's own comment for why a third category was
+    // needed rather than forcing that fixture into one of the first two.
     for (const file of files) {
       const inExact = EXACT_MATCH_FILES.has(file)
       const inSubsequence = SUBSEQUENCE_ONLY_FILES.has(file)
+      const inPreSplitTruncation = PRE_SPLIT_TRUNCATION_FILES.has(file)
+      const categoryCount = [inExact, inSubsequence, inPreSplitTruncation].filter(Boolean).length
       expect(
-        inExact !== inSubsequence,
-        `${file} must be categorized in exactly one of EXACT_MATCH_FILES/SUBSEQUENCE_ONLY_FILES (found in exact=${inExact}, subsequence=${inSubsequence})`
-      ).toBe(true)
+        categoryCount,
+        `${file} must be categorized in exactly one of EXACT_MATCH_FILES/SUBSEQUENCE_ONLY_FILES/PRE_SPLIT_TRUNCATION_FILES (found in exact=${inExact}, subsequence=${inSubsequence}, preSplitTruncation=${inPreSplitTruncation})`
+      ).toBe(1)
     }
 
     // One harness, reused across the whole corpus loop — same rationale as
@@ -318,7 +372,7 @@ test('Gate 4: exported PDF page count and per-page text match the on-screen Page
       pdfLibPageCount: number
       pdfjsPageCount: number
       pageCountMatch: boolean
-      textCategory: 'exact' | 'subsequence'
+      textCategory: 'exact' | 'subsequence' | 'pre-split-truncation'
       textMatch: boolean
       firstMismatchDetail: string | null
       textDeltaSample: string
@@ -343,6 +397,15 @@ test('Gate 4: exported PDF page count and per-page text match the on-screen Page
       texts: number
       paths: number
     }> = []
+
+    // Same rationale as mermaidDiagramDomEvidence above, for
+    // `code-blocks-spanning-pages.md`'s own loop iteration: the 1-indexed
+    // pages (out of that file's own page count) where the PDF's text came
+    // up short of the on-screen text — i.e. a genuine PRE_SPLIT_TRUNCATION_
+    // FILES divergence. Used by the dedicated non-vacuousness assertion
+    // after the loop below, so this finding is a real, checked property of
+    // a fresh run rather than a one-time observation baked into a comment.
+    const preSplitTruncationPages: number[] = []
 
     for (const file of files) {
       const markdown = readFileSync(join(corpusDir, file), 'utf8')
@@ -540,9 +603,11 @@ test('Gate 4: exported PDF page count and per-page text match the on-screen Page
         `${file}: on-screen pageCount vs. rendered .pagedjs_page count`
       ).toBe(onscreenPageCount)
 
-      const category: 'exact' | 'subsequence' = EXACT_MATCH_FILES.has(file)
+      const category: 'exact' | 'subsequence' | 'pre-split-truncation' = EXACT_MATCH_FILES.has(file)
         ? 'exact'
-        : 'subsequence'
+        : SUBSEQUENCE_ONLY_FILES.has(file)
+          ? 'subsequence'
+          : 'pre-split-truncation'
       let textMatch = true
       let firstMismatchDetail: string | null = null
       // Accumulated, per-page "extra" characters the PDF's text has that the
@@ -561,6 +626,31 @@ test('Gate 4: exported PDF page count and per-page text match the on-screen Page
           normalizeText(textContent.items.map((item) => ('str' in item ? item.str : '')).join(''))
         )
         const onscreenText = normalizeText(pagesText[i])
+
+        if (category === 'pre-split-truncation') {
+          // Reversed from the other two categories on purpose — see
+          // PRE_SPLIT_TRUNCATION_FILES's own comment. Here the ON-SCREEN
+          // side is expected to be the superset, so the checked direction is
+          // "is the PDF's text a subsequence of the on-screen text," not the
+          // other way around. A page where the two are simply equal (no
+          // internal split landed on it) trivially satisfies this too, so
+          // the same per-page check is correct across the whole file, not
+          // just the pages where a split actually occurs.
+          const reversed = subsequenceDelta(pdfText, onscreenText)
+          if (!reversed.isSubsequence) {
+            // This would mean the PDF shows content that isn't even on
+            // screen anywhere, in order — a strictly worse, undisclosed
+            // failure mode, not the bounded truncation this category exists
+            // to tolerate. Fail loudly rather than silently accept it.
+            textMatch = false
+            firstMismatchDetail = `page ${i + 1} (pre-split-truncation reverse-subsequence check failed — PDF shows content absent from on-screen text, not just a bounded truncation): onscreen=${JSON.stringify(onscreenText.slice(0, 120))} pdf=${JSON.stringify(pdfText.slice(0, 120))}`
+            break
+          }
+          if (onscreenText !== pdfText) {
+            preSplitTruncationPages.push(i + 1)
+          }
+          continue
+        }
 
         const { isSubsequence, extra } = subsequenceDelta(onscreenText, pdfText)
         if (extra) textDeltaParts.push(extra)
@@ -688,6 +778,33 @@ test('Gate 4: exported PDF page count and per-page text match the on-screen Page
       ).toBe(0)
     }
 
+    // Dedicated, named non-vacuousness assertion for the PRE_SPLIT_
+    // TRUNCATION_FILES finding — mirrors the mermaid-diagrams.md dedicated
+    // section above: the per-page loop's reverse-subsequence check ALONE
+    // would still pass a run where the underlying Paged.js bug had been
+    // silently fixed (a page that's now byte-identical trivially satisfies
+    // "PDF is a subsequence of on-screen" too), so that check alone can't
+    // prove the finding is real on any given run. This asserts the finding
+    // actually reproduced: `code-blocks-spanning-pages.md`'s own long,
+    // page-spanning `<pre>` block has at least one internal split, and at
+    // least one of that file's pages genuinely diverges (PDF text shorter
+    // than on-screen text, in the disclosed, bounded way the category
+    // comment describes) rather than the category being empty by
+    // construction.
+    const preSplitResult = perFileResults.find((r) => r.file === 'code-blocks-spanning-pages.md')
+    expect(
+      preSplitResult,
+      'code-blocks-spanning-pages.md must have been processed by the loop above'
+    ).toBeTruthy()
+    console.log(
+      'Gate 4 code-blocks-spanning-pages.md pre-split-truncation pages (1-indexed):',
+      JSON.stringify(preSplitTruncationPages)
+    )
+    expect(
+      preSplitTruncationPages.length,
+      "expected at least one page where the exported PDF text is a genuine, bounded truncation of the on-screen text (the real Paged.js pre-split content-loss bug this task found — see PRE_SPLIT_TRUNCATION_FILES's own comment) — if this is now empty, either the fixture stopped exercising a real page-internal split (check its own page count and pre-fragment count) or the underlying Paged.js bug was fixed, either of which is worth a fresh look rather than silently leaving this assertion green for the wrong reason"
+    ).toBeGreaterThan(0)
+
     mkdirSync(RESULTS_DIR, { recursive: true })
     writeFileSync(
       join(RESULTS_DIR, 'gate4-findings.json'),
@@ -695,7 +812,8 @@ test('Gate 4: exported PDF page count and per-page text match the on-screen Page
         {
           perFileResults,
           mermaidDiagramContentLossConfirmed: !mermaidFullText.includes('Stage'),
-          mermaidDiagramDomEvidence
+          mermaidDiagramDomEvidence,
+          preSplitTruncationPages
         },
         null,
         2
