@@ -240,11 +240,29 @@ class SafeImageView implements NodeView {
     this.img.title = note ? [note, title].filter(Boolean).join(' — ') : title
   }
 
+  // The `{width=...}` size the document asked for (nodes/image-size.ts), put
+  // on the real <img> as the HTML `width` DIMENSION ATTRIBUTE -- exactly the
+  // attribute markdownToHtml emits for the paginated/PDF/HTML-export surfaces,
+  // so both surfaces resolve the size through the identical mechanism.
+  //
+  // This has to happen HERE rather than in the node schema's toDOM, and that
+  // is easy to get wrong: this node view takes priority over toDOM for actual
+  // rendering (see this file's own point 3 above), so a width applied only in
+  // toDOM would render on every surface EXCEPT the editing canvas -- the one
+  // divergence Gate 10's 0.000px parity exists to prevent.
+  private applyWidth(node: ProseMirrorNode): void {
+    const width = typeof node.attrs.width === 'string' ? node.attrs.width : ''
+    if (width) this.img.setAttribute('width', width)
+    else this.img.removeAttribute('width')
+  }
+
   private syncFrom(node: ProseMirrorNode): void {
     const src = typeof node.attrs.src === 'string' ? node.attrs.src : ''
     const alt = typeof node.attrs.alt === 'string' ? node.attrs.alt : ''
     const title = typeof node.attrs.title === 'string' ? node.attrs.title : ''
     const generation = ++this.generation
+
+    this.applyWidth(node)
 
     if (isSafeImageSrc(src)) {
       this.img.src = src

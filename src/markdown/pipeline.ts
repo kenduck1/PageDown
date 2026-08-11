@@ -17,6 +17,7 @@ import { annotateSourceOffsets, type SourceMap } from './source-map'
 import { remarkPagebreak, PAGEBREAK_CLASS, collectPagebreakWarnings } from './pagebreak-plugin'
 import { createPagebreakToHast } from './pagebreak-to-hast'
 import { remarkToc, TOC_CLASS, collectTocWarnings } from './toc-plugin'
+import { remarkImageAttrs } from './image-size'
 import { createTocToHast } from './toc-to-hast'
 import type { DocumentWarning } from './document-warnings'
 import { createMathBlockToHast, createMathInlineToHast } from './math-to-hast'
@@ -303,6 +304,15 @@ export function markdownToHtml(
     // pass: `remarkToc` reads every `heading` in the finished tree, so it has
     // to run after parsing is complete -- which `.runSync()` below guarantees.
     .use(remarkToc)
+    // Must run in the PARSE processor rather than as a post-sanitize hast
+    // pass, unlike rewriteLocalImageSrcs/applyRemoteImagePolicy: it consumes a
+    // trailing `{width=...}` TEXT node, which only exists while the tree is
+    // still mdast. It sets `data.hProperties.width`, which mdast-util-to-hast's
+    // own image handler then merges through applyData -- so no custom hast
+    // handler is needed, and the emitted `width` attribute is already in
+    // hast-util-sanitize's default allowlist, meaning the schema below needed
+    // no widening at all for this feature.
+    .use(remarkImageAttrs)
     .use(remarkComment)
 
   const parsedTree = parseProcessor.parse(source) as Root
