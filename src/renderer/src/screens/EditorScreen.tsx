@@ -50,6 +50,29 @@ import { resolveDocumentStyle } from '../../../typography/document-style'
 // transition pairs that destroy undo history.
 const UNDO_BARRIER_TOAST_MESSAGE = 'Undo history resets when switching between Format and Source.'
 
+/**
+ * Whether a composer row's captured target document is still the one on
+ * screen -- the submit-time half of the audit-2.5 fix (see the capture refs'
+ * own comment in EditorScreen for the measured bug and for why the target is
+ * `{ tabId, revision }` rather than a tab id alone).
+ *
+ * Reads the live store rather than taking the current values as arguments,
+ * because its callers are click handlers whose enclosing render closure can be
+ * arbitrarily old -- the same `getState()` convention handleSetViewMode and
+ * handleRestoreVersion already use for exactly this risk.
+ *
+ * A null target (no composer was ever opened this session) refuses. That
+ * direction is deliberate: every real path into these handlers goes through a
+ * composer row, which cannot render without having been opened, so a null here
+ * means something dispatched a composer command out of band -- and refusing an
+ * unexplained write to a document is always the recoverable choice.
+ */
+function composerTargetIsLive(target: { tabId: string; revision: number } | null): boolean {
+  if (!target) return false
+  const { activeTabId, revision } = useDocumentStore.getState()
+  return target.tabId === activeTabId && target.revision === revision
+}
+
 function EditorScreen(): React.JSX.Element {
   const goHome = useAppStore((state) => state.goHome)
   const pageSetupOpen = useAppStore((state) => state.pageSetupOpen)
@@ -59,6 +82,11 @@ function EditorScreen(): React.JSX.Element {
   const openCommentComposer = useAppStore((state) => state.openCommentComposer)
   const linkComposerOpen = useAppStore((state) => state.linkComposerOpen)
   const openLinkComposer = useAppStore((state) => state.openLinkComposer)
+  // Read here, not just by the composer components themselves: EditorScreen
+  // closes both rows when the document they were opened against stops being
+  // the one on screen -- see the composer-target refs further down.
+  const closeLinkComposer = useAppStore((state) => state.closeLinkComposer)
+  const closeCommentComposer = useAppStore((state) => state.closeCommentComposer)
   // No `closeShortcutsHelp` read here anymore -- App.tsx owns the modal's
   // render (and therefore its onClose) as of the product-completeness audit
   // Tier 3, C hoist. `openShortcutsHelp` and `shortcutsHelpOpen` are still
@@ -73,8 +101,12 @@ function EditorScreen(): React.JSX.Element {
   const splitLeftMode = useAppStore((state) => state.splitLeftMode)
   const splitRatio = useAppStore((state) => state.splitRatio)
   const setSplitRatio = useAppStore((state) => state.setSplitRatio)
-  const currentPage = useAppStore((state) => state.currentPage)
-  const setCurrentPage = useAppStore((state) => state.setCurrentPage)
+  // Per-TAB now, not per-window (product-completeness audit 2.4) -- "page 7"
+  // is a fact about one document. See DocumentTab.currentPage's own comment
+  // for the two symptoms that move fixed, including the one committed render
+  // in which the new tab showed the old tab's page.
+  const currentPage = useDocumentStore((state) => state.currentPage)
+  const setCurrentPage = useDocumentStore((state) => state.setCurrentPage)
   const splitFollowEnabled = useAppStore((state) => state.splitFollowEnabled)
   const sidebarVisible = useAppStore((state) => state.sidebarVisible)
   const toggleSidebar = useAppStore((state) => state.toggleSidebar)
@@ -116,7 +148,16 @@ function EditorScreen(): React.JSX.Element {
   // area -- the region provably disjoint from Split mode's native preview view.
   const editorPaneRef = useRef<HTMLDivElement>(null)
   const splitRowRef = useRef<HTMLDivElement>(null)
-  const [zoom, setZoom] = useState(1)
+  // Window-scoped, in appStore, NOT `useState` here (product-completeness
+  // audit 2.4). Zoom genuinely is a per-window preference -- it describes how
+  // big the paper looks on this screen and never reaches the document, the
+  // paginator or the PDF -- so it carrying across tabs is correct. What was
+  // wrong is that App.tsx unmounts this whole screen on a Home round trip
+  // (`{screen === 'editor' ? <EditorScreen /> : null}`), so component-local
+  // state silently threw the level away and came back at 100%. See
+  // appStore's `zoom` field comment.
+  const zoom = useAppStore((state) => state.zoom)
+  const setZoom = useAppStore((state) => state.setZoom)
   // Whether the zoom control can actually do anything right now. False in
   // Split mode, whose two-pane row deliberately renders OUTSIDE the zoom
   // wrapper (its right pane is a native WebContentsView positioned from a DOM
@@ -159,6 +200,22 @@ function EditorScreen(): React.JSX.Element {
   // milkdown/selection-plugin.ts), WHERE it is, and the box it may be drawn
   // in. State rather than refs because the bubble is React-rendered chrome.
   const [selectionSnapshot, setSelectionSnapshot] = useState<SelectionSnapshot | null>(null)
+  // Which MilkdownEditor instance the snapshot above came from, as its
+  // `revision` key. A snapshot outlives the editor that produced it -- this is
+  // plain React state, while the editor it describes is torn down and rebuilt
+  // whenever `revision` changes (tab switch, Page Setup apply, History
+  // restore, view-mode switch) -- and a snapshot describing a destroyed
+  // editor is not a selection. Recorded in the same callback that stores the
+  // snapshot (never an effect), so this needs no extra render pass.
+  //
+  // In practice a freshly mounted editor republishes almost immediately
+  // (@milkdown/preset-commonmark's heading-id plugin dispatches a synthetic
+  // transaction on every mount, which the selection plugin's view.update
+  // reports), but "almost immediately" is exactly the kind of unverified
+  // timing assumption this file avoids leaning on -- and the observable cost
+  // of being wrong is the audit-2.5 stale prefill: the Insert link row opening
+  // with the PREVIOUS document's href already typed in it.
+  const [selectionRevision, setSelectionRevision] = useState(revision)
   const [selectionAnchor, setSelectionAnchor] = useState<Rect | null>(null)
   const [selectionSafeRect, setSelectionSafeRect] = useState<Rect | null>(null)
 
@@ -199,10 +256,18 @@ function EditorScreen(): React.JSX.Element {
   const handleSelectionChanged = useCallback(
     (snapshot: SelectionSnapshot | null): void => {
       setSelectionSnapshot(snapshot)
+      setSelectionRevision(useDocumentStore.getState().revision)
       measureSelectionGeometry()
     },
     [measureSelectionGeometry]
   )
+
+  // The snapshot, but only while it still describes the editor that is
+  // actually mounted (see selectionRevision above). Everything that reads a
+  // selection reads THIS, not the raw state: the toolbar's pressed states, the
+  // selection bubble, and the link composer's prefill would each otherwise
+  // describe a document that is no longer on screen.
+  const liveSelection = selectionRevision === revision ? selectionSnapshot : null
   // The slash-menu controller (hooks/useSlashMenu.ts) -- owns its own
   // ephemeral state, its own capture-phase scroll listener, and the
   // onChoose/onHover bridge into the live Milkdown editor, so this screen
@@ -237,26 +302,18 @@ function EditorScreen(): React.JSX.Element {
   // backs handleAddComment below.
   const authorName = usePreferencesStore((state) => state.preferences?.authorName)
 
-  // A different document -- or a different tab -- is a different set of
-  // pages, so the current page must not carry over. Without this, opening a
-  // 2-page letter while sitting on page 9 of a report leaves the status bar
-  // claiming page 9 (and the Pages list highlighting a row that no longer
-  // exists).
+  // NOTE (product-completeness audit 2.4): the identity-keyed
+  // `useEffect(() => setCurrentPage(1), [activeTabId, filePath])` that used to
+  // sit here is GONE, and must not come back. It existed only because
+  // `currentPage` was per-window; the page now lives on the tab
+  // (DocumentTab.currentPage), so a fresh document starts at 1 because its tab
+  // object does, and returning to a tab restores the page you left it on.
+  // The effect was also strictly worse than storing the value: it ran after
+  // the switching render committed, so for one frame the new document was on
+  // screen carrying the OTHER document's page -- fed to the status bar, the
+  // Pages sidebar, and SplitPreview's `targetPage`. Reinstating any
+  // reset-on-switch effect here would reintroduce exactly that window.
   //
-  // Keyed on document IDENTITY (`activeTabId` + `filePath`), deliberately
-  // NOT on `revision`. `revision` bumps on any in-place content rewrite,
-  // including `handleSetViewMode`'s own `replaceContentForTab` call -- so a
-  // revision-keyed reset silently broke this feature's headline path:
-  // clicking "next page" in Format mode set the page, switched to Split,
-  // and the resulting revision bump immediately reset the page back to 1,
-  // landing the user on page 1 of a preview they had asked to open at page
-  // 2. A revision bump from an in-place rewrite (mode switch, Page Setup
-  // apply, History restore) is the SAME document, and the page count
-  // shrinking underneath is already handled by the clamp below.
-  useEffect(() => {
-    setCurrentPage(1)
-  }, [activeTabId, filePath, setCurrentPage])
-
   // The page count can SHRINK under an edit while `currentPage` still points
   // past the new end, so clamp for display rather than trusting the stored
   // value. The sandbox clamps for real on its side too (it is the only thing
@@ -369,6 +426,69 @@ function EditorScreen(): React.JSX.Element {
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
   }, [])
+
+  // Which document each composer ROW was opened against (product-completeness
+  // audit 2.5). Both composers are layout rows that leave the whole app --
+  // including the tab bar -- live and clickable, and both act through
+  // `editorRef`, which always points at whichever MilkdownEditor is mounted
+  // RIGHT NOW. Measured consequence: select text in tab A, open Insert link,
+  // click tab B, press Insert, and the link landed in tab B. Same shape for
+  // Add comment, and the composer's own prefill (`initialHref`, derived from
+  // the outgoing document's selection snapshot) was stale on top of it.
+  //
+  // Captured as `{ tabId, revision }` rather than a tab id alone, because tab
+  // identity is not quite the question. What has to still be true at submit
+  // time is "the editor instance holding the selection this composer was
+  // opened against is still the one on screen," and `revision` is exactly that
+  // signal: EditorScreen keys MilkdownEditor on it, so every remount -- a tab
+  // switch, a Page Setup apply, a History restore, a view-mode switch, and
+  // notably a DIFFERENT document loaded into the SAME tab (openDocumentState
+  // reusing a pristine blank tab keeps its id, so a tab-id-only check would
+  // pass) -- changes it. The tab id is kept alongside it because it is the
+  // thing that actually names the document, matching how
+  // setRemoteImagesAllowed/updateContentForTab/replaceContentForTab all take
+  // an explicit tab id for this same class of race; requiring BOTH to match
+  // means neither signal alone has to be perfect.
+  //
+  // Written from an effect keyed on the open flags -- deliberately NOT from
+  // the store actions that open the composers, because those are called from
+  // three different places (the toolbar's buttons, the selection bubble, and
+  // the Mod-Shift-M shortcut) and one of them, EditorToolbar, calls
+  // appStore.openLinkComposer/openCommentComposer directly. Capturing here
+  // covers every opener at once with no change to the store's API.
+  const linkComposerTargetRef = useRef<{ tabId: string; revision: number } | null>(null)
+  const commentComposerTargetRef = useRef<{ tabId: string; revision: number } | null>(null)
+
+  useEffect(() => {
+    if (!linkComposerOpen) return
+    const { activeTabId: tabId, revision: rev } = useDocumentStore.getState()
+    linkComposerTargetRef.current = { tabId, revision: rev }
+  }, [linkComposerOpen])
+
+  useEffect(() => {
+    if (!commentComposerOpen) return
+    const { activeTabId: tabId, revision: rev } = useDocumentStore.getState()
+    commentComposerTargetRef.current = { tabId, revision: rev }
+  }, [commentComposerOpen])
+
+  // ...and close both rows as soon as that document is no longer the one on
+  // screen. This is the USER-VISIBLE half of the 2.5 fix: a composer opened
+  // over a selection in another document has nothing left to act on, so it
+  // goes away with the document rather than sitting there looking usable and
+  // then refusing. Keyed on `revision` alone because revision changes on every
+  // one of the transitions above (including every tab switch --
+  // switchTab/openTab/closeTab all bump it), so this cannot miss a case that
+  // the submit-time guards below would catch.
+  //
+  // Zustand actions, not React setState, so this does not trip
+  // react-hooks/set-state-in-effect (the same reason useFindController can
+  // call setMatches from an effect). Both closes are idempotent "set false"
+  // actions, so running this on mount -- and on a revision bump with nothing
+  // open -- costs nothing.
+  useEffect(() => {
+    closeLinkComposer()
+    closeCommentComposer()
+  }, [revision, closeLinkComposer, closeCommentComposer])
 
   // Publishes the live Milkdown flush to the window-close guard, which runs
   // from App.tsx (the only component mounted on every screen) and so has no
@@ -728,13 +848,19 @@ function EditorScreen(): React.JSX.Element {
     // asynchronously (the renderer pushes window UI state, main rebuilds the
     // menu), so a command dispatched from a momentarily-stale menu must still
     // do nothing rather than something invisible.
+    // Read the live level via getState() rather than through a functional
+    // updater: appStore's setZoom takes a value (it is a plain store action,
+    // not a React setState), and reading `zoom` from this render's closure
+    // instead would be the stale-closure risk this file already avoids
+    // elsewhere -- useMenuCommands' handler map is captured per render, but a
+    // menu command can arrive at any time.
     'view:zoomIn': () => {
       if (!zoomApplies) return
-      setZoom((current) => nextZoomLevel(current))
+      setZoom(nextZoomLevel(useAppStore.getState().zoom))
     },
     'view:zoomOut': () => {
       if (!zoomApplies) return
-      setZoom((current) => previousZoomLevel(current))
+      setZoom(previousZoomLevel(useAppStore.getState().zoom))
     },
     'view:zoomReset': () => {
       if (!zoomApplies) return
@@ -938,6 +1064,10 @@ function EditorScreen(): React.JSX.Element {
   // this stays a no-op rather than a crash if the composer is ever reachable
   // from a surface that isn't.
   const handleInsertLink = (href: string): void => {
+    if (!composerTargetIsLive(linkComposerTargetRef.current)) {
+      closeLinkComposer()
+      return
+    }
     editorRef.current?.insertLink(href)
   }
 
@@ -946,6 +1076,10 @@ function EditorScreen(): React.JSX.Element {
   // the mark across the WHOLE link rather than only the selected characters),
   // not insertLink with an empty href.
   const handleRemoveLink = (): void => {
+    if (!composerTargetIsLive(linkComposerTargetRef.current)) {
+      closeLinkComposer()
+      return
+    }
     editorRef.current?.removeLink()
   }
 
@@ -957,6 +1091,10 @@ function EditorScreen(): React.JSX.Element {
   // itself, which would make an genuinely-blank preference indistinguishable
   // from a user who deliberately typed "You" as their name.
   const handleAddComment = (text: string): boolean => {
+    if (!composerTargetIsLive(commentComposerTargetRef.current)) {
+      closeCommentComposer()
+      return false
+    }
     const author = authorName || 'You'
     return editorRef.current?.addComment(author, text) ?? false
   }
@@ -1461,7 +1599,7 @@ function EditorScreen(): React.JSX.Element {
         // hardcoded `active={false}` they carried since the design handoff.
         // One source, so the two toolbars can never disagree about whether the
         // cursor is in bold text.
-        selection={selectionSnapshot}
+        selection={liveSelection}
       />
       {/* Position is load-bearing, not cosmetic (see FindBar.tsx's own module
       comment) -- rendering FindBar here, as a LAYOUT ROW between the toolbar
@@ -1493,7 +1631,7 @@ function EditorScreen(): React.JSX.Element {
         // other half). Empty string when the selection carries no link, which
         // is also what switches the row between Insert and Update wording and
         // decides whether "Remove link" is offered at all.
-        initialHref={selectionSnapshot?.linkHref ?? ''}
+        initialHref={liveSelection?.linkHref ?? ''}
         onInsertLink={handleInsertLink}
         onRemoveLink={handleRemoveLink}
       />
@@ -1723,7 +1861,7 @@ function EditorScreen(): React.JSX.Element {
       because applyFindState selects each match WITHOUT focusing, so
       snapshot.hasFocus is already false while the user is in the find bar. */}
       <SelectionBubble
-        snapshot={selectionSnapshot}
+        snapshot={liveSelection}
         anchor={selectionAnchor}
         safe={selectionSafeRect}
         suppressed={pageSetupOpen || shortcutsHelpOpen || commentComposerOpen || linkComposerOpen}

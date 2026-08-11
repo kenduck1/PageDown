@@ -41,6 +41,11 @@ interface FindState extends FindStateValues {
   toggleWholeWord: () => void
   toggleReplaceExpanded: () => void
   setMatches: (count: number, capped: boolean) => void
+  // Drops everything DERIVED FROM A PARTICULAR DOCUMENT, keeping everything
+  // the user typed. Called when the editor switches to a different document
+  // (useFindController) -- see this action's implementation comment for the
+  // real bug it closes and for why the query deliberately survives.
+  resetForDocument: () => void
   goToNext: () => void
   goToPrevious: () => void
 }
@@ -98,6 +103,28 @@ export const useFindStore = create<FindState>()((set) => ({
             ? 0
             : state.activeIndex
     })),
+  // Product-completeness audit 2.4. THIS store is unambiguously
+  // document-scoped: a match count and a match cursor describe one specific
+  // document's text, so carrying them onto a different document is actively
+  // wrong rather than merely surprising. Nothing cleared them on a tab switch
+  // -- closeFind was the only writer that did, and its three call sites are
+  // all "the user closed the bar," never "the document changed." Two observed
+  // consequences, both fixed here:
+  //   - the bar kept advertising the PREVIOUS document's "3 of 12" until the
+  //     live surface happened to republish;
+  //   - worse, `activeIndex` stayed pointing into the OLD match list, so the
+  //     first Find Next after a switch jumped to an unrelated position (old
+  //     index 3 resolving against the new document's 4th match).
+  //
+  // Deliberately keeps `query`/`replacement`/`options`/`isOpen`/
+  // `replaceExpanded`: switching documents mid-search means "find this same
+  // thing over here", which is what every editor does, and is the same
+  // reasoning closeFind already uses for keeping the query. Resetting to
+  // activeIndex -1 rather than 0 is what makes the re-scan land on the FIRST
+  // match: setMatches' own clamp turns a negative index into 0 as soon as the
+  // new surface publishes a non-zero count, and -1 is the only correct value
+  // while the count is 0 (see initialFindState).
+  resetForDocument: () => set({ matchCount: 0, activeIndex: -1, capped: false }),
   goToNext: () =>
     set((state) =>
       state.matchCount === 0 ? {} : { activeIndex: (state.activeIndex + 1) % state.matchCount }

@@ -1,6 +1,6 @@
 import { forwardRef, useImperativeHandle } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, render, screen } from '@testing-library/react'
+import { act, cleanup, render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import type { MilkdownEditorHandle } from '../milkdown/MilkdownEditor'
 
@@ -242,5 +242,79 @@ describe('EditorScreen comments', () => {
     await user.type(screen.getByRole('textbox', { name: 'Comment text' }), '{Escape}')
 
     expect(screen.queryByRole('group', { name: 'Add comment' })).not.toBeInTheDocument()
+  })
+
+  // Product-completeness audit 2.5, the Add-comment half (the Insert-link half
+  // is covered the same way in EditorScreen.link.test.tsx, including the
+  // same-tab/different-document case and the stale prefill). A comment is a
+  // real edit to the document, so landing one in the wrong tab is worse than
+  // the link case, not merely equivalent.
+  describe('a composer belongs to the document it was opened against', () => {
+    function seedTwoTabs(): string {
+      useDocumentStore.setState({
+        ...initialDocumentState,
+        tabs: [
+          {
+            id: 'tab-a',
+            filePath: '/tmp/a.md',
+            content: '# A',
+            isDirty: false,
+            mtimeMs: null,
+            remoteImagesAllowed: null,
+            currentPage: 1
+          },
+          {
+            id: 'tab-b',
+            filePath: '/tmp/b.md',
+            content: '# B',
+            isDirty: false,
+            mtimeMs: null,
+            remoteImagesAllowed: null,
+            currentPage: 1
+          }
+        ],
+        activeTabId: 'tab-a',
+        filePath: '/tmp/a.md',
+        content: '# A'
+      })
+      return 'tab-b'
+    }
+
+    it('closes the row when the user switches to another tab', async () => {
+      const second = seedTwoTabs()
+      const user = userEvent.setup()
+      render(<EditorScreen />)
+
+      await user.click(screen.getByRole('button', { name: 'Add comment' }))
+      expect(screen.getByRole('group', { name: 'Add comment' })).toBeInTheDocument()
+
+      act(() => {
+        useDocumentStore.getState().switchTab(second)
+      })
+
+      expect(screen.queryByRole('group', { name: 'Add comment' })).not.toBeInTheDocument()
+      expect(mockEditorHandle.addComment).not.toHaveBeenCalled()
+    })
+
+    // The guard on its own, independent of the close above -- see the matching
+    // test in EditorScreen.link.test.tsx for why the state is constructed by
+    // moving activeTabId WITHOUT bumping revision.
+    it('refuses to comment on a document it was not opened against', async () => {
+      const second = seedTwoTabs()
+      const user = userEvent.setup()
+      render(<EditorScreen />)
+
+      await user.click(screen.getByRole('button', { name: 'Add comment' }))
+      await user.type(screen.getByRole('textbox', { name: 'Comment text' }), 'needs revision')
+
+      act(() => {
+        useDocumentStore.setState({ activeTabId: second, filePath: '/tmp/b.md', content: '# B' })
+      })
+
+      await user.click(screen.getByRole('button', { name: 'Add' }))
+
+      expect(mockEditorHandle.addComment).not.toHaveBeenCalled()
+      expect(screen.queryByRole('group', { name: 'Add comment' })).not.toBeInTheDocument()
+    })
   })
 })

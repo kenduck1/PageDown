@@ -90,26 +90,33 @@ describe('useAppStore', () => {
     expect(useAppStore.getState().screen).toBe('settings')
   })
 
-  it('starts on page 1', () => {
-    expect(useAppStore.getState().currentPage).toBe(1)
+  // `currentPage` used to live here and is deliberately gone: the page you
+  // are looking at belongs to a DOCUMENT, not to a window, so it now lives on
+  // DocumentTab and is covered by documentStore.test.ts. This assertion is
+  // what stops it being reintroduced here by reflex -- a second, per-window
+  // copy would silently shadow the per-tab one for whichever consumer read it.
+  it('does not carry a per-window current page any more', () => {
+    expect('currentPage' in useAppStore.getState()).toBe(false)
+    expect('setCurrentPage' in useAppStore.getState()).toBe(false)
   })
 
-  it('setCurrentPage sets the current page', () => {
-    useAppStore.getState().setCurrentPage(4)
-    expect(useAppStore.getState().currentPage).toBe(4)
+  it('starts at 100% zoom', () => {
+    expect(useAppStore.getState().zoom).toBe(1)
   })
 
-  it('setCurrentPage floors below 1', () => {
-    useAppStore.getState().setCurrentPage(0)
-    expect(useAppStore.getState().currentPage).toBe(1)
-    useAppStore.getState().setCurrentPage(-3)
-    expect(useAppStore.getState().currentPage).toBe(1)
+  it('setZoom sets the level', () => {
+    useAppStore.getState().setZoom(1.5)
+    expect(useAppStore.getState().zoom).toBe(1.5)
   })
 
-  it('setCurrentPage ignores a non-finite page', () => {
-    useAppStore.getState().setCurrentPage(6)
-    useAppStore.getState().setCurrentPage(Number.NaN)
-    expect(useAppStore.getState().currentPage).toBe(6)
+  it('setZoom ignores a non-finite or non-positive level', () => {
+    useAppStore.getState().setZoom(1.25)
+    useAppStore.getState().setZoom(Number.NaN)
+    expect(useAppStore.getState().zoom).toBe(1.25)
+    useAppStore.getState().setZoom(0)
+    expect(useAppStore.getState().zoom).toBe(1.25)
+    useAppStore.getState().setZoom(-2)
+    expect(useAppStore.getState().zoom).toBe(1.25)
   })
 
   it('starts with Split-mode Follow enabled', () => {

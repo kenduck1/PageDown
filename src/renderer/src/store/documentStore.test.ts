@@ -460,6 +460,89 @@ describe('useDocumentStore tabs', () => {
     })
   })
 
+  // Product-completeness audit 2.4: the page you are looking at belongs to a
+  // DOCUMENT, so it lives on the tab. It used to be a single per-window
+  // appStore.currentPage held in place only by an EditorScreen effect that
+  // reset it to 1 on document identity change -- which lost the position and
+  // still left one committed render showing the other document's page.
+  describe('currentPage is per-tab (audit 2.4)', () => {
+    it('starts every tab at page 1 and mirrors the active tab', () => {
+      const state = useDocumentStore.getState()
+      expect(state.currentPage).toBe(1)
+      expect(state.tabs[0].currentPage).toBe(1)
+    })
+
+    it('setCurrentPage writes the ACTIVE tab and the mirror together', () => {
+      useDocumentStore.getState().setCurrentPage(7)
+      const state = useDocumentStore.getState()
+      expect(state.currentPage).toBe(7)
+      expect(state.tabs.find((tab) => tab.id === state.activeTabId)?.currentPage).toBe(7)
+    })
+
+    it('remembers each tab’s own page across a switch, in both directions', () => {
+      const first = useDocumentStore.getState().activeTabId
+      useDocumentStore.getState().setCurrentPage(7)
+      useDocumentStore.getState().openTab('/second.md', '# Second')
+      const second = useDocumentStore.getState().activeTabId
+
+      // A different document starts at its own beginning...
+      expect(useDocumentStore.getState().currentPage).toBe(1)
+      useDocumentStore.getState().setCurrentPage(3)
+
+      // ...and neither tab's page has leaked onto the other.
+      useDocumentStore.getState().switchTab(first)
+      expect(useDocumentStore.getState().currentPage).toBe(7)
+      useDocumentStore.getState().switchTab(second)
+      expect(useDocumentStore.getState().currentPage).toBe(3)
+    })
+
+    // The structural half of the fix, and the half an "assert the value after
+    // the switch" test cannot see: activeTabId and currentPage move in ONE
+    // set(), so no subscriber -- and therefore no committed React render --
+    // can ever observe the new tab paired with the old tab's page. That
+    // pairing is exactly what the old reset-in-an-effect produced for one
+    // frame, and it reached the status bar, the Pages sidebar and
+    // SplitPreview's targetPage.
+    it('never exposes a state in which a tab is active carrying another tab’s page', () => {
+      const first = useDocumentStore.getState().activeTabId
+      useDocumentStore.getState().setCurrentPage(7)
+      useDocumentStore.getState().openTab('/second.md', '# Second')
+      useDocumentStore.getState().setCurrentPage(3)
+
+      const seen: Array<{ activeTabId: string; currentPage: number }> = []
+      const unsubscribe = useDocumentStore.subscribe((state) =>
+        seen.push({ activeTabId: state.activeTabId, currentPage: state.currentPage })
+      )
+      useDocumentStore.getState().switchTab(first)
+      unsubscribe()
+
+      expect(seen).toEqual([{ activeTabId: first, currentPage: 7 }])
+    })
+
+    it('ignores a non-finite page and floors anything below 1', () => {
+      useDocumentStore.getState().setCurrentPage(6)
+      useDocumentStore.getState().setCurrentPage(Number.NaN)
+      expect(useDocumentStore.getState().currentPage).toBe(6)
+      useDocumentStore.getState().setCurrentPage(0)
+      expect(useDocumentStore.getState().currentPage).toBe(1)
+      useDocumentStore.getState().setCurrentPage(-4)
+      expect(useDocumentStore.getState().currentPage).toBe(1)
+    })
+
+    it('reuses a pristine blank tab’s id but still starts the new document at page 1', () => {
+      // The reuse path keeps the tab ID (so the tab does not visibly jump),
+      // which is exactly the case a "reset when the tab id changes" rule
+      // would have missed -- it works here because reuse builds a whole new
+      // tab object rather than patching the old one.
+      useDocumentStore.getState().setCurrentPage(9)
+      const reusedId = useDocumentStore.getState().activeTabId
+      useDocumentStore.getState().loadDocument('/loaded.md', '# Loaded')
+
+      expect(useDocumentStore.getState().activeTabId).toBe(reusedId)
+      expect(useDocumentStore.getState().currentPage).toBe(1)
+    })
+  })
+
   // Product-completeness audit 0.5: opening a path already open in this
   // window must FOCUS the existing tab, not create a duplicate -- see
   // openTab's own implementation comment in documentStore.ts for the full

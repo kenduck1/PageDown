@@ -49,6 +49,39 @@ export function useFindController(params: FindControllerParams): FindController 
   const options = useFindStore((state) => state.options)
   const activeIndex = useFindStore((state) => state.activeIndex)
   const setMatches = useFindStore((state) => state.setMatches)
+  const resetForDocument = useFindStore((state) => state.resetForDocument)
+
+  // Find state is per-DOCUMENT (see findStore.resetForDocument's own comment
+  // for the two observed symptoms this closes). This is the one place that
+  // knows both halves -- which document is live, and what Find currently
+  // believes -- so it is where the two are re-synchronised.
+  //
+  // Keyed on `activeTabId` ALONE, deliberately, and both halves of that matter:
+  //   - NOT on `revision`, even though revision is what remounts the editor.
+  //     revision also bumps for in-place rewrites of the SAME document (a
+  //     view-mode switch, Page Setup's Apply, a History restore), and resetting
+  //     the cursor there would throw away the user's position mid-search -- the
+  //     exact mistake the currentPage reset made before it moved onto the tab.
+  //   - `activeTabId` alone is nonetheless sufficient. The one document change
+  //     that does NOT change the tab id is openDocumentState reusing a
+  //     PRISTINE blank tab, and a pristine tab is byte-empty by definition
+  //     (isPristineBlankTab), so its match list is necessarily already empty --
+  //     there is nothing stale to clear.
+  //
+  // An effect rather than a synchronous call from documentStore's own actions:
+  // making documentStore reach into findStore would invert this codebase's
+  // store layering (findStore knows nothing about documents today, and
+  // documentStore knows nothing about any UI feature) for a difference of one
+  // commit. Accepted, disclosed consequence of the effect: for that single
+  // commit the bar can still show the previous document's count, and in Format
+  // mode the push effect below can select the old index once in the newly
+  // mounted editor before this correction lands. Both are visual-only and
+  // resolve in the same tick's follow-up render; no edit and no navigation is
+  // performed on the wrong document, because the count/cursor drive only
+  // decoration and selection.
+  useEffect(() => {
+    resetForDocument()
+  }, [activeTabId, resetForDocument])
 
   // Source-mode matches: a plain scan over the raw Markdown string, recomputed
   // only when something that could actually change the result changes --

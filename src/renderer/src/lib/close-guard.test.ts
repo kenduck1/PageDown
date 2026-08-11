@@ -21,6 +21,7 @@ function tab(overrides: Partial<DocumentTab> & { id: string }): DocumentTab {
     isDirty: false,
     mtimeMs: null,
     remoteImagesAllowed: null,
+    currentPage: 1,
     ...overrides
   }
 }

@@ -316,4 +316,33 @@ describe('EditorSidebar', () => {
 
     expect(window.api.getVersionHistory).toHaveBeenCalledWith('/a.md')
   })
+
+  // Product-completeness audit 2.4 reported the History panel as "stays and
+  // shows nothing" after switching to an Untitled tab, and read that as a
+  // reason to make `sidebarTab` per-tab. The panel selection is deliberately
+  // staying per-WINDOW (see appStore's own comment: it is a workspace choice
+  // like a devtools tab, and all four panels are already document-aware), so
+  // this pins the fact the decision rests on -- an unsaved document gets a
+  // real explanation, not a blank rail. If that ever regresses to genuinely
+  // showing nothing, the per-window decision has to be revisited, and this
+  // failing is the signal.
+  it('explains an unsaved document’s empty History rather than showing nothing', () => {
+    useAppStore.setState({ sidebarTab: 'history' })
+    render(
+      <EditorSidebar
+        content={SOURCE}
+        onSelectHeading={vi.fn()}
+        currentPage={1}
+        onSelectPage={vi.fn()}
+        filePath={null}
+        onRestoreVersion={vi.fn()}
+        onSelectComment={vi.fn()}
+        onResolveComment={vi.fn()}
+      />
+    )
+
+    expect(
+      screen.getByText('Save this document first to start keeping version history.')
+    ).toBeInTheDocument()
+  })
 })

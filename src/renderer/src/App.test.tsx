@@ -110,6 +110,28 @@ describe('App', () => {
     expect(screen.queryAllByText('Untitled')).toHaveLength(0)
   })
 
+  // Product-completeness audit 2.4: zoom is a genuine per-WINDOW preference
+  // (it describes how big the paper looks on this screen; nothing about it
+  // reaches the document, the paginator or the PDF), so carrying it across
+  // tabs is correct -- but it was held in EditorScreen's own useState, and
+  // this component unmounts that screen entirely on Home. A round trip
+  // therefore silently threw the level away. This test has to live at App
+  // level, because the unmount is App's doing: an EditorScreen-only test
+  // cannot see it.
+  it('keeps the canvas zoom level across a Home round trip', async () => {
+    const user = userEvent.setup()
+    render(<App />)
+
+    await user.click(screen.getByRole('button', { name: 'New document' }))
+    await user.selectOptions(screen.getByLabelText('Zoom level'), '1.5')
+    expect(screen.getByLabelText('Zoom level')).toHaveValue('1.5')
+
+    await user.click(screen.getByRole('button', { name: '← Home' }))
+    await user.click(screen.getByRole('button', { name: 'New document' }))
+
+    expect(screen.getByLabelText('Zoom level')).toHaveValue('1.5')
+  })
+
   describe('opening a document via ?openPath= (Multi-window support)', () => {
     afterEach(() => {
       window.history.replaceState(null, '', '/')
