@@ -1051,3 +1051,43 @@
   font-style: italic;
   opacity: 0.6;
 }
+
+/* THE PAGE BREAK MARKER'S ONLY LOAD-BEARING RULE, and its absence was a real,
+   shipped, headline defect rather than an oversight in a corner: this app is a
+   PAGE-FIRST editor whose toolbar has a Page Break button, whose slash menu
+   offers "Page break", and whose `<!-- pagebreak -->` marker has a custom
+   remark plugin, a Milkdown node, three alternate spellings, lossless `raw`
+   round-tripping and a per-render random-token sanitize exception protecting
+   it from forgery -- and inserting one did NOTHING to the pagination, the
+   exported PDF, the printed output or the page count. `markdownToHtml` emitted
+   `<div class="pagedown-pagebreak"></div>` onto the paginated surface and
+   nothing anywhere consumed that class, so the empty div rendered as nothing
+   and the page ran straight on. The editor drew a dashed divider; the output
+   ignored it.
+
+   CLAUDE.md had recorded the fact in passing -- "not exploitable today
+   (nothing yet consumes `.pagedown-pagebreak` for real layout)" -- as an aside
+   in a SECURITY argument about forged markers, never as a missing feature.
+   Same failure mode as the toolbar-reachability bug: the evidence was written
+   down, filed under the wrong heading, and therefore never read as a defect.
+   It was found by a gate fixture that used `<!-- pagebreak -->` to guarantee
+   a second page and got one page.
+
+   `break-after` (the CSS Fragmentation Level 3 name), not the legacy
+   `page-break-after`: Paged.js's own `Layout`/`breakToken` machinery reads the
+   modern property, and Chromium maps the legacy alias onto it anyway.
+
+   The element is EMPTY and deliberately stays empty -- a break is an effect,
+   not a mark, and anything painted here would print a divider onto a page
+   whose whole purpose is to end cleanly. It still generates a box, which is
+   all `break-after` needs.
+
+   On the editing surface this is inert: the Milkdown canvas is one continuous
+   page card, so there is no fragmentation context for `break-after` to act in.
+   The visible dashed divider a user sees there comes from the Tailwind classes
+   the node's own `toDOM` carries, NOT from here -- so this rule cannot disturb
+   Gate 10's 0.000px parity, and the marker keeps looking like a marker in the
+   editor while doing its real work only where pages exist. */
+.pagedown-document .pagedown-pagebreak {
+  break-after: page;
+}
