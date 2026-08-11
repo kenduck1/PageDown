@@ -4,6 +4,7 @@ import userEvent from '@testing-library/user-event'
 import EditorScreen from './EditorScreen'
 import { useAppStore, initialAppState } from '../store/appStore'
 import { useDocumentStore, initialDocumentState } from '../store/documentStore'
+import type { MenuCommand } from '../../../menu/commands'
 
 beforeEach(() => {
   useAppStore.setState(initialAppState)
@@ -60,13 +61,29 @@ beforeEach(() => {
     onWindowCloseRequest: vi.fn().mockReturnValue(() => {}),
     respondToWindowClose: vi.fn(),
     getStartupWarnings: vi.fn().mockResolvedValue([]),
-    getAppVersion: vi.fn().mockResolvedValue('1.0.0')
+    getAppVersion: vi.fn().mockResolvedValue('1.0.0'),
+    resolveLocalImage: vi.fn()
   }
 })
 
 afterEach(() => {
   cleanup()
 })
+
+// Delivers an application-menu command exactly the way preload does, through
+// whatever callbacks EditorScreen has currently registered on
+// `window.api.onMenuCommand`. Needed here (a copy of
+// EditorScreen.menu.test.tsx's own helper, which cannot be imported from a
+// test file) because the single-row-toolbar pass moved the Split left-pane
+// choice out of EditorToolbar and into View > Split Left Pane -- so the menu
+// IS the trigger a user has for it now, and driving the real subscription is
+// a more faithful reproduction of that than clicking the pill ever was.
+function emitMenuCommand(command: MenuCommand, payload?: string): void {
+  const calls = vi.mocked(window.api.onMenuCommand).mock.calls
+  act(() => {
+    for (const [callback] of calls) callback(command, payload)
+  })
+}
 
 describe('EditorScreen', () => {
   it('shows "Untitled" for a new, unsaved document', () => {
@@ -1324,7 +1341,6 @@ describe('EditorScreen', () => {
     it('toggling splitLeftMode from format to source while in Split mode does not lose an in-flight Milkdown edit', async () => {
       useDocumentStore.setState({ filePath: '/tmp/report.md', content: '# Report' })
       useAppStore.setState({ viewMode: 'split', splitLeftMode: 'format' })
-      const user = userEvent.setup()
       render(<EditorScreen />)
 
       await waitFor(() => {
@@ -1353,7 +1369,13 @@ describe('EditorScreen', () => {
       await new Promise((resolve) => setTimeout(resolve, 20))
       expect(useDocumentStore.getState().content).toBe('# Report')
 
-      await user.click(screen.getByRole('button', { name: 'Split left pane: Source' }))
+      // View > Split Left Pane > Source, delivered through the real
+      // onMenuCommand subscription. This used to be a click on a toolbar pill;
+      // the pill moved into the View menu with the single-row-toolbar pass,
+      // and the INVARIANT under test is unchanged and just as load-bearing --
+      // switching the left pane must not silently drop an edit still inside
+      // Milkdown's 200ms markdownUpdated debounce.
+      emitMenuCommand('view:splitLeftSource')
 
       await waitFor(() => {
         const textarea = screen.getByRole('textbox', {
@@ -1374,7 +1396,9 @@ describe('EditorScreen', () => {
       await user.clear(textarea)
       await user.type(textarea, '# Edited In Split Source Pane')
 
-      await user.click(screen.getByRole('button', { name: 'Split left pane: Format' }))
+      // The mirror-image transition, same new trigger: View > Split Left
+      // Pane > Format.
+      emitMenuCommand('view:splitLeftFormat')
 
       await waitFor(() => {
         expect(screen.getByTestId('document-content')).toHaveTextContent(
@@ -1720,41 +1744,72 @@ describe('EditorScreen', () => {
       expect(mount.className).toContain('pagedown-font-source-serif-4')
     })
 
-    it('choosing a font in the toolbar writes fontFamily into the document frontmatter', async () => {
+    // These two used to drive the toolbar's own font-family/font-size
+    // selects. Those selects moved into Page Setup's Typography section
+    // (single-row-toolbar pass -- they are document-wide PageConfig fields,
+    // not selection formatting), so the flow is now the real one a user has:
+    // open Page Setup, change the control, Apply. The assertion is unchanged
+    // and, if anything, stronger -- it now also proves the move did not
+    // detach these two fields from the single applyPageConfig write path that
+    // every other page setting already uses.
+    it('choosing a font in Page Setup writes fontFamily into the document frontmatter', async () => {
       const user = userEvent.setup()
       useDocumentStore.setState({ filePath: '/tmp/report.md', content: '# Report\n\nBody' })
       render(<EditorScreen />)
 
+      await user.click(screen.getByRole('button', { name: 'Page setup' }))
       const select = await screen.findByLabelText('Font family')
       expect(select).toHaveValue('source-serif-4')
 
       await user.selectOptions(select, 'inter')
+      await user.click(screen.getByRole('button', { name: 'Apply' }))
 
       // A real frontmatter write, not UI-only state: the font has to
       // survive save/reopen and reach the paginator and PDF export.
       await waitFor(() => {
         expect(useDocumentStore.getState().content).toContain('fontFamily: inter')
       })
+
+      // ...and reopening the dialog shows the family the document actually
+      // has, which is the half a write-only control would fail.
+      await user.click(screen.getByRole('button', { name: 'Page setup' }))
       expect(await screen.findByLabelText('Font family')).toHaveValue('inter')
     })
 
     // Capability-gap pass. The size select had `defaultValue="11"` and no
     // onChange whatsoever: it visibly moved to whatever was picked and changed
     // nothing, while also reporting a size (11) the app never rendered at.
-    it('choosing a size in the toolbar writes fontSize into the document frontmatter', async () => {
+    it('choosing a size in Page Setup writes fontSize into the document frontmatter', async () => {
       const user = userEvent.setup()
       useDocumentStore.setState({ filePath: '/tmp/report.md', content: '# Report\n\nBody' })
       render(<EditorScreen />)
 
+      await user.click(screen.getByRole('button', { name: 'Page setup' }))
       const select = await screen.findByLabelText('Font size')
       expect(select).toHaveValue('default')
 
       await user.selectOptions(select, '12')
+      await user.click(screen.getByRole('button', { name: 'Apply' }))
 
       await waitFor(() => {
         expect(useDocumentStore.getState().content).toContain('fontSize: 12')
       })
+
+      await user.click(screen.getByRole('button', { name: 'Page setup' }))
       expect(await screen.findByLabelText('Font size')).toHaveValue('12')
+    })
+
+    // File > Page Setup… (Cmd+Shift+P), added in the same pass so the two
+    // controls that moved into this dialog gained a keyboard route. Without
+    // it, Page Setup would be reachable only by mouse -- which matters more
+    // now that it owns font family and size.
+    it('the File > Page Setup… menu command opens the dialog', async () => {
+      useDocumentStore.setState({ filePath: '/tmp/report.md', content: '# Report' })
+      render(<EditorScreen />)
+
+      expect(screen.queryByRole('dialog', { name: 'Page setup' })).not.toBeInTheDocument()
+      emitMenuCommand('file:pageSetup')
+      expect(await screen.findByRole('dialog', { name: 'Page setup' })).toBeInTheDocument()
     })
 
     it('an explicit size reaches the Milkdown canvas as a real class', async () => {
@@ -1982,17 +2037,22 @@ describe('EditorScreen', () => {
     it('zero-sizes the preview while the keyboard-shortcuts modal is open, and restores it on close', async () => {
       // ShortcutsHelpModal itself is rendered by App.tsx now (product-
       // completeness audit Tier 3, C), not this screen, so this test drives
-      // the SAME `shortcutsHelpOpen` store flag the toolbar button and
+      // the SAME `shortcutsHelpOpen` store flag Help > Keyboard Shortcuts and
       // App.tsx's modal both actually key off, rather than clicking a dialog
       // that no longer exists in THIS render tree. What's under test here is
       // this screen's own `overlayOpen={pageSetupOpen || shortcutsHelpOpen}`
       // wiring into SplitPreview -- unchanged by where the modal renders --
       // and App.test.tsx's own 'keyboard shortcuts reference modal' suite is
       // what proves the dialog itself really appears/disappears.
-      const user = userEvent.setup()
+      // The trigger is the store action rather than a toolbar click because
+      // the shortcuts BUTTON left this toolbar in the single-row pass; its
+      // home is now Help > Keyboard Shortcuts (Cmd+/), whose handler lives in
+      // App.tsx and calls exactly this action.
       const setSplitPreviewBounds = await renderSplitWithLayout()
 
-      await user.click(screen.getByRole('button', { name: 'Keyboard shortcuts' }))
+      act(() => {
+        useAppStore.getState().openShortcutsHelp()
+      })
 
       expect(useAppStore.getState().shortcutsHelpOpen).toBe(true)
       await waitFor(() => {

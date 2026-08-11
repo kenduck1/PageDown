@@ -109,7 +109,8 @@ beforeEach(() => {
     onWindowCloseRequest: vi.fn().mockReturnValue(() => {}),
     respondToWindowClose: vi.fn(),
     getStartupWarnings: vi.fn().mockResolvedValue([]),
-    getAppVersion: vi.fn().mockResolvedValue('1.0.0')
+    getAppVersion: vi.fn().mockResolvedValue('1.0.0'),
+    resolveLocalImage: vi.fn()
   }
 })
 
@@ -119,26 +120,31 @@ afterEach(() => {
 
 describe('EditorToolbar', () => {
   // jsdom has no layout engine -- every width here is 0 -- so it structurally
-  // cannot verify that the formatting controls are REACHABLE, which is the
-  // property that actually matters and the one that was measurably broken (at
-  // the shipped 1000x840 default, eleven controls were unreachable at every
-  // scroll position). phase0/gate32-toolbar-reachability.spec.ts proves that
-  // in the real app. What this test can do is pin the two declarations that
-  // whole fix consists of, both of which look like incidental styling and are
-  // not: a `flex-nowrap` toolbar cannot wrap the right-hand cluster away, and
-  // a `flex-basis: 0%` (i.e. Tailwind's `flex-1`) formatting region reports a
-  // hypothetical main size of 0 to flex line-breaking, so the cluster always
-  // "fits" beside it and the wrap never happens.
-  it('lays the toolbar out so the right-hand cluster can wrap instead of squeezing formatting', () => {
+  // cannot verify either of the two properties that actually matter: that the
+  // formatting controls are REACHABLE, and that the toolbar is ONE ROW.
+  // phase0/gate33-toolbar-reachability.spec.ts proves both in the real app.
+  // What this test can do is pin the two declarations the single-row layout
+  // rests on, both of which read as incidental styling and are not.
+  //
+  // `flex-wrap` was here briefly (it fixed reachability by dropping the
+  // right-hand cluster onto a second line) and is now forbidden: it cost 36px
+  // of permanent vertical chrome at the shipped default. `basis-[content]`
+  // went with it -- it existed only to make flex line-breaking see this
+  // region's full natural width, which is what made the wrap fire at all.
+  // With `flex-1` (basis 0%) the region simply absorbs whatever the flex-none
+  // cluster leaves, and `min-w-0` is what lets it shrink far enough for
+  // `overflow-x-auto` to engage at the app's 760px minimum instead of pushing
+  // its own tail past the window edge.
+  it('lays the toolbar out as a single non-wrapping row with a shrinkable formatting region', () => {
     const ref = createRef<MilkdownEditorHandle>()
     render(<EditorToolbar editorRef={ref} />)
 
     const toolbar = screen.getByRole('toolbar', { name: 'Formatting toolbar' })
-    expect(toolbar.className).toContain('flex-wrap')
-    expect(toolbar.className).not.toContain('flex-nowrap')
+    expect(toolbar.className).not.toContain('flex-wrap')
 
     const formattingRegion = toolbar.firstElementChild as HTMLElement
-    expect(formattingRegion.className).toContain('basis-[content]')
+    expect(formattingRegion.className).not.toContain('basis-[content]')
+    expect(formattingRegion.className).toContain('flex-1')
     expect(formattingRegion.className).toContain('min-w-0')
   })
 
@@ -481,140 +487,79 @@ describe('EditorToolbar', () => {
     expect(screen.getByRole('combobox', { name: 'Paragraph style' })).not.toBeDisabled()
   })
 
-  // Task 5 of the Split mode sub-project: a small Format/Source toggle for
-  // splitLeftMode, visible only in Split mode. Design-handoff placement
-  // check (task-5-brief.md Step 7): PageDown.dc.html DOES show Split-mode
-  // chrome for this exact choice, but as a pill pair inside the LEFT PANE's
-  // own header bar (a 34px strip above the split editing surface), not in
-  // this toolbar -- a different structural location than the file this
-  // task names as the modification target (EditorToolbar.tsx) and than
-  // EditorScreen's own Split layout (task-5-brief.md Step 5, no per-pane
-  // header bar). Building that separate header bar is real scope beyond
-  // this task's brief, so per Step 7's own "use judgment, don't block"
-  // instruction, this uses the brief's own explicitly-sanctioned fallback
-  // instead: a small two-button toggle next to the existing mode-switcher
-  // segmented control, styled the same way (rounded-md bg-chrome-dark
-  // segmented pill).
+  // THE SINGLE-ROW INVARIANT, expressed as the only thing jsdom can actually
+  // check about it. jsdom has no layout engine (every width is 0), so the real
+  // "is this one row at 1000px" proof lives in phase0/gate33 -- but the CAUSE
+  // of the two-row toolbar is checkable here, and it is the one that would
+  // come back by accident: a control being re-added to the right-hand cluster.
   //
-  // aria-label overrides ("Split left pane: Format" / "... Source") rather
-  // than the plain "Format"/"Source" visible text, on purpose -- the
-  // segmented control's OWN Format/Source buttons are simultaneously
-  // visible whenever this toggle is (both are only reachable from Split
-  // mode, since the toggle's whole precondition is viewMode === 'split').
-  // A same-string accessible name would make screen.getByRole('button',
-  // { name: 'Format' }) ambiguous (two matches) the instant Split mode is
-  // active -- which would have broken the pre-existing 'view-mode segmented
-  // control' test above (it clicks 'Split' then immediately queries
-  // 'Source' by exact name). Verified this really would collide before
-  // choosing distinct labels, not assumed.
-  describe('splitLeftMode toggle', () => {
-    it('is absent when viewMode is format or source', () => {
+  // Six controls left this toolbar so it could fit on one line. Each is listed
+  // with where it lives now, because that is the rule for removing one at all
+  // (EditorToolbar.tsx's header): a control whose only home is this toolbar
+  // must stay. If any of these reappears here, the toolbar wraps again at the
+  // shipped default window size and the user gets 36px of permanent vertical
+  // chrome back.
+  describe('controls that moved off the toolbar (single-row invariant)', () => {
+    const RELOCATED = [
+      // 208px. PageSetupModal's Typography section -- and they were never
+      // selection formatting: both write PageConfig fields into the
+      // document's own frontmatter.
+      { role: 'combobox' as const, name: 'Font family' },
+      { role: 'combobox' as const, name: 'Font size' },
+      // 132px. File > Print… (Cmd+P), File > Export as HTML… (Cmd+Alt+E),
+      // Help > Keyboard Shortcuts (Cmd+/).
+      { role: 'button' as const, name: 'Print' },
+      { role: 'button' as const, name: 'Export as HTML' },
+      { role: 'button' as const, name: 'Keyboard shortcuts' }
+    ]
+
+    it.each(RELOCATED)('$name is not rendered in the toolbar', ({ role, name }) => {
       const ref = createRef<MilkdownEditorHandle>()
       useAppStore.setState({ viewMode: 'format' })
-      const { rerender } = render(<EditorToolbar editorRef={ref} />)
+      render(<EditorToolbar editorRef={ref} />)
+      expect(screen.queryByRole(role, { name })).not.toBeInTheDocument()
+    })
+
+    // 218px, and the pair that mattered most: they rendered ONLY in Split
+    // mode, i.e. they loaded their whole cost onto the mode with the least
+    // room. Checked in Split specifically -- checking in Format would pass
+    // even against the old code, which is exactly the vacuous-assertion trap
+    // this suite avoids elsewhere.
+    it('the split-left-pane pills and the Follow pill are gone from Split mode too', () => {
+      const ref = createRef<MilkdownEditorHandle>()
+      useAppStore.setState({ viewMode: 'split', splitLeftMode: 'format' })
+      render(<EditorToolbar editorRef={ref} />)
+
       expect(
         screen.queryByRole('button', { name: 'Split left pane: Format' })
       ).not.toBeInTheDocument()
       expect(
         screen.queryByRole('button', { name: 'Split left pane: Source' })
       ).not.toBeInTheDocument()
-
-      useAppStore.setState({ viewMode: 'source' })
-      rerender(<EditorToolbar editorRef={ref} />)
-      expect(
-        screen.queryByRole('button', { name: 'Split left pane: Format' })
-      ).not.toBeInTheDocument()
-      expect(
-        screen.queryByRole('button', { name: 'Split left pane: Source' })
-      ).not.toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: 'Follow' })).not.toBeInTheDocument()
     })
 
-    it('is present and reflects splitLeftMode when viewMode is split', () => {
+    // The right-hand cluster is now MODE-INDEPENDENT, which is the structural
+    // reason Format and Split measure identically in gate33. Asserted on the
+    // rendered control set rather than on a width, since jsdom has no widths.
+    it('renders the same right-hand cluster controls in Format and in Split', () => {
       const ref = createRef<MilkdownEditorHandle>()
-      useAppStore.setState({ viewMode: 'split', splitLeftMode: 'format' })
-      render(<EditorToolbar editorRef={ref} />)
+      const clusterNames = (): string[] => {
+        const toolbar = screen.getByRole('toolbar', { name: 'Formatting toolbar' })
+        const cluster = toolbar.lastElementChild as HTMLElement
+        return Array.from(cluster.querySelectorAll('button')).map(
+          (button) => button.getAttribute('aria-label') ?? (button.textContent || '')
+        )
+      }
 
-      expect(screen.getByRole('button', { name: 'Split left pane: Format' })).toHaveAttribute(
-        'aria-pressed',
-        'true'
-      )
-      expect(screen.getByRole('button', { name: 'Split left pane: Source' })).toHaveAttribute(
-        'aria-pressed',
-        'false'
-      )
-    })
-
-    it('clicking the toggle calls setSplitLeftMode with the clicked mode', async () => {
-      const ref = createRef<MilkdownEditorHandle>()
-      useAppStore.setState({ viewMode: 'split', splitLeftMode: 'format' })
-      const user = userEvent.setup()
-      render(<EditorToolbar editorRef={ref} />)
-
-      await user.click(screen.getByRole('button', { name: 'Split left pane: Source' }))
-
-      expect(useAppStore.getState().splitLeftMode).toBe('source')
-    })
-  })
-
-  describe('Follow toggle', () => {
-    it('is absent outside Split(format) -- plain format/source, and Split(source)', () => {
-      const ref = createRef<MilkdownEditorHandle>()
       useAppStore.setState({ viewMode: 'format' })
       const { rerender } = render(<EditorToolbar editorRef={ref} />)
-      expect(screen.queryByRole('button', { name: 'Follow' })).not.toBeInTheDocument()
+      const inFormat = clusterNames()
 
-      useAppStore.setState({ viewMode: 'source' })
+      useAppStore.setState({ viewMode: 'split', splitLeftMode: 'format' })
       rerender(<EditorToolbar editorRef={ref} />)
-      expect(screen.queryByRole('button', { name: 'Follow' })).not.toBeInTheDocument()
 
-      // Split mode alone is not enough -- Follow's own arithmetic is keyed
-      // to the Milkdown page card's content height, which a Source-mode
-      // left pane has no relationship to (see EditorToolbar.tsx's own
-      // comment on this toggle).
-      useAppStore.setState({ viewMode: 'split', splitLeftMode: 'source' })
-      rerender(<EditorToolbar editorRef={ref} />)
-      expect(screen.queryByRole('button', { name: 'Follow' })).not.toBeInTheDocument()
-    })
-
-    it('is present, reflects splitFollowEnabled, and defaults ON in Split(format)', () => {
-      const ref = createRef<MilkdownEditorHandle>()
-      useAppStore.setState({ viewMode: 'split', splitLeftMode: 'format' })
-      render(<EditorToolbar editorRef={ref} />)
-
-      expect(useAppStore.getState().splitFollowEnabled).toBe(true)
-      expect(screen.getByRole('button', { name: 'Follow' })).toHaveAttribute('aria-pressed', 'true')
-    })
-
-    it('clicking the toggle calls toggleSplitFollow, flipping splitFollowEnabled', async () => {
-      const ref = createRef<MilkdownEditorHandle>()
-      useAppStore.setState({ viewMode: 'split', splitLeftMode: 'format' })
-      const user = userEvent.setup()
-      render(<EditorToolbar editorRef={ref} />)
-
-      await user.click(screen.getByRole('button', { name: 'Follow' }))
-      expect(useAppStore.getState().splitFollowEnabled).toBe(false)
-      expect(screen.getByRole('button', { name: 'Follow' })).toHaveAttribute(
-        'aria-pressed',
-        'false'
-      )
-
-      await user.click(screen.getByRole('button', { name: 'Follow' }))
-      expect(useAppStore.getState().splitFollowEnabled).toBe(true)
-    })
-
-    it('never says "Sync" anywhere in its own label or title', () => {
-      // Copy-guidance regression: this feature is page-granularity and can
-      // drift, and the transport is request/response polling, not a live
-      // pixel-synced two-pane view -- "Sync" would overclaim both. See
-      // docs/superpowers/plans/2026-08-09-design-doc-gap-audit.md's
-      // "Follow, not Sync" recommendation.
-      const ref = createRef<MilkdownEditorHandle>()
-      useAppStore.setState({ viewMode: 'split', splitLeftMode: 'format' })
-      render(<EditorToolbar editorRef={ref} />)
-
-      const toggle = screen.getByRole('button', { name: 'Follow' })
-      expect(toggle.textContent?.toLowerCase()).not.toContain('sync')
-      expect(toggle.getAttribute('title')?.toLowerCase()).not.toContain('sync')
+      expect(clusterNames()).toEqual(inFormat)
     })
   })
 
@@ -630,17 +575,12 @@ describe('EditorToolbar', () => {
     expect(useAppStore.getState().pageSetupOpen).toBe(true)
   })
 
-  it('The keyboard-shortcuts button calls useAppStore.openShortcutsHelp', async () => {
-    const ref = createRef<MilkdownEditorHandle>()
-    const user = userEvent.setup()
-    render(<EditorToolbar editorRef={ref} />)
-
-    expect(useAppStore.getState().shortcutsHelpOpen).toBe(false)
-
-    await user.click(screen.getByRole('button', { name: 'Keyboard shortcuts' }))
-
-    expect(useAppStore.getState().shortcutsHelpOpen).toBe(true)
-  })
+  // The keyboard-shortcuts BUTTON test that used to sit here is gone with the
+  // button (single-row toolbar). Its replacement is not a weaker version of
+  // itself: `app:shortcuts` is dispatched by Help > Keyboard Shortcuts, which
+  // app-menu-template.test.ts covers, and App.tsx owns both the modal and that
+  // command's handler -- so the same openShortcutsHelp path is still asserted,
+  // from the surface that now triggers it.
 
   it('Export PDF calls window.api.exportPdf with the current document content', async () => {
     useDocumentStore.setState({ content: '# Real document content', filePath: null })
@@ -648,7 +588,7 @@ describe('EditorToolbar', () => {
     const user = userEvent.setup()
     render(<EditorToolbar editorRef={ref} />)
 
-    await user.click(screen.getByRole('button', { name: /Export PDF/ }))
+    await user.click(screen.getByRole('button', { name: 'Export as PDF' }))
 
     await waitFor(() => {
       expect(window.api.exportPdf).toHaveBeenCalledWith('# Real document content', null, false)
@@ -668,7 +608,7 @@ describe('EditorToolbar', () => {
     const user = userEvent.setup()
     render(<EditorToolbar editorRef={ref} />)
 
-    await user.click(screen.getByRole('button', { name: /Export PDF/ }))
+    await user.click(screen.getByRole('button', { name: 'Export as PDF' }))
 
     await waitFor(() => {
       expect(window.api.exportPdf).toHaveBeenCalledWith(
@@ -692,7 +632,7 @@ describe('EditorToolbar', () => {
     const user = userEvent.setup()
     render(<EditorToolbar editorRef={ref} />)
 
-    await user.click(screen.getByRole('button', { name: /Export PDF/ }))
+    await user.click(screen.getByRole('button', { name: 'Export as PDF' }))
 
     await waitFor(() => {
       expect(useDocumentStore.getState().error).toBe('Failed to export PDF. Please try again.')
@@ -711,7 +651,7 @@ describe('EditorToolbar', () => {
     const user = userEvent.setup()
     render(<EditorToolbar editorRef={ref} />)
 
-    await user.click(screen.getByRole('button', { name: /Export PDF/ }))
+    await user.click(screen.getByRole('button', { name: 'Export as PDF' }))
 
     await waitFor(() => {
       expect(window.api.exportPdf).toHaveBeenCalled()
@@ -721,16 +661,23 @@ describe('EditorToolbar', () => {
     )
   })
 
-  it('Export as HTML calls window.api.exportHtml with content/path/consent, matching Export PDF', async () => {
+  // HTML export and Print lost their toolbar buttons in the single-row pass
+  // and are now driven only from the File menu (Cmd+Alt+E / Cmd+P), whose
+  // handlers in EditorScreen call these exact store actions. The four tests
+  // below therefore invoke the action rather than clicking a button -- the
+  // code under test (documentStore.exportHtml / .print, and the Toast this
+  // component renders from the store's exportNotice) is unchanged, only the
+  // trigger moved. EditorScreen.menu.test.tsx separately proves the menu
+  // command reaches these actions at all.
+  it('exportHtml calls window.api.exportHtml with content/path/consent, matching Export PDF', async () => {
     useDocumentStore.setState({
       content: '# Real document content',
       filePath: '/Users/someone/notes/report.md'
     })
     const ref = createRef<MilkdownEditorHandle>()
-    const user = userEvent.setup()
     render(<EditorToolbar editorRef={ref} />)
 
-    await user.click(screen.getByRole('button', { name: /Export as HTML/ }))
+    await useDocumentStore.getState().exportHtml()
 
     await waitFor(() => {
       expect(window.api.exportHtml).toHaveBeenCalledWith(
@@ -752,7 +699,7 @@ describe('EditorToolbar', () => {
     const user = userEvent.setup()
     render(<EditorToolbar editorRef={ref} />)
 
-    await user.click(screen.getByRole('button', { name: /Export PDF/ }))
+    await user.click(screen.getByRole('button', { name: 'Export as PDF' }))
 
     const toast = await screen.findByRole('status')
     expect(toast).toHaveTextContent('Exported PDF: q3.pdf')
@@ -766,7 +713,7 @@ describe('EditorToolbar', () => {
     const user = userEvent.setup()
     render(<EditorToolbar editorRef={ref} />)
 
-    await user.click(screen.getByRole('button', { name: /Export as HTML/ }))
+    await useDocumentStore.getState().exportHtml()
     await screen.findByRole('status')
 
     await user.click(screen.getByRole('button', { name: 'Show in Folder' }))
@@ -784,7 +731,7 @@ describe('EditorToolbar', () => {
     const user = userEvent.setup()
     render(<EditorToolbar editorRef={ref} />)
 
-    await user.click(screen.getByRole('button', { name: /Export PDF/ }))
+    await user.click(screen.getByRole('button', { name: 'Export as PDF' }))
 
     await waitFor(() => {
       expect(window.api.exportPdf).toHaveBeenCalled()
@@ -792,16 +739,15 @@ describe('EditorToolbar', () => {
     expect(screen.queryByRole('status')).not.toBeInTheDocument()
   })
 
-  it('Print calls window.api.print with the current document content and file path', async () => {
+  it('print calls window.api.print with the current document content and file path', async () => {
     useDocumentStore.setState({
       content: '# Real document content',
       filePath: '/Users/someone/notes/report.md'
     })
     const ref = createRef<MilkdownEditorHandle>()
-    const user = userEvent.setup()
     render(<EditorToolbar editorRef={ref} />)
 
-    await user.click(screen.getByRole('button', { name: 'Print' }))
+    await useDocumentStore.getState().print()
 
     await waitFor(() => {
       expect(window.api.print).toHaveBeenCalledWith(
@@ -812,16 +758,15 @@ describe('EditorToolbar', () => {
     })
   })
 
-  it('Print surfaces a failure as a friendly message, not the raw IPC error string', async () => {
+  it('print surfaces a failure as a friendly message, not the raw IPC error string', async () => {
     const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
     vi.mocked(window.api.print).mockRejectedValue(
       new Error("Error invoking remote method 'file:print': Error: Print job failed")
     )
     const ref = createRef<MilkdownEditorHandle>()
-    const user = userEvent.setup()
     render(<EditorToolbar editorRef={ref} />)
 
-    await user.click(screen.getByRole('button', { name: 'Print' }))
+    await useDocumentStore.getState().print()
 
     await waitFor(() => {
       expect(useDocumentStore.getState().error).toBe('Failed to print. Please try again.')
@@ -837,10 +782,9 @@ describe('EditorToolbar', () => {
     vi.mocked(window.api.print).mockResolvedValue({ cancelled: true })
     useDocumentStore.setState({ error: null })
     const ref = createRef<MilkdownEditorHandle>()
-    const user = userEvent.setup()
     render(<EditorToolbar editorRef={ref} />)
 
-    await user.click(screen.getByRole('button', { name: 'Print' }))
+    await useDocumentStore.getState().print()
 
     await waitFor(() => {
       expect(window.api.print).toHaveBeenCalled()
@@ -1073,38 +1017,12 @@ describe('EditorToolbar', () => {
       expect(input.value).toBe('')
     })
 
-    it('the Font size select shows the document’s real size and reports changes', async () => {
-      const user = userEvent.setup()
-      const ref = createRef<MilkdownEditorHandle>()
-      const onSetFontSize = vi.fn()
-      useDocumentStore.setState({ content: '---\nfontSize: 12\n---\n\n# Doc\n' })
-      render(<EditorToolbar editorRef={ref} onSetFontSize={onSetFontSize} />)
-
-      const select = screen.getByRole('combobox', { name: 'Font size' })
-      // This is the assertion the old control could never have passed: it had a
-      // hardcoded `defaultValue="11"` and no onChange at all, so it reported a
-      // size the document did not have and discarded every change.
-      expect(select).toHaveValue('12')
-      await user.selectOptions(select, '16')
-      expect(onSetFontSize).toHaveBeenCalledWith(16)
-    })
-
-    it('the Font size select offers a Default option that reports the string', async () => {
-      const user = userEvent.setup()
-      const ref = createRef<MilkdownEditorHandle>()
-      const onSetFontSize = vi.fn()
-      useDocumentStore.setState({ content: '---\nfontSize: 12\n---\n\n# Doc\n' })
-      render(<EditorToolbar editorRef={ref} onSetFontSize={onSetFontSize} />)
-
-      await user.selectOptions(screen.getByRole('combobox', { name: 'Font size' }), 'default')
-      expect(onSetFontSize).toHaveBeenCalledWith('default')
-    })
-
-    it('the Font size select falls back to Default for a document that sets none', () => {
-      const ref = createRef<MilkdownEditorHandle>()
-      useDocumentStore.setState({ content: '# Doc\n' })
-      render(<EditorToolbar editorRef={ref} />)
-      expect(screen.getByRole('combobox', { name: 'Font size' })).toHaveValue('default')
-    })
+    // The three Font size tests that used to close this block moved WITH the
+    // control, into PageSetupModal.test.tsx's Typography describe -- including
+    // the one that matters most (a document declaring `fontSize: 12` shows 12,
+    // which the original hardcoded-`defaultValue="11"` control could never
+    // have passed). Nothing is dropped; see EditorToolbar.tsx's header for why
+    // a document-wide PageConfig field does not belong on a
+    // selection-formatting toolbar in the first place.
   })
 })

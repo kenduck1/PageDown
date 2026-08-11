@@ -10,11 +10,31 @@ describe('coerceWindowUiState', () => {
     const state = {
       documentOpen: true,
       viewMode: 'split',
+      // Both of these became WindowUiState fields when the single-row-toolbar
+      // pass moved the Split left-pane pills and the Follow pill out of
+      // EditorToolbar and into View > Split Left Pane / View > Follow Preview
+      // Scroll -- the menu is now the only surface either one has, so it has
+      // to be able to render their live state.
+      splitLeftMode: 'source',
+      splitFollowEnabled: false,
       fileName: 'report.md',
       isDirty: true,
       openFilePaths: ['/tmp/docs/report.md', '/tmp/docs/notes.md']
     }
     expect(coerceWindowUiState(state)).toEqual(state)
+  })
+
+  it('validates splitLeftMode against the real union and splitFollowEnabled as a boolean', () => {
+    // Same reasoning as viewMode's own allowlist immediately below: these
+    // arrive over IPC as untyped data, and splitLeftMode reaches a menu radio
+    // group's `checked` computation, where an out-of-union string would leave
+    // NEITHER item checked -- a menu silently reporting a state the window is
+    // not in.
+    expect(coerceWindowUiState({ splitLeftMode: 'split' }).splitLeftMode).toBe('format')
+    expect(coerceWindowUiState({ splitLeftMode: 7 }).splitLeftMode).toBe('format')
+    expect(coerceWindowUiState({ splitLeftMode: 'source' }).splitLeftMode).toBe('source')
+    expect(coerceWindowUiState({ splitFollowEnabled: 'no' }).splitFollowEnabled).toBe(true)
+    expect(coerceWindowUiState({ splitFollowEnabled: false }).splitFollowEnabled).toBe(false)
   })
 
   it('falls back to the default for a non-object payload', () => {
@@ -31,6 +51,8 @@ describe('coerceWindowUiState', () => {
     ).toEqual({
       documentOpen: true,
       viewMode: 'format',
+      splitLeftMode: 'format',
+      splitFollowEnabled: true,
       fileName: null,
       isDirty: false,
       openFilePaths: []
@@ -78,7 +100,14 @@ describe('coerceWindowUiState', () => {
 })
 
 describe('menuRelevantStateChanged', () => {
-  const base = { documentOpen: true, viewMode: 'format' as const, fileName: 'a.md', isDirty: false }
+  const base = {
+    documentOpen: true,
+    viewMode: 'format' as const,
+    splitLeftMode: 'format' as const,
+    splitFollowEnabled: true,
+    fileName: 'a.md',
+    isDirty: false
+  }
 
   it('is true when there was no previous state at all', () => {
     expect(menuRelevantStateChanged(undefined, base)).toBe(true)
@@ -87,6 +116,15 @@ describe('menuRelevantStateChanged', () => {
   it('is true when documentOpen or viewMode changed', () => {
     expect(menuRelevantStateChanged(base, { ...base, documentOpen: false })).toBe(true)
     expect(menuRelevantStateChanged(base, { ...base, viewMode: 'source' })).toBe(true)
+  })
+
+  it('is true when splitLeftMode or splitFollowEnabled changed', () => {
+    // Not merely "more fields is more correct": both render as live menu
+    // state (a radio checkmark, a checkbox), and they are now the ONLY
+    // surface either control has. A change that did not rebuild the menu
+    // would leave it reporting a state the window is not in.
+    expect(menuRelevantStateChanged(base, { ...base, splitLeftMode: 'source' })).toBe(true)
+    expect(menuRelevantStateChanged(base, { ...base, splitFollowEnabled: false })).toBe(true)
   })
 
   it('is FALSE for a dirty flip or a filename change', () => {

@@ -120,6 +120,20 @@ export function buildAppMenuTemplate(params: AppMenuTemplateParams): MenuItemCon
   // The one per-mode exception to the coarse rule above -- see the View menu's
   // zoom items for the full reasoning.
   const zoomApplies = documentOpen && state.viewMode !== 'split'
+  // The Split-only items are the mirror image of the zoom exception: they are
+  // the only two things in this menu that mean nothing OUTSIDE Split mode.
+  // Both used to be toolbar pills that simply were not RENDERED outside Split
+  // (EditorToolbar gated them on `viewMode === 'split'`, and Follow
+  // additionally on `splitLeftMode === 'format'`); a menu item cannot come and
+  // go the same way without the menu visibly reflowing, so the equivalent is
+  // to keep them present and disabled.
+  const splitApplies = documentOpen && state.viewMode === 'split'
+  // Follow's own arithmetic (useSplitFollowScroll.ts, via page-nav.ts's
+  // estimatePageFromScrollOffset) is keyed to the Milkdown page card's
+  // content-box height, which has no counterpart in a plain <textarea> -- so
+  // it is genuinely inapplicable when the left pane is Source, exactly as the
+  // toolbar pill's own render gate already encoded.
+  const followApplies = splitApplies && state.splitLeftMode === 'format'
 
   const clickCommand = (command: MenuCommand) => (): void => send(command)
 
@@ -172,10 +186,35 @@ export function buildAppMenuTemplate(params: AppMenuTemplateParams): MenuItemCon
         click: clickCommand('file:exportPdf')
       },
       {
+        // Same base key as Export as PDF, different modifier, because the two
+        // are the same operation in two formats and a mnemonic that survives
+        // is worth more than an unrelated free letter. Alt+E is genuinely
+        // free: the Mod+Alt bindings the editor already claims are 0-8, C, X
+        // (headings/code block/strikethrough) and F (Find and Replace, macOS)
+        // -- checked against ShortcutsHelpModal.tsx's own verified list, which
+        // is itself read out of the installed presets.
+        label: 'Export as HTML…',
+        accelerator: 'CmdOrCtrl+Alt+E',
+        enabled: documentOpen,
+        click: clickCommand('file:exportHtml')
+      },
+      {
         label: 'Print…',
         accelerator: 'CmdOrCtrl+P',
         enabled: documentOpen,
         click: clickCommand('file:print')
+      },
+      {
+        // Cmd+Shift+P is the platform's own long-standing Page Setup
+        // accelerator, and it is free here. This item did not exist while
+        // Page Setup was reachable ONLY from a toolbar icon; it matters more
+        // now, because Page Setup is also where the document's font family
+        // and body size moved to (see PageSetupModal.tsx's Typography
+        // section), so it is no longer a rarely-touched dialog.
+        label: 'Page Setup…',
+        accelerator: 'CmdOrCtrl+Shift+P',
+        enabled: documentOpen,
+        click: clickCommand('file:pageSetup')
       },
       { type: 'separator' },
       // Non-macOS convention puts Preferences under File (macOS puts it in
@@ -274,6 +313,51 @@ export function buildAppMenuTemplate(params: AppMenuTemplateParams): MenuItemCon
         accelerator: 'CmdOrCtrl+3',
         enabled: documentOpen,
         click: clickCommand('view:source')
+      },
+      { type: 'separator' },
+      // SPLIT LEFT PANE and FOLLOW PREVIEW SCROLL are this menu's only home,
+      // not a duplicate of a toolbar control. Both shipped as pills in
+      // EditorToolbar's right-hand cluster and were moved here by the
+      // single-row-toolbar pass: together they cost 218px of toolbar width and
+      // ONLY in Split mode, which is exactly the mode where the toolbar had
+      // least room -- so they were what forced the toolbar onto a second row.
+      // They land in View rather than anywhere else because this menu already
+      // owns "how is this window showing the document" (the radio group
+      // directly above, zoom below), and a radio pair plus a checkbox can
+      // report their own live state, which a plain command item could not.
+      //
+      // NEITHER carries an accelerator, and that is a checked conclusion
+      // rather than an omission: the obvious pair for a sub-choice of Cmd+1 /
+      // Cmd+3 would be Cmd+Alt+1 / Cmd+Alt+3, and @milkdown/preset-commonmark
+      // already binds both to Heading 1 / Heading 3 (ShortcutsHelpModal.tsx's
+      // Structure section, read out of the installed preset). Inventing an
+      // unrelated chord for a per-window layout preference would be worse than
+      // a labelled menu item with a live checkmark.
+      {
+        label: 'Split Left Pane',
+        submenu: [
+          {
+            label: 'Format',
+            type: 'radio',
+            checked: state.splitLeftMode === 'format',
+            enabled: splitApplies,
+            click: clickCommand('view:splitLeftFormat')
+          },
+          {
+            label: 'Source',
+            type: 'radio',
+            checked: state.splitLeftMode === 'source',
+            enabled: splitApplies,
+            click: clickCommand('view:splitLeftSource')
+          }
+        ]
+      },
+      {
+        label: 'Follow Preview Scroll',
+        type: 'checkbox',
+        checked: state.splitFollowEnabled,
+        enabled: followApplies,
+        click: clickCommand('view:toggleSplitFollow')
       },
       { type: 'separator' },
       // The three zoom items are the ONE place this menu's deliberately-coarse

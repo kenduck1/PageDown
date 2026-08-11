@@ -1,16 +1,10 @@
-import { useEffect, useMemo, useRef, useState, type ReactElement, type RefObject } from 'react'
+import { useEffect, useRef, useState, type ReactElement, type RefObject } from 'react'
 import { useAppStore, type ViewMode } from '../store/appStore'
 import { useDocumentStore } from '../store/documentStore'
 import { useFindStore } from '../store/findStore'
 import { isSourceEditing } from '../lib/editing-surface'
 import { shouldPinToolbarGroup } from '../lib/toolbar-layout'
 import Toast from './Toast'
-import {
-  PAGE_FONT_SIZES,
-  resolvePageConfig,
-  type PageFontFamily,
-  type PageFontSize
-} from '../../../markdown/page-config'
 import type { MilkdownEditorHandle } from '../milkdown/MilkdownEditor'
 import type { SelectionSnapshot } from '../milkdown/selection-plugin'
 
@@ -30,6 +24,79 @@ import type { SelectionSnapshot } from '../milkdown/selection-plugin'
 // (File > Export as PDF / Print), and an in-flight guard living in this
 // component's own useState could not have stopped a double-run started from
 // the menu.
+//
+// ==========================================================================
+// THIS TOOLBAR IS ONE ROW, AND STAYING ONE ROW IS A REQUIREMENT
+// ==========================================================================
+// Measured in the real built app at the shipped 1000x840 default
+// (src/main/window-bounds.ts), the toolbar was 81px tall -- two rows -- and
+// only collapsed to one at about 1436px. In a page-first editor, 36px of
+// permanent vertical chrome is expensive, and the wrap was a fix for a
+// DIFFERENT defect: at the same window size the formatting region had only
+// 407px of visible width (189px in Split) for 843px of content, while the
+// opaque `sticky left-0` leading group alone was 420.5px -- wider than the
+// region it was pinned inside, so it covered that region at EVERY scroll
+// position and eleven controls were unreachable by any means.
+//
+// Both constraints are real, and wrapping traded one for the other. The fix
+// is to make the content genuinely FIT instead. Measured in the real built
+// app after this pass, at 1000x840: toolbar height 45px (was 81), formatting
+// region 691px visible for 691px of content -- maxScroll 0 -- in BOTH Format
+// and Split, with all 15 controls hit-testable and every one of them on a
+// single offsetTop band. At the app's own 760px minimum it is still 45px,
+// with 451px visible for 635px of content, and all 15 still reachable by
+// scrolling. shouldPinToolbarGroup (lib/toolbar-layout.ts)
+// is kept unchanged as the structural backstop for the narrow widths that do
+// still scroll (the app's own 760px minimum), where it un-pins the leading
+// group rather than letting it occlude anything.
+//
+// THE RULE FOR REMOVING A CONTROL FROM THIS TOOLBAR: it may go only if it is
+// genuinely reachable another way -- an application-menu item, ideally with
+// an accelerator. A control whose only home is this toolbar must stay. What
+// left, and where each one lives now:
+//
+//   Font family / Font size selects (208px)  -> PageSetupModal's Typography
+//       section. These were never selection formatting: both write
+//       PageConfig fields into the document's own YAML frontmatter, i.e.
+//       they are document-wide settings, and PageSetupModal is the
+//       PageConfig editor. Also File > Page Setup… (Cmd+Shift+P).
+//   Print (44px)                             -> File > Print… (Cmd+P).
+//   Export as HTML (44px)                    -> File > Export as HTML…
+//       (Cmd+Alt+E), a menu item this pass added.
+//   Keyboard shortcuts (44px)                -> Help > Keyboard Shortcuts
+//       (Cmd+/), which is already ungated on documentOpen.
+//   Split left pane Format/Source (142.7px)  -> View > Split Left Pane
+//       (a real radio pair), Split-mode only.
+//   Follow (75.5px)                          -> View > Follow Preview Scroll
+//       (a real checkbox), Split-mode only.
+//
+// Two controls were narrowed rather than removed: the view-mode segmented
+// control dropped its three icons (66px) but kept every label, and Export PDF
+// became an icon-only accent button (86px) -- it keeps the accent fill, so it
+// is still the visually dominant control, and it is the one action here with
+// a real accelerator (Cmd+Shift+E) and a File-menu twin.
+//
+// WHAT WAS RULED OUT:
+//   - Widening the default window. Not available: Gate 28/29 assert their
+//     floating-surface clamps are BINDING, and those assertions go vacuous
+//     above ~1050px (window-bounds.ts records the measured crossover).
+//   - An overflow "…" popup. The occlusion objection alone is NO LONGER
+//     decisive and should not be quoted as if it were -- lib/floating-
+//     position.ts already clamps the selection bubble and the slash palette
+//     out of the Split preview's column, so the machinery exists. It is ruled
+//     out on better grounds: a FIXED overflow set is strictly worse than the
+//     application menu, which already exists, already carries accelerators,
+//     and is where people look for Print/Export; a DYNAMIC one needs
+//     per-render measurement of every control (see how much care
+//     shouldPinToolbarGroup's single measured rule already takes); and in
+//     Split mode the clamp would land the popup on the far side of the window
+//     from the button that opened it.
+//   - Icon-only mode switching. 135px, and the cheapest of all -- rejected
+//     because Format/Split/Source is the app's primary mode affordance and
+//     three abstract glyphs do not name it.
+//   - Dropping Undo/Redo (91px) or Find (40px). Both are one-click controls a
+//     mouse-first user reaches for constantly, unlike the Split-only pills
+//     and the once-per-session export actions that went instead.
 export interface EditorToolbarProps {
   editorRef: RefObject<MilkdownEditorHandle | null>
   // Optional: when provided, mode-switch clicks call this INSTEAD of the
@@ -41,24 +108,13 @@ export interface EditorToolbarProps {
   // component's existing standalone tests (rendered with only `editorRef`)
   // keep passing unchanged.
   onSetViewMode?: (mode: ViewMode) => void
-  // Optional, same pattern as onSetViewMode above: when provided, the
-  // font-family select reports the user's choice through this instead of
-  // touching the document itself. EditorScreen wires it to a real
-  // frontmatter write (handleSetFontFamily), because the font is a property
-  // OF THE DOCUMENT -- it has to survive save/reopen and reach the
-  // paginator and PDF export, so UI-only state would be wrong. Omitted in
-  // this component's own standalone tests, which render it with only
-  // `editorRef`; the select still shows the document's real current family
-  // either way, it just can't change it.
-  onSetFontFamily?: (fontFamily: PageFontFamily) => void
-  // Exactly the same contract as onSetFontFamily above, for the size select
-  // beside it: EditorScreen wires it to a real frontmatter write, because the
-  // body size is a property OF THE DOCUMENT (it has to survive save/reopen and
-  // reach the paginator and PDF export), so UI-only state would be wrong.
-  // Omitted in this component's own standalone tests, which render it with
-  // only `editorRef`; the select still shows the document's real current size
-  // either way, it just can't change it.
-  onSetFontSize?: (fontSize: PageFontSize) => void
+  // The font-family and font-size selects that used to be configured through
+  // this component (onSetFontFamily / onSetFontSize) are GONE from the
+  // toolbar -- see this file's header. They are PageConfig fields, so they now
+  // live in PageSetupModal's Typography section and reach the document
+  // through the single `onApply` path every other page setting already uses;
+  // EditorScreen no longer needs a second, parallel frontmatter writer for
+  // them.
   // The live selection/formatting state from milkdown/selection-plugin.ts,
   // threaded through EditorScreen. Optional and defaulting to null, so this
   // component's own standalone tests (which render it with only `editorRef`)
@@ -172,18 +228,12 @@ function ToolbarIconButton({
 function EditorToolbar({
   editorRef,
   onSetViewMode,
-  onSetFontFamily,
-  onSetFontSize,
   selection = null
 }: EditorToolbarProps): ReactElement {
   const viewMode = useAppStore((state) => state.viewMode)
   const setViewMode = useAppStore((state) => state.setViewMode)
   const splitLeftMode = useAppStore((state) => state.splitLeftMode)
-  const setSplitLeftMode = useAppStore((state) => state.setSplitLeftMode)
-  const splitFollowEnabled = useAppStore((state) => state.splitFollowEnabled)
-  const toggleSplitFollow = useAppStore((state) => state.toggleSplitFollow)
   const openPageSetup = useAppStore((state) => state.openPageSetup)
-  const openShortcutsHelp = useAppStore((state) => state.openShortcutsHelp)
   const openCommentComposer = useAppStore((state) => state.openCommentComposer)
   const openLinkComposer = useAppStore((state) => state.openLinkComposer)
   // F2 (final whole-branch review): every control below bound to
@@ -213,19 +263,19 @@ function EditorToolbar({
   // "which editing surface is live" cannot be answered from viewMode alone;
   // this was the one place still trying to.
   const isSourceMode = isSourceEditing(viewMode, splitLeftMode)
-  const content = useDocumentStore((state) => state.content)
   const findOpen = useFindStore((state) => state.isOpen)
   const openFind = useFindStore((state) => state.openFind)
   const closeFind = useFindStore((state) => state.closeFind)
   // Both the flags and the actions now come from the store -- see this
   // component's own header comment, and documentStore's isExporting field,
   // for why a component-local useState guard stopped being sufficient.
+  // Only the PDF pair is read here now: Print and Export-as-HTML lost their
+  // toolbar buttons and are driven exclusively from the File menu, whose
+  // handlers (EditorScreen's useMenuCommands) call the same store actions --
+  // so their in-flight guards are unchanged, they simply have one trigger
+  // instead of two.
   const isExporting = useDocumentStore((state) => state.isExporting)
-  const isPrinting = useDocumentStore((state) => state.isPrinting)
-  const isExportingHtml = useDocumentStore((state) => state.isExportingHtml)
   const exportPdf = useDocumentStore((state) => state.exportPdf)
-  const exportHtml = useDocumentStore((state) => state.exportHtml)
-  const print = useDocumentStore((state) => state.print)
   // Product-completeness audit 2.3: "Export gives no feedback." exportNotice
   // is store state (not this component's own useState) specifically because
   // export has TWO independent triggers -- this toolbar's own buttons, and
@@ -235,12 +285,6 @@ function EditorToolbar({
   // what makes it fire regardless of which one the user actually used.
   const exportNotice = useDocumentStore((state) => state.exportNotice)
   const clearExportNotice = useDocumentStore((state) => state.clearExportNotice)
-  // The document's own current font family, for the controlled select
-  // below. resolvePageConfig does a real YAML parse, so it is memoized on
-  // `content` for the same reason EditorScreen memoizes its own copy.
-  const fontFamily = useMemo(() => resolvePageConfig(content).fontFamily, [content])
-  // Same treatment, same memo, for the size select beside it.
-  const fontSize = useMemo(() => resolvePageConfig(content).fontSize, [content])
   // A real, hidden <input type="file">, clicked programmatically by the
   // "Insert image" button. Chromium opens the genuine OS picker for it, which
   // is why this feature needed NO new main-process IPC handler at all -- worth
@@ -440,50 +484,26 @@ function EditorToolbar({
 
   return (
     <>
-      {/* flex-WRAP, not flex-nowrap -- the single most important line in this
-        file, and a fix for a measured defect rather than a style preference.
-        Measured in the real built app at the shipped default 1000x840 window
-        (src/main/window-bounds.ts): the right-hand cluster is 551px wide in
-        Format mode and 769px in Split, which left the formatting region 407px
-        / 189px of visible width for 843px of content -- and since the pinned
-        leading group alone is 420.5px, it covered that region completely at
-        every scroll position. Eleven controls (Bold, Italic, all three lists,
-        link, image, table, page break, Add comment, Find) were unreachable by
-        any means, confirmed by real hit-testing, not by eye.
-        CLAUDE.md had already recorded the symptom from the other side: Gate 27
-        could not click its own "Add comment" button and used a keyboard
-        shortcut instead.
+      {/* NO flex-wrap, deliberately and permanently -- this row must never
+        become two. `flex-wrap` shipped here briefly as a fix for the
+        reachability defect described in this file's header, and it worked, but
+        it cost 36px of permanent vertical chrome at the default window size
+        (45px -> 81px, one row again only above ~1436px) in an app whose whole
+        subject is the page. The content was made to fit instead.
 
-        With wrapping, the right-hand cluster drops to a second line whenever
-        it cannot coexist with the formatting region's full natural width, so
-        the formatting row gets the whole toolbar width (972px at the default
-        size) and NOTHING is hidden or scrolled. The toolbar is 45px tall on
-        one line and ~86px on two, and only pays that when it must.
-
-        What was ruled out, and why:
-          - Widening the default window. Explicitly not available: Gate 28/29
-            assert their floating-surface clamps are BINDING, and those
-            assertions go vacuous above ~1050px (window-bounds.ts records the
-            measured crossover). A wider default trades a visible bug for two
-            silently-vacuous gates.
-          - An overflow "..." popup menu. A WebContentsView composites above
-            ALL DOM unconditionally, and in Split mode the preview occupies
-            exactly the region a menu anchored under this cluster would drop
-            into -- so it would need PageSetupModal's zero-rect blanking trick
-            or the bubble menu's clamp, i.e. real new occlusion machinery, to
-            hide controls the user could otherwise just see. This codebase's
-            own precedent (FindBar/CommentComposer/LinkComposer) is a LAYOUT
-            ROW rather than a floating surface for exactly this reason.
-          - Dropping controls into the application menu only. Print/Export/
-            Page Setup are already there, but a formatting toolbar whose Bold
-            button lives in a menu is not a formatting toolbar.
-          - Making the leading group narrow enough to fit. It would have meant
-            relocating the paragraph-style/font-family/font-size selects, and
-            407px of visible region cannot hold the remaining 422px of
-            formatting controls anyway -- it moves the threshold instead of
-            removing it, which is what the audit explicitly asked not to do. */}
+        Because there is no wrap, the invariant that keeps this honest is
+        arithmetic: the formatting region's natural content plus the
+        right-hand cluster must stay inside the toolbar's own content box
+        (972px at the shipped 1000px default). Measured after this pass:
+        635 + 14 + 266.9 = 915.9, i.e. 56.1px of real slack, and IDENTICAL in
+        Format and Split because the two Split-only pills moved to the View
+        menu -- the cluster is 266.9px in both, where it used to grow from
+        551.3 to 769.4. If a future control pushes past that, the failure mode
+        is a horizontally scrolling formatting region -- degraded, but not
+        broken, because shouldPinToolbarGroup refuses to pin an occluding
+        group -- and phase0/gate33 fails on a named assertion, not silently. */}
       <div
-        className="flex flex-none flex-wrap items-center gap-x-3.5 gap-y-1.5 border-b border-border-subtle bg-page px-3.5 py-1.5"
+        className="flex flex-none items-center gap-x-3.5 border-b border-border-subtle bg-page px-3.5 py-1.5"
         role="toolbar"
         aria-label="Formatting toolbar"
       >
@@ -551,24 +571,21 @@ function EditorToolbar({
           per feedback) compresses the same transparent-to-opaque range
           into less horizontal space, so it reads as a bit more present
           without turning into a hard edge. */}
-        {/* `basis-[content]` (flex-basis: content), NOT `flex-1`'s implicit
-          `flex-basis: 0%`, and that one property is what makes the wrap above
-          work at all. CSS Flexbox collects items onto a line by their
-          HYPOTHETICAL main size (flex base size, clamped by min/max) -- with
-          basis 0% this region's hypothetical size is 0, so the right-hand
-          cluster would always "fit" beside it and never wrap, leaving the
-          region squeezed to whatever was left over. With basis: content the
-          hypothetical size is the formatting controls' real natural width
-          (843px measured), so the cluster wraps exactly when the two genuinely
-          cannot coexist. `grow` still lets this region fill the line it lands
-          on, and `min-w-0` + `shrink` still let it shrink BELOW that natural
-          width once it is alone on a line (the app's 760px minimum window),
-          where overflow-x-auto and the pin guard take over. A hardcoded
-          `min-w-[843px]` was the alternative and is strictly worse: it is a
-          measurement frozen into a class, wrong the moment a label, locale or
-          font changes, and at narrow widths it would push content past the
-          window edge with no way to scroll to it. */}
-        <div className="relative min-w-0 shrink grow basis-[content]">
+        {/* `flex-1` (flex-basis: 0%), NOT the `basis-[content]` this carried
+          while the toolbar wrapped. `basis: content` made this region's
+          HYPOTHETICAL main size its full natural width, which is exactly what
+          made flex line-breaking push the right-hand cluster onto a second
+          line; with the wrap gone that basis has nothing left to do, and a
+          zero basis is what makes this region simply absorb whatever the
+          flex-none cluster leaves. `min-w-0` remains load-bearing on a flex
+          child -- without it this div refuses to shrink below its content's
+          natural width and `overflow-x-auto` never engages, so at the app's
+          760px minimum the tail of the row would be pushed past the window
+          edge with no way to reach it. A hardcoded `min-w-[...]` is still the
+          wrong alternative for the same reason it always was: a measurement
+          frozen into a class, wrong the moment a label, locale or font
+          changes. */}
+        <div className="relative min-w-0 flex-1">
           <div
             ref={scrollRef}
             className="scrollbar-hide flex items-center gap-x-2.5 overflow-x-auto"
@@ -628,87 +645,42 @@ function EditorToolbar({
 
               <ToolbarDivider />
 
-              {/* Paragraph style / font family / font size. Font family and
-              font size have no backing MilkdownEditorHandle command (this
-              sub-project's brief scopes editing commands to bold/italic/
-              heading/lists/link/table/pagebreak/undo/redo only) -- both
-              selects below are real, interactive, native <select> elements,
-              but intentionally unwired, matching the same "present but
-              inert" treatment as the Find button. */}
-              <div className="flex items-center gap-2">
-                <div className="relative flex h-[30px] items-center">
-                  <select
-                    key={headingSelectResetKey}
-                    aria-label="Paragraph style"
-                    className="h-full appearance-none rounded-sm bg-transparent pl-2.5 pr-6 text-12-5 text-text-primary hover:bg-chrome-light disabled:cursor-not-allowed disabled:opacity-40"
-                    defaultValue="paragraph"
-                    onChange={(e) => handleHeadingChange(e.target.value)}
-                    disabled={isSourceMode}
-                  >
-                    <option value="paragraph">Normal text</option>
-                    <option value="1">Heading 1</option>
-                    <option value="2">Heading 2</option>
-                    <option value="3">Heading 3</option>
-                  </select>
-                  <span className="pointer-events-none absolute right-2 text-text-tertiary">
-                    <ChevronDownIcon />
-                  </span>
-                </div>
-                <div className="relative flex h-[30px] items-center">
-                  {/* Controlled off the document's own frontmatter, not local
-                    state: reopening a document must show the family it
-                    actually uses. The `font-serif` class the closed control
-                    used to carry is deliberately gone -- it rendered the
-                    selection in Source Serif regardless of what was
-                    selected, which read as the control being broken the
-                    moment a second family existed. */}
-                  <select
-                    aria-label="Font family"
-                    className="h-full appearance-none rounded-sm bg-transparent pl-2.5 pr-6 text-12-5 text-text-primary hover:bg-chrome-light"
-                    value={fontFamily}
-                    onChange={(e) => onSetFontFamily?.(e.target.value as PageFontFamily)}
-                  >
-                    <option value="source-serif-4">Source Serif 4</option>
-                    <option value="inter">Inter</option>
-                  </select>
-                  <span className="pointer-events-none absolute right-2 text-text-tertiary">
-                    <ChevronDownIcon />
-                  </span>
-                </div>
-                {/* Real, controlled, and document-backed as of the capability-gap
-              pass. This was the single worst control in the toolbar: it had
-              `defaultValue="11"` and NO onChange at all, so it visibly moved to
-              whatever the user picked and then changed nothing -- and 11 was not
-              even the app's real body size (14px), so it also misreported the
-              document's actual state. `fontSize` is now a real PageConfig/
-              DocumentStyle field rendered by BOTH surfaces through shared
-              classes in document-typography.css, exactly like the font-family
-              select beside it. "Default" means "whatever the document's theme
-              says" and emits no class at all -- see PageFontSize. */}
-                <div className="relative flex h-[30px] items-center">
-                  <select
-                    aria-label="Font size"
-                    className="h-full appearance-none rounded-sm bg-transparent pl-2 pr-6 text-12-5 text-text-primary hover:bg-chrome-light"
-                    value={String(fontSize)}
-                    onChange={(e) =>
-                      onSetFontSize?.(
-                        e.target.value === 'default'
-                          ? 'default'
-                          : (Number(e.target.value) as PageFontSize)
-                      )
-                    }
-                  >
-                    <option value="default">Default</option>
-                    {PAGE_FONT_SIZES.map((size) => (
-                      <option key={size} value={String(size)}>
-                        {size}
-                      </option>
-                    ))}
-                  </select>
-                  <span className="pointer-events-none absolute right-1.5 text-text-tertiary">
-                    <ChevronDownIcon />
-                  </span>
-                </div>
+              {/* Paragraph style, and ONLY paragraph style.
+
+              THE FONT FAMILY AND FONT SIZE SELECTS THAT USED TO SIT BESIDE IT
+              ARE GONE, MOVED (not deleted) INTO PageSetupModal's Typography
+              section -- 208px, the single largest saving in the single-row
+              pass, and the one whose justification is about meaning rather
+              than pixels. Neither was ever selection formatting: both write
+              `fontFamily`/`fontSize` into the DOCUMENT's own YAML frontmatter,
+              affecting every page at once, and PageSetupModal is where every
+              other PageConfig field is already edited. A selection-formatting
+              toolbar that also carries two document-wide settings invites
+              exactly the misreading that shipped once here, when Font size had
+              `defaultValue="11"` and no onChange at all and read as per-
+              selection sizing that silently did nothing.
+
+              Paragraph style stays because it genuinely is a per-block
+              command (it dispatches toggleHeading/setParagraph on the current
+              selection), and it stays in the PINNED group because it is the
+              one control worth keeping on screen while the rest scrolls. */}
+              <div className="relative flex h-[30px] items-center">
+                <select
+                  key={headingSelectResetKey}
+                  aria-label="Paragraph style"
+                  className="h-full appearance-none rounded-sm bg-transparent pl-2.5 pr-6 text-12-5 text-text-primary hover:bg-chrome-light disabled:cursor-not-allowed disabled:opacity-40"
+                  defaultValue="paragraph"
+                  onChange={(e) => handleHeadingChange(e.target.value)}
+                  disabled={isSourceMode}
+                >
+                  <option value="paragraph">Normal text</option>
+                  <option value="1">Heading 1</option>
+                  <option value="2">Heading 2</option>
+                  <option value="3">Heading 3</option>
+                </select>
+                <span className="pointer-events-none absolute right-2 text-text-tertiary">
+                  <ChevronDownIcon />
+                </span>
               </div>
 
               <ToolbarDivider />
@@ -974,185 +946,66 @@ function EditorToolbar({
           shrinks or scrolls, regardless of how narrow the window gets --
           the scrollable region above absorbs all the squeeze instead.
 
-          `ml-auto` keeps it in the same right-hand corner whether it shares a
-          line with the formatting region or has wrapped onto its own: on a
-          shared line the formatting region's `grow` has already consumed the
-          free space so the auto margin resolves to 0 (auto margins are
-          distributed only from space left AFTER flexing), and on its own line
-          there is nothing growing, so the margin takes all of it and the
-          cluster stays right-aligned rather than jumping to the left edge. */}
+          `ml-auto` is now belt-and-braces rather than load-bearing: the
+          formatting region's `flex-1` already consumes every spare pixel, so
+          the auto margin resolves to 0 in practice (auto margins are
+          distributed only from space left AFTER flexing). It is kept because
+          it costs nothing and it is what pins this cluster right if the region
+          ever stops growing. */}
         <div className="ml-auto flex flex-none items-center gap-3.5">
+          {/* LABELS ONLY -- the three 16px mode icons that used to sit beside
+            them are gone. They cost 66px (icon plus its gap, three times) and
+            said nothing the adjacent word did not: a page outline, a split
+            rectangle and a pair of chevrons are not self-describing, which is
+            exactly why they were captioned in the first place. Dropping the
+            LABELS instead would have saved twice as much and was rejected --
+            Format/Split/Source is this app's primary mode affordance, and it
+            is the one control here that must stay legible at a glance. */}
           <div className="flex items-center gap-0.5 rounded-md bg-chrome-dark p-0.5">
             {(
               [
-                {
-                  mode: 'format' as const,
-                  label: 'Format',
-                  icon: (
-                    <Icon strokeWidth={1.6}>
-                      <rect x="6" y="3.5" width="12" height="17" rx="1.5" />
-                      <path d="M8.7 8h6.6M8.7 11h6.6M8.7 14h4" />
-                    </Icon>
-                  )
-                },
-                {
-                  mode: 'split' as const,
-                  label: 'Split',
-                  icon: (
-                    <Icon strokeWidth={1.6}>
-                      <rect x="4" y="4.5" width="16" height="15" rx="1.5" />
-                      <path d="M12 4.5v15" />
-                    </Icon>
-                  )
-                },
-                {
-                  mode: 'source' as const,
-                  label: 'Source',
-                  icon: (
-                    <Icon strokeWidth={1.7}>
-                      <path d="M9 8.5 5.5 12 9 15.5" />
-                      <path d="M15 8.5 18.5 12 15 15.5" />
-                    </Icon>
-                  )
-                }
+                { mode: 'format' as const, label: 'Format' },
+                { mode: 'split' as const, label: 'Split' },
+                { mode: 'source' as const, label: 'Source' }
               ] as const
-            ).map(({ mode, label, icon }) => (
+            ).map(({ mode, label }) => (
               <button
                 key={mode}
                 type="button"
                 aria-pressed={viewMode === mode}
                 onClick={() => (onSetViewMode ? onSetViewMode(mode) : setViewMode(mode))}
-                className={`flex items-center gap-1.5 rounded-sm px-2.5 py-1 text-12-5 ${
+                className={`rounded-sm px-2.5 py-1 text-12-5 ${
                   viewMode === mode
                     ? 'bg-page text-text-primary shadow-flat'
                     : 'text-text-secondary hover:text-text-primary'
                 }`}
               >
-                {icon}
                 {label}
               </button>
             ))}
           </div>
 
-          {/* Split-left-pane toggle -- visible only in Split mode (Task 5,
-        Split mode sub-project). Placement/style is a bounded judgment call:
-        the design mockup (PageDown.dc.html) DOES show a Format/Source pill
-        pair for this exact choice, but inside the split LEFT PANE's own
-        34px header strip, a structural location this task doesn't build
-        (EditorScreen's Split layout has no per-pane header bar, and this
-        task's own brief names EditorToolbar.tsx, not that pane, as the
-        modification target). Falling back to the brief's own explicitly-
-        sanctioned default instead: a small two-button toggle next to the
-        Format/Split/Source segmented control, in the SAME rounded-md
-        bg-chrome-dark segmented-pill style as that control, so it reads as
-        "a second, narrower version of the same kind of control" rather than
-        a visually unrelated new pattern.
+          {/* THE SPLIT-LEFT-PANE PILLS AND THE "Follow" PILL USED TO SIT HERE,
+            and they are the reason this toolbar could not fit on one line.
+            Together they were 218px (128.7 + 61.5 plus their gaps) and they
+            appeared ONLY in Split mode -- i.e. they loaded their entire cost
+            onto precisely the mode with the least room, taking the visible
+            formatting region down to 189px. Both now live in the View menu
+            (`View > Split Left Pane`, a real radio pair; `View > Follow
+            Preview Scroll`, a real checkbox), which is why WindowUiState
+            gained `splitLeftMode`/`splitFollowEnabled`: a menu is only an
+            acceptable home for them if it can show their live state.
 
-        aria-label overrides (not the plain "Format"/"Source" visible text)
-        are load-bearing, not decoration: the segmented control's OWN
-        Format/Source buttons are simultaneously on screen whenever this
-        toggle is (both only ever show together, since viewMode === 'split'
-        is this toggle's entire precondition) -- a same-string accessible
-        name would make screen.getByRole('button', { name: 'Format' })
-        ambiguous the instant Split mode is active. Verified this really
-        would collide (against the pre-existing 'view-mode segmented
-        control' test, which clicks 'Split' then immediately queries
-        'Source' by exact name) before choosing distinct labels. */}
-          {viewMode === 'split' && (
-            <div className="flex items-center gap-0.5 rounded-md bg-chrome-dark p-0.5">
-              {(
-                [
-                  { mode: 'format' as const, label: 'Format' },
-                  { mode: 'source' as const, label: 'Source' }
-                ] as const
-              ).map(({ mode, label }) => (
-                <button
-                  key={mode}
-                  type="button"
-                  aria-label={`Split left pane: ${label}`}
-                  aria-pressed={splitLeftMode === mode}
-                  // Deliberately calls setSplitLeftMode directly rather than
-                  // going through a coordination function the way
-                  // EditorScreen's own onSetViewMode prop does for the
-                  // Format/Split/Source segmented control above -- this is NOT
-                  // an oversight; see EditorScreen.tsx's handleSetViewMode doc
-                  // comment (item 3) for the full mechanism. Short version:
-                  // Split's own left-pane ternary (splitLeftMode === 'source'
-                  // ? SourceEditor : the Milkdown page-card) is a real element-
-                  // type swap, same as the Format/Source conditional
-                  // elsewhere -- so toggling it always unmounts whichever
-                  // editor was showing (MilkdownEditor's own unmount cleanup
-                  // flushes any pending edit before destroy) and mounts a
-                  // fresh instance of the other one, which reads the CURRENT
-                  // store content regardless of key. That safety net is
-                  // verified directly, not just argued from the mechanism, by
-                  // EditorScreen.test.tsx's 'toggling splitLeftMode... does
-                  // not lose an in-flight edit' tests (real MilkdownEditor, a
-                  // real unflushed edit, a real click on this exact button). If
-                  // this ternary's shape ever changes such that the outgoing
-                  // and incoming editors could share one instance (no longer a
-                  // type swap), this onClick would need to start routing
-                  // through an EditorScreen-owned handleSetSplitLeftMode the
-                  // same way onSetViewMode already works, not stay a bare
-                  // store-action call.
-                  onClick={() => setSplitLeftMode(mode)}
-                  className={`rounded-sm px-2.5 py-1 text-12-5 ${
-                    splitLeftMode === mode
-                      ? 'bg-page text-text-primary shadow-flat'
-                      : 'text-text-secondary hover:text-text-primary'
-                  }`}
-                >
-                  {label}
-                </button>
-              ))}
-            </div>
-          )}
+            Removing them also made the cluster mode-INDEPENDENT, which is
+            worth more than the pixels: the toolbar no longer reflows when you
+            switch to Split, and Format and Split now measure identically.
 
-          {/* Split-mode "Follow" toggle -- visible only alongside the
-          Format/Source split-left-pane toggle immediately above, and for
-          the SAME reason it's gated on splitLeftMode === 'format' too, not
-          just viewMode === 'split': Follow's own arithmetic
-          (useSplitFollowScroll.ts, src/pagination/page-nav.ts's
-          estimatePageFromScrollOffset) is keyed to the Milkdown page card's
-          content-box height, which has no relationship to a plain
-          <textarea>'s scroll position in Source mode's left pane -- showing
-          a toggle that does nothing there would be worse than not showing
-          it. Default ON (appStore's initialAppState), not always-on with no
-          escape hatch: the preview is ALSO independently, deliberately
-          scrollable on its own (CLAUDE.md's Page Navigation section
-          documents the 400ms poll's manual-scroll tracking as load-bearing
-          for exactly this reason), so a user glancing at a different page
-          while continuing to edit elsewhere needs a way to stop Follow from
-          fighting that. Named "Follow", never "Sync", in this visible label
-          AND its title -- see docs/superpowers/plans/
-          2026-08-09-design-doc-gap-audit.md's "Follow, not Sync"
-          recommendation: this is page-granularity and can drift, and the
-          transport is request/response polling, not a live pixel-synced
-          two-pane view -- "Sync" would overclaim both.
-
-          A single button, not a two-option segmented group like the toggle
-          above it (there is no second, equally-valid choice to show side by
-          side for a plain on/off preference), but kept in the SAME
-          rounded-md bg-chrome-dark p-0.5 wrapper/button styling so it reads
-          as "another control from this same family" rather than a visually
-          unrelated new pattern. */}
-          {viewMode === 'split' && splitLeftMode === 'format' && (
-            <div className="flex items-center gap-0.5 rounded-md bg-chrome-dark p-0.5">
-              <button
-                type="button"
-                aria-pressed={splitFollowEnabled}
-                title="Follow: scroll the preview to roughly match your position in the editor (page-granularity, can drift on documents with heavy break-avoidance)"
-                onClick={toggleSplitFollow}
-                className={`rounded-sm px-2.5 py-1 text-12-5 ${
-                  splitFollowEnabled
-                    ? 'bg-page text-text-primary shadow-flat'
-                    : 'text-text-secondary hover:text-text-primary'
-                }`}
-              >
-                Follow
-              </button>
-            </div>
-          )}
+            The one thing genuinely lost is a one-click Follow toggle while
+            editing. It is a set-once preference that defaults ON, so a menu
+            round trip is an acceptable price; putting it in the status bar
+            instead was measured and rejected -- at the app's 760px minimum
+            that bar is already ~610px of content, and the statistics cluster
+            grows with the document, so it has no dependable slack either. */}
 
           <ToolbarIconButton label="Page setup" onClick={openPageSetup}>
             <Icon strokeWidth={1.6}>
@@ -1161,70 +1014,49 @@ function EditorToolbar({
             </Icon>
           </ToolbarIconButton>
 
-          {/* Print, next to Page setup and Export PDF -- reuses the exact same
-        pagination harness architecture PDF export does (a fresh, dedicated,
-        hidden window per call), so on-screen preview / printed output /
-        exported PDF all stay pixel-identical by construction. An icon-only
-        button, not a labeled one like Export PDF -- it doesn't need to
-        compete for the same visual weight as the primary accent action. */}
-          {/* Keyboard shortcuts reference (ShortcutsHelpModal.tsx). Mod-/ opens
-        the same modal (EditorScreen.tsx's own keydown effect) -- this button
-        exists because that shortcut is itself undiscoverable without a
-        visible entry point, the same reasoning Find's own toolbar button
-        (further left) already established for Mod-F. */}
-          <ToolbarIconButton label="Keyboard shortcuts" onClick={openShortcutsHelp}>
-            <Icon strokeWidth={1.7}>
-              <circle cx="12" cy="12" r="8.5" />
-              <path d="M9.5 9.5a2.5 2.5 0 1 1 3.5 2.3c-.8.4-1 .9-1 1.7" />
-              <circle cx="12" cy="16.3" r="0.4" fill="currentColor" stroke="none" />
-            </Icon>
-          </ToolbarIconButton>
+          {/* PRINT, EXPORT AS HTML AND KEYBOARD SHORTCUTS ALL USED TO SIT
+            HERE, three 30px icon buttons costing 132px with their gaps. All
+            three are now menu-only, and all three were safe to move for the
+            same reason: each is a once-in-a-while command with a real
+            accelerator, not something you reach for mid-sentence.
+              Print              -> File > Print… (Cmd+P), pre-existing.
+              Export as HTML     -> File > Export as HTML… (Cmd+Alt+E), a menu
+                                    item this pass added precisely so the
+                                    button had somewhere to go.
+              Keyboard shortcuts -> Help > Keyboard Shortcuts (Cmd+/), which is
+                                    deliberately not gated on a document being
+                                    open, so it is reachable from every screen
+                                    -- strictly wider than this button ever
+                                    was, since this toolbar only exists inside
+                                    the editor.
+            Their in-flight guards (documentStore's isPrinting /
+            isExportingHtml) are untouched and still correct; those flags now
+            simply have one trigger instead of two. */}
 
-          <ToolbarIconButton
-            label={isPrinting ? 'Printing…' : 'Print'}
-            onClick={() => void print()}
-            disabled={isPrinting}
-          >
-            <Icon strokeWidth={1.7}>
-              <rect x="6" y="3" width="12" height="6" rx="0.5" />
-              <rect x="4" y="9" width="16" height="8" rx="1.5" />
-              <rect x="7" y="14" width="10" height="7" rx="0.5" />
-            </Icon>
-          </ToolbarIconButton>
-
-          {/* Product-completeness audit 2.3: HTML export. Icon-only, next to
-        Print, for the same reason Print itself is icon-only rather than a
-        labeled button matching Export PDF's own visual weight -- it doesn't
-        need to compete with the primary accent action. See
-        src/main/html-exporter.ts's own module comment for what this format
-        renders (real typography parity via the shared stylesheet) and what
-        it deliberately does not (Mermaid/math stay inert source-text code
-        blocks -- baking those into real output would mean driving the full
-        sandboxed render pipeline from the main process, real separate scope). */}
-          <ToolbarIconButton
-            label={isExportingHtml ? 'Exporting HTML…' : 'Export as HTML'}
-            onClick={() => void exportHtml()}
-            disabled={isExportingHtml}
-          >
-            <Icon strokeWidth={1.7}>
-              <path d="M8.5 8 4.5 12l4 4" />
-              <path d="M15.5 8l4 4-4 4" />
-              <path d="M13 6.5l-2 11" />
-            </Icon>
-          </ToolbarIconButton>
-
+          {/* ICON-ONLY, and the label loss is the deliberate cost of keeping
+            Undo/Redo and Find on this toolbar. The labelled form was 118.4px
+            against 32px here -- 86px, which is what pays for those two -- and
+            of everything in this cluster, Export PDF is the item that loses
+            least by shedding text: it keeps the accent fill (so it is still
+            unmistakably the primary action), it is the ONE control here with
+            both a real accelerator and a File-menu twin, and it is used once
+            per session rather than once per paragraph. The alternative
+            considered and rejected was shortening the label ("Export", "PDF"),
+            which left only 10-12px of slack -- a measurement pretending to be
+            a design. */}
           <button
             type="button"
             onClick={() => void exportPdf()}
             disabled={isExporting}
-            className="flex h-8 items-center gap-1.5 rounded-md bg-accent px-3.5 text-12-5 font-semibold text-on-accent transition-colors hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-60"
+            title={isExporting ? 'Exporting…' : 'Export as PDF'}
+            aria-label={isExporting ? 'Exporting…' : 'Export as PDF'}
+            className="flex h-8 w-8 items-center justify-center rounded-md bg-accent text-on-accent transition-colors hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-60"
           >
             <Icon strokeWidth={1.9}>
               <path d="M12 3.5v11" />
               <path d="M8 11l4 4 4-4" />
               <path d="M5 18.5h14" />
             </Icon>
-            {isExporting ? 'Exporting…' : 'Export PDF'}
           </button>
         </div>
       </div>

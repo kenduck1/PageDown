@@ -39,7 +39,13 @@ export const MENU_COMMANDS = [
   'file:save',
   'file:saveAs',
   'file:exportPdf',
+  // Added by the single-row-toolbar pass, alongside `file:pageSetup` below.
+  // Both name a control that USED to exist only as a toolbar icon button and
+  // now has a real menu home -- see EditorToolbar.tsx's own header for the
+  // rule that governs which controls may leave that toolbar at all.
+  'file:exportHtml',
   'file:print',
+  'file:pageSetup',
   'edit:find',
   'edit:findReplace',
   'edit:findNext',
@@ -47,6 +53,15 @@ export const MENU_COMMANDS = [
   'view:format',
   'view:split',
   'view:source',
+  // The Split-mode left-pane choice and the Follow-preview-scroll toggle.
+  // Both were toolbar pills until the single-row-toolbar pass; the View menu
+  // is now their only home, which is why they render as a real radio pair and
+  // a real checkbox (with live state from WindowUiState) rather than as three
+  // plain items -- a menu item that cannot show its own state is a poor
+  // replacement for a pill that could.
+  'view:splitLeftFormat',
+  'view:splitLeftSource',
+  'view:toggleSplitFollow',
   'view:zoomIn',
   'view:zoomOut',
   'view:zoomReset',
