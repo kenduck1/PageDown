@@ -58,7 +58,7 @@ codebase that cannot pull in the full SDK, and it is what `pagedown-client`
 itself wraps around every HTTP call. Read `acquire()` first: it is the one
 method application code actually calls.
 
-```
+```python
 """Token-bucket rate limiter for outbound API requests.
 
 Backs the pagedown-client package's built-in request queue.

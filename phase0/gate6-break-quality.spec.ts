@@ -76,14 +76,14 @@ const fixtures = [
   'headings-near-page-bottom.md',
   'mermaid-diagrams.md',
   'nested-lists.md',
-  // Added by the code-block corpus-coverage task: a plain, page-spanning
-  // `<pre>` block is exactly the same class of "block splits across a page
-  // boundary" scenario `tables-spanning-pages.md` already covers for
-  // tables, and no pinned fixture previously exercised it — see this
-  // fixture's own frontmatter-adjacent comment in phase0/corpus/code-
-  // blocks-spanning-pages.md and PRE_SPLIT_TRUNCATION_FILES in
-  // gate4-export.spec.ts for the real, disclosed PDF-export content-loss
-  // finding this same split also surfaced there.
+  // Added by the code-block corpus-coverage task: a page-spanning `<pre>`
+  // block is exactly the same class of "block splits across a page boundary"
+  // scenario `tables-spanning-pages.md` already covers for tables, and no
+  // pinned fixture previously exercised it. That same split then surfaced two
+  // real PDF-export content-loss bugs, both since fixed — see
+  // `OverflowFitHandler`/`SignificantWhitespaceHandler` in
+  // src/pagination/break-handlers.ts, and gate4-export.spec.ts's own
+  // regression section, for what they were and how they are now guarded.
   'code-blocks-spanning-pages.md'
 ]
 
@@ -239,10 +239,22 @@ test('Gate 6: render every break-quality fixture and capture per-page structure 
     // the class of regression this gate previously could not see, because
     // no other pinned fixture here contained a real page-spanning code
     // block.
+    //
+    // RE-MEASURED 6 -> 7 by the split-code-block content-loss fix
+    // (`OverflowFitHandler`, src/pagination/break-handlers.ts). That is the
+    // fix working, not a regression: Paged.js used to overfill each of this
+    // block's split fragments past the page's content box (measured 6.59px,
+    // 18.48px, 18.48px on the three internally-split pages), and Chromium's
+    // print pipeline silently dropped whatever hung over. Retreating each
+    // break to the last line that genuinely fits costs roughly one line per
+    // split, which across three splits adds one page. Verified with the same
+    // corpus sweep that produced the number: every other pinned count in this
+    // gate, and in Gate 2, is unchanged, because the handler is inert on any
+    // page Paged.js already broke correctly.
     expect(
       observations['code-blocks-spanning-pages.md'].pageCount,
-      "code-blocks-spanning-pages.md's one long <pre> block genuinely spans several internal page splits at this harness's current typography — this is the pinned regression guard for code-block box-model/typography metrics this task added; a future font/line-height/padding change to --font-mono or the pre/code rules in document-typography.css is expected to move this number, and re-measuring it (not just restoring 6) is the correct response"
-    ).toBe(6)
+      "code-blocks-spanning-pages.md's one long <pre> block genuinely spans several internal page splits at this harness's current typography — this is the pinned regression guard for code-block box-model/typography metrics; a future font/line-height/padding change to --font-mono or the pre/code rules in document-typography.css, or a change to OverflowFitHandler's break-retreat logic, is expected to move this number, and re-measuring it (not just restoring 7) is the correct response"
+    ).toBe(7)
   } finally {
     await close()
   }

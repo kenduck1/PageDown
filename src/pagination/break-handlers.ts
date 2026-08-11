@@ -305,6 +305,412 @@ export class TableContinuationHandler extends Handler {
   }
 }
 
+// --- OverflowFitHandler ------------------------------------------------------
+//
+// Fixes a real, measured PRINT-FIDELITY CONTENT-LOSS bug: a long fenced code
+// block split across pages silently lost ~1-2 lines of real text from the
+// EXPORTED PDF on every page carrying an internal split of that block. Found
+// via phase0/corpus/code-blocks-spanning-pages.md; characterized before this
+// handler existed as gate4-export.spec.ts's `PRE_SPLIT_TRUNCATION_FILES`
+// category (now removed, since this fixes it).
+//
+// ROOT CAUSE, measured end-to-end rather than reasoned from docs:
+//
+// 1. Paged.js decides a text break in `Layout.textBreak`
+//    (node_modules/pagedjs/src/chunker/layout.js:732-790). It walks the
+//    overflowing text node word by word and breaks at the first word whose
+//    `top >= vEnd`, i.e. the first word that starts BELOW the page's content
+//    box. A line whose top is above the boundary but whose BOTTOM falls below
+//    it therefore stays on the page, hanging past the content box. Nothing in
+//    that walk accounts for the containing element's own bottom padding or
+//    bottom border either, which sit BELOW that last line and push the box
+//    further past the boundary still.
+// 2. That is invisible for ordinary prose in this project's reference corpus
+//    (measured directly: of 15 corpus files, only `code-blocks-spanning-
+//    pages.md` and `mermaid-diagrams.md` ever leave a page's content
+//    extending past the content box at all). A fenced code block is the
+//    common case that DOES trip it, because `document-typography.css` gives
+//    `pre` a real box -- `padding: 0.85em 1em` plus a 1px border, i.e. 12.9px
+//    of chrome below the final line that Paged.js's line-based measurement
+//    never sees. Measured overflow on the fixture: 6.59px, 18.48px, 18.48px
+//    on its three internally-split pages.
+// 3. Chromium's `printToPDF` then does not paint what hangs past the content
+//    box. `.pagedjs_page_content` is a fixed-height (`height: 100%` of the
+//    864px content area) `column-fill: auto` box, so the excess is treated as
+//    fragmentation overflow rather than as visible spill. Confirmed as REAL
+//    content loss, not an extraction artifact, three independent ways: pdfjs
+//    `getTextContent()`, poppler `pdftotext` (an entirely separate
+//    implementation), and rasterising the page with `pdftoppm` and looking at
+//    it -- the code block's grey box paints at full height with the final
+//    lines simply blank inside it. It is not a tagged-PDF artifact either
+//    (`generateTaggedPDF: false` loses exactly the same text), and it is not
+//    a page-position clip: absolutely-positioned probe text injected into the
+//    SAME subtree at 20px intervals from y=700 to y=1000 painted at EVERY
+//    offset, including well below the lines that vanished.
+//
+// WHAT WAS RULED OUT, so nobody re-treads it:
+// - Not a markdown-pipeline bug: `markdownToHtml`'s raw output has every
+//   character, checked before the HTML ever reaches the render context.
+// - Not `overflow-x: auto` on `pre` per se. Removing the scroll container
+//   (`overflow-x: visible`/`clip`) does shrink the loss, but it does not
+//   remove it, and it makes things WORSE in a way that is easy to miss: with
+//   no scroll container the `<pre>` stops being monolithic, so Chromium
+//   fragments it for real -- measured `pre.getClientRects().length === 2`
+//   with a used height of 912.59px inside an 864px first fragment, and the
+//   second fragment's line boxes land back at the TOP of the same page
+//   (y~116px), overlapping content that is already there. `overflow-x: auto`
+//   is therefore load-bearing and must stay.
+// - Not the `@page` margin, print-media CSS, or a scale/offset difference:
+//   `Emulation.setEmulatedMedia('print')` produces layout numbers identical
+//   to screen, and PDF text coordinates map 1:1 onto sheet-relative CSS
+//   pixels (a code line's PDF x of 83.2pt == the measured 111px text origin).
+// - Not fixable by padding tweaks, measured rather than argued: against the
+//   shipped CSS, `padding-bottom: 2em` changed nothing (112 characters lost
+//   vs. 111 at baseline, same three pages); stripping the padding AND border
+//   entirely still lost text (two pages); and adding that padding on top of
+//   the `overflow-x: clip` variant made it strictly worse (49 characters lost
+//   vs. 24 without it). Only moving the BREAK reaches zero.
+//
+// THE FIX: pull the break point back, by whole lines, until what remains on
+// the page genuinely fits inside the layout bounds. `onOverflow`
+// (chunker.js:107, triggered at layout.js:484 with the overflow Range, the
+// rendered wrapper, and the layout bounds) is the sanctioned hook for exactly
+// this: a handler may RETURN a replacement Range, and Paged.js then uses it
+// for BOTH `createBreakToken` and `removeOverflow`, so the break token and the
+// extracted content stay consistent by construction.
+//
+// Deliberately NOT scoped to `pre` by selector, even though `pre` is the only
+// element measured to trip this. The guard is the measurement itself -- the
+// handler returns immediately when the kept content already fits -- so it is
+// inert on every page Paged.js already breaks correctly, which is every page
+// of every other corpus file. Scoping by tag name would fix one symptom and
+// leave the same bug live for any future element that grows a bottom border
+// or padding (blockquote, a callout, a themed table).
+//
+// It only ever acts on a TEXT-node break, which also keeps it away from
+// `mermaid-diagrams.md`'s own (separate, still-open, deliberately pinned in
+// gate4) oversized-SVG content loss: that page overflows by ~1092px from an
+// element-node break, which stepping back text lines could not fix anyway.
+const MAX_LINE_STEPS = 12
+
+// Upper bound on how many text nodes a single retreat may walk backwards
+// through before giving up. Only relevant for syntax-highlighted content,
+// where one rendered line is spread across many `hljs-*` token nodes; a line
+// of code is a handful of tokens, so this is generous, and it exists purely so
+// a pathological document cannot turn a break decision into an unbounded walk
+// of layout-forcing measurements.
+const MAX_NODES_SCANNED = 64
+
+// Slack when comparing a measured client-rect edge against the bounds. Both
+// numbers are sub-pixel floats from real layout, so an exact `<=` would flip
+// on rounding noise alone.
+const FIT_TOLERANCE_PX = 0.5
+
+// Minimum drop in the kept-content bottom that counts as "a whole line
+// earlier". Guards the same sub-pixel noise as above from being mistaken for
+// real progress in the binary search below.
+const LINE_TOLERANCE_PX = 0.5
+
+interface KeptContent {
+  bottom: number
+  height: number
+}
+
+function isTextNode(node: Node | null | undefined): node is Text {
+  return !!node && node.nodeType === 3
+}
+
+// The bottom edge, and line height, of the LAST rendered line that would
+// remain on this page if the break happened at `offset`.
+//
+// Measured with a real Range over [0, offset) rather than computed from line
+// counts: the text may wrap (`white-space: pre-wrap`), may be interleaved with
+// `rehype-highlight`'s `<span class="hljs-*">` tokens in sibling nodes, and
+// may sit under any line-height the active document theme picked. Zero-width
+// and zero-height rects are skipped on purpose -- Chromium emits a degenerate
+// rect for a range that ends exactly at a line start (and for a blank line in
+// a `pre`), and counting one would report the FOLLOWING line's bottom and make
+// this function non-monotonic, which the binary search below depends on.
+function keptContentBottom(node: Text, offset: number): KeptContent | null {
+  if (offset <= 0) return null
+  const range = document.createRange()
+  range.setStart(node, 0)
+  range.setEnd(node, offset)
+  const rects = range.getClientRects()
+  let found: KeptContent | null = null
+  for (let i = 0; i < rects.length; i++) {
+    const rect = rects[i]
+    if (rect.width <= 0 || rect.height <= 0) continue
+    if (!found || rect.bottom > found.bottom) {
+      found = { bottom: rect.bottom, height: rect.height }
+    }
+  }
+  return found
+}
+
+// The largest offset in [1, high] within `node` whose kept content ends on an
+// EARLIER line than `currentBottom`, or 0 if this node has no such offset.
+// Binary search is valid because keptContentBottom is monotonic non-decreasing
+// in `offset` (later text is never higher on the page).
+//
+// Returning the LARGEST such offset (rather than the first one found) is what
+// keeps the break at a natural boundary: for a `pre`, it lands immediately
+// after the newline that ends the retained line, so the retained fragment
+// keeps its trailing newline and the continuation fragment starts at the next
+// line's own indentation -- no blank line injected at the top of the
+// continuation, which a naive "step back to the previous line's start" would
+// produce.
+function lastOffsetAboveLine(node: Text, high: number, currentBottom: number): number {
+  let low = 1
+  let best = 0
+  let hi = high
+  while (low <= hi) {
+    const mid = (low + hi) >> 1
+    const measured = keptContentBottom(node, mid)
+    if (!measured || measured.bottom < currentBottom - LINE_TOLERANCE_PX) {
+      best = mid
+      low = mid + 1
+    } else {
+      hi = mid - 1
+    }
+  }
+  return best
+}
+
+interface BreakPosition {
+  node: Text
+  offset: number
+}
+
+// The last break position anywhere in `block` that lands on an earlier line
+// than `currentBottom`.
+//
+// Searching ACROSS text nodes (not just inside the one Paged.js picked) is
+// what makes this work for a SYNTAX-HIGHLIGHTED code block, and it is a real,
+// measured requirement rather than defensive generality: `rehype-highlight`
+// splits the block into ~150 `<span class="hljs-*">` tokens, so the text node
+// the break lands in is routinely a few characters long and contains no
+// earlier line at all. Restricted to `block`'s own subtree so a retreat can
+// never escape the element being split.
+//
+// `keptContentBottom` stays scoped to a single node throughout: its rects are
+// absolute viewport coordinates, so the bottom it reports is the real line
+// bottom regardless of how little of that line the node covers.
+function previousBreakPosition(
+  block: Element,
+  node: Text,
+  offset: number,
+  currentBottom: number
+): BreakPosition | null {
+  const within = lastOffsetAboveLine(node, offset - 1, currentBottom)
+  if (within > 0) return { node, offset: within }
+
+  const walker = document.createTreeWalker(block, NodeFilter.SHOW_TEXT)
+  walker.currentNode = node
+  for (let visited = 0; visited < MAX_NODES_SCANNED; visited++) {
+    const previous = walker.previousNode()
+    if (!previous) return null
+    const text = previous as Text
+    const found = lastOffsetAboveLine(text, text.length, currentBottom)
+    if (found > 0) return { node: text, offset: found }
+  }
+  return null
+}
+
+export class OverflowFitHandler extends Handler {
+  onOverflow(
+    overflow: Range | undefined,
+    rendered: Element | undefined,
+    bounds: DOMRect | undefined
+  ): Range | undefined {
+    if (!overflow || !rendered || !bounds) return undefined
+    const container = overflow.startContainer
+    if (!isTextNode(container)) return undefined
+    const parent = container.parentElement
+    if (!parent || !rendered.contains(parent)) return undefined
+
+    // Everything each ancestor box paints BELOW its own last line: bottom
+    // padding and bottom border, summed up to (but excluding) the page
+    // wrapper Paged.js renders into. This is the part `textBreak` is blind
+    // to, and for a fenced code block it is the dominant term. The same walk
+    // finds the outermost ancestor still inside the page wrapper -- the
+    // element actually being split -- which bounds the cross-node retreat
+    // below.
+    let chrome = 0
+    let block: Element = parent
+    for (let element: Element | null = parent; element && element !== rendered;) {
+      const style = window.getComputedStyle(element)
+      chrome += parseFloat(style.paddingBottom) || 0
+      chrome += parseFloat(style.borderBottomWidth) || 0
+      block = element
+      element = element.parentElement
+    }
+
+    let measured = keptContentBottom(container, overflow.startOffset)
+    if (!measured) return undefined
+
+    // A client rect covers the text's own box, not the full line box, so the
+    // line's half-leading sits below the measured bottom and has to be
+    // reserved too. Derived from the element's real used line-height rather
+    // than assumed, since the document themes change it.
+    const lineHeight = parseFloat(window.getComputedStyle(parent).lineHeight)
+    const halfLeading = Number.isFinite(lineHeight)
+      ? Math.max(0, (lineHeight - measured.height) / 2)
+      : 0
+    const limit = bounds.bottom - chrome - halfLeading
+
+    // The overwhelmingly common case, and the reason this handler is safe to
+    // register globally: Paged.js already broke this page correctly, so leave
+    // its Range exactly as it is.
+    if (measured.bottom <= limit + FIT_TOLERANCE_PX) return undefined
+
+    let position: BreakPosition = { node: container, offset: overflow.startOffset }
+    for (let step = 0; step < MAX_LINE_STEPS; step++) {
+      // `null` means there is no earlier line anywhere in the element being
+      // split -- retreating further is Paged.js's own "break before the whole
+      // element" case, which it already handles, so hand the original Range
+      // back untouched rather than emptying the fragment.
+      const previous = previousBreakPosition(block, position.node, position.offset, measured.bottom)
+      if (!previous) return undefined
+      position = previous
+      const next = keptContentBottom(position.node, position.offset)
+      if (!next) return undefined
+      measured = next
+      if (measured.bottom <= limit + FIT_TOLERANCE_PX) {
+        overflow.setStart(position.node, position.offset)
+        return overflow
+      }
+    }
+    return undefined
+  }
+}
+
+// --- SignificantWhitespaceHandler --------------------------------------------
+//
+// Fixes a second, independent, also-measured content-loss bug in the same
+// area: on a page that CONTINUES a split element, whitespace-only text nodes
+// sitting between two inline elements are dropped outright. In a
+// syntax-highlighted code block that means `def acquire(...)` renders and
+// exports as `defacquire(...)` -- confirmed on the real fixture with a
+// `python` info string, which produces 156 `hljs-*` spans: `defacquire`,
+// `withself` and `defwrapped` all appear in the paginated output.
+//
+// ROOT CAUSE, read straight out of the pinned pagedjs@0.4.3 source:
+// `Layout.renderTo` (layout.js:177-180) does `walker = walk(nodeAfter(node,
+// source), source)` after appending any node it deep-cloned, and `isContainer`
+// (utils/dom.js:408-476) reports FALSE for every inline tag -- `SPAN`,
+// `STRONG`, `EM`, `CODE`, ... -- so every one of them is deep-cloned and
+// triggers that jump. `nodeAfter` (dom.js:41-60) resolves through
+// `nextSignificantNode`, which skips anything `isIgnorable` (dom.js:632-635)
+// calls ignorable: a comment, or A TEXT NODE THAT IS ENTIRELY WHITESPACE. The
+// skipped node is never appended to the page, so the space is simply gone.
+//
+// Why this only shows up on a split: the FIRST fragment of a `<pre>` is
+// produced by one deep `cloneNode(true)` of the whole element, which copies
+// its whitespace verbatim. Only a CONTINUATION fragment starts the walk at a
+// text node INSIDE the element and therefore walks its inline children one by
+// one, which is where the skip happens.
+//
+// THE FIX: make the whitespace non-ignorable before Paged.js ever walks it, by
+// wrapping it in a `<span>`. `isIgnorable` tests node type, so an ELEMENT is
+// never skipped, and `nodeAfter` then lands on the wrapper and renders it. A
+// bare `<span>` around whitespace is layout-neutral on both surfaces (it
+// matches no rule in document-typography.css and adds no box of its own), so
+// this cannot move Gate 10's editor/paginator parity.
+//
+// `beforeParsed` (chunker.js:150) rather than `afterParsed`, and that ordering
+// is load-bearing: `ContentParser.addRefs` (parser.js:43-66) stamps `data-ref`
+// on every element it walks, and `validNode`/`prevValidNode`/`rebuildAncestors`
+// all key off that attribute. Wrapping after the parse would inject elements
+// Paged.js considers invalid. `ContentParser.add` mutates the node it is given
+// in place (`return this.dom`, no clone), so the wrappers added here are the
+// ones that get refs.
+//
+// Deliberately NARROW. Two conditions must hold, because the same skip is
+// harmless nearly everywhere else:
+//   - the previous sibling must be an ELEMENT. That is the only way the
+//     `nodeAfter` jump above can reach (and skip) this node at all.
+//   - the whitespace must be RENDERED: either it is inside a `<pre>`, where
+//     `white-space` preserves it, or it separates two inline boxes, where
+//     collapsing it away glues two words together. Whitespace between two
+//     BLOCK elements is collapsible and invisible, so wrapping it would add
+//     stray inline boxes for no benefit.
+const INLINE_TAGS = new Set([
+  'A',
+  'ABBR',
+  'B',
+  'BDI',
+  'BDO',
+  'BIG',
+  'CITE',
+  'CODE',
+  'DEL',
+  'DFN',
+  'EM',
+  'I',
+  'IMG',
+  'INS',
+  'KBD',
+  'MARK',
+  'Q',
+  'S',
+  'SAMP',
+  'SMALL',
+  'SPAN',
+  'STRONG',
+  'SUB',
+  'SUP',
+  'TIME',
+  'U',
+  'VAR'
+])
+
+// Same whitespace definition `isIgnorable`/`isAllWhitespace` use (dom.js:645),
+// deliberately NOT `\s`: that would also match a non-breaking space, which
+// Paged.js does not treat as ignorable and which must not be rewritten here.
+const WHITESPACE_ONLY = /^[\t\n\r ]+$/
+
+function isInlineElement(node: Node | null): boolean {
+  return !!node && node.nodeType === 1 && INLINE_TAGS.has((node as Element).tagName)
+}
+
+export class SignificantWhitespaceHandler extends Handler {
+  beforeParsed(content: ParentNode): void {
+    const doc = content.ownerDocument ?? document
+    const walker = doc.createTreeWalker(content as Node, NodeFilter.SHOW_TEXT)
+    const targets: Text[] = []
+    let node = walker.nextNode()
+    while (node) {
+      const text = node as Text
+      if (WHITESPACE_ONLY.test(text.data) && shouldPreserveWhitespace(text)) {
+        targets.push(text)
+      }
+      node = walker.nextNode()
+    }
+    // Collected first, rewritten second: moving a node while a TreeWalker is
+    // positioned on it is exactly the case where its traversal state is
+    // defined against a tree that no longer matches.
+    for (const text of targets) {
+      const wrapper = doc.createElement('span')
+      wrapper.setAttribute('data-pagedown-space', 'true')
+      text.replaceWith(wrapper)
+      wrapper.appendChild(text)
+    }
+  }
+}
+
+function shouldPreserveWhitespace(text: Text): boolean {
+  // Only a PRECEDING ELEMENT can trigger the `nodeAfter` jump that skips this
+  // node; with a text node (or nothing) before it, the plain `walk` reaches it
+  // normally and it is never at risk.
+  const previous = text.previousSibling
+  if (!previous || previous.nodeType !== 1) return false
+  const parent = text.parentElement
+  if (!parent) return false
+  if (parent.closest('pre')) return true
+  return isInlineElement(previous) && isInlineElement(text.nextSibling)
+}
+
 let registered = false
 
 // Called once, at render-context module load (resources/pagination-render/
@@ -317,6 +723,11 @@ let registered = false
 // `preview()` call.
 export function registerBreakHandlers(): void {
   if (registered) return
-  registerHandlers(KeepWithNextHandler, TableContinuationHandler)
+  registerHandlers(
+    KeepWithNextHandler,
+    TableContinuationHandler,
+    OverflowFitHandler,
+    SignificantWhitespaceHandler
+  )
   registered = true
 }
