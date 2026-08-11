@@ -38,13 +38,13 @@
   "pageHeight": 1056,
   "pageCount": 6,
   "nonceCheck": {
-    "nonce": "pwVwhJdPSZpcwDjwMBlOvw==",
+    "nonce": "JP1Djca4tnRs1nDYBvYoYA==",
     "styleCount": 4,
     "styleNonces": [
-      "pwVwhJdPSZpcwDjwMBlOvw==",
-      "pwVwhJdPSZpcwDjwMBlOvw==",
-      "pwVwhJdPSZpcwDjwMBlOvw==",
-      "pwVwhJdPSZpcwDjwMBlOvw=="
+      "JP1Djca4tnRs1nDYBvYoYA==",
+      "JP1Djca4tnRs1nDYBvYoYA==",
+      "JP1Djca4tnRs1nDYBvYoYA==",
+      "JP1Djca4tnRs1nDYBvYoYA=="
     ],
     "styleAttrCount": 0,
     "hoistedRuleCounts": [
@@ -54,7 +54,7 @@
       46
     ]
   },
-  "totalCspViolations": 972,
+  "totalCspViolations": 978,
   "injectionViolationCount": 2,
   "pwned": "undefined"
 }
