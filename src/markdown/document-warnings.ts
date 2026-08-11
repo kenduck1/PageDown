@@ -27,7 +27,15 @@
 // `WindowUiState` (a dependency-free contract module, not something living
 // under `src/main/**` that would drag Electron's own types along with it).
 export type DocumentWarningId =
-  'malformed-frontmatter' | 'inline-pagebreak-marker' | 'alternate-pagebreak-syntax'
+  | 'malformed-frontmatter'
+  | 'inline-pagebreak-marker'
+  | 'alternate-pagebreak-syntax'
+  // `toc-plugin.ts`'s `collectTocWarnings`, read off the same mdast tree as
+  // the pagebreak warnings above. Exists because an empty table of contents
+  // is the one TOC outcome that is invisible on screen: the marker renders as
+  // literally nothing, so without this the user cannot tell "recognized, but
+  // your headings are deeper than depth=3" from "not recognized at all".
+  | 'empty-toc'
 
 export interface DocumentWarning {
   id: DocumentWarningId

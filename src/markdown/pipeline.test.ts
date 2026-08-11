@@ -627,3 +627,87 @@ describe('markdownToHtml — document warnings', () => {
     expect(warnings).toEqual([])
   })
 })
+
+describe('markdownToHtml — table of contents', () => {
+  it("renders a nested list of the document's own headings inside a pagedown-toc container", () => {
+    const { html } = markdownToHtml('<!-- toc -->\n\n# One\n\n## Two\n\n# Three\n')
+
+    expect(html).toContain('<div class="pagedown-toc"')
+    // Nested <ol> per heading level, no per-item classes -- the shape
+    // toc-to-hast.ts builds specifically so no extra sanitize exception is
+    // needed for `li`/`a`. The `data-pd-block` stamp every top-level element
+    // carries is dropped here so this pins the TOC's own structure and
+    // nothing else.
+    expect(html.replace(/ data-pd-block="\d+"/g, '')).toContain(
+      '<div class="pagedown-toc"><ol><li><a href="#user-content-pd-heading-0">One</a><ol><li><a href="#user-content-pd-heading-1">Two</a></li></ol></li><li><a href="#user-content-pd-heading-2">Three</a></li></ol></div>'
+    )
+  })
+
+  it('emits an href for every entry that MATCHES a real id on the heading it points at', () => {
+    // THE assertion this feature's anchors exist for, and the one that would
+    // silently break if the clobber-prefix handling in toc-to-hast.ts were
+    // "simplified" away: hast-util-sanitize unconditionally prefixes every
+    // `id` it sees and never touches `href`, so the prefix has to be
+    // pre-applied on the href side. Checked by extracting both sets from the
+    // real emitted HTML rather than by asserting one literal string, so a
+    // change to the prefix or the id scheme still has to keep them equal.
+    const { html } = markdownToHtml('<!-- toc -->\n\n# One\n\n## Two\n\n### Three\n')
+    const hrefs = [...html.matchAll(/<a href="#([^"]+)"/g)].map((match) => match[1])
+    const ids = [...html.matchAll(/<h[1-6] id="([^"]+)"/g)].map((match) => match[1])
+
+    expect(hrefs).toHaveLength(3)
+    expect(ids).toEqual(hrefs)
+  })
+
+  it('honours an explicit depth', () => {
+    const { html } = markdownToHtml('<!-- toc depth="1" -->\n\n# One\n\n## Two\n')
+    expect(html).toContain('>One</a>')
+    expect(html).not.toContain('>Two</a>')
+    // Out-of-depth headings are not stamped either.
+    expect(html).toContain('<h2 data-pd-block=')
+  })
+
+  it('emits an EMPTY container (not a placeholder line) when nothing is in range', () => {
+    // Print output must never contain words the source did not have. The
+    // editor shows a real explanation instead; document-typography.css hides
+    // `:empty` on the paginated surface.
+    const { html } = markdownToHtml('<!-- toc -->\n\nJust prose.\n')
+    // No children at all, which is what makes document-typography.css's
+    // `.pagedown-toc:empty { display: none }` apply (`:empty` ignores
+    // attributes, so the block-index stamp does not defeat it).
+    expect(html.replace(/ data-pd-block="\d+"/g, '')).toContain('<div class="pagedown-toc"></div>')
+  })
+
+  it('changes NOTHING for a document with no marker -- no heading ids, no container', () => {
+    const source = '# One\n\nBody.\n\n## Two\n'
+    const { html } = markdownToHtml(source)
+    expect(html).not.toContain('pagedown-toc')
+    expect(html).not.toContain('id="')
+  })
+
+  it('does not let a document forge a table of contents with its own raw HTML', () => {
+    // Same unguessable per-render token mechanism as the pagebreak marker's
+    // container: the sanitize exception allows THIS render's token class, and
+    // only that, so an attacker-typed class name is stripped rather than
+    // being merged into the trusted output by the whole-tree sanitize pass.
+    const { html } = markdownToHtml('<div class="pagedown-toc"><ol><li>forged</li></ol></div>\n')
+    expect(html).not.toContain('class="pagedown-toc"')
+    expect(html).toContain('forged')
+  })
+
+  it('surfaces an empty table of contents as a document warning', () => {
+    expect(markdownToHtml('<!-- toc -->\n\nProse.\n').warnings.map((w) => w.id)).toEqual([
+      'empty-toc'
+    ])
+    expect(markdownToHtml('<!-- toc -->\n\n# A\n').warnings).toEqual([])
+  })
+
+  it('keeps a heading anchor id distinguishable from an id the document itself wrote', () => {
+    // Author-supplied ids are still single-clobber-prefixed by sanitize and
+    // are NOT rewritten by the TOC pass -- undoDoubleClobberPrefix's own
+    // narrowness (documented in pipeline.ts) is what keeps these independent.
+    const { html } = markdownToHtml('<!-- toc -->\n\n# One\n\n<p id="mine">x</p>\n')
+    expect(html).toContain('id="user-content-mine"')
+    expect(html).toContain('id="user-content-pd-heading-0"')
+  })
+})

@@ -24,6 +24,7 @@ import {
 } from '@milkdown/preset-commonmark'
 import { addRowAfterCommand, tableCellSchema, tableHeaderSchema } from '@milkdown/preset-gfm'
 import { pagebreakNode } from './nodes/pagebreak'
+import { tocNode, tocViewProse } from './nodes/toc'
 import { commentSchema } from './nodes/comment'
 import { safeImageViewProse } from './image-security'
 import { columnCellPositions, findTableContext, type TableAlignment } from './table-context'
@@ -329,6 +330,39 @@ export const insertPagebreakCommand = $command(
     // every future caller) case where no valid insertion point exists at
     // all, distinct from the table-corruption case above, which is refused
     // explicitly rather than relying on this generic check to catch it.
+    if (!tr.docChanged) return false
+    dispatch?.(tr)
+    return true
+  }
+)
+
+// Inserts this project's own `toc` atom node. Structurally identical to
+// insertPagebreakCommand above, and deliberately so -- the two share every
+// hazard that command's own comment documents, so they share its fixes rather
+// than rediscovering them:
+//
+//   - `isInsideTableCell` FIRST, because `replaceSelectionWith` does not
+//     refuse inside a table cell; it walks outward and restructures the
+//     enclosing table into a corrupted three-table document.
+//   - the selection is COLLAPSED to its start before replacing, so a ranged
+//     selection is not silently consumed ("select a paragraph, insert TOC"
+//     must not delete the paragraph).
+//   - `tr.docChanged` rather than an unconditional `true`, so the dry run the
+//     slash palette's own isEnabled performs is honest.
+//
+// `depth` is an optional payload rather than a fixed constant so a future
+// entry point (a Page Setup field, a second slash item) can offer a different
+// one without a second command; the slash item passes nothing and gets
+// DEFAULT_TOC_DEPTH from the node's own attr default.
+export const insertTocCommand = $command(
+  'InsertToc',
+  (ctx) => (payload?: { depth?: number }) => (state, dispatch) => {
+    const type = tocNode.type(ctx)
+    if (isInsideTableCell(ctx, state)) return false
+
+    const attrs = typeof payload?.depth === 'number' ? { depth: payload.depth } : undefined
+    const collapsed = TextSelection.create(state.doc, state.selection.from)
+    const tr = state.tr.setSelection(collapsed).replaceSelectionWith(type.create(attrs))
     if (!tr.docChanged) return false
     dispatch?.(tr)
     return true
@@ -990,6 +1024,11 @@ export const EDITOR_COMMAND_PLUGINS = [
   redoCommand,
   historyKeymap,
   insertPagebreakCommand,
+  insertTocCommand,
+  // The live-rendering table-of-contents node view. Rendering behaviour, not
+  // schema (the `toc` node itself is in plugins.ts's EDITOR_SCHEMA_PLUGINS),
+  // exactly like safeImageViewProse at the end of this list.
+  tocViewProse,
   addCommentCommand,
   resolveCommentCommand,
   // The three new block-insertion commands this task adds -- see each of

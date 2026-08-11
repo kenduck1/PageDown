@@ -15,6 +15,7 @@ import {
   insertMathBlockCommand,
   insertMermaidBlockCommand,
   insertPagebreakCommand,
+  insertTocCommand,
   isInsideTableCell
 } from './commands'
 import { findSlashTrigger } from '../lib/slash-query'
@@ -333,6 +334,37 @@ export const SLASH_ITEMS: SlashItem[] = [
     // site the way Table/Horizontal rule above need one.
     isEnabled: (ctx, state) =>
       ctx.get(commandsCtx).get(insertPagebreakCommand.key)(undefined)(state)
+  },
+  {
+    id: 'table-of-contents',
+    group: 'Insert',
+    label: 'Table of contents',
+    description: 'Auto-generated list of headings',
+    // Deliberately no 'headings' keyword, even though it describes the item
+    // well: filterSlashItems matches on substrings, so it would make typing
+    // "/head" -- overwhelmingly a request for Heading 1/2/3 -- return a fourth,
+    // unrelated result at the top of a four-item list. Caught by
+    // slash-items.test.ts's own "'head' -> only the three headings" assertion,
+    // which is exactly the kind of discrimination a catalogue test is for.
+    keywords: ['toc', 'contents', 'outline', 'index'],
+    run: (ctx) => {
+      ctx.get(commandsCtx).call(insertTocCommand.key)
+    },
+    // NOT block-replacing, and that is a property of insertTocCommand rather
+    // than an assumption about it: like insertPagebreakCommand, it collapses
+    // the selection to its start before calling replaceSelectionWith, so a
+    // plain paragraph is SPLIT rather than consumed. It also carries its own
+    // isInsideTableCell refusal (shared with insertPagebreakCommand, for the
+    // measured table-corruption bug documented there) and returns
+    // `tr.docChanged` rather than an unconditional `true` -- so unlike
+    // insertTableCommand/insertHrCommand above, its dry run is genuinely
+    // informative and needs no extra gate at this call site.
+    //
+    // isTargetBlockEmptyAfterQueryRemoved is deliberately NOT applied. That
+    // gate exists for the two commands that WIPE the target block; applying
+    // it here would refuse the extremely ordinary "type a sentence, then add
+    // a TOC below it" gesture for no safety benefit.
+    isEnabled: (ctx, state) => ctx.get(commandsCtx).get(insertTocCommand.key)(undefined)(state)
   },
   {
     id: 'math-block',

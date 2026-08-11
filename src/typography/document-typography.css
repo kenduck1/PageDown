@@ -948,3 +948,106 @@
 .pagedown-document[class*='pagedown-size-'] h6 {
   font-size: calc(12 / 14 * 1em);
 }
+
+/* ---------------------------------------------------------------------------
+   Table of contents (src/markdown/toc-plugin.ts's `<!-- toc -->` marker)
+
+   Both surfaces render the SAME markup for this block -- a `.pagedown-toc`
+   container wrapping nested `<ol>`s -- so that a document with a table of
+   contents keeps the editor/paginator agreement Gate 10 pins at 0.000px. The
+   sandboxed paginator builds it in hast (src/markdown/toc-to-hast.ts); the
+   Milkdown canvas builds the same shape as real DOM in a node view
+   (src/renderer/src/milkdown/nodes/toc.ts). Every rule below therefore has to
+   live HERE rather than in base.css, or the two would diverge the moment
+   either surface's own chrome styling changed.
+
+   Deliberately uses no CSS custom property that is not already referenced
+   elsewhere in this file: the sandboxed render context mints its own `:root`
+   block by hand (resources/pagination-render/index.ts) and an unresolved
+   var() there is silent and inherits rather than erroring. Sizing here is all
+   em-relative to the surrounding body text instead. */
+
+.pagedown-document .pagedown-toc {
+  margin: 1.4em 0;
+}
+
+/* A document whose marker matched but whose headings are all deeper than its
+   depth renders an EMPTY container (createTocToHast emits no list at all
+   rather than a "no headings" line -- print output should not contain words
+   the source never had). Without this it would still occupy the margins above
+   and read as an unexplained gap. The editor shows a real explanation instead,
+   via `.pagedown-toc-placeholder` below, and `collectTocWarnings` raises a
+   document warning either way. */
+.pagedown-document .pagedown-toc:empty {
+  display: none;
+}
+
+.pagedown-document .pagedown-toc ol {
+  list-style: none;
+  padding-inline-start: 0;
+  margin: 0;
+}
+
+/* One indent step per heading level. `list-style: none` above means the
+   nesting itself is the only level cue, which is why the indent is generous
+   relative to the 0.15em row gap. */
+.pagedown-document .pagedown-toc ol ol {
+  padding-inline-start: 1.4em;
+}
+
+.pagedown-document .pagedown-toc li {
+  margin: 0.15em 0;
+}
+
+/* `display: flex` exists so the page number produced by `::after` below can be
+   pushed to the right edge with `margin-left: auto` -- a leader-dot fill was
+   considered and rejected, because a leader is only legible when it ends at a
+   number, and there IS no number on the editing surface (see below). A bare
+   flex row degrades to ordinary text there instead of to a dotted line
+   pointing at nothing.
+
+   `text-decoration: none` overrides this file's own `.pagedown-document a`
+   rule (which underlines every link): a fully underlined contents page is
+   noise, and these anchors are structural rather than referential. */
+.pagedown-document .pagedown-toc a {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5em;
+  color: inherit;
+  text-decoration: none;
+}
+
+/* REAL PAGE NUMBERS, resolved by Paged.js itself -- no second render pass, no
+   new IPC, and no page-number knowledge anywhere in the Markdown pipeline.
+   `target-counter` is a CSS Generated Content for Paged Media feature that
+   pagedjs implements natively (node_modules/pagedjs/src/modules/
+   generated-content/target-counters.js, registered in its DEFAULT handler set
+   -- read directly, not assumed): its polisher rewrites this declaration into
+   a plain `counter(...)` against a generated variable, then `afterPageLayout`
+   walks `.pagedjs_page` elements to find which page contains the element this
+   anchor's `href` points at and injects a matching `counter-reset` rule. That
+   is why toc-to-hast.ts has to emit a real, resolvable `href` and why
+   remarkToc stamps a real `id` onto each linked heading -- the anchors are
+   load-bearing machinery here, not just navigation.
+
+   ON THE EDITING SURFACE THIS RULE INTENTIONALLY PRODUCES NOTHING. Chromium
+   has no `target-counter`, so the whole `content` declaration is invalid at
+   parse time and no `::after` box is generated at all -- which is the correct
+   outcome, because the Milkdown canvas is one continuous page card with no
+   page numbers to show. It costs no layout height on either surface (the
+   number sits on the entry's own line), so the parity this file exists to
+   protect is unaffected. */
+.pagedown-document .pagedown-toc a::after {
+  content: target-counter(attr(href url), page);
+  margin-left: auto;
+  font-variant-numeric: tabular-nums;
+}
+
+/* EDITOR-ONLY, and it has no paginated counterpart on purpose -- see the
+   `:empty` rule above. Named here rather than in base.css only because the
+   element it styles lives inside `.pagedown-document`, where this file's own
+   baseline rule would otherwise be the only thing describing it. */
+.pagedown-document .pagedown-toc-placeholder {
+  font-style: italic;
+  opacity: 0.6;
+}

@@ -78,6 +78,41 @@ describe('Full node-set round trip (frontmatter + pagebreak + commonmark + gfm t
     expect(output).toBe(source)
   })
 
+  // Table-of-contents markers, in the FULL composition -- the thing a
+  // nodes/toc.test.ts run in isolation cannot prove, since the failure mode
+  // that matters is one custom node's remark plugin quietly losing to
+  // another's inside the shared parse pipeline.
+  it('round-trips a <!-- toc --> marker alongside frontmatter, pagebreaks and gfm', async () => {
+    const source = [
+      '---',
+      'title: Report',
+      '---',
+      '',
+      '<!-- toc -->',
+      '',
+      '# One',
+      '',
+      '<!-- pagebreak -->',
+      '',
+      '## Two',
+      '',
+      '| a | b |',
+      '| - | - |',
+      '| x | y |',
+      ''
+    ].join('\n')
+
+    expect(await roundTrip(source)).toBe(source)
+  })
+
+  it('preserves an alternate [TOC] marker verbatim, exactly like \\newpage', async () => {
+    const source = 'Before.\n\n[TOC]\n\n# After\n'
+    const output = await roundTrip(source)
+
+    expect(output).toBe(source)
+    expect(output).not.toContain('<!-- toc -->')
+  })
+
   // Reference-style links: a linkReference plus its definition used to come
   // back with the link INLINED and the definition block DELETED -- semantics
   // preserved, syntax destroyed. See nodes/reference.ts for the root cause
