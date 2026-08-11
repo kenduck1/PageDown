@@ -1,5 +1,6 @@
 import { useEffect, type RefObject } from 'react'
 import { useFindStore } from '../store/findStore'
+import { isMacPlatform } from '../lib/platform'
 
 // This app's FIRST bare-`window`-level keyboard shortcut (a second,
 // ShortcutsHelpModal's Mod-/, followed the same pattern later -- see
@@ -8,18 +9,23 @@ import { useFindStore } from '../store/findStore'
 // no application Menu of its own at all.
 //
 // THAT IS NO LONGER TRUE: Edit > Find… now carries the real `CmdOrCtrl+F`
-// accelerator (src/main/app-menu-template.ts). Which of the two paths
-// actually fires for a given keypress was NOT measured -- Electron documents
-// a menu accelerator as being handled by the menu, but this was deliberately
-// not made to matter, and that is the point of the refactor below rather
-// than a gap in it:
+// accelerator, and Edit > Find and Replace… now carries its own real,
+// PLATFORM-CONDITIONAL accelerator (`Cmd+Alt+F` on macOS, `Ctrl+H` on
+// Windows/Linux -- see app-menu-template.ts's own header for why those two
+// literal strings and not one shared `CmdOrCtrl+…` form). Which of the two
+// paths actually fires for a given keypress was NOT measured -- Electron
+// documents a menu accelerator as being handled by the menu, but this was
+// deliberately not made to matter, and that is the point of the refactor
+// below rather than a gap in it:
 //
-//   - if the accelerator wins, EditorScreen's `edit:find` menu-command
-//     handler runs the flow and this listener never sees the keydown;
+//   - if the accelerator wins, EditorScreen's `edit:find`/`edit:findReplace`
+//     menu-command handlers run the flow and this listener never sees the
+//     keydown;
 //   - if the keydown still reaches the page, this listener runs the SAME
 //     function;
-//   - if somehow both fire, running it twice is idempotent (openFind on an
-//     already-open bar, and re-seeding the same query).
+//   - if somehow both fire, running it twice is idempotent (openFind /
+//     openFindAndReplace on an already-open bar, and re-seeding the same
+//     query).
 //
 // So the listener is kept, deliberately: it is the only path that works if
 // the application menu is ever absent (Electron allows
@@ -139,6 +145,38 @@ export function useFindShortcuts(params: FindShortcutsParams): void {
       if ((event.metaKey || event.ctrlKey) && !event.shiftKey && isFindKey) {
         event.preventDefault()
         openFindFromShortcut({ getSelectedText, queryInputRef }, event.altKey)
+        return
+      }
+
+      // Windows/Linux convention for Find and Replace (Word, VS Code,
+      // Notepad++, Sublime, Chrome DevTools all bind Ctrl+H), added because
+      // Ctrl+Alt+F -- the only route to Find and Replace before this fix --
+      // is nobody's muscle memory there. Deliberately gated to !isMac, and
+      // deliberately checked as `event.ctrlKey` alone rather than folded into
+      // `isFindKey`'s `metaKey || ctrlKey` pattern above: on a real Mac
+      // keyboard Cmd+H is the OS's own system-reserved Hide Application
+      // shortcut, and even though this app-level listener would never
+      // literally receive `event.key === 'h'` with `metaKey` true for that
+      // combo (the OS intercepts Cmd+H before any app's renderer sees it,
+      // the same way it intercepts Cmd+Tab), the platform gate is kept
+      // explicit rather than relying on that OS-level interception as the
+      // only line of defense -- an app-level guard should not depend on
+      // never being asked to prove it. isMacPlatform() is re-read on every
+      // keydown (not hoisted to module scope) specifically so a test can
+      // flip navigator.platform between cases the same way it already flips
+      // modifier keys via press()'s own params.
+      const isMac = isMacPlatform()
+      const isReplaceKey = event.code === 'KeyH' || event.key.toLowerCase() === 'h'
+      if (
+        !isMac &&
+        event.ctrlKey &&
+        !event.metaKey &&
+        !event.altKey &&
+        !event.shiftKey &&
+        isReplaceKey
+      ) {
+        event.preventDefault()
+        openFindFromShortcut({ getSelectedText, queryInputRef }, true)
         return
       }
 

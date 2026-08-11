@@ -47,13 +47,29 @@ import type { WindowUiState } from '../menu/window-state'
 //    the one collision where losing the race would be silently destructive
 //    (inline code stops working, with no error anywhere), so it is avoided by
 //    construction rather than reasoned about.
-//  - `Cmd/Ctrl+F` (Find) and `Cmd/Ctrl+/` (Keyboard Shortcuts) DO compete
-//    with the two bare `window` keydown listeners that were this app's only
-//    shortcuts before the menu existed (useFindShortcuts.ts, EditorScreen.tsx).
-//    Which side wins was deliberately NOT measured, and deliberately made not
-//    to matter: both routes call the SAME function (openFindFromShortcut;
-//    closeSlashMenu + openShortcutsHelp), and running either twice is
-//    idempotent. See useFindShortcuts.ts's own header for the full argument.
+//  - `Cmd/Ctrl+F` (Find), `Find and Replace…`'s own accelerator, and
+//    `Cmd/Ctrl+/` (Keyboard Shortcuts) DO compete with the bare `window`
+//    keydown listeners that were this app's only shortcuts before the menu
+//    existed (useFindShortcuts.ts, EditorScreen.tsx). Which side wins was
+//    deliberately NOT measured, and deliberately made not to matter: both
+//    routes call the SAME function (openFindFromShortcut; closeSlashMenu +
+//    openShortcutsHelp), and running either twice is idempotent. See
+//    useFindShortcuts.ts's own header for the full argument.
+//  - `Find and Replace…`'s accelerator is the one PLATFORM-CONDITIONAL value
+//    in this whole template: `Cmd+Alt+F` on macOS (TextEdit/Pages/Xcode
+//    convention), `Ctrl+H` on Windows/Linux (Word/VS Code/Notepad++/Sublime/
+//    Chrome DevTools convention -- nobody's muscle memory is `Ctrl+Alt+F`,
+//    which is what a naive `CmdOrCtrl+Alt+F` would have produced). `Cmd+H` is
+//    never used on macOS at any point -- that is the OS's own system-reserved
+//    Hide Application shortcut, and Electron's accelerator system would
+//    intercept it the same as any other, silently breaking Hide. Checked
+//    against the installed `prosemirror-commands` package directly (the
+//    library @milkdown/prose re-exports, though this project never actually
+//    wires its `baseKeymap` into the editor): its own `macBaseKeymap` binds
+//    `Ctrl-h` to backspace, but that binding is (a) mac-only within that
+//    library and (b) never reachable here regardless, since this app's
+//    Ctrl+H is non-mac-only by construction -- so there is no real collision
+//    with Milkdown/ProseMirror on either platform.
 //
 // Undo/Redo/Cut/Copy/Paste keep their roles and their standard accelerators,
 // and that IS measured rather than reasoned about. Electron already installs
@@ -201,6 +217,15 @@ export function buildAppMenuTemplate(params: AppMenuTemplateParams): MenuItemCon
         accelerator: 'CmdOrCtrl+F',
         enabled: documentOpen,
         click: clickCommand('edit:find')
+      },
+      {
+        label: 'Find and Replace…',
+        // NOT `CmdOrCtrl+Alt+F` -- see this module's own header for why the
+        // two platforms need genuinely different literal accelerators here,
+        // unlike every other item in this menu.
+        accelerator: isMac ? 'Cmd+Alt+F' : 'Ctrl+H',
+        enabled: documentOpen,
+        click: clickCommand('edit:findReplace')
       },
       {
         label: 'Find Next',

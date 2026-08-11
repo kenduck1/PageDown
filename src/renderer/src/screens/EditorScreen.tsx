@@ -819,6 +819,17 @@ function EditorScreen(): React.JSX.Element {
         { getSelectedText: findController.getSelectedText, queryInputRef: findQueryInputRef },
         false
       ),
+    // Same function as `edit:find` above, just `withReplace: true` -- the
+    // menu's own accelerator (Cmd+Alt+F / Ctrl+H, see app-menu-template.ts)
+    // competes with useFindShortcuts.ts's bare `window` listener exactly like
+    // `edit:find`'s Cmd+F does, and converges on the identical call for the
+    // identical reason: whichever path fires, the observable result is the
+    // same, and running both is idempotent.
+    'edit:findReplace': () =>
+      openFindFromShortcut(
+        { getSelectedText: findController.getSelectedText, queryInputRef: findQueryInputRef },
+        true
+      ),
     // Next/Previous act on the find store directly and are deliberately NOT
     // gated on the bar being open: findStore's goToNext/goToPrevious are
     // already no-ops at zero matches, and a Find Next with a query still

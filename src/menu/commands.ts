@@ -41,6 +41,7 @@ export const MENU_COMMANDS = [
   'file:exportPdf',
   'file:print',
   'edit:find',
+  'edit:findReplace',
   'edit:findNext',
   'edit:findPrevious',
   'view:format',

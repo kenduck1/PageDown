@@ -286,6 +286,23 @@ describe('EditorScreen: application-menu commands', () => {
     expect(useFindStore.getState().query).toBe('Report')
   })
 
+  it('edit:findReplace opens the find bar WITH replace expanded, and seeds the query', () => {
+    // Same handler shape as edit:find above, `withReplace: true` -- proves
+    // the menu's own Cmd+Alt+F/Ctrl+H accelerator (app-menu-template.ts)
+    // reaches the identical openFindFromShortcut flow as useFindShortcuts.ts's
+    // bare `window` listener, not a simplified stand-in that would drop the
+    // seed-from-selection behavior.
+    mockEditorHandle.getSelectedText.mockReturnValue('Report')
+    useDocumentStore.setState({ filePath: '/tmp/report.md', content: '# Report' })
+    render(<EditorScreen />)
+
+    emitMenuCommand('edit:findReplace')
+
+    expect(useFindStore.getState().isOpen).toBe(true)
+    expect(useFindStore.getState().replaceExpanded).toBe(true)
+    expect(useFindStore.getState().query).toBe('Report')
+  })
+
   it('edit:findNext / edit:findPrevious move the match cursor', () => {
     render(<EditorScreen />)
     act(() => {
