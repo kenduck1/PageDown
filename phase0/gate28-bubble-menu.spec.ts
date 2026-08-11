@@ -464,7 +464,45 @@ test('Gate 28: in Split mode the bubble is clamped clear of the real preview Web
       .locator('.milkdown-mount .ProseMirror p')
       .filter({ hasText: 'whole content column width' })
     await expect(target).toHaveText(WIDE_TARGET)
+
+    // FIXTURE RETUNE, not a weakened assertion -- both assertions below are
+    // byte-identical to what they always were, and the same precedent CLAUDE.md
+    // already records for Gate 4/Gate 6's synthetic-table fixture (60 -> 35
+    // rows, "to again produce the 2-page split it was written to exercise").
+    //
+    // This test used to triple-click the whole line and let the SELECTION'S
+    // MIDPOINT land under the native preview's column. That worked only
+    // because the page card overflowed the pane at a fixed 816px, so a
+    // full-line selection's midpoint sat far to the right. Split mode now
+    // fits the page to the pane (src/renderer/src/lib/fit-scale.ts), which
+    // moves that midpoint left -- measured 553.34 against a preview at x=611 --
+    // and the "clamp is binding" half above correctly FAILED LOUDLY rather
+    // than the headline passing silently. That is this gate's own two-part
+    // design working, and the right response is to restore the scenario the
+    // gate describes, not to relax what it claims.
+    //
+    // Selecting the LAST WORD instead is a strictly better fixture for the
+    // sentence this test's own header already uses -- "a selection near the
+    // right edge of the left pane" -- and, unlike a whole-line selection, it
+    // stays near that edge at EVERY scale, including a page that fits the pane
+    // exactly. So this retune also removes the hidden dependency on the card
+    // overflowing that made the original fragile in the first place.
+    //
+    // Driven by real keystrokes through Chromium's own input pipeline rather
+    // than by a positioned dblclick: gate29 already establishes
+    // ArrowRight/ArrowLeft caret movement as the deterministic technique in
+    // this exact geometry, and a coordinate-addressed click into a line that
+    // extends past the pane's visible width is precisely the actionability
+    // problem gate27 documents.
     await target.click({ clickCount: 3 })
+    await win.keyboard.press('ArrowRight') // collapse to the line's end
+    const LAST_WORD_CHARS = 'width.'.length
+    for (let i = 0; i < LAST_WORD_CHARS; i += 1) {
+      await win.keyboard.press('Shift+ArrowLeft')
+    }
+    await expect
+      .poll(async () => win.evaluate(() => window.getSelection()?.toString() ?? ''))
+      .toBe('width.')
 
     const bubble = win.getByRole('toolbar', { name: 'Text formatting' })
     await expect(bubble).toBeVisible()

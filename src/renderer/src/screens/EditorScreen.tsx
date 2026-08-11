@@ -32,6 +32,7 @@ import { useSlashMenu } from '../hooks/useSlashMenu'
 import { useMenuCommands } from '../hooks/useMenuCommands'
 import { useFindStore } from '../store/findStore'
 import { DEFAULT_ZOOM, nextZoomLevel, previousZoomLevel } from '../lib/zoom-levels'
+import { computeFitScale } from '../lib/fit-scale'
 import { extractRawFrontmatter, replaceRawFrontmatter } from '../../../markdown/frontmatter-splice'
 import { resolvePageConfig, applyPageConfig, type PageConfig } from '../../../markdown/page-config'
 import { computePageGeometry } from '../../../typography/page-geometry'
@@ -1262,6 +1263,65 @@ function EditorScreen(): React.JSX.Element {
   // document's typography any more than they can about its page box.
   const documentStyle = useMemo(() => resolveDocumentStyle(pageConfig), [pageConfig])
 
+  // Split mode's fit-to-width scale (src/renderer/src/lib/fit-scale.ts holds
+  // the arithmetic and, more importantly, the argued FLOOR).
+  //
+  // The page card is a fixed `width` by design, and in Split mode it sat in a
+  // pane roughly half the canvas -- 816px of Letter page inside a measured
+  // 389px pane at this app's own default window, i.e. the user horizontally
+  // scrolling their own document to read a line of it. Scaling the card down
+  // is the only fix that leaves its real layout width (and therefore Gate 10's
+  // editor/paginator parity) untouched.
+  //
+  // MEASURED FROM `clientWidth`, NOT from `splitRatio` arithmetic. The ratio is
+  // a percentage of a row whose own pixel width depends on the window, the
+  // sidebar rail and whatever layout rows (FindBar, CommentComposer,
+  // RemoteImageBanner) happen to be open, so deriving px from it would mean
+  // re-deriving every one of those here. `clientWidth` also has the scrollbar
+  // already excluded, which a `getBoundingClientRect()` width does not.
+  const [splitPaneWidthPx, setSplitPaneWidthPx] = useState(0)
+  const splitFitApplies = viewMode === 'split' && splitLeftMode === 'format'
+  useEffect(() => {
+    if (!splitFitApplies) return
+    const el = editorPaneRef.current
+    if (!el) return
+    // ResizeObserver rather than a window 'resize' listener: this pane changes
+    // width for THREE independent reasons (window resize, a Split-divider
+    // drag, and a layout row opening or closing above it) and only the first
+    // of those fires a window event. It also delivers an initial observation
+    // on observe(), which is why nothing needs to setState synchronously in
+    // this effect body -- doing so would trip react-hooks/set-state-in-effect,
+    // the same rule SettingsScreen's own buffered input had to work around.
+    //
+    // NO FEEDBACK LOOP, and that is a property of WHAT is observed rather than
+    // luck: the callback reads the pane's own `clientWidth`, which depends on
+    // the pane's assigned width and the vertical scrollbar's gutter -- never on
+    // the scaled content's width. The gutter is pinned by `scrollbar-gutter:
+    // stable` on the pane itself (see the JSX below), so it does not appear and
+    // disappear with the scaled content's height either. Without that pin the
+    // loop would be real: smaller scale -> shorter content -> no scrollbar ->
+    // wider clientWidth -> larger scale -> taller content -> scrollbar back.
+    const observer = new ResizeObserver(() => {
+      const current = editorPaneRef.current
+      if (!current) return
+      setSplitPaneWidthPx((previous) =>
+        previous === current.clientWidth ? previous : current.clientWidth
+      )
+    })
+    observer.observe(el)
+    return () => observer.disconnect()
+  }, [splitFitApplies])
+
+  // 1 whenever fit-to-width is not the thing driving the canvas -- Format and
+  // Source mode keep their own user-chosen `zoom` on the single-pane wrapper,
+  // untouched, and Split(source) is a `h-full w-full` textarea with no fixed
+  // page width to fit in the first place (scaling it would just shrink text
+  // for no reason).
+  const splitFitScale = useMemo(
+    () => (splitFitApplies ? computeFitScale(splitPaneWidthPx, pageGeometry.pageWidthPx) : 1),
+    [splitFitApplies, splitPaneWidthPx, pageGeometry.pageWidthPx]
+  )
+
   // Split-mode "Follow" (docs/superpowers/plans/
   // 2026-08-09-design-doc-gap-audit.md's "Follow, not Sync" recommendation):
   // scrolling the editor pane estimates a page from that scroll offset and
@@ -1281,6 +1341,12 @@ function EditorScreen(): React.JSX.Element {
     enabled: splitFollowEnabled && viewMode === 'split' && splitLeftMode === 'format',
     scrollElementRef: editorPaneRef,
     contentHeightPx: pageGeometry.contentHeightPx,
+    // The pane this hook samples `scrollTop` from now contains a CSS-`zoom`ed
+    // wrapper, so its scroll offset is no longer in the same coordinate space
+    // as `contentHeightPx` -- see the hook's own `scale` doc comment for the
+    // measurement and for why omitting this silently under-reports the page
+    // rather than failing.
+    scale: splitFitScale,
     pageCount,
     onNavigate: handleNavigateToPage
   })
@@ -1717,10 +1783,47 @@ function EditorScreen(): React.JSX.Element {
             <div ref={splitRowRef} className="flex h-full">
               <div
                 ref={editorPaneRef}
-                style={{ width: `calc(${splitRatio}% - 3px)` }}
+                // `scrollbarGutter: 'stable'` is what makes `clientWidth` a
+                // content-INDEPENDENT measurement, which is the whole reason
+                // the fit-scale effect above cannot feed back on itself. On
+                // macOS (overlay scrollbars) it reserves nothing and changes
+                // nothing; on Windows/Linux it keeps the classic scrollbar's
+                // track reserved whether or not the scrollbar is currently
+                // showing. Without it, a document that got short enough to stop
+                // scrolling would widen the pane by the scrollbar's width,
+                // raise the scale, grow taller, and bring the scrollbar back.
+                style={{ width: `calc(${splitRatio}% - 3px)`, scrollbarGutter: 'stable' }}
                 className="h-full overflow-auto"
               >
-                {splitLeftMode === 'source' ? renderSourceEditor() : renderPageCard()}
+                {/* Fit-to-width. CSS `zoom` on an INNER wrapper, exactly like
+                the single-pane branch below -- not `transform: scale()`, which
+                is the mistake that fix already made and measured: a transform
+                does not participate in layout, so the scroller's
+                scrollWidth/scrollHeight ignore it and content is clipped with
+                no way to reach it (196px per side at 150%). `zoom` does
+                participate (standardized, layout-affecting, Chromium >= 128;
+                this app ships Chromium via Electron 39), so this pane's own
+                `overflow-auto` scrolls the SCALED extent with no ResizeObserver
+                on the content, no spacer layer and no scrollbar feedback loop.
+
+                The two facts the single-pane branch records about `zoom` hold
+                here unchanged, and one of them matters more in Split than
+                anywhere else: `coordsAtPos` still reports post-zoom viewport
+                coordinates, so SelectionBubble/SlashMenu must still NOT divide
+                by this scale -- and because both clamp into
+                `intersect(canvasRect, editorPaneRect)`, and `editorPaneRef` is
+                the UNSCALED pane outside this wrapper, the occlusion guarantee
+                against the native preview view is untouched by construction.
+
+                Only the Format branch is wrapped. Source mode's `h-full w-full`
+                textarea has no fixed page width to fit, and wrapping it would
+                additionally break the `h-full` chain it resolves its own height
+                against. */}
+                {splitLeftMode === 'source' ? (
+                  renderSourceEditor()
+                ) : (
+                  <div style={{ zoom: splitFitScale }}>{renderPageCard()}</div>
+                )}
               </div>
               {/* 6px wide, split evenly (3px) into each pane's own calc() above,
               so the row always totals exactly 100% regardless of container
@@ -1846,7 +1949,16 @@ function EditorScreen(): React.JSX.Element {
         pageCountPending={pageCountPending}
         currentPage={effectiveCurrentPage}
         onNavigateToPage={handleNavigateToPage}
-        zoom={zoom}
+        // The scale the canvas is ACTUALLY rendered at, which in Split mode is
+        // the fit-to-width scale and not the user's own (inapplicable) zoom.
+        // Reporting `zoom` here regardless would restate the exact defect this
+        // control was already fixed for once -- a readout naming a scale the
+        // pane is not rendering at -- only pointing the other way (it would now
+        // say 100% while the page renders at 71%). Split(source) has no fixed
+        // page width to fit, so `splitFitScale` is 1 there and this falls back
+        // to the user's zoom, which is also inapplicable but at least is not a
+        // number this screen invented.
+        zoom={splitFitApplies ? splitFitScale : zoom}
         onZoomChange={setZoom}
         // See zoomApplies' own comment above: the control is disabled rather
         // than hidden, so the current level stays readable in Split mode

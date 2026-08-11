@@ -100,15 +100,21 @@ export interface EditorStatusBarProps {
    */
   onNavigateToPage: (page: number) => void
   /**
-   * A CSS scale multiplier (1 = 100%, 0.5 = 50%, 2 = 200%), NOT a raw
-   * percentage number. A future integration step is expected to apply this
-   * directly as a CSS transform on the mounted editor's own scrollable
-   * container, e.g. `style={{ transform: \`scale(${zoom})\` }}` (plus
-   * `transformOrigin: 'top center'` or similar) on `MilkdownEditor`'s mount
-   * element / its scroll container in `EditorScreen.tsx` -- this component
-   * does not (and, being built in an isolated worktree with no access to
-   * that markup, cannot) apply the transform itself. See this sub-project's
-   * report for the full integration note.
+   * The scale the document canvas is CURRENTLY RENDERED AT, as a CSS
+   * multiplier (1 = 100%, 0.5 = 50%, 2 = 200%), NOT a raw percentage number.
+   *
+   * In Format and Source mode that is the user's own chosen zoom, and
+   * `zoomEnabled` is true so this control also sets it. In Split mode it is
+   * EditorScreen's computed fit-to-width scale (`computeFitScale`), and
+   * `zoomEnabled` is false -- the readout is then reporting a number the user
+   * cannot change, which is the honest reading of "zoom" in a mode whose scale
+   * is chosen by the pane's width. Feeding the user's inapplicable zoom here
+   * instead would restate the very defect this control was already fixed for
+   * once (see `zoomEnabled` below).
+   *
+   * EditorScreen applies it: CSS `zoom` on an inner wrapper inside the
+   * scrolling pane, in both the single-pane and Split branches. This component
+   * never applies it itself.
    */
   zoom: number
   onZoomChange: (zoom: number) => void
@@ -238,6 +244,24 @@ function EditorStatusBar({
     [debouncedContent]
   )
   const [jumpDraft, setJumpDraft] = useState<string | null>(null)
+  // A controlled `<select>` whose `value` is not among its own options renders
+  // BLANK -- zoom-levels.ts's own module comment records that trap, and it is
+  // reachable for real now that Split mode reports a fit-to-width scale here
+  // rather than the (inapplicable, and therefore untrue) user-chosen zoom.
+  // Those scales are quantised to whole percents but are otherwise arbitrary,
+  // so 71% is a perfectly ordinary value and is not on the manual list.
+  //
+  // Showing the REAL scale rather than leaving the readout at "100%" is the
+  // point: a readout that says 100% while the pane renders at 71% is the exact
+  // defect the second product audit found and fixed here (150% reported while
+  // `paneTransform` stayed "none"), just pointing the other way. The extra
+  // option is only ever appended when the control is disabled, so the manual
+  // list a user can actually pick from is unchanged.
+  const zoomOptions = useMemo(() => {
+    if (ZOOM_OPTIONS.some((option) => option.value === zoom)) return ZOOM_OPTIONS
+    const fitOption = { label: `${Math.round(zoom * 100)}%`, value: zoom }
+    return [...ZOOM_OPTIONS, fitOption].sort((a, b) => a.value - b.value)
+  }, [zoom])
   const hasPages = typeof pageCount === 'number' && pageCount > 0
   const canGoPrevious = hasPages && currentPage > 1
   const canGoNext = hasPages && currentPage < (pageCount as number)
@@ -338,10 +362,14 @@ function EditorStatusBar({
           // navigation controls above already follow ("Next page (shown in
           // Split view)") -- a greyed control with no explanation reads as
           // broken.
-          title={zoomEnabled ? undefined : 'Zoom applies to Format and Source view, not Split view'}
+          title={
+            zoomEnabled
+              ? undefined
+              : 'Split view scales the page to fit the editor pane; zoom applies to Format and Source view'
+          }
           className="rounded-sm bg-transparent text-11-5 text-text-secondary disabled:cursor-not-allowed disabled:opacity-40"
         >
-          {ZOOM_OPTIONS.map((option) => (
+          {zoomOptions.map((option) => (
             <option key={option.value} value={String(option.value)}>
               {option.label}
             </option>

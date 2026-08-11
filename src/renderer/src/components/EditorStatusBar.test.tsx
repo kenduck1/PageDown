@@ -187,11 +187,63 @@ describe('EditorStatusBar', () => {
     expect(select).toBeDisabled()
     // Disabled, not hidden or blanked -- the current level stays readable.
     expect(select).toHaveValue('1.5')
-    // And it says why, rather than being an unexplained greyed control.
+    // And it says why, rather than being an unexplained greyed control. The
+    // wording now leads with what Split DOES do (fit the page to the pane),
+    // because since fit-to-width landed the number beside it is that fit
+    // scale rather than a level the user chose.
     expect(select).toHaveAttribute(
       'title',
-      'Zoom applies to Format and Source view, not Split view'
+      'Split view scales the page to fit the editor pane; zoom applies to Format and Source view'
     )
+  })
+
+  it('renders an off-list scale so a fit-to-width value is not a blank readout', () => {
+    // Split mode reports EditorScreen's computed fit scale here, and those are
+    // quantised to whole percents but otherwise arbitrary -- 71% is a
+    // perfectly ordinary one and is not among the seven manual levels. A
+    // controlled <select> whose value is not among its own options renders
+    // BLANK (zoom-levels.ts's own module comment records that trap), so
+    // without the appended option this readout would show nothing at all in
+    // exactly the mode that now has something real to report.
+    render(
+      <EditorStatusBar
+        content="Hi"
+        isDirty={false}
+        zoom={0.71}
+        onZoomChange={vi.fn()}
+        zoomEnabled={false}
+        pageCount={3}
+        pageCountPending={false}
+        currentPage={1}
+        onNavigateToPage={vi.fn()}
+      />
+    )
+
+    const select = screen.getByLabelText('Zoom level')
+    expect(select).toHaveValue('0.71')
+    expect(screen.getByRole('option', { name: '71%' })).toBeInTheDocument()
+    // The seven manual levels are untouched -- the extra entry is additive,
+    // not a replacement, so nothing a user can actually pick has changed.
+    expect(screen.getByRole('option', { name: '100%' })).toBeInTheDocument()
+    expect(screen.getAllByRole('option')).toHaveLength(8)
+  })
+
+  it('does not append a duplicate option for a scale already on the manual list', () => {
+    render(
+      <EditorStatusBar
+        content="Hi"
+        isDirty={false}
+        zoom={0.75}
+        onZoomChange={vi.fn()}
+        zoomEnabled={false}
+        pageCount={3}
+        pageCountPending={false}
+        currentPage={1}
+        onNavigateToPage={vi.fn()}
+      />
+    )
+    expect(screen.getAllByRole('option')).toHaveLength(7)
+    expect(screen.getAllByRole('option', { name: '75%' })).toHaveLength(1)
   })
 
   it('leaves the zoom dropdown enabled by default', () => {

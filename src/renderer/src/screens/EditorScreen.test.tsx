@@ -1553,6 +1553,131 @@ describe('EditorScreen', () => {
     })
   })
 
+  describe('Split-mode fit-to-width', () => {
+    // jsdom has no layout engine and its ResizeObserver is a no-op stub
+    // (test-setup.ts), so the REAL proof that a scaled page genuinely fits a
+    // real pane lives in phase0/gate35-split-fit-to-width.spec.ts. What is
+    // testable here is the WIRING -- that the measured width reaches
+    // computeFitScale, that its result reaches the wrapper's `zoom` and the
+    // status-bar readout, and that nothing outside Split(format) is touched.
+    // Those are exactly the joins a gate cannot isolate.
+
+    // A controllable stand-in for the no-op stub, so a test can deliver an
+    // observation on demand. Restored in afterEach.
+    let triggerResize: (() => void) | null = null
+    const OriginalResizeObserver = globalThis.ResizeObserver
+
+    function installControllableResizeObserver(paneWidthPx: number): void {
+      const widthSpy = vi
+        .spyOn(HTMLElement.prototype, 'clientWidth', 'get')
+        .mockReturnValue(paneWidthPx)
+      // Kept so the spy is torn down with the rest of the mocks; the
+      // reference itself is unused beyond that.
+      void widthSpy
+      globalThis.ResizeObserver = class {
+        constructor(private readonly callback: () => void) {
+          triggerResize = () => this.callback()
+        }
+        /* eslint-disable @typescript-eslint/no-empty-function */
+        observe(): void {}
+        unobserve(): void {}
+        disconnect(): void {}
+        /* eslint-enable @typescript-eslint/no-empty-function */
+      } as unknown as typeof ResizeObserver
+    }
+
+    afterEach(() => {
+      globalThis.ResizeObserver = OriginalResizeObserver
+      triggerResize = null
+    })
+
+    it('scales the Split(format) page card down to fit the measured pane', async () => {
+      // 389px is the real measured pane width at this app's own default
+      // 1000x840 window with the divider at 50% -- the exact configuration
+      // the user's report was about. 389 - 4 gutter = 385; 385 / 816 = 0.4718,
+      // below MIN_FIT_SCALE, so the floor applies and the page renders at 70%
+      // (571px) instead of 816px.
+      installControllableResizeObserver(389)
+      useDocumentStore.setState({ filePath: '/tmp/report.md', content: '# Report' })
+      useAppStore.setState({ viewMode: 'split', splitLeftMode: 'format', splitRatio: 50 })
+      render(<EditorScreen />)
+
+      const card = screen.getByTestId('page-card')
+      const wrapper = card.parentElement as HTMLElement
+      // Before any observation has been delivered the pane width is unknown,
+      // and an unmeasured pane must render at full size rather than collapse.
+      expect(wrapper.style.zoom).toBe('1')
+
+      act(() => triggerResize?.())
+      await waitFor(() => {
+        expect(wrapper.style.zoom).toBe('0.7')
+      })
+    })
+
+    it('applies no scaling when the pane is wide enough for the whole page', async () => {
+      installControllableResizeObserver(1200)
+      useDocumentStore.setState({ filePath: '/tmp/report.md', content: '# Report' })
+      useAppStore.setState({ viewMode: 'split', splitLeftMode: 'format' })
+      render(<EditorScreen />)
+
+      act(() => triggerResize?.())
+      const wrapper = screen.getByTestId('page-card').parentElement as HTMLElement
+      await waitFor(() => {
+        expect(wrapper.style.zoom).toBe('1')
+      })
+    })
+
+    it('reports the fit scale in the status bar rather than the inapplicable zoom', async () => {
+      // The coherence half. Split's zoom control is disabled, so before this
+      // feature the readout simply showed the user's own (inert) level. Now
+      // that the pane really is scaled, showing 100% while rendering 70% would
+      // restate the exact defect that control was already fixed for once.
+      installControllableResizeObserver(389)
+      useDocumentStore.setState({ filePath: '/tmp/report.md', content: '# Report' })
+      useAppStore.setState({ viewMode: 'split', splitLeftMode: 'format', zoom: 1 })
+      render(<EditorScreen />)
+
+      act(() => triggerResize?.())
+      await waitFor(() => {
+        expect(screen.getByLabelText('Zoom level')).toHaveValue('0.7')
+      })
+      expect(screen.getByLabelText('Zoom level')).toBeDisabled()
+    })
+
+    it('leaves Format mode entirely alone -- the single-pane wrapper keeps the user zoom', async () => {
+      installControllableResizeObserver(389)
+      useDocumentStore.setState({ filePath: '/tmp/report.md', content: '# Report' })
+      useAppStore.setState({ viewMode: 'format', zoom: 1.5 })
+      render(<EditorScreen />)
+
+      act(() => triggerResize?.())
+      const wrapper = screen.getByTestId('page-card').parentElement as HTMLElement
+      await waitFor(() => {
+        expect(wrapper.style.zoom).toBe('1.5')
+      })
+      expect(screen.getByLabelText('Zoom level')).toHaveValue('1.5')
+    })
+
+    it('does not wrap Split(source) -- a textarea has no fixed page width to fit', async () => {
+      // Wrapping it would also break the `h-full` chain SourceEditor resolves
+      // its own height against.
+      installControllableResizeObserver(389)
+      useDocumentStore.setState({ filePath: '/tmp/report.md', content: '# Report' })
+      useAppStore.setState({ viewMode: 'split', splitLeftMode: 'source' })
+      render(<EditorScreen />)
+
+      act(() => triggerResize?.())
+      const textarea = screen.getByRole('textbox', { name: /markdown source/i })
+      // Its ancestors up to the scrolling pane carry no zoom of any kind.
+      let el: HTMLElement | null = textarea
+      while (el && !el.className.includes('overflow-auto')) {
+        expect(el.style.zoom).toBe('')
+        el = el.parentElement
+      }
+      expect(el).not.toBeNull()
+    })
+  })
+
   describe('page-card blank-space click behavior (focusEnd)', () => {
     it("clicking the page card's own blank space (not on real content) focuses the real ProseMirror editor", async () => {
       useDocumentStore.setState({ filePath: '/tmp/report.md', content: '# Report\n\nBody text' })
