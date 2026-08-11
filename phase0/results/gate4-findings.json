@@ -2,15 +2,15 @@
   "perFileResults": [
     {
       "file": "code-blocks-spanning-pages.md",
-      "onscreenPageCount": 6,
-      "pdfLibPageCount": 6,
-      "pdfjsPageCount": 6,
+      "onscreenPageCount": 7,
+      "pdfLibPageCount": 7,
+      "pdfjsPageCount": 7,
       "pageCountMatch": true,
-      "textCategory": "pre-split-truncation",
+      "textCategory": "exact",
       "textMatch": true,
       "firstMismatchDetail": null,
       "textDeltaSample": "",
-      "exportMs": 76,
+      "exportMs": 85,
       "imgInfo": []
     },
     {
@@ -23,7 +23,7 @@
       "textMatch": true,
       "firstMismatchDetail": null,
       "textDeltaSample": "1.1.2.1.",
-      "exportMs": 60,
+      "exportMs": 59,
       "imgInfo": []
     },
     {
@@ -49,7 +49,7 @@
       "textMatch": true,
       "firstMismatchDetail": null,
       "textDeltaSample": "",
-      "exportMs": 59,
+      "exportMs": 57,
       "imgInfo": []
     },
     {
@@ -62,7 +62,7 @@
       "textMatch": true,
       "firstMismatchDetail": null,
       "textDeltaSample": "",
-      "exportMs": 59,
+      "exportMs": 58,
       "imgInfo": []
     },
     {
@@ -75,7 +75,7 @@
       "textMatch": true,
       "firstMismatchDetail": null,
       "textDeltaSample": "Diagramoftheproposedsitelayout,showingthemainentranceonthenorthsideandparkingtotheeast.",
-      "exportMs": 58,
+      "exportMs": 57,
       "imgInfo": [
         {
           "src": "pagedown-render://render/assets/diagram-placeholder.png",
@@ -96,7 +96,7 @@
       "textMatch": true,
       "firstMismatchDetail": null,
       "textDeltaSample": "",
-      "exportMs": 255,
+      "exportMs": 249,
       "imgInfo": []
     },
     {
@@ -143,7 +143,7 @@
       "textMatch": true,
       "firstMismatchDetail": null,
       "textDeltaSample": "1.1.2.2.1.2.3.1.2.",
-      "exportMs": 65,
+      "exportMs": 62,
       "imgInfo": []
     },
     {
@@ -156,7 +156,7 @@
       "textMatch": true,
       "firstMismatchDetail": null,
       "textDeltaSample": "",
-      "exportMs": 60,
+      "exportMs": 61,
       "imgInfo": []
     },
     {
@@ -169,7 +169,7 @@
       "textMatch": true,
       "firstMismatchDetail": null,
       "textDeltaSample": "1.",
-      "exportMs": 60,
+      "exportMs": 58,
       "imgInfo": []
     },
     {
@@ -182,7 +182,7 @@
       "textMatch": true,
       "firstMismatchDetail": null,
       "textDeltaSample": "",
-      "exportMs": 58,
+      "exportMs": 59,
       "imgInfo": []
     },
     {
@@ -195,7 +195,7 @@
       "textMatch": true,
       "firstMismatchDetail": null,
       "textDeltaSample": "",
-      "exportMs": 66,
+      "exportMs": 64,
       "imgInfo": []
     },
     {
@@ -208,7 +208,7 @@
       "textMatch": true,
       "firstMismatchDetail": null,
       "textDeltaSample": "",
-      "exportMs": 681,
+      "exportMs": 693,
       "imgInfo": []
     }
   ],
@@ -239,9 +239,9 @@
       "paths": 9
     }
   ],
-  "preSplitTruncationPages": [
-    3,
-    4,
-    5
-  ]
+  "codeBlockDomEvidence": {
+    "preCount": 7,
+    "splitCount": 3,
+    "glued": []
+  }
 }
