@@ -76,7 +76,15 @@ const COLOR_SCHEMES: readonly ColorScheme[] = ['light', 'dark', 'system']
 // partially-missing preferences.json to DEFAULT_PREFERENCES for whichever
 // fields don't validate, per-field, rather than discarding the whole file
 // for one bad value or crashing every consumer.
-function sanitizePreferences(value: unknown): Preferences {
+//
+// Exported (multi-window correctness pass) because the `preferences:set` IPC
+// handler now BROADCASTS the new preferences to every other window, which
+// makes a renderer-supplied payload cross into other renderers for the first
+// time. That payload used to only ever be JSON.stringify'd to disk and read
+// back through this same function on the next launch, so validating it on the
+// way in was optional; once it is pushed live into a sibling renderer that
+// will apply it directly (colour scheme, autosave interval), it is not.
+export function sanitizePreferences(value: unknown): Preferences {
   if (typeof value !== 'object' || value === null) return { ...DEFAULT_PREFERENCES }
   const raw = value as Record<string, unknown>
 

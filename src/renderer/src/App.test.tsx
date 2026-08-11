@@ -5,6 +5,7 @@ import userEvent from '@testing-library/user-event'
 import App from './App'
 import { useAppStore, initialAppState } from './store/appStore'
 import { useDocumentStore, initialDocumentState } from './store/documentStore'
+import { usePreferencesStore } from './store/preferencesStore'
 import type { MenuCommand } from '../../menu/commands'
 
 // Delivers an application-menu command through whatever callbacks are
@@ -69,6 +70,9 @@ beforeEach(() => {
     // returning undefined would throw on unmount.
     onMenuCommand: vi.fn().mockReturnValue(() => {}),
     setWindowState: vi.fn(),
+    // Preferences broadcast (multi-window): a real unsubscribe function,
+    // same contract as the other push channels here.
+    onPreferencesChanged: vi.fn().mockReturnValue(() => {}),
     // The window-close guard's two channels. onWindowCloseRequest must
     // return a real unsubscribe FUNCTION -- App.tsx calls it from an effect
     // cleanup, same contract as onMenuCommand above.
@@ -240,7 +244,10 @@ describe('App', () => {
         documentOpen: false,
         viewMode: 'format',
         fileName: null,
-        isDirty: false
+        isDirty: false,
+        // The store's own always-present blank tab has no path, so there is
+        // nothing to route an OS file-open request to yet.
+        openFilePaths: []
       })
 
       act(() => {
@@ -258,8 +265,83 @@ describe('App', () => {
         documentOpen: true,
         viewMode: 'source',
         fileName: 'report.md',
-        isDirty: true
+        isDirty: true,
+        // The mirror fields alone were set above, not a real tab, so the tab
+        // list is still pathless -- openFilePaths is reported from `tabs`, not
+        // from the active-tab mirror, which is exactly what makes it cover
+        // BACKGROUND tabs too. See the dedicated test below.
+        openFilePaths: []
       })
+    })
+
+    it('reports every saved document open in this window, not just the active one', async () => {
+      // This is what lets the main process route an OS file-open request (a
+      // Finder double-click, "Open With") to the window already showing that
+      // document. A background tab counts: raising that window and pushing
+      // file:openRecent focuses the existing tab rather than opening a third
+      // window on the same file.
+      render(<App />)
+      await screen.findByText('PageDown')
+
+      act(() => {
+        useDocumentStore.getState().openTab('/tmp/docs/report.md', '# Report')
+        useDocumentStore.getState().openTab('/tmp/docs/letter.md', '# Letter')
+      })
+
+      const reported = vi.mocked(window.api.setWindowState).mock.calls.at(-1)![0]
+      expect(reported.openFilePaths).toEqual(['/tmp/docs/report.md', '/tmp/docs/letter.md'])
+    })
+
+    it('does NOT re-report on every keystroke', async () => {
+      // The reported list is derived through a NUL-joined string selector
+      // precisely so that editing -- which rebuilds documentStore's tab array
+      // on every change -- cannot re-fire this effect. Selecting `state.tabs`
+      // directly would send one IPC message per character typed, and main
+      // would set the OS window title on each.
+      render(<App />)
+      await screen.findByText('PageDown')
+
+      act(() => {
+        useDocumentStore.getState().openTab('/tmp/docs/report.md', '# Report')
+        // The FIRST edit legitimately re-reports: it flips isDirty, which the
+        // window title genuinely shows. Get past it before measuring.
+        useDocumentStore.getState().updateContent('# Report edited')
+      })
+      const callsAfterFirstEdit = vi.mocked(window.api.setWindowState).mock.calls.length
+
+      act(() => {
+        useDocumentStore.getState().updateContent('# Report edited more')
+        useDocumentStore.getState().updateContent('# Report edited even more')
+      })
+      expect(vi.mocked(window.api.setWindowState).mock.calls.length).toBe(callsAfterFirstEdit)
+    })
+
+    it('adopts preferences changed in ANOTHER window', async () => {
+      // preferences.json is one shared file but this store is per renderer
+      // process, so without the broadcast a colour-scheme change made in
+      // window 2 left window 1 light until relaunch -- while the spellcheck
+      // half of the very same change applied to both windows immediately.
+      render(<App />)
+      await screen.findByText('PageDown')
+
+      const push = vi.mocked(window.api.onPreferencesChanged).mock.calls[0][0]
+      act(() => {
+        push({
+          spellcheckEnabled: false,
+          autosaveIntervalMs: 45_000,
+          defaultPageConfig: {
+            pageSize: 'A4',
+            orientation: 'portrait',
+            theme: 'default',
+            fontFamily: 'source-serif-4'
+          },
+          colorScheme: 'dark',
+          authorName: ''
+        })
+      })
+
+      expect(usePreferencesStore.getState().preferences?.colorScheme).toBe('dark')
+      expect(document.documentElement.dataset.theme).toBe('dark')
     })
 
     it('file:new creates a document and shows the editor', async () => {

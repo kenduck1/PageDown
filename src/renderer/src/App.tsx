@@ -21,6 +21,21 @@ function App(): React.JSX.Element {
   const closeShortcutsHelp = useAppStore((state) => state.closeShortcutsHelp)
   const filePath = useDocumentStore((state) => state.filePath)
   const isDirty = useDocumentStore((state) => state.isDirty)
+  // Every saved document open in THIS window, as one NUL-joined string rather
+  // than an array -- deliberately, and it is what keeps the report below
+  // cheap. Selecting `state.tabs` directly would hand back a new array
+  // identity on every keystroke (updateContent rebuilds the tab list), so the
+  // reporting effect would re-fire, and re-send over IPC, per character typed.
+  // A joined string is a primitive: Zustand's default Object.is comparison
+  // sees no change until a tab is genuinely opened, closed, or saved to a new
+  // path. NUL is the separator because it is the one byte that cannot appear
+  // in a path on any platform this app runs on.
+  const openFilePathsKey = useDocumentStore((state) =>
+    state.tabs
+      .map((tab) => tab.filePath)
+      .filter((path): path is string => path !== null)
+      .join('\0')
+  )
   const openFile = useDocumentStore((state) => state.openFile)
   const openPath = useDocumentStore((state) => state.openPath)
   const preferences = usePreferencesStore((state) => state.preferences)
@@ -84,14 +99,23 @@ function App(): React.JSX.Element {
   // splits paths the same way for the tab bar and the Home screen's recent
   // rows -- and doing it once here keeps the main process out of the business
   // of guessing whether a path is POSIX or Windows.
+  // `openFilePaths` is the third thing only main can act on (see
+  // src/menu/window-state.ts): it is what lets an OS-delivered file-open
+  // request -- a Finder double-click, "Open With", a Windows/Linux
+  // file-association relaunch -- land in the window that already has that
+  // document open instead of opening a second window on the same file.
+  // documentStore is the only place that knows what is open right now, and it
+  // is per renderer process, so this report is the only way that fact reaches
+  // main at all.
   useEffect(() => {
     window.api.setWindowState({
       documentOpen: screen === 'editor',
       viewMode,
       fileName: filePath ? (filePath.split(/[/\\]/).pop() ?? filePath) : null,
-      isDirty
+      isDirty,
+      openFilePaths: openFilePathsKey ? openFilePathsKey.split('\0') : []
     })
-  }, [screen, viewMode, filePath, isDirty])
+  }, [screen, viewMode, filePath, isDirty, openFilePathsKey])
 
   // Product-completeness audit Tier 3, C: the shortcuts reference used to be
   // reachable ONLY from inside EditorScreen -- both its `Mod-/` keydown
@@ -168,6 +192,17 @@ function App(): React.JSX.Element {
   // earliest real consumer.
   useEffect(() => {
     window.api.getPreferences().then(setPreferences)
+  }, [setPreferences])
+
+  // ...and kept current when ANOTHER window changes them. preferences.json is
+  // one shared file, but this store is per renderer process, so without this a
+  // change made in window 2 left window 1 on stale values indefinitely --
+  // visibly incoherent, because the spellcheck half of the very same change
+  // applies to every window at once (it is a session-level Electron toggle).
+  // The main process excludes the window that made the change, so this never
+  // echoes back into the Settings screen the user is currently typing in.
+  useEffect(() => {
+    return window.api.onPreferencesChanged(setPreferences)
   }, [setPreferences])
 
   // "Open in New Window" (Multi-window support): a fresh window's own

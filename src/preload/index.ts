@@ -12,6 +12,7 @@ import {
   WINDOW_CLOSE_RESPONSE_CHANNEL
 } from '../window/close-request'
 import type { WindowUiState } from '../menu/window-state'
+import { PREFERENCES_CHANGED_CHANNEL } from '../preferences/channel'
 
 // Custom APIs for renderer
 const api = {
@@ -73,6 +74,32 @@ const api = {
     ipcRenderer.invoke('file:print', content, filePath, allowRemoteImages),
   getPreferences: () => ipcRenderer.invoke('preferences:get'),
   setPreferences: (preferences: Preferences) => ipcRenderer.invoke('preferences:set', preferences),
+  // Preferences are one shared file for the whole app, so a change made in
+  // ANY window has to reach the others -- without this, changing the colour
+  // scheme in window 2 left window 1 light until relaunch, while the
+  // spellcheck half of the same change applied to both immediately (it is a
+  // session-level Electron toggle). See broadcastPreferences in
+  // src/main/index.ts.
+  //
+  // This surface's THIRD push channel, and it follows onMenuCommand's own
+  // three rules verbatim: no raw `ipcRenderer.on` is exposed, the
+  // `IpcRendererEvent` (which carries a live privileged `sender` handle) is
+  // stripped rather than forwarded, and a real unsubscribe function is
+  // returned because a bridged callback is never reference-identical to the
+  // one the caller passed. The payload needs no validation here -- unlike a
+  // menu command, it does not originate in this process, it is the main
+  // process's own already-sanitized Preferences object (sanitizePreferences
+  // runs in the `preferences:set` handler before both the write and this
+  // broadcast).
+  onPreferencesChanged: (callback: (preferences: Preferences) => void) => {
+    const listener = (_event: IpcRendererEvent, preferences: Preferences): void => {
+      callback(preferences)
+    }
+    ipcRenderer.on(PREFERENCES_CHANGED_CHANNEL, listener)
+    return () => {
+      ipcRenderer.removeListener(PREFERENCES_CHANGED_CHANNEL, listener)
+    }
+  },
   autosaveSnapshot: (content: string, filePath: string) =>
     ipcRenderer.invoke('file:autosaveSnapshot', content, filePath),
   getVersionHistory: (filePath: string) => ipcRenderer.invoke('file:getVersionHistory', filePath),

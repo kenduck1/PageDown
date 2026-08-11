@@ -27,10 +27,9 @@ function build(overrides: Partial<AppMenuTemplateParams> = {}): {
 }
 
 const EDITING: WindowUiState = {
+  ...DEFAULT_WINDOW_UI_STATE,
   documentOpen: true,
-  viewMode: 'format',
-  fileName: 'report.md',
-  isDirty: false
+  fileName: 'report.md'
 }
 
 function submenuOf(

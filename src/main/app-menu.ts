@@ -2,6 +2,7 @@ import { app, BrowserWindow, Menu } from 'electron'
 import { readRecentFiles } from './recent-files'
 import { buildAppMenuTemplate } from './app-menu-template'
 import { APP_NAME, formatWindowTitle } from './window-title'
+import { getActiveWindow } from './focused-window'
 import {
   DEFAULT_WINDOW_UI_STATE,
   coerceWindowUiState,
@@ -54,12 +55,22 @@ export async function refreshApplicationMenu(): Promise<void> {
   // and returns []), so this cannot leave the app menu-less on a corrupt or
   // missing recent-files.json.
   const recents = await readRecentFiles(current.userDataDir)
-  const focused = BrowserWindow.getFocusedWindow()
-  // No focused window (every window closed on macOS, or the app is in the
-  // background) falls back to the neutral default, which disables every
-  // document-scoped item -- correct, since there is demonstrably no document
-  // on screen to act on.
-  const state = (focused ? windowStates.get(focused) : undefined) ?? DEFAULT_WINDOW_UI_STATE
+  // getActiveWindow(), NOT BrowserWindow.getFocusedWindow(). The latter
+  // returns null for a window that is merely BACKGROUNDED (macOS: the user
+  // clicked another app), and this function then fell through to the neutral
+  // default -- greying out every document-scoped File/View item for a window
+  // that is open, has a document in it, and is one click away from being
+  // frontmost again. Whether that repaint was ever visible depended purely on
+  // timing (macOS hides a backgrounded app's menu bar, but nothing guarantees
+  // a `browser-window-focus` rebuild lands before the user reads the menu on
+  // re-activation), which is exactly the kind of "usually fine" this should
+  // not rely on. See focused-window.ts.
+  //
+  // A genuinely absent window -- every window closed, macOS's "app running,
+  // nothing open" state -- still falls back to the neutral default, which is
+  // correct: there really is no document to act on.
+  const active = getActiveWindow()
+  const state = (active ? windowStates.get(active) : undefined) ?? DEFAULT_WINDOW_UI_STATE
   const template = buildAppMenuTemplate({
     appName: APP_NAME,
     platform: process.platform,
@@ -85,7 +96,14 @@ export function initApplicationMenu(next: AppMenuDeps): void {
 // Called for every WINDOW_STATE_CHANNEL message. Does the two things only the
 // main process can: the real OS window title, and the application menu's
 // enablement/checkmarks.
-export function applyWindowUiState(win: BrowserWindow, raw: unknown): void {
+//
+// Returns the COERCED state so the caller (src/main/index.ts) can use the
+// validated payload it already produced here -- specifically `openFilePaths`,
+// which is not a menu concern at all but arrives on the same message. The
+// alternative was coercing the same raw payload a second time at the call
+// site; returning it keeps exactly one validation pass and makes it
+// impossible for the two to disagree.
+export function applyWindowUiState(win: BrowserWindow, raw: unknown): WindowUiState {
   const state = coerceWindowUiState(raw)
   const previous = windowStates.get(win)
   windowStates.set(win, state)
@@ -93,7 +111,7 @@ export function applyWindowUiState(win: BrowserWindow, raw: unknown): void {
   // A message can genuinely arrive after its window is gone -- the renderer
   // sends on a React effect, and a close can land between the send and its
   // delivery. Every setter below throws on a destroyed window.
-  if (win.isDestroyed()) return
+  if (win.isDestroyed()) return state
 
   win.setTitle(formatWindowTitle(state))
   // macOS-only: paints the real dot inside the window's close button. Guarded
@@ -107,12 +125,23 @@ export function applyWindowUiState(win: BrowserWindow, raw: unknown): void {
   // would rebuild the entire menu on every dirty flip (i.e. on the first
   // keystroke after every save); without the second, a background window's
   // report would repaint the menu to describe a window the user isn't
-  // looking at. `focused === null` is included deliberately: at startup the
-  // first state report can land before the window has been focused at all,
+  // looking at. `active === null` is included deliberately: at startup the
+  // first state report can land before any window has been focused at all,
   // and skipping it there would leave the menu stuck on the neutral default
   // until the user clicked somewhere.
-  const focused = BrowserWindow.getFocusedWindow()
-  if (menuRelevantStateChanged(previous, state) && (focused === win || focused === null)) {
+  //
+  // getActiveWindow() rather than getFocusedWindow() here for the SECOND half
+  // of the same fix described in refreshApplicationMenu above: with the raw
+  // focused window, a backgrounded app reported `null`, took the `=== null`
+  // branch, and rebuilt the menu from a state lookup that then also missed --
+  // so a background window's ordinary state report repainted the menu into
+  // the all-greyed default. Now a backgrounded window's own report matches
+  // `active === win` and repaints the menu correctly, while a genuinely
+  // BACKGROUND window (a second window reporting while another is active) is
+  // still skipped, which is the distinction this guard was always after.
+  const active = getActiveWindow()
+  if (menuRelevantStateChanged(previous, state) && (active === win || active === null)) {
     void refreshApplicationMenu()
   }
+  return state
 }

@@ -52,6 +52,49 @@ async function getFileWindows(application: ElectronApplication): Promise<Page[]>
   throw new Error('Timed out locating any real app-shell window')
 }
 
+// Every on-screen split-preview WebContentsView currently attached to each
+// real app-shell window, keyed by that window's own URL.
+//
+// WHY THIS EXISTS. Split mode's preview is a native WebContentsView attached
+// to a window's contentView, and until the multi-window correctness pass every
+// split-preview IPC handler ignored `event.sender` and used the captured
+// `mainWindow`. Measured consequence: clicking Split in window 2 attached an
+// OPAQUE view to WINDOW 1's contentView, at window 2's pane coordinates, where
+// it painted on top of window 1's Home screen -- window 2's own pane stayed
+// empty. That is strictly worse than the "Split only works in the first
+// window" limitation it was documented as: it corrupted the window that did
+// nothing wrong. Nothing covered it, which is exactly why it survived.
+//
+// Mechanism is Gate 15's `probeSplitPreviewView`, generalized to report
+// PER WINDOW rather than for the first `file://` window only -- app.evaluate()
+// against Electron's own public main-process API, because a WebContentsView is
+// not a top-level window (app.windows() cannot see it) and `window.api` is
+// deep-frozen by contextBridge (so no renderer-side spy is possible). See Gate
+// 15's header for the full derivation.
+//
+// The `bounds.x >= 0 && bounds.y >= 0` filter isolates a REAL split preview
+// from the permanently off-screen Phase-0-spike pagedown-render:// view that
+// src/main/index.ts attaches to the first window at startup ({x:-9999,
+// y:-9999}) -- same disambiguation Gate 15 and Gate 18 already rely on.
+async function probeSplitPreviewsByWindow(
+  application: ElectronApplication
+): Promise<Array<{ url: string; previewCount: number }>> {
+  return application.evaluate(async ({ BrowserWindow, WebContentsView }) => {
+    return BrowserWindow.getAllWindows()
+      .filter((win) => !win.isDestroyed() && win.webContents.getURL().startsWith('file://'))
+      .map((win) => ({
+        url: win.webContents.getURL(),
+        previewCount: win.contentView.children.filter((child) => {
+          if (!(child instanceof WebContentsView)) return false
+          if (child.webContents.isDestroyed()) return false
+          if (!child.webContents.getURL().startsWith('pagedown-render://')) return false
+          const bounds = child.getBounds()
+          return bounds.x >= 0 && bounds.y >= 0 && bounds.width > 0 && bounds.height > 0
+        }).length
+      }))
+  })
+}
+
 let app: ElectronApplication | undefined
 let close: (() => Promise<void>) | undefined
 let userDataDir: string
@@ -125,6 +168,63 @@ test('Gate 25: Open in New Window creates a genuinely independent second window,
       })
       .toContain('Independent edit in window 2.')
     expect(await win1.locator('body').innerText()).not.toContain('Independent edit in window 2.')
+
+    // ---------------------------------------------------------------------
+    // Split mode in the SECOND window attaches its preview to the SECOND
+    // window -- and leaves the first window's contentView alone.
+    //
+    // Before the per-window harness fix, this measured (via this same probe):
+    //   window 2: 0 on-screen previews  <- its own pane stayed empty
+    //   window 1: 1 on-screen preview   <- window 2's pane rectangle, opaque,
+    //                                      painted over window 1's Home screen
+    // Both halves are asserted, in the same run, for the same reason Gate 16
+    // measures a Letter control alongside its A4 subject: "window 2 got one"
+    // alone would still pass if BOTH windows got one.
+    // ---------------------------------------------------------------------
+    const previewsBeforeSplit = await probeSplitPreviewsByWindow(app)
+    expect(previewsBeforeSplit.every((entry) => entry.previewCount === 0)).toBe(true)
+
+    // The document window opened via "Open in New Window" is the one whose
+    // URL carries the ?openPath= query param createWindow rides the target
+    // document along on -- a stable identity, unlike positional ordering.
+    const isWindow2 = (url: string): boolean => url.includes('openPath=')
+
+    await win2!.getByRole('button', { name: 'Split', exact: true }).click()
+
+    let previews: Array<{ url: string; previewCount: number }> = []
+    await expect
+      .poll(
+        async () => {
+          previews = await probeSplitPreviewsByWindow(app!)
+          return previews.find((entry) => isWindow2(entry.url))?.previewCount ?? 0
+        },
+        {
+          message: "expected window 2's own Split preview to attach to window 2",
+          timeout: 20_000
+        }
+      )
+      .toBe(1)
+
+    // ...and window 1, which is sitting on Home and never asked for anything,
+    // gained NO composited child view at all.
+    expect(previews.filter((entry) => !isWindow2(entry.url)).map((e) => e.previewCount)).toEqual([
+      0
+    ])
+
+    // Leaving Split mode in window 2 tears down window 2's own harness --
+    // per-window teardown, exercised here because the shared-harness version
+    // of `split-preview:destroy` blanked whichever window happened to hold the
+    // one global harness, regardless of which window sent the message.
+    await win2!.getByRole('button', { name: 'Format', exact: true }).click()
+    await expect
+      .poll(
+        async () => {
+          previews = await probeSplitPreviewsByWindow(app!)
+          return previews.reduce((total, entry) => total + entry.previewCount, 0)
+        },
+        { message: 'expected window 2 to tear down its own split preview', timeout: 10_000 }
+      )
+      .toBe(0)
 
     // Save window 2 before closing it. This is REQUIRED, not tidiness: the
     // window-close guard added for the unsaved-work fix cancels the close of a

@@ -7,7 +7,13 @@ import {
 
 describe('coerceWindowUiState', () => {
   it('passes a well-formed state through unchanged', () => {
-    const state = { documentOpen: true, viewMode: 'split', fileName: 'report.md', isDirty: true }
+    const state = {
+      documentOpen: true,
+      viewMode: 'split',
+      fileName: 'report.md',
+      isDirty: true,
+      openFilePaths: ['/tmp/docs/report.md', '/tmp/docs/notes.md']
+    }
     expect(coerceWindowUiState(state)).toEqual(state)
   })
 
@@ -22,7 +28,13 @@ describe('coerceWindowUiState', () => {
     // field must not throw away three good ones.
     expect(
       coerceWindowUiState({ documentOpen: true, viewMode: 'nonsense', fileName: 7, isDirty: 'yes' })
-    ).toEqual({ documentOpen: true, viewMode: 'format', fileName: null, isDirty: false })
+    ).toEqual({
+      documentOpen: true,
+      viewMode: 'format',
+      fileName: null,
+      isDirty: false,
+      openFilePaths: []
+    })
   })
 
   it('rejects a non-string fileName, which would otherwise reach setTitle()', () => {
@@ -30,6 +42,38 @@ describe('coerceWindowUiState', () => {
     // with an object fileName puts a literal "[object Object]" in the OS
     // title bar rather than surfacing an error anywhere.
     expect(coerceWindowUiState({ fileName: { toString: () => 'x' } }).fileName).toBeNull()
+  })
+
+  describe('openFilePaths', () => {
+    // This field decides which WINDOW an OS file-open request is routed to, so
+    // a malformed entry must not be able to make a path "match" something it
+    // isn't -- and a malformed message must not be able to make the main
+    // process retain unbounded per-window state.
+    it('drops non-string and empty entries rather than the whole array', () => {
+      expect(
+        coerceWindowUiState({ openFilePaths: ['/a.md', 7, null, '', '/b.md'] }).openFilePaths
+      ).toEqual(['/a.md', '/b.md'])
+    })
+
+    it('degrades a non-array to an empty list', () => {
+      // Empty is the SAFE degradation: it means "this window is showing
+      // nothing I can route to", so the request falls back to opening a new
+      // window rather than focusing a wrong one.
+      expect(coerceWindowUiState({ openFilePaths: '/a.md' }).openFilePaths).toEqual([])
+      expect(coerceWindowUiState({}).openFilePaths).toEqual([])
+    })
+
+    it('caps how many paths one window can make the main process retain', () => {
+      const many = Array.from({ length: 200 }, (_, i) => `/doc-${i}.md`)
+      expect(coerceWindowUiState({ openFilePaths: many }).openFilePaths).toHaveLength(64)
+    })
+
+    it('does not hand out DEFAULT_WINDOW_UI_STATE own array', () => {
+      // That constant is exported and handed out as a whole state elsewhere;
+      // sharing one mutable array across every coerced message is a trap.
+      const coerced = coerceWindowUiState({})
+      expect(coerced.openFilePaths).not.toBe(DEFAULT_WINDOW_UI_STATE.openFilePaths)
+    })
   })
 })
 
