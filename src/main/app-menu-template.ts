@@ -199,6 +199,23 @@ export function buildAppMenuTemplate(params: AppMenuTemplateParams): MenuItemCon
         click: clickCommand('file:exportHtml')
       },
       {
+        // Third on the same base key, for the same "these are one operation in
+        // three formats" reason the HTML item above documents. Alt+Shift+E is
+        // free: the Mod+Alt bindings the editor claims are 0-8, C, X and
+        // (macOS) F, none of which add Shift, and Mod+Shift+E/Mod+Alt+E are
+        // the two items directly above -- checked against
+        // ShortcutsHelpModal.tsx's own verified list and pinned by this
+        // module's own "never reuses one accelerator" test.
+        //
+        // Labelled "Word" rather than ".docx" because the recipient this
+        // export exists for ("send me the Word file") asks for it by that
+        // name, and the ellipsis is real -- a Save dialog follows.
+        label: 'Export as Word…',
+        accelerator: 'CmdOrCtrl+Alt+Shift+E',
+        enabled: documentOpen,
+        click: clickCommand('file:exportDocx')
+      },
+      {
         label: 'Print…',
         accelerator: 'CmdOrCtrl+P',
         enabled: documentOpen,

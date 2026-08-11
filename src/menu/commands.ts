@@ -49,6 +49,12 @@ export const MENU_COMMANDS = [
   // now has a real menu home -- see EditorToolbar.tsx's own header for the
   // rule that governs which controls may leave that toolbar at all.
   'file:exportHtml',
+  // "Send me the Word file" is routine for this app's own stated audience
+  // (reports, resumes, letters), and it is the third leg beside PDF and HTML.
+  // Unlike those two it has no toolbar history at all -- the File menu is its
+  // only home, by the same rule that governs which controls may live in the
+  // single-row toolbar.
+  'file:exportDocx',
   'file:print',
   'file:pageSetup',
   'edit:find',

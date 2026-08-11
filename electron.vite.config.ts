@@ -85,6 +85,28 @@ export default defineConfig({
           // feature's own verification, not assumed from this comment alone.
           'mdast-util-math',
           'micromark-extension-math'
+          // `docx` (.docx export, src/export/markdown-to-docx.ts) is
+          // DELIBERATELY NOT on this list, and the check that establishes that
+          // is recorded here so nobody has to redo it -- or, worse, assume the
+          // opposite. It is `"type": "module"`, which is the trigger condition
+          // this whole comment block warns about, but unlike every package
+          // above it also ships a REAL CommonJS build and declares it in
+          // `exports["."].require` (./dist/index.cjs). So Node's require(esm)
+          // interop is never reached: `require("docx")` loads genuine CJS and
+          // returns genuine named exports.
+          //
+          // Verified against the REAL COMPILED BUNDLE rather than a test, per
+          // this file's own warning that Vitest/Playwright mask exactly this
+          // failure -- a CJS probe placed inside `out/main/` (so it resolves
+          // the module identically to the emitted `require("docx")`) reported
+          // `{Packer:"function", Document:"function", Paragraph:"function",
+          // hasDefaultOnly:false}` and packed a real 8493-byte PK-prefixed
+          // file. phase0/gate39-docx-export.spec.ts is the permanent version of
+          // that check: it drives a real export through the real compiled app.
+          //
+          // Left externalized on purpose rather than "excluded to be safe":
+          // bundling it would add roughly 300KB to out/main/index.js in
+          // exchange for nothing.
         ]
       }
     }

@@ -118,6 +118,12 @@ interface DocumentStateValues {
   // (html-exporter.ts never touches the pagination harness at all -- see
   // its own module comment).
   isExportingHtml: boolean
+  // A FOURTH in-flight guard, for the same reason isExportingHtml is a third
+  // rather than folded into isExporting: .docx export is its own operation
+  // with its own trigger, contends over nothing (it never touches the
+  // pagination harness), and sharing a flag would grey out an unrelated
+  // export button for the duration.
+  isExportingDocx: boolean
   // Product-completeness audit 2.3: "Export gives no feedback." Surfaces the
   // outcome of the most recent SUCCESSFUL Export PDF / Export HTML action as
   // a short-lived notice for EditorToolbar's own Toast (a generic, reusable
@@ -186,6 +192,11 @@ interface DocumentState extends DocumentStateValues {
   // in-flight guard, friendly-not-raw error text, success surfaced via
   // exportNotice rather than silently discarding the returned path).
   exportHtml: () => Promise<void>
+  // .docx (Microsoft Word) export -- same shape and reasoning again. Worth
+  // stating where a caller will read it: this is a CONTENT export. Word
+  // repaginates with its own layout engine, so exportPdf remains the path for
+  // anything where the page layout itself matters.
+  exportDocx: () => Promise<void>
   print: () => Promise<void>
   // Dismisses the current export success notice -- called by Toast's own
   // auto-dismiss timer (via EditorToolbar) and available for an explicit
@@ -598,6 +609,7 @@ export const initialDocumentState: DocumentStateValues = {
   isExporting: false,
   isPrinting: false,
   isExportingHtml: false,
+  isExportingDocx: false,
   exportNotice: null,
   revision: 0,
   tabs: [initialTab],
@@ -1142,6 +1154,27 @@ export const useDocumentStore = create<DocumentState>()((set, get) => ({
       set({ error: 'Failed to export HTML. Please try again.' })
     } finally {
       set({ isExportingHtml: false })
+    }
+  },
+  exportDocx: async () => {
+    if (get().isExportingDocx) return
+    set({ isExportingDocx: true })
+    const { content, filePath, remoteImagesAllowed } = get()
+    try {
+      const result = await window.api.exportDocx(content, filePath, remoteImagesAllowed === true)
+      if (result) {
+        set({
+          exportNotice: {
+            message: `Exported Word document: ${tabLabel(result.filePath)}`,
+            filePath: result.filePath
+          }
+        })
+      }
+    } catch (err) {
+      console.error('Failed to export Word document', err)
+      set({ error: 'Failed to export Word document. Please try again.' })
+    } finally {
+      set({ isExportingDocx: false })
     }
   },
   clearExportNotice: () => set({ exportNotice: null }),

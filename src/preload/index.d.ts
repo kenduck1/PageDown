@@ -204,6 +204,14 @@ export interface FileApi {
     filePath?: string | null,
     allowRemoteImages?: boolean
   ) => Promise<{ filePath: string } | null>
+  // .docx (Microsoft Word) export -- same shape again. A CONTENT export, not a
+  // layout-fidelity one: Word repaginates with its own engine, so exportPdf
+  // stays the fidelity path. See src/export/markdown-to-docx.ts.
+  exportDocx: (
+    content: string,
+    filePath?: string | null,
+    allowRemoteImages?: boolean
+  ) => Promise<{ filePath: string } | null>
   // Reveals a just-exported file (PDF or HTML) in the OS file manager.
   // `false` when `filePath` isn't a path this app itself wrote via a recent
   // export -- see the preload implementation's own comment for why this is

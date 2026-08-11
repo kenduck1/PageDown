@@ -17,6 +17,7 @@ beforeEach(() => {
     confirmDiscardChanges: vi.fn(),
     exportPdf: vi.fn(),
     exportHtml: vi.fn(),
+    exportDocx: vi.fn(),
     showItemInFolder: vi.fn(),
     print: vi.fn(),
     getPreferences: vi.fn(),
@@ -1172,6 +1173,80 @@ describe('useDocumentStore exportHtml', () => {
     useDocumentStore.setState({ content: '# Report' })
 
     await useDocumentStore.getState().exportHtml()
+
+    expect(useDocumentStore.getState().exportNotice).toBeNull()
+  })
+})
+
+describe('useDocumentStore exportDocx', () => {
+  it('calls window.api.exportDocx with content/path/consent, matching its siblings', async () => {
+    // The path is what lets main resolve this document's own local images; the
+    // consent flag is what decides whether a remote image becomes a link or
+    // inert alt text. Dropping either silently degrades the exported file.
+    vi.mocked(window.api.exportDocx).mockResolvedValue({ filePath: '/tmp/report.docx' })
+    useDocumentStore.setState({
+      filePath: '/tmp/report.md',
+      content: '# Report',
+      remoteImagesAllowed: true
+    })
+
+    await useDocumentStore.getState().exportDocx()
+
+    expect(window.api.exportDocx).toHaveBeenCalledWith('# Report', '/tmp/report.md', true)
+  })
+
+  it('a successful export surfaces the real written path via exportNotice', async () => {
+    vi.mocked(window.api.exportDocx).mockResolvedValue({ filePath: '/tmp/report.docx' })
+    useDocumentStore.setState({ content: '# Report' })
+
+    await useDocumentStore.getState().exportDocx()
+
+    expect(useDocumentStore.getState().exportNotice).toEqual({
+      message: 'Exported Word document: report.docx',
+      filePath: '/tmp/report.docx'
+    })
+  })
+
+  it('holds its OWN in-flight guard, independent of the PDF and HTML ones', async () => {
+    let resolveExport: (() => void) | undefined
+    vi.mocked(window.api.exportDocx).mockReturnValue(
+      new Promise((resolve) => {
+        resolveExport = () => resolve({ filePath: '/tmp/report.docx' })
+      })
+    )
+    useDocumentStore.setState({ filePath: '/tmp/report.md', content: '# Report' })
+
+    const first = useDocumentStore.getState().exportDocx()
+    expect(useDocumentStore.getState().isExportingDocx).toBe(true)
+    expect(useDocumentStore.getState().isExporting).toBe(false)
+    expect(useDocumentStore.getState().isExportingHtml).toBe(false)
+    await useDocumentStore.getState().exportDocx()
+
+    expect(window.api.exportDocx).toHaveBeenCalledTimes(1)
+    resolveExport?.()
+    await first
+    expect(useDocumentStore.getState().isExportingDocx).toBe(false)
+  })
+
+  it('surfaces a friendly message rather than the raw IPC error string', async () => {
+    vi.mocked(window.api.exportDocx).mockRejectedValue(
+      new Error("Error invoking remote method 'file:exportDocx': Error: disk full")
+    )
+    useDocumentStore.setState({ content: '# Report' })
+
+    await useDocumentStore.getState().exportDocx()
+
+    expect(useDocumentStore.getState().error).toBe(
+      'Failed to export Word document. Please try again.'
+    )
+    expect(useDocumentStore.getState().isExportingDocx).toBe(false)
+  })
+
+  it('a cancelled Save dialog sets no notice', async () => {
+    vi.mocked(window.api.exportDocx).mockResolvedValue(null)
+    useDocumentStore.setState({ content: '# Report' })
+
+    await useDocumentStore.getState().exportDocx()
 
     expect(useDocumentStore.getState().exportNotice).toBeNull()
   })
