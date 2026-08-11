@@ -494,3 +494,38 @@ describe('markdownToHtml — remote image consent (allowRemoteImages)', () => {
     expect(markdownToHtml(raw).html).toContain('<img')
   })
 })
+
+// 2026-08-09 design-doc gap audit's A5: `markdownToHtml` used to return only
+// `{ html, sourceMap }`, with no channel for design:167's own "warns on an
+// inline occurrence" requirement at all. `warnings` is computed from the
+// SAME parse pass already running (see collectPagebreakWarnings' own header
+// comment in pagebreak-plugin.ts) -- these tests exist at the
+// `markdownToHtml` boundary specifically to prove the field is actually
+// wired through this function's return value, not just correct in
+// isolation (pagebreak-plugin.test.ts already covers the detection logic
+// itself in detail).
+describe('markdownToHtml — document warnings', () => {
+  it('returns an empty warnings array for a well-formed document', () => {
+    const { warnings } = markdownToHtml('Paragraph one.\n\n<!-- pagebreak -->\n\nParagraph two.')
+    expect(warnings).toEqual([])
+  })
+
+  it('warns on a mid-paragraph inline pagebreak occurrence', () => {
+    const { warnings } = markdownToHtml('Some text with an <!-- pagebreak --> inline occurrence.')
+    expect(warnings).toHaveLength(1)
+    expect(warnings[0].id).toBe('inline-pagebreak-marker')
+  })
+
+  it('warns when an alternate pagebreak syntax is recognized and kept as written', () => {
+    const { warnings } = markdownToHtml('Paragraph one.\n\n\\newpage\n\nParagraph two.')
+    expect(warnings).toHaveLength(1)
+    expect(warnings[0].id).toBe('alternate-pagebreak-syntax')
+  })
+
+  it('does not warn for the canonical marker used correctly, even alongside unrelated raw HTML', () => {
+    const { warnings } = markdownToHtml(
+      '<div class="callout">Note</div>\n\nParagraph.\n\n<!-- pagebreak -->\n\nMore.'
+    )
+    expect(warnings).toEqual([])
+  })
+})

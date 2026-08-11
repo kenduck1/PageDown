@@ -14,8 +14,9 @@ import type { Root as HastRoot } from 'hast'
 import type { Root } from 'mdast'
 import { visit } from 'unist-util-visit'
 import { annotateSourceOffsets, type SourceMap } from './source-map'
-import { remarkPagebreak, PAGEBREAK_CLASS } from './pagebreak-plugin'
+import { remarkPagebreak, PAGEBREAK_CLASS, collectPagebreakWarnings } from './pagebreak-plugin'
 import { createPagebreakToHast } from './pagebreak-to-hast'
+import type { DocumentWarning } from './document-warnings'
 import { createMathBlockToHast, createMathInlineToHast } from './math-to-hast'
 import { remarkComment } from './comment-plugin'
 import { createCommentToHast } from './comment-to-hast'
@@ -186,7 +187,7 @@ function applyRemoteImagePolicy(tree: HastRoot, allowRemoteImages: boolean): voi
 export function markdownToHtml(
   source: string,
   options?: { assetToken?: string; allowRemoteImages?: boolean }
-): { html: string; sourceMap: SourceMap } {
+): { html: string; sourceMap: SourceMap; warnings: DocumentWarning[] } {
   // unified's `.parse()` only performs the parse phase — it does NOT run
   // attached transformers (remarkPagebreak's tree mutation only executes
   // during `.run()`/`.runSync()`). remarkGfm/remarkFrontmatter don't need
@@ -231,6 +232,18 @@ export function markdownToHtml(
   const tree = parseProcessor.runSync(parsedTree) as Root
 
   const sourceMap = annotateSourceOffsets(tree, source)
+
+  // A second `visit()` over the tree `remarkPagebreak` just promoted --
+  // NOT a second markdown parse (see collectPagebreakWarnings' own header
+  // comment in pagebreak-plugin.ts). Computed here, alongside sourceMap
+  // above, and actually threaded out through this function's return value
+  // -- unlike sourceMap itself, which the 2026-08-09 design-doc gap audit's
+  // B1 finding flags as computed-and-discarded by every production call
+  // site. Don't repeat that mistake for warnings: every call site below
+  // that only destructures `{ html }` is fine (a DocumentWarning with no
+  // consumer is harmless), but at least one real consumer must exist, and
+  // does -- see page-count-generator.ts's `getPageCount`.
+  const warnings = collectPagebreakWarnings(tree)
 
   // Per-render random token: without this, the whole-tree sanitize() pass
   // below can't tell pagebreakToHast's own trusted output apart from
@@ -364,5 +377,5 @@ export function markdownToHtml(
     .stringify(highlighted)
     .replaceAll(tokenClassName, PAGEBREAK_CLASS)
 
-  return { html, sourceMap }
+  return { html, sourceMap, warnings }
 }

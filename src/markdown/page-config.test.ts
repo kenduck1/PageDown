@@ -4,6 +4,7 @@ import {
   extractPageConfig,
   applyPageConfig,
   resolvePageConfig,
+  resolvePageConfigWithWarnings,
   DEFAULT_PAGE_CONFIG,
   type PageConfig
 } from './page-config'
@@ -887,5 +888,73 @@ describe('resolvePageConfig', () => {
     const config = resolvePageConfig('---\nheaderLeft: Only\n---\n# Doc')
     expect(config.header.center).toBe(DEFAULT_PAGE_CONFIG.header.center)
     expect(config.header.right).toBe(DEFAULT_PAGE_CONFIG.header.right)
+  })
+})
+
+// design:208 ("Malformed YAML frontmatter -> fall back to default page
+// config ... non-blocking warning, never crash on load") plus the 2026-08-09
+// design-doc gap audit's A5 finding that `page-config.ts` had a bare
+// `catch { return {} }` -- the fallback worked and was tested (see
+// `resolvePageConfig`'s own "falls back to DEFAULT_PAGE_CONFIG" test above,
+// left untouched), but nothing ever surfaced that it had happened.
+// `resolvePageConfigWithWarnings` is the ONE new function this adds --
+// `resolvePageConfig`/`extractPageConfig` keep their exact pre-existing
+// signatures and behavior, confirmed by every test above still passing
+// unmodified.
+describe('resolvePageConfigWithWarnings', () => {
+  it('config matches resolvePageConfig exactly for a well-formed document', () => {
+    const source = '---\npage: A4\norientation: landscape\n---\n\n# Report\n'
+    expect(resolvePageConfigWithWarnings(source).config).toEqual(resolvePageConfig(source))
+  })
+
+  it('produces no warnings for a document with no frontmatter block at all', () => {
+    const { warnings } = resolvePageConfigWithWarnings('# Just a heading\n\nBody text.\n')
+    expect(warnings).toEqual([])
+  })
+
+  it('produces no warnings for an empty document', () => {
+    expect(resolvePageConfigWithWarnings('').warnings).toEqual([])
+  })
+
+  it('produces no warnings for a well-formed frontmatter block', () => {
+    const source = '---\npage: A4\n---\n\n# Report\n'
+    expect(resolvePageConfigWithWarnings(source).warnings).toEqual([])
+  })
+
+  it('produces no warnings when the frontmatter block has only unrelated (non-owned) keys', () => {
+    const source = '---\ntitle: My Report\ntags: [a, b]\n---\n\n# Report\n'
+    expect(resolvePageConfigWithWarnings(source).warnings).toEqual([])
+  })
+
+  it('produces no warnings when an individual owned key holds an unrecognized value -- only a whole-block failure warns', () => {
+    // page: Tabloid isn't a recognized PageSize -- extractPageConfig already
+    // silently omits it (see the extractPageConfig describe block above),
+    // and that per-key tolerance is deliberately NOT what this warning is
+    // for. See parseOwnedKeys' own `malformed` doc comment in page-config.ts.
+    const source = '---\npage: Tabloid\ntheme: default\n---\n\n# Report\n'
+    expect(resolvePageConfigWithWarnings(source).warnings).toEqual([])
+  })
+
+  it('warns AND still falls back to DEFAULT_PAGE_CONFIG for syntactically malformed YAML', () => {
+    const source = '---\npage: [unclosed\n---\n\n# Report\n'
+    const { config, warnings } = resolvePageConfigWithWarnings(source)
+
+    expect(config).toEqual(DEFAULT_PAGE_CONFIG)
+    expect(warnings).toHaveLength(1)
+    expect(warnings[0].id).toBe('malformed-frontmatter')
+  })
+
+  it('never throws on malformed YAML', () => {
+    const source = '---\npage: [unclosed\n---\n\n# Report\n'
+    expect(() => resolvePageConfigWithWarnings(source)).not.toThrow()
+  })
+
+  it('warns for frontmatter that parses as valid YAML but not as a mapping (a bare list)', () => {
+    const source = '---\n- one\n- two\n---\n\n# Report\n'
+    const { config, warnings } = resolvePageConfigWithWarnings(source)
+
+    expect(config).toEqual(DEFAULT_PAGE_CONFIG)
+    expect(warnings).toHaveLength(1)
+    expect(warnings[0].id).toBe('malformed-frontmatter')
   })
 })

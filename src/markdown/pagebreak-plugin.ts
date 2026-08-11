@@ -2,6 +2,7 @@ import { visit } from 'unist-util-visit'
 import type { Root, Html, Text, Parent } from 'mdast'
 import type { Node } from 'unist'
 import type { Processor } from 'unified'
+import type { DocumentWarning } from './document-warnings'
 
 export interface Pagebreak extends Node {
   type: 'pagebreak'
@@ -146,6 +147,105 @@ export function remarkPagebreak() {
       }
     })
   }
+}
+
+// design:167 ("PageDown always emits it with blank-line separation,
+// validates on parse, and warns on an inline occurrence") plus the
+// 2026-08-09 design-doc gap audit's A5 finding (this warning path never
+// existed at all -- pipeline.ts had nothing to carry it on). Reads the
+// SAME tree `remarkPagebreak` already promoted, right after
+// `markdownToHtml`'s own `.runSync()` call -- a second `visit()` over an
+// already-built, in-memory AST, NOT a second markdown PARSE (no
+// re-tokenizing, no new `unified()` pipeline). Exported separately from
+// `remarkPagebreak` itself, rather than folded into that transform's own
+// single visit, so Milkdown's own use of `remarkPagebreak` (which never
+// calls this function) is completely unaffected -- this is purely
+// additive and read-only, and `markdownToHtml` (pipeline.ts) is its only
+// caller.
+//
+// Two independent, aggregated (never one-warning-per-occurrence, per this
+// feature's own "don't be noisy" requirement) conditions:
+//
+// 1. Inline occurrences of the CANONICAL marker only -- not the div
+//    convention, not \newpage/\pagebreak. design:167's own text is
+//    specifically about `<!-- pagebreak -->`'s HTML-comment parsing
+//    gotcha ("written inline it's parsed as inline HTML inside a
+//    paragraph and lands mid-paragraph unexpectedly"); the alternate
+//    syntaxes have no equivalent gotcha (an embedded `\newpage` is just
+//    ordinary text either way, and CLAUDE.md already documents that
+//    silently NOT promoting a mid-sentence `\newpage`/`\pagebreak` is a
+//    deliberate, accepted false-negative -- a Pandoc/LaTeX tutorial
+//    documenting the command rather than invoking it -- which a warning
+//    here would needlessly nag about).
+//
+//    After `.runSync()`, every occurrence remarkPagebreak COULD promote
+//    already has been (no longer `type: 'html'` at all), so a leftover
+//    `html` node whose trimmed value is exactly the canonical marker is,
+//    by construction, one it declined to promote. Two such leftovers are
+//    told apart by direct parent type: `listItem`/`tableCell` is
+//    design:167's OTHER, separately-stated, NOT-warned sentence ("Breaks
+//    inside tables or list items are unsupported in v1" -- a CORRECTLY
+//    block-isolated marker that simply landed somewhere v1 doesn't
+//    support, not "written inline"; see BLOCK_CONTAINER_TYPES' own
+//    comment on why a table cell's marker is always the direct-child
+//    inline shape, never paragraph-wrapped). Every other parent
+//    (paragraph, heading, strong, emphasis, link, ...) is a genuine
+//    mid-text occurrence.
+//
+// 2. Alternate syntax kept as written -- `Pagebreak#raw` (see that
+//    field's own comment above) already records the literal an author
+//    typed, so a promoted `pagebreak` node whose `raw` is defined and
+//    isn't the canonical marker text is, by definition, one of the three
+//    alternate conventions. No longer "N markers were normalized" (that
+//    framing described the OLD, lossy behaviour this file's own history
+//    section says was inverted) -- purely informational: "PageDown
+//    recognized N alternate marker(s) and is keeping them exactly as
+//    written."
+export function collectPagebreakWarnings(tree: Root): DocumentWarning[] {
+  let inlineCount = 0
+  let alternateCount = 0
+
+  visit(tree, (node, _index, parent: Parent | undefined) => {
+    if (!parent) return
+
+    if (node.type === 'html' && (node as Html).value.trim() === PAGEBREAK_MARKER) {
+      if (parent.type !== 'listItem' && parent.type !== 'tableCell') {
+        inlineCount += 1
+      }
+      return
+    }
+
+    if (node.type === 'pagebreak') {
+      const raw = (node as Pagebreak).raw
+      if (raw !== undefined && raw !== PAGEBREAK_MARKER) {
+        alternateCount += 1
+      }
+    }
+  })
+
+  const warnings: DocumentWarning[] = []
+
+  if (inlineCount > 0) {
+    warnings.push({
+      id: 'inline-pagebreak-marker',
+      message:
+        inlineCount === 1
+          ? "A <!-- pagebreak --> marker is written inline, so it won't create a page break -- surround it with blank lines."
+          : `${inlineCount} <!-- pagebreak --> markers are written inline, so they won't create a page break -- surround each with blank lines.`
+    })
+  }
+
+  if (alternateCount > 0) {
+    warnings.push({
+      id: 'alternate-pagebreak-syntax',
+      message:
+        alternateCount === 1
+          ? 'This document uses an alternate page-break marker (\\newpage, \\pagebreak, or a page-break-after div) -- kept as written.'
+          : `This document uses ${alternateCount} alternate page-break markers (\\newpage, \\pagebreak, or a page-break-after div) -- kept as written.`
+    })
+  }
+
+  return warnings
 }
 
 // Teaches mdast-util-to-markdown (the serializer remark-stringify wraps)

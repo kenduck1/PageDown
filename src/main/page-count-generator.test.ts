@@ -108,6 +108,53 @@ describe('getPageCount page geometry', () => {
   })
 })
 
+// 2026-08-09 design-doc gap audit's A5: getPageCount is the real integration
+// point both warning producers (markdownToHtml's pagebreak warnings,
+// resolvePageConfigWithWarnings' malformed-frontmatter warning) are combined
+// on, threaded back to the renderer over this same round trip. Real,
+// unmocked pipeline.ts/page-config.ts run here -- only the Electron/harness
+// boundary is faked, same as every other test in this file.
+describe('getPageCount warnings', () => {
+  beforeEach(() => {
+    mocks.sendDocument.mockClear()
+  })
+
+  it('returns no warnings for a well-formed document', async () => {
+    const result = await getPageCount('---\npage: A4\n---\n\n# A well-formed report')
+    expect(result.warnings).toEqual([])
+  })
+
+  it('surfaces a malformed-frontmatter warning without throwing', async () => {
+    const result = await getPageCount('---\npage: [unclosed\n---\n\n# Report')
+    expect(result.warnings).toHaveLength(1)
+    expect(result.warnings[0].id).toBe('malformed-frontmatter')
+    // The fallback still worked -- the harness still got called with SOME
+    // real geometry (Letter, since the malformed block yields no page
+    // config at all), never a thrown error.
+    expect(mocks.sendDocument).toHaveBeenCalled()
+  })
+
+  it('surfaces an inline-pagebreak-marker warning', async () => {
+    const result = await getPageCount(
+      'Some text with an <!-- pagebreak --> inline occurrence, unlikely elsewhere in this suite.'
+    )
+    expect(result.warnings.map((w) => w.id)).toContain('inline-pagebreak-marker')
+  })
+
+  it('combines warnings from both producers when a document has both problems', async () => {
+    const content = [
+      '---',
+      'page: [unclosed',
+      '---',
+      '',
+      'Some text with an <!-- pagebreak --> inline occurrence, combined case.'
+    ].join('\n')
+    const result = await getPageCount(content)
+    const ids = result.warnings.map((w) => w.id).sort()
+    expect(ids).toEqual(['inline-pagebreak-marker', 'malformed-frontmatter'])
+  })
+})
+
 describe('getPageCount cache key includes allowRemoteImages', () => {
   beforeEach(() => {
     mocks.sendDocument.mockClear()

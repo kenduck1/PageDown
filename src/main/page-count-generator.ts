@@ -1,9 +1,10 @@
 import { dirname } from 'node:path'
 import { BaseWindow } from 'electron'
 import { markdownToHtml } from '../markdown/pipeline'
-import { resolvePageConfig } from '../markdown/page-config'
+import { resolvePageConfigWithWarnings } from '../markdown/page-config'
 import { computePageGeometry } from '../typography/page-geometry'
 import { resolveDocumentStyle } from '../typography/document-style'
+import type { DocumentWarning } from '../markdown/document-warnings'
 import {
   createPaginationHarness,
   registerAssetRoot,
@@ -199,7 +200,7 @@ let lastDocumentDir: string | null = null
 // stale, pre-consent page count until some unrelated edit invalidated the
 // cache by changing `content`.
 let lastAllowRemoteImages = false
-let lastResult: { pageCount: number } | null = null
+let lastResult: { pageCount: number; warnings: DocumentWarning[] } | null = null
 
 /**
  * Returns the real, correct page count for a document's raw Markdown
@@ -224,12 +225,21 @@ let lastResult: { pageCount: number } | null = null
  * is not a degraded mode to work around -- it is exactly how an unsaved (or
  * unvalidated) document is made to deny every local asset, since with no
  * token `markdownToHtml` leaves image srcs completely untouched.
+ *
+ * `warnings` (2026-08-09 design-doc gap audit's A5) rides this SAME round
+ * trip rather than opening a new channel: this function already runs
+ * `markdownToHtml` and resolves the document's page config on every
+ * debounced edit, in every view mode (the status bar always shows a page
+ * count), so it is the one existing "already happening, already reaches the
+ * renderer" pass both warning producers can piggyback on with zero new
+ * parsing, zero new debounce, and zero new IPC channel. See
+ * `usePageCount.ts`/`DocumentWarningsBanner.tsx` for the renderer side.
  */
 export async function getPageCount(
   content: string,
   documentPath?: string,
   allowRemoteImages = false
-): Promise<{ pageCount: number }> {
+): Promise<{ pageCount: number; warnings: DocumentWarning[] }> {
   const documentDir = documentPath ? dirname(documentPath) : null
   if (
     lastContent === content &&
@@ -249,16 +259,27 @@ export async function getPageCount(
     // out.
     const assetToken = documentDir ? registerAssetRoot(documentDir) : undefined
     try {
-      const { html } = markdownToHtml(content, { assetToken, allowRemoteImages })
+      // `warnings` here are markdownToHtml's own pagebreak-related notices
+      // (inline occurrences, alternate syntax kept as written) -- see
+      // pagebreak-plugin.ts's `collectPagebreakWarnings`.
+      const { html, warnings: pagebreakWarnings } = markdownToHtml(content, {
+        assetToken,
+        allowRemoteImages
+      })
       // The document's own page size/orientation/margins, read out of its
       // real YAML frontmatter (Page Geometry Wiring) -- the status bar's
       // count has to reflect the geometry the document is actually
-      // configured for, not a fixed Letter/1in assumption. `resolvePageConfig`
-      // merges over DEFAULT_PAGE_CONFIG, so a document with no frontmatter
-      // (or partial frontmatter) still yields a complete config here. Parsed
-      // once and reused for `documentStyle` below (Task 5) rather than
-      // re-parsing frontmatter a second time.
-      const pageConfig = resolvePageConfig(content)
+      // configured for, not a fixed Letter/1in assumption.
+      // `resolvePageConfigWithWarnings` merges over DEFAULT_PAGE_CONFIG, so a
+      // document with no frontmatter (or partial frontmatter) still yields a
+      // complete config here, AND surfaces design:208's malformed-YAML
+      // warning -- the plain `resolvePageConfig` every other caller in this
+      // codebase uses has no such warning, since none of them have a
+      // user-facing surface to show one on. Parsed once and reused for
+      // `documentStyle` below (Task 5) rather than re-parsing frontmatter a
+      // second time.
+      const { config: pageConfig, warnings: frontmatterWarnings } =
+        resolvePageConfigWithWarnings(content)
       const geometry = computePageGeometry(pageConfig)
       // sendDocument now requires a DocumentStyle on every request (Task 5)
       // -- theme/font and running header/footer content live in margin
@@ -267,7 +288,16 @@ export async function getPageCount(
       // paginate it correctly (e.g. the selected font's own metrics).
       const documentStyle = resolveDocumentStyle(pageConfig)
       const result = await harness.sendDocument(html, geometry, documentStyle)
-      const pageCount = { pageCount: result.pageCount }
+      // Frontmatter warnings first: a malformed page-config block is a more
+      // fundamental problem than a pagebreak marker's placement, and the
+      // renderer's own banner (DocumentWarningsBanner.tsx) displays this
+      // array in order -- not that order carries any functional weight, only
+      // that it's stable and deterministic across identical content rather
+      // than depending on object-spread iteration order accidents.
+      const pageCount = {
+        pageCount: result.pageCount,
+        warnings: [...frontmatterWarnings, ...pagebreakWarnings]
+      }
       lastContent = content
       lastDocumentDir = documentDir
       lastAllowRemoteImages = allowRemoteImages

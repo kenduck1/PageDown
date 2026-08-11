@@ -1,9 +1,22 @@
 import { useEffect, useRef, useState } from 'react'
+import type { DocumentWarning } from '../../../markdown/document-warnings'
 
 interface PageCountState {
   pageCount: number | null
   loading: boolean
   error: string | null
+  // Non-blocking, informational notices about the document's own Markdown
+  // source (2026-08-09 design-doc gap audit's A5) -- malformed frontmatter,
+  // an inline pagebreak marker, an alternate pagebreak syntax kept as
+  // written. Rides the SAME debounced getPageCount round trip the page
+  // count itself already makes; see page-count-generator.ts's own comment
+  // for why this is the one channel both warning producers piggyback on.
+  // Follows the exact same "keep the last known value, don't flash back to
+  // empty" treatment as `pageCount` below on every branch (a fresh content
+  // change, a rejected fetch) -- for an identical reason: a warning banner
+  // popping in and out on every debounce tick while a fetch is merely in
+  // flight would be its own, self-inflicted noise.
+  warnings: DocumentWarning[]
 }
 
 // The pagination render harness backing `window.api.getPageCount` handles
@@ -60,20 +73,27 @@ export function usePageCount(
   const [state, setState] = useState<PageCountState>({
     pageCount: null,
     loading: true,
-    error: null
+    error: null,
+    warnings: []
   })
 
   if (prevContent !== content) {
     setPrevContent(content)
-    // Deliberately keeps the previous `pageCount` (and clears `error`, not
-    // `pageCount`) rather than resetting to `null` -- an editor session
-    // re-fetches on essentially every debounce cycle as the user keeps
-    // typing, and flashing the status bar back to "Page 1 of —" on every
-    // single one (only to re-settle ~500ms+ later) reads far worse than
-    // briefly showing the last known-correct count while a fresh one is
-    // in flight. `loading: true` still lets a caller show a subtler
-    // in-progress affordance if it wants one, without losing the number.
-    setState((prev) => ({ pageCount: prev.pageCount, loading: true, error: null }))
+    // Deliberately keeps the previous `pageCount` AND `warnings` (and clears
+    // `error`, not either of them) rather than resetting to `null`/`[]` -- an
+    // editor session re-fetches on essentially every debounce cycle as the
+    // user keeps typing, and flashing the status bar back to "Page 1 of —"
+    // (or a warning banner flickering off) on every single one (only to
+    // re-settle ~500ms+ later) reads far worse than briefly showing the last
+    // known-correct state while a fresh one is in flight. `loading: true`
+    // still lets a caller show a subtler in-progress affordance if it wants
+    // one, without losing either value.
+    setState((prev) => ({
+      pageCount: prev.pageCount,
+      loading: true,
+      error: null,
+      warnings: prev.warnings
+    }))
   }
 
   // Monotonically-increasing token identifying the most recently FIRED
@@ -95,30 +115,42 @@ export function usePageCount(
         .getPageCount(content, filePath, allowRemoteImages)
         .then((result) => {
           if (latestRequestRef.current !== requestId) return
-          setState({ pageCount: result.pageCount, loading: false, error: null })
+          // `result.warnings ?? []` guards against an older/mocked
+          // `window.api.getPageCount` that doesn't return the field at all
+          // (this codebase's test suite has plenty of `{ pageCount: N }`-only
+          // fixtures predating this feature) -- never trust a wire value's
+          // declared type alone for something this cheap to also check at
+          // runtime.
+          setState({
+            pageCount: result.pageCount,
+            loading: false,
+            error: null,
+            warnings: result.warnings ?? []
+          })
         })
         .catch((err: unknown) => {
           if (latestRequestRef.current !== requestId) return
-          // KEEPS the last known-good count rather than resetting it to
-          // `null`, for the same reason the content-change branch above
-          // keeps it -- and for a stronger one. A failed count is not new
-          // information about the document's length: the pagination harness
-          // timing out (its 10s deadline), or one render throwing, says
-          // nothing about how many pages the document had a moment ago. The
-          // design doc's own requirement is that this reading "shows the
-          // last known-good value with a subtle in-progress indicator --
-          // never blank or flickering" (design:189), and nulling here made
-          // the status bar drop to a literal em-dash on a transient harness
-          // failure that the very next debounce cycle usually recovers from.
+          // KEEPS the last known-good count AND warnings rather than
+          // resetting either, for the same reason the content-change branch
+          // above keeps them -- and for a stronger one. A failed fetch is not
+          // new information about the document's length or its warnings: the
+          // pagination harness timing out (its 10s deadline), or one render
+          // throwing, says nothing about either. The design doc's own
+          // requirement is that the page-count reading "shows the last
+          // known-good value with a subtle in-progress indicator -- never
+          // blank or flickering" (design:189); the same reasoning applies to
+          // warnings, which this hook now carries on the identical channel.
           //
-          // `null` therefore keeps its ONE meaning: never successfully
-          // computed at all (a document whose first count failed still shows
-          // the em-dash, correctly -- there is no known-good value to show).
-          // It never means "we had a number and lost it."
+          // `pageCount: null` therefore keeps its ONE meaning: never
+          // successfully computed at all (a document whose first count
+          // failed still shows the em-dash, correctly -- there is no
+          // known-good value to show). It never means "we had a number and
+          // lost it."
           setState((prev) => ({
             pageCount: prev.pageCount,
             loading: false,
-            error: err instanceof Error ? err.message : String(err)
+            error: err instanceof Error ? err.message : String(err),
+            warnings: prev.warnings
           }))
         })
     }, debounceMs)

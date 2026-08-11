@@ -268,6 +268,105 @@ describe('usePageCount', () => {
     expect(result.current.loading).toBe(false)
   })
 
+  // 2026-08-09 design-doc gap audit's A5: `warnings` rides the same
+  // getPageCount round trip as `pageCount`. These tests deliberately mirror
+  // the retention/stale-response tests above -- the same "keep last known
+  // value" reasoning applies to warnings, not just the count.
+  describe('warnings', () => {
+    it('defaults to an empty array before the first fetch resolves', () => {
+      vi.mocked(window.api.getPageCount).mockReturnValue(new Promise(() => {}))
+      const { result } = renderHook(() => usePageCount('# Doc', null, 0))
+      expect(result.current.warnings).toEqual([])
+    })
+
+    it('surfaces warnings returned by getPageCount', async () => {
+      vi.mocked(window.api.getPageCount).mockResolvedValue({
+        pageCount: 3,
+        warnings: [{ id: 'inline-pagebreak-marker', message: 'inline marker' }]
+      })
+      const { result } = renderHook(() => usePageCount('# Doc', null, 0))
+
+      await waitFor(() => expect(result.current.loading).toBe(false))
+      expect(result.current.warnings).toEqual([
+        { id: 'inline-pagebreak-marker', message: 'inline marker' }
+      ])
+    })
+
+    // Defensive against an older or hand-written mock returning
+    // `{ pageCount }` with no `warnings` field at all -- this codebase's own
+    // test suite has plenty of those predating this feature (see this same
+    // file's earlier tests, deliberately left unmodified).
+    it('tolerates a resolved value with no warnings field at all', async () => {
+      vi.mocked(window.api.getPageCount).mockResolvedValue({ pageCount: 4 })
+      const { result } = renderHook(() => usePageCount('# Doc', null, 0))
+
+      await waitFor(() => expect(result.current.loading).toBe(false))
+      expect(result.current.warnings).toEqual([])
+    })
+
+    it('keeps the last known warnings visible while a new fetch is in flight', async () => {
+      let resolveSecond: ((value: { pageCount: number; warnings: never[] }) => void) | undefined
+      const secondCall = new Promise<{ pageCount: number; warnings: never[] }>((resolve) => {
+        resolveSecond = resolve
+      })
+      vi.mocked(window.api.getPageCount)
+        .mockResolvedValueOnce({
+          pageCount: 5,
+          warnings: [{ id: 'malformed-frontmatter', message: 'bad yaml' }]
+        })
+        .mockReturnValueOnce(secondCall)
+
+      const { result, rerender } = renderHook(({ content }) => usePageCount(content, null, 0), {
+        initialProps: { content: 'first' }
+      })
+      await waitFor(() => expect(result.current.warnings).toHaveLength(1))
+
+      rerender({ content: 'second' })
+      await waitFor(() => expect(result.current.loading).toBe(true))
+      // Still showing the PREVIOUS warning while the new fetch is pending --
+      // not cleared to [] the instant content changes.
+      expect(result.current.warnings).toHaveLength(1)
+
+      resolveSecond?.({ pageCount: 6, warnings: [] })
+      await waitFor(() => expect(result.current.warnings).toEqual([]))
+    })
+
+    it('retains the last known warnings when a later fetch fails', async () => {
+      vi.mocked(window.api.getPageCount)
+        .mockResolvedValueOnce({
+          pageCount: 12,
+          warnings: [{ id: 'inline-pagebreak-marker', message: 'inline marker' }]
+        })
+        .mockRejectedValueOnce(new Error('harness timed out'))
+
+      const { result, rerender } = renderHook(({ content }) => usePageCount(content, null, 0), {
+        initialProps: { content: 'first' }
+      })
+      await waitFor(() => expect(result.current.warnings).toHaveLength(1))
+
+      rerender({ content: 'second' })
+      await waitFor(() => expect(result.current.error).toBe('harness timed out'))
+      expect(result.current.warnings).toHaveLength(1)
+    })
+
+    it('updates to a new, smaller warning set once a later fetch succeeds (warnings are not sticky)', async () => {
+      vi.mocked(window.api.getPageCount)
+        .mockResolvedValueOnce({
+          pageCount: 12,
+          warnings: [{ id: 'inline-pagebreak-marker', message: 'inline marker' }]
+        })
+        .mockResolvedValueOnce({ pageCount: 12, warnings: [] })
+
+      const { result, rerender } = renderHook(({ content }) => usePageCount(content, null, 0), {
+        initialProps: { content: 'first' }
+      })
+      await waitFor(() => expect(result.current.warnings).toHaveLength(1))
+
+      rerender({ content: 'second, now fixed' })
+      await waitFor(() => expect(result.current.warnings).toEqual([]))
+    })
+  })
+
   it('ignores a stale in-flight response that resolves after a newer request', async () => {
     let resolveFirst: ((value: { pageCount: number }) => void) | undefined
     const firstCall = new Promise<{ pageCount: number }>((resolve) => {

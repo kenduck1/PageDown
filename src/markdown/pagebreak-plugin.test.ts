@@ -4,7 +4,11 @@ import remarkParse from 'remark-parse'
 import remarkStringify from 'remark-stringify'
 import { visit } from 'unist-util-visit'
 import type { Root } from 'mdast'
-import { remarkPagebreak, remarkPagebreakToMarkdown } from './pagebreak-plugin'
+import {
+  remarkPagebreak,
+  remarkPagebreakToMarkdown,
+  collectPagebreakWarnings
+} from './pagebreak-plugin'
 
 function parse(markdown: string): Root {
   const processor = unified().use(remarkParse).use(remarkPagebreak)
@@ -20,6 +24,21 @@ function countNodesOfType(tree: Root, type: string): number {
   return count
 }
 
+// DELIBERATE, NOT a full inversion like the "PRESERVED verbatim" block
+// further down: every "does not promote" assertion in this describe block
+// stays correct and UNCHANGED -- PageDown still never promotes an inline/
+// unsupported-location occurrence to a real pagebreak node, matching
+// design:167's own "Breaks inside tables or list items are unsupported in
+// v1" and the general rule that only a properly blank-line-isolated marker
+// takes effect. What used to be genuinely SILENT beyond that -- no signal
+// anywhere that the marker was seen and declined -- is now surfaced via
+// `collectPagebreakWarnings` (see the dedicated describe block at the
+// bottom of this file), per design:167's own "warns on an inline
+// occurrence" and the 2026-08-09 design-doc gap audit's A5 finding that no
+// channel existed to carry that warning at all. Updating comments here to
+// say so, rather than leaving these tests looking like the silence is still
+// total, is the deliberate part of this change -- the promotion behavior
+// itself needed no fix.
 describe('remarkPagebreak', () => {
   it('promotes a blank-line-surrounded pagebreak comment to a pagebreak node', () => {
     const tree = parse('Paragraph one.\n\n<!-- pagebreak -->\n\nParagraph two.')
@@ -284,5 +303,106 @@ describe('non-matching occurrences survive a full round trip unchanged', () => {
     const transformed = processor.runSync(tree)
     const output = processor.stringify(transformed)
     expect(output).toBe(source)
+  })
+})
+
+// design:167's "warns on an inline occurrence" plus the 2026-08-09 gap
+// audit's B2 follow-up ("the natural home for a 'N alternate markers'
+// notice"). Uses the SAME `parse()` helper as the `remarkPagebreak`
+// describe block above -- `collectPagebreakWarnings` reads the tree AFTER
+// `remarkPagebreak` has already run, exactly how pipeline.ts's
+// `markdownToHtml` calls it (a second `visit()`, not a second parse).
+describe('collectPagebreakWarnings', () => {
+  it('returns no warnings for a well-formed document with no pagebreak content at all', () => {
+    const tree = parse('Just a paragraph.\n\nAnother one.')
+    expect(collectPagebreakWarnings(tree)).toEqual([])
+  })
+
+  it('returns no warnings for a correctly blank-line-isolated canonical marker', () => {
+    const tree = parse('Paragraph one.\n\n<!-- pagebreak -->\n\nParagraph two.')
+    expect(collectPagebreakWarnings(tree)).toEqual([])
+  })
+
+  it('warns once for a mid-paragraph inline occurrence of the canonical marker', () => {
+    const tree = parse('Some text with an <!-- pagebreak --> inline occurrence.')
+    const warnings = collectPagebreakWarnings(tree)
+    expect(warnings).toHaveLength(1)
+    expect(warnings[0].id).toBe('inline-pagebreak-marker')
+    expect(warnings[0].message).toContain('inline')
+  })
+
+  it('warns for an occurrence embedded in a heading', () => {
+    const tree = parse('# Heading <!-- pagebreak -->\n\nBody text.')
+    expect(collectPagebreakWarnings(tree).map((w) => w.id)).toEqual(['inline-pagebreak-marker'])
+  })
+
+  it('warns for an occurrence embedded in emphasis/strong text', () => {
+    const tree = parse('This is **bold <!-- pagebreak --> text** here.')
+    expect(collectPagebreakWarnings(tree).map((w) => w.id)).toEqual(['inline-pagebreak-marker'])
+  })
+
+  // The OTHER half of design:167's same sentence -- "Breaks inside tables or
+  // list items are unsupported in v1" -- is a DIFFERENT, NOT-warned bucket:
+  // a marker here is correctly block-isolated (blank lines on both sides),
+  // it just landed somewhere v1 doesn't support. Warning about it would
+  // conflate "you wrote this wrong" with "you wrote this somewhere
+  // unsupported," which design:167 itself keeps as two separate sentences.
+  it('does NOT warn for an occurrence inside a list item (a different, unsupported-location case)', () => {
+    const tree = parse('- Item one\n\n  <!-- pagebreak -->\n\n- Item two')
+    expect(collectPagebreakWarnings(tree)).toEqual([])
+  })
+
+  it('aggregates multiple inline occurrences into ONE warning with a count, not one per occurrence', () => {
+    const tree = parse(
+      'First <!-- pagebreak --> one.\n\nSecond <!-- pagebreak --> one.\n\nThird <!-- pagebreak --> one.'
+    )
+    const warnings = collectPagebreakWarnings(tree)
+    expect(warnings).toHaveLength(1)
+    expect(warnings[0].message).toContain('3')
+  })
+
+  it('does not warn about a mid-sentence \\newpage/\\pagebreak occurrence (a different, accepted false-negative risk)', () => {
+    const tree = parse('Some text mentioning \\newpage inline, and also \\pagebreak here.')
+    expect(collectPagebreakWarnings(tree)).toEqual([])
+  })
+
+  it('does not warn about the page-break-after div convention placed inline', () => {
+    // Scoped deliberately narrow to the canonical HTML-comment marker only
+    // -- see collectPagebreakWarnings' own header comment for why.
+    const tree = parse('Some text with <div style="page-break-after: always;"></div> inline.')
+    expect(collectPagebreakWarnings(tree)).toEqual([])
+  })
+
+  it('warns once when an alternate syntax is recognized and kept as written', () => {
+    const tree = parse('Paragraph one.\n\n\\newpage\n\nParagraph two.')
+    const warnings = collectPagebreakWarnings(tree)
+    expect(warnings).toHaveLength(1)
+    expect(warnings[0].id).toBe('alternate-pagebreak-syntax')
+  })
+
+  it('does not count the canonical marker itself as "alternate"', () => {
+    const tree = parse('Paragraph one.\n\n<!-- pagebreak -->\n\nParagraph two.')
+    expect(collectPagebreakWarnings(tree).some((w) => w.id === 'alternate-pagebreak-syntax')).toBe(
+      false
+    )
+  })
+
+  it('aggregates multiple alternate-syntax occurrences into ONE warning with a count', () => {
+    const tree = parse(
+      'One.\n\n\\newpage\n\nTwo.\n\n\\pagebreak\n\nThree.\n\n<div style="page-break-after: always;"></div>\n\nFour.'
+    )
+    const warnings = collectPagebreakWarnings(tree)
+    const alternate = warnings.find((w) => w.id === 'alternate-pagebreak-syntax')
+    expect(alternate?.message).toContain('3')
+  })
+
+  it('can produce both warning categories at once for a document that has both problems', () => {
+    const tree = parse(
+      'Inline <!-- pagebreak --> occurrence.\n\nParagraph.\n\n\\newpage\n\nMore text.'
+    )
+    const ids = collectPagebreakWarnings(tree)
+      .map((w) => w.id)
+      .sort()
+    expect(ids).toEqual(['alternate-pagebreak-syntax', 'inline-pagebreak-marker'])
   })
 })
