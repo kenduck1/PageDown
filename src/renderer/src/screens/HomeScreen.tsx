@@ -323,17 +323,33 @@ function HomeScreen(): React.JSX.Element {
         >
           Open file…
         </button>
-        <button
-          onClick={() => handleNavClick('recent')}
-          className={`rounded-md px-3 py-2 text-left text-13 ${homeActiveSection === 'recent' ? 'bg-accent/9 font-semibold text-accent' : 'text-text-primary'}`}
-        >
-          Recent
-        </button>
+        {/* Templates BEFORE Recent, matching the order `main` below actually
+        renders them in ("Start new" gallery, then "Recent"). These two items
+        are scroll links into those sections, so listing them in a different
+        order than the sections appear is a straightforward contradiction: the
+        second nav item scrolled UP, and the highlight tracked a position the
+        page was not in.
+
+        Reordering the NAV rather than the CONTENT, deliberately. Templates-first
+        is what the page already does and is the more common "start here"
+        layout; it also groups all three ways to begin something (New document,
+        Open file…, Templates) contiguously, leaving Recent as the one
+        "come back to something" entry. Moving Recent to the top instead would
+        have pushed an eight-card template gallery below the fold for exactly
+        the users who have recents, and would have put the page's primary call
+        to action under a list. Both orders remove the contradiction; only this
+        one leaves the content alone. */}
         <button
           onClick={() => handleNavClick('templates')}
           className={`rounded-md px-3 py-2 text-left text-13 ${homeActiveSection === 'templates' ? 'bg-accent/9 font-semibold text-accent' : 'text-text-primary'}`}
         >
           Templates
+        </button>
+        <button
+          onClick={() => handleNavClick('recent')}
+          className={`rounded-md px-3 py-2 text-left text-13 ${homeActiveSection === 'recent' ? 'bg-accent/9 font-semibold text-accent' : 'text-text-primary'}`}
+        >
+          Recent
         </button>
         <button
           onClick={goSettings}

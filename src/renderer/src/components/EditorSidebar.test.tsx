@@ -230,7 +230,8 @@ describe('EditorSidebar', () => {
       onWindowCloseRequest: vi.fn().mockReturnValue(() => {}),
       respondToWindowClose: vi.fn(),
       getStartupWarnings: vi.fn().mockResolvedValue([]),
-      getAppVersion: vi.fn().mockResolvedValue('1.0.0')
+      getAppVersion: vi.fn().mockResolvedValue('1.0.0'),
+      resolveLocalImage: vi.fn()
     }
     const user = userEvent.setup()
     render(
@@ -298,7 +299,8 @@ describe('EditorSidebar', () => {
       onWindowCloseRequest: vi.fn().mockReturnValue(() => {}),
       respondToWindowClose: vi.fn(),
       getStartupWarnings: vi.fn().mockResolvedValue([]),
-      getAppVersion: vi.fn().mockResolvedValue('1.0.0')
+      getAppVersion: vi.fn().mockResolvedValue('1.0.0'),
+      resolveLocalImage: vi.fn()
     }
     useAppStore.setState({ sidebarTab: 'history' })
     render(

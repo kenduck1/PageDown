@@ -150,7 +150,13 @@ export const initialAppState: AppStateValues = {
   shortcutsHelpOpen: false,
   commentComposerOpen: false,
   linkComposerOpen: false,
-  homeActiveSection: 'recent',
+  // 'templates', not 'recent' -- this is the section the Home content
+  // actually shows FIRST (HomeScreen renders the "Start new" gallery above
+  // "Recent"), and the nav's own item order now matches that too. It used to
+  // be 'recent', which highlighted the Recent nav item on first paint while
+  // the content underneath was scrolled to the top of Templates -- the
+  // highlight claimed a position the page was not in.
+  homeActiveSection: 'templates',
   zoom: DEFAULT_ZOOM,
   sidebarVisible: true,
   splitFollowEnabled: true

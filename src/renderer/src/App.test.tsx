@@ -79,7 +79,8 @@ beforeEach(() => {
     onWindowCloseRequest: vi.fn().mockReturnValue(() => {}),
     respondToWindowClose: vi.fn(),
     getStartupWarnings: vi.fn().mockResolvedValue([]),
-    getAppVersion: vi.fn().mockResolvedValue('1.0.0')
+    getAppVersion: vi.fn().mockResolvedValue('1.0.0'),
+    resolveLocalImage: vi.fn()
   }
 })
 
@@ -265,6 +266,12 @@ describe('App', () => {
       expect(window.api.setWindowState).toHaveBeenCalledWith({
         documentOpen: false,
         viewMode: 'format',
+        // Reported since the single-row-toolbar pass moved the Split
+        // left-pane pills and the Follow pill into the View menu -- main
+        // renders those as a radio pair and a checkbox, so it needs their
+        // live state, and this window-state report is its only source.
+        splitLeftMode: 'format',
+        splitFollowEnabled: true,
         fileName: null,
         isDirty: false,
         // The store's own always-present blank tab has no path, so there is
@@ -286,6 +293,8 @@ describe('App', () => {
       expect(window.api.setWindowState).toHaveBeenLastCalledWith({
         documentOpen: true,
         viewMode: 'source',
+        splitLeftMode: 'format',
+        splitFollowEnabled: true,
         fileName: 'report.md',
         isDirty: true,
         // The mirror fields alone were set above, not a real tab, so the tab

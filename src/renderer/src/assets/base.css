@@ -296,4 +296,46 @@
     background: var(--color-slash-query);
     border-radius: 2px;
   }
+
+  /* The image node view's wrapper (src/renderer/src/milkdown/image-security.ts).
+     EDITOR-ONLY, and here for the same reason .pagedown-find-match /
+     .pagedown-comment-mark / .pagedown-slash-query are rather than in the
+     shared src/typography/document-typography.css: that file also feeds the
+     sandboxed pagination render context, where a "this image could not be
+     resolved" note must never appear -- an exported PDF gets whatever the
+     paginator's own asset pipeline resolved, and it has no notion of this
+     surface's blocked/missing states at all. Nothing here targets a
+     RESOLVED image: that is a plain <img> inside this span, styled only by
+     document-typography.css's own `img` rule, identically on every surface,
+     so an image the user can actually see is pixel-for-pixel unaffected by
+     this block. */
+  .pagedown-image {
+    display: inline;
+  }
+
+  /* Colours are hardcoded literals, NOT app-shell tokens, and that is the
+     same exemption document-typography.css's own .pagedown-document baseline
+     takes: this note renders inside the document canvas, which is pinned to
+     light (#ffffff/#202124) unconditionally because a printed page has no
+     dark mode. A token here would flip with the app chrome and leave grey
+     text on white paper in dark mode. */
+  .pagedown-image-note {
+    display: inline-block;
+    max-width: 100%;
+    padding: 0.15em 0.45em;
+    border: 1px dashed #c2c4c8;
+    border-radius: 4px;
+    background: #f6f6f7;
+    color: #5f6368;
+    font-family: var(--font-sans);
+    font-size: 12px;
+    line-height: 1.4;
+    /* The note is the app talking, not the document -- never inherit the
+       document's own serif/theme font sizing, and never let a `dir: rtl`
+       document or an inherited italic/bold run reformat it. */
+    font-style: normal;
+    font-weight: 400;
+    white-space: normal;
+    user-select: none;
+  }
 }

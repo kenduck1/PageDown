@@ -104,7 +104,23 @@ function SettingsScreen(): React.JSX.Element {
 
   return (
     <div className="flex h-full flex-col overflow-y-auto bg-chrome-light font-sans text-text-primary">
-      <div className="flex items-center justify-between border-b border-border-subtle bg-page px-5 py-3.5">
+      {/* `sticky top-0`, so the only way back out of Settings does not scroll
+      away with the content. The reported complaint was exactly that -- having
+      to scroll back to the top to leave -- and it is a STICKINESS complaint,
+      not an argument against this screen's model: Settings stays a full
+      navigated destination that applies each change immediately (see this
+      file's own header comment for why), rather than becoming a modal, which
+      would drag draft-then-Apply/Cancel semantics back in with it.
+
+      Sticky works here without any structural change because the scroll
+      container is this element's own PARENT (`overflow-y-auto` on the root
+      div) and this is a direct child of it -- a `sticky` element positions
+      against its nearest scrolling ancestor, so had the scrollbar lived on
+      an inner wrapper instead this would have silently done nothing.
+      `bg-page` was already here and is what keeps the scrolled content from
+      showing through; `z-10` keeps it above the native `<select>` controls
+      below, which otherwise paint over it mid-scroll. */}
+      <div className="sticky top-0 z-10 flex items-center justify-between border-b border-border-subtle bg-page px-5 py-3.5">
         <h1 className="text-15-5 font-bold">Settings</h1>
         <button onClick={goHome} className="text-12-5 text-text-secondary hover:text-text-primary">
           ← Home

@@ -19,13 +19,17 @@ import { createPagebreakToHast } from './pagebreak-to-hast'
 import { createMathBlockToHast, createMathInlineToHast } from './math-to-hast'
 import { remarkComment } from './comment-plugin'
 import { createCommentToHast } from './comment-to-hast'
+import { isRelativeLocalPath, isRemoteImageSrc, urlToRelativePath } from './local-image-src'
 
 export type { SourceMap }
 
-// A leading URL scheme (`http:`, `https:`, `data:`, `pagedown-render:`, ...)
-// per RFC 3986's `scheme` production. Anything matching this is already an
-// absolute reference and must be left untouched by rewriteLocalImageSrcs.
-const URL_SCHEME_PATTERN = /^[a-z][a-z0-9+.-]*:/i
+// Both moved to ./local-image-src (a dependency-free module) and re-exported
+// here unchanged, so every pre-existing `import { isRelativeLocalPath } from
+// './pipeline'` keeps working. The move exists so the privileged RENDERER
+// can ask the same question without importing this module's own
+// unified/remark/rehype dependency graph -- see that file's header for the
+// full reasoning.
+export { isRelativeLocalPath, urlToRelativePath }
 
 // Passed explicitly to BOTH remark-rehype and the sanitize schema below
 // (each of which defaults to this exact same value independently) so their
@@ -68,54 +72,6 @@ function undoDoubleClobberPrefix(value: unknown): unknown {
     return value.map(undoDoubleClobberPrefix)
   }
   return value
-}
-
-// True only for a relative, document-local path — no leading `/` (an
-// absolute filesystem path, denied by resolveAssetPath on the main-process
-// side anyway, but never even worth routing through the __asset__ scheme)
-// and no URL scheme prefix (http(s), data:, pagedown-render:, ...).
-// Exported for src/main/html-exporter.ts, which needs the identical
-// relative-local-path test to decide which `<img>` srcs in its OWN output
-// are candidates for data: URI inlining -- reusing this rather than a
-// second hand-rolled regex is what keeps the two "is this a local image
-// reference" questions (rewrite-to-asset-scheme here, inline-to-data-URI
-// there) from silently drifting apart.
-export function isRelativeLocalPath(src: string): boolean {
-  if (src.length === 0) return false
-  if (src.startsWith('/')) return false
-  if (URL_SCHEME_PATTERN.test(src)) return false
-  return true
-}
-
-// mdast-util-to-hast (via micromark-util-sanitize-uri) already
-// percent-encodes unsafe/reserved characters in a Markdown image's `src`
-// before it ever lands in `properties.src` here — so a space becomes `%20`,
-// a non-ASCII character becomes its UTF-8 percent-encoding, etc., well
-// before this rewrite ever sees the value. encodeURIComponent-ing that
-// already-encoded string a second time double-encodes it (`%20` becomes
-// `%2520`), while src/main/pagination-window.ts's protocol handler decodes
-// the path segment exactly once — so any src containing a space or
-// non-ASCII character round-tripped to a literal, on-disk-nonexistent
-// filename and silently 404'd. Decoding one layer first undoes mdast's own
-// encoding, so it's the *original* filename characters that get
-// encodeURIComponent'd, and the handler's one decode recovers them exactly.
-// Raw-HTML `<img src>` values bypass mdast's normalization entirely and can
-// contain a literal, undecodable `%` (e.g. `100%.png`, or `a%zz.png` where
-// `%zz` isn't valid hex) — decodeURIComponent throws URIError on those, so
-// this must not be unguarded, or a document containing one would crash
-// markdownToHtml entirely. Falling back to the raw value on failure is safe:
-// it's exactly what happened before this fix existed, for every src.
-// Exported for the same reason isRelativeLocalPath is, immediately above:
-// src/main/html-exporter.ts needs to turn a matched local `src` back into a
-// real relative filesystem path before it can hand that to
-// resolveAssetPath, and this is the one place that decode-one-layer logic
-// (and its documented undecodable-`%` guard) already lives.
-export function urlToRelativePath(src: string): string {
-  try {
-    return decodeURIComponent(src)
-  } catch {
-    return src
-  }
 }
 
 // Rewrites every relative local `img src` in the tree into the sandboxed
@@ -189,7 +145,13 @@ function rewriteLocalImageSrcs(tree: HastRoot, assetToken: string): void {
 // matched too (protocol-relative): it resolves against whatever scheme the
 // consuming context uses, which is architecture-dependent rather than reliably
 // inert, so it is cheaper to strip than to reason about per surface.
-const REMOTE_SRC_PATTERN = /^\s*(?:https?:|\/\/)/i
+//
+// The pattern itself now lives in ./local-image-src as `isRemoteImageSrc`,
+// so this ENFORCEMENT copy and detectRemoteImages.ts's banner-deciding copy
+// are literally the same code rather than two regexes a comment asks a
+// future reader to keep in sync -- see that function's own comment. The
+// reasoning above is unchanged and is why the shared pattern looks the way
+// it does.
 
 function applyRemoteImagePolicy(tree: HastRoot, allowRemoteImages: boolean): void {
   visit(tree, 'element', (node) => {
@@ -215,7 +177,7 @@ function applyRemoteImagePolicy(tree: HastRoot, allowRemoteImages: boolean): voi
     if (node.tagName !== 'img') return
     const src = node.properties.src
     if (typeof src !== 'string') return
-    if (REMOTE_SRC_PATTERN.test(src)) {
+    if (isRemoteImageSrc(src)) {
       delete node.properties.src
     }
   })

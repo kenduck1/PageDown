@@ -75,13 +75,15 @@ describe('useAppStore', () => {
     expect(useAppStore.getState().pageSetupOpen).toBe(false)
   })
 
-  it('starts with recent as the active home section', () => {
-    expect(useAppStore.getState().homeActiveSection).toBe('recent')
+  // Matches the section HomeScreen actually renders first, and the order its
+  // own nav now lists them in -- see initialAppState's own comment.
+  it('starts with templates as the active home section', () => {
+    expect(useAppStore.getState().homeActiveSection).toBe('templates')
   })
 
   it('setHomeActiveSection switches sections without touching screen', () => {
-    useAppStore.getState().setHomeActiveSection('templates')
-    expect(useAppStore.getState().homeActiveSection).toBe('templates')
+    useAppStore.getState().setHomeActiveSection('recent')
+    expect(useAppStore.getState().homeActiveSection).toBe('recent')
     expect(useAppStore.getState().screen).toBe('home')
   })
 

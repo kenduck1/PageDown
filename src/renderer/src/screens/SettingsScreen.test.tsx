@@ -66,7 +66,8 @@ beforeEach(() => {
     onWindowCloseRequest: vi.fn().mockReturnValue(() => {}),
     respondToWindowClose: vi.fn(),
     getStartupWarnings: vi.fn().mockResolvedValue([]),
-    getAppVersion: vi.fn().mockResolvedValue('1.0.0')
+    getAppVersion: vi.fn().mockResolvedValue('1.0.0'),
+    resolveLocalImage: vi.fn()
   }
 })
 
@@ -165,5 +166,41 @@ describe('SettingsScreen', () => {
     )
     expect(usePreferencesStore.getState().preferences?.colorScheme).toBe('dark')
     expect(screen.getByRole('combobox', { name: 'Theme' })).toHaveValue('default')
+  })
+})
+
+describe('SettingsScreen header stickiness', () => {
+  // The reported defect: leaving Settings meant scrolling back to the top,
+  // because the header carrying the only "← Home" control scrolled away with
+  // the content. Fixed with `sticky`, deliberately NOT by turning Settings
+  // into a modal -- it stays a navigated destination that applies each
+  // change immediately (see SettingsScreen.tsx's own header comment).
+  //
+  // jsdom has no layout engine, so this cannot assert that the header stays
+  // painted at the top through a real scroll -- that is what a human or a
+  // real-browser gate would do. What it CAN pin, and what actually regressed,
+  // is the two structural facts stickiness depends on: the class is present,
+  // and the header is a direct child of the element that owns the scrollbar
+  // (a `sticky` element positions against its nearest SCROLLING ancestor, so
+  // moving the overflow onto an inner wrapper would silently make this a
+  // no-op with no error anywhere).
+  it('renders the header sticky, inside the element that actually scrolls', () => {
+    usePreferencesStore.setState({ preferences: REAL_PREFERENCES, loaded: true })
+    render(<SettingsScreen />)
+
+    const header = screen.getByRole('heading', { name: 'Settings' }).parentElement as HTMLElement
+    expect(header.className).toContain('sticky')
+    expect(header.className).toContain('top-0')
+
+    const scrollContainer = header.parentElement as HTMLElement
+    expect(scrollContainer.className).toContain('overflow-y-auto')
+  })
+
+  it('keeps the back control inside that sticky header', () => {
+    usePreferencesStore.setState({ preferences: REAL_PREFERENCES, loaded: true })
+    render(<SettingsScreen />)
+
+    const header = screen.getByRole('heading', { name: 'Settings' }).parentElement as HTMLElement
+    expect(header).toContainElement(screen.getByRole('button', { name: '← Home' }))
   })
 })

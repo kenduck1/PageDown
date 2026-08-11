@@ -16,6 +16,7 @@ import { PINNED_STRINGIFY_OPTIONS, PINNED_GFM_OPTIONS } from './stringify-option
 import { buildEditorCommands, chooseSlashItem, type EditorCommands } from './editor-commands'
 import { createFindPlugin } from './find-plugin'
 import { createDropImagePlugin, insertDroppedImages } from './drop-image'
+import { createImageResolverPlugin } from './image-security'
 import { createSelectionPlugin, type SelectionSnapshot } from './selection-plugin'
 import { createSlashPlugin, type SlashSession } from './slash-plugin'
 import { enabledSlashItems } from './slash-items'
@@ -54,6 +55,17 @@ interface MilkdownEditorProps {
   // dependency anywhere else, and this stays consistent with that. Latest-
   // ref captured below, same as onChange/onError/onFindMatchesChanged.
   onDropImage?: (file: File) => Promise<{ relativePath: string } | { error: string }>
+  // Resolves ONE of the document's own relative local image references
+  // (`./figures/chart.png`) to a self-contained `data:` URI, or `null` if it
+  // cannot be resolved -- backing the image node view's actual rendering
+  // (milkdown/image-security.ts). Owned by the caller (EditorScreen wires it
+  // to documentStore.resolveLocalImage, which knows the active tab's own
+  // file path) for the same reason onDropImage is: this component takes no
+  // window.api/store dependency anywhere else. Omitting it is safe and means
+  // exactly what it did before local images rendered at all -- every local
+  // reference shows as unresolved. Latest-ref captured below, same as every
+  // other callback prop here.
+  onResolveLocalImage?: (src: string) => Promise<string | null>
   // Fired whenever the selection or its formatting state actually changes
   // (selection-plugin.ts's own sameSnapshot early-return decides "actually"),
   // and with `null` when this editor is destroyed so a stale bubble can't
@@ -132,6 +144,7 @@ const MilkdownEditor = forwardRef<MilkdownEditorHandle, MilkdownEditorProps>(
       onError,
       onFindMatchesChanged,
       onDropImage,
+      onResolveLocalImage,
       onSelectionChanged,
       onSlashStateChanged
     },
@@ -190,6 +203,15 @@ const MilkdownEditor = forwardRef<MilkdownEditorHandle, MilkdownEditorProps>(
     // once inside the mount effect below (see dropImageProse), same
     // reasoning as onFindMatchesChangedRef above.
     const onDropImageRef = useRef(onDropImage)
+    // Same latest-ref treatment, for the image node view's resolver -- and
+    // here it is genuinely load-bearing rather than merely consistent: the
+    // resolver closes over the ACTIVE TAB's file path, which changes on a
+    // tab switch. A tab switch does bump `revision` and therefore remount,
+    // but the resolver object is published into ProseMirror plugin state at
+    // CONSTRUCTION and never replaced (see createImageResolverPlugin), so
+    // reading the prop through a ref is what keeps a long-lived mount from
+    // resolving against a stale document directory.
+    const onResolveLocalImageRef = useRef(onResolveLocalImage)
     // Same latest-ref treatment, for the selection plugin -- constructed once
     // inside the mount effect below (see selectionProse), same reasoning as
     // onFindMatchesChangedRef above.
@@ -203,6 +225,7 @@ const MilkdownEditor = forwardRef<MilkdownEditorHandle, MilkdownEditorProps>(
       onErrorRef.current = onError
       onFindMatchesChangedRef.current = onFindMatchesChanged
       onDropImageRef.current = onDropImage
+      onResolveLocalImageRef.current = onResolveLocalImage
       onSelectionChangedRef.current = onSelectionChanged
       onSlashStateChangedRef.current = onSlashStateChanged
     })
@@ -337,6 +360,25 @@ const MilkdownEditor = forwardRef<MilkdownEditorHandle, MilkdownEditorProps>(
 
       const dropImageProse = $prose((ctx) => createDropImagePlugin(ctx, dropImageHandlers))
 
+      // Publishes this mount's local-image resolver into ProseMirror plugin
+      // state, where image-security.ts's node view reads it. Per-mount for
+      // the same reason findProse/dropImageProse are (it closes over this
+      // mount's own latest-refs), but note the DIVISION OF LABOUR: the node
+      // view itself is registered once, globally, by safeImageViewProse in
+      // EDITOR_COMMAND_PLUGINS -- so the security-critical "never assign an
+      // unresolved src" rendering path is NOT per-mount and cannot be
+      // omitted by a caller that forgets this plugin. Omitting this one only
+      // costs local images their resolution; it can never let an unsafe src
+      // through.
+      const imageResolverProse = $prose(() =>
+        createImageResolverPlugin({
+          resolveLocalImage: (src) =>
+            onResolveLocalImageRef.current
+              ? onResolveLocalImageRef.current(src)
+              : Promise.resolve(null)
+        })
+      )
+
       // Same per-mount construction as findProse/dropImageProse above --
       // closes over this mount's own latest-ref callback, exactly like
       // findProse, and needs `ctx` for the SAME reason dropImageProse does:
@@ -430,6 +472,7 @@ const MilkdownEditor = forwardRef<MilkdownEditorHandle, MilkdownEditorProps>(
         .use(findProse)
         .use(selectionProse)
         .use(dropImageProse)
+        .use(imageResolverProse)
         .use(slashProse)
         .create()
         .then((created) => {
