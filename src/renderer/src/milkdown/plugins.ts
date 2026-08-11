@@ -13,6 +13,7 @@ import {
   listItemSchemaSpread
 } from './list-spread-fix'
 import { linkSchemaOuter, linkReferenceSchemaOuter } from './link-mark-priority-fix'
+import { imageAttrsRemark, imageSchemaWithWidth } from './nodes/image-size'
 
 // @milkdown/preset-commonmark's composed `plugins` array unconditionally
 // registers remarkInlineLinkPlugin (a wrapper around `remark-inline-links`),
@@ -90,5 +91,11 @@ export const EDITOR_SCHEMA_PLUGINS = [
   // Same contract again, for the 'link' mark and the 'linkReference' mark
   // declared above -- must come after BOTH. See link-mark-priority-fix.ts.
   linkSchemaOuter,
-  linkReferenceSchemaOuter
+  linkReferenceSchemaOuter,
+  // Image sizing: the shared remark transform that recognizes a trailing
+  // `{width=...}` block, plus the same last-registration-wins schema override
+  // contract as the three fixes above -- must come after
+  // COMMONMARK_WITHOUT_INLINE_LINKS, which is where the stock 'image' node is.
+  imageAttrsRemark,
+  imageSchemaWithWidth
 ]

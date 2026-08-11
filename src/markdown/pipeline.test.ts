@@ -711,3 +711,53 @@ describe('markdownToHtml — table of contents', () => {
     expect(html).toContain('id="user-content-pd-heading-0"')
   })
 })
+
+describe('markdownToHtml — image sizing', () => {
+  it('emits a real width attribute from a trailing {width=...} block', () => {
+    expect(markdownToHtml('![Logo](logo.png){width=50%}').html).toContain(
+      '<img src="logo.png" alt="Logo" width="50%">'
+    )
+  })
+
+  it('normalizes every absolute unit to pixels, because HTML dimension parsing would not', () => {
+    // `width="3in"` renders as THREE PIXELS in a browser: the rules for
+    // parsing dimension values stop at the first non-digit. Converting in the
+    // pipeline is what makes print units usable at all.
+    expect(markdownToHtml('![L](l.png){width=3in}').html).toContain('width="288"')
+    expect(markdownToHtml('![L](l.png){width=144pt}').html).toContain('width="192"')
+    expect(markdownToHtml('![L](l.png){width=200}').html).toContain('width="200"')
+  })
+
+  it('needs no sanitize schema change -- width is already in the default allowlist', () => {
+    // If this ever regressed, the attribute would be silently stripped and the
+    // feature would do nothing with no error anywhere. Asserted against the
+    // real sanitized output rather than against the schema.
+    const { html } = markdownToHtml('![L](l.png){width=50%}')
+    expect(html).toMatch(/<img[^>]*width="50%"/)
+  })
+
+  it('leaves an unrecognized block visible in the document instead of swallowing it', () => {
+    const { html } = markdownToHtml('![L](l.png){height=200px}')
+    expect(html).not.toContain('width=')
+    expect(html).toContain('{height=200px}')
+  })
+
+  it('sizes a reference-style image too', () => {
+    expect(markdownToHtml('![L][ref]{width=50%}\n\n[ref]: l.png').html).toContain('width="50%"')
+  })
+
+  it('still routes a sized LOCAL image through the asset-token rewrite', () => {
+    // The rewrite runs post-sanitize on `img[src]`; the width arrives
+    // pre-sanitize via hProperties. Proving both land on the same element is
+    // what rules out one pass clobbering the other.
+    const { html } = markdownToHtml('![L](photo.png){width=50%}', { assetToken: 'tok' })
+    expect(html).toContain('pagedown-render://render/__asset__/tok/photo.png')
+    expect(html).toMatch(/<img[^>]*width="50%"/)
+  })
+
+  it('still BLOCKS a sized remote image by default -- sizing must not become a consent bypass', () => {
+    const { html } = markdownToHtml('![L](https://evil.example/x.png){width=50%}')
+    expect(html).not.toContain('https://evil.example')
+    expect(html).toContain('width="50%"')
+  })
+})

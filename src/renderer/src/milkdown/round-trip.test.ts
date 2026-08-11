@@ -105,6 +105,14 @@ describe('Full node-set round trip (frontmatter + pagebreak + commonmark + gfm t
     expect(await roundTrip(source)).toBe(source)
   })
 
+  it('preserves an image size attribute block in the full composition', async () => {
+    // In the FULL composition specifically, because the risk here is that the
+    // stock `image` node -- which several other overrides in this list also
+    // touch -- wins the last-registration race against the width override.
+    const source = 'Text ![Logo](logo.png "T"){width=50%} more.\n\n![B](b.png){width=288px}\n'
+    expect(await roundTrip(source)).toBe(source)
+  })
+
   it('preserves an alternate [TOC] marker verbatim, exactly like \\newpage', async () => {
     const source = 'Before.\n\n[TOC]\n\n# After\n'
     const output = await roundTrip(source)
