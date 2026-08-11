@@ -77,7 +77,14 @@ beforeEach(() => {
     confirmDiscardChanges: vi.fn(),
     exportPdf: vi.fn().mockResolvedValue({ filePath: '/tmp/document.pdf' }),
     exportHtml: vi.fn(),
-    showItemInFolder: vi.fn(),
+    // Defaults to a successful reveal -- handleShowExportInFolder now awaits
+    // this call's own resolved boolean (second-pass product-completeness
+    // audit: a moved/deleted export must surface a real failure, see that
+    // handler's own comment), so a bare `vi.fn()` with no resolved value
+    // would make `.then()` throw on `undefined` the moment any test clicks
+    // "Show in Folder." Tests covering the failure path override this
+    // per-test with `.mockResolvedValue(false)`.
+    showItemInFolder: vi.fn().mockResolvedValue(true),
     print: vi.fn().mockResolvedValue({ cancelled: false }),
     getPreferences: vi.fn(),
     setPreferences: vi.fn(),
@@ -372,11 +379,16 @@ describe('EditorToolbar', () => {
     const user = userEvent.setup()
     render(<EditorToolbar editorRef={ref} onSetViewMode={onSetViewMode} />)
 
-    // Exact string, not /split/i -- the toolbar also has a "Split cell"
-    // table-editing button whose accessible name matches that regex, making
-    // it ambiguous (getByRole throws on multiple matches). 'Split' exactly
-    // matches only the view-mode segmented-control button, same convention
-    // already used by the sibling 'view-mode segmented control' test below.
+    // Exact string, not /split/i -- this toolbar used to also carry a "Split
+    // cell" table-editing button whose accessible name matched that regex,
+    // which would have made a case-insensitive lookup ambiguous (getByRole
+    // throws on multiple matches). That button is gone now (GFM pipe tables
+    // can't express merged cells, so "split cell" never meant anything --
+    // see the 'EditorToolbar formerly-dead controls' describe block below),
+    // so 'Split' exactly only ever had one match here, but the exact string
+    // still costs nothing and stays correct if a future control ever
+    // reintroduces an ambiguous name. Same convention already used by the
+    // sibling 'view-mode segmented control' test above.
     await user.click(screen.getByRole('button', { name: 'Split' }))
 
     expect(onSetViewMode).toHaveBeenCalledWith('split')
@@ -394,8 +406,11 @@ describe('EditorToolbar', () => {
   // fully enabled -- clicking Bold, a list button, etc. looked like it
   // should do something and did nothing. This pins that the editorRef-bound
   // cluster is disabled whenever viewMode is 'source', and re-enabled the
-  // instant it isn't -- and that everything NOT bound to editorRef (a
-  // still-unwired placeholder button, in this case) is left alone.
+  // instant it isn't -- and that everything NOT bound to editorRef (Find,
+  // which works on both editing surfaces, and the view-mode switcher itself)
+  // is left alone. See the inline comment further down for why this used to
+  // assert on Underline instead -- a genuinely-unwired placeholder control
+  // at the time this test was written, since removed.
   it('disables exactly the editorRef-bound controls in Source mode, and re-enables them in Format mode', () => {
     const handle = createFakeEditorHandle()
     const ref = { current: handle }
@@ -722,6 +737,38 @@ describe('EditorToolbar', () => {
     // The toast has nothing left to offer once its one action was taken --
     // see Toast.tsx/EditorToolbar's handleShowExportInFolder.
     expect(screen.queryByRole('status')).not.toBeInTheDocument()
+  })
+
+  // Second-pass product-completeness audit Tier 3: a moved/deleted export
+  // used to dismiss the toast and reveal nothing, with ZERO feedback --
+  // shell.showItemInFolder is a silent no-op on a vanished path. The
+  // main-process handler now resolves `false` for that case (existence
+  // checked via `stat` before revealing); this proves the renderer surfaces
+  // that failure through the real error banner rather than swallowing it.
+  it('clicking "Show in Folder" surfaces a real error when the export no longer exists on disk', async () => {
+    vi.mocked(window.api.exportHtml).mockResolvedValue({ filePath: '/tmp/report.html' })
+    vi.mocked(window.api.showItemInFolder).mockResolvedValue(false)
+    useDocumentStore.setState({ content: '# Doc' })
+    const ref = createRef<MilkdownEditorHandle>()
+    const user = userEvent.setup()
+    render(<EditorToolbar editorRef={ref} />)
+
+    await useDocumentStore.getState().exportHtml()
+    await screen.findByRole('status')
+
+    await user.click(screen.getByRole('button', { name: 'Show in Folder' }))
+
+    expect(window.api.showItemInFolder).toHaveBeenCalledWith('/tmp/report.html')
+    // The toast is dismissed regardless (its one action was taken either
+    // way -- see handleShowExportInFolder's own comment)...
+    expect(screen.queryByRole('status')).not.toBeInTheDocument()
+    // ...but the failure is now visible somewhere: documentStore's `error`,
+    // the same field EditorScreen's real error banner renders.
+    await waitFor(() => {
+      expect(useDocumentStore.getState().error).toBe(
+        'Could not locate the exported file. It may have been moved or deleted.'
+      )
+    })
   })
 
   it('a cancelled Export PDF Save dialog shows no toast (the user chose to cancel, not a completed export)', async () => {

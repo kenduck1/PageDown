@@ -38,6 +38,11 @@ export const MENU_COMMANDS = [
   'file:openRecent',
   'file:save',
   'file:saveAs',
+  // Second-pass product-completeness audit: closes the ACTIVE TAB, not the
+  // window -- see app-menu-template.ts's own comment on why Close Window's
+  // accelerator had to move to make room for this one at the conventional
+  // CmdOrCtrl+W slot.
+  'file:closeTab',
   'file:exportPdf',
   // Added by the single-row-toolbar pass, alongside `file:pageSetup` below.
   // Both name a control that USED to exist only as a toolbar icon button and

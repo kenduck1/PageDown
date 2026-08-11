@@ -833,6 +833,19 @@ function EditorScreen(): React.JSX.Element {
     'file:exportHtml': () => void exportHtml(),
     'file:print': () => void print(),
     'file:pageSetup': () => openPageSetup(),
+    // Second-pass product-completeness audit: Close Tab. Deliberately the
+    // SAME handleRequestCloseTab the tab bar's own "x" button calls (defined
+    // further down this component) rather than a parallel, simplified
+    // closing path -- routing through it is what gives Cmd+W (now Close
+    // Tab's own accelerator, see app-menu-template.ts) the identical
+    // confirm/flush/save/clear-autosave sequence a dirty active tab already
+    // gets from the button. `useDocumentStore.getState()` here, not this
+    // render's own `activeTabId` closure variable, for the same reason
+    // handleRequestCloseTab itself re-reads by id after every await: a menu
+    // command can be dispatched at any time, and reading the live value at
+    // the moment it actually fires is what handleRequestCloseTab's own
+    // internal re-reads already assume of their caller.
+    'file:closeTab': () => void handleRequestCloseTab(useDocumentStore.getState().activeTabId),
     'edit:find': () =>
       openFindFromShortcut(
         { getSelectedText: findController.getSelectedText, queryInputRef: findQueryInputRef },

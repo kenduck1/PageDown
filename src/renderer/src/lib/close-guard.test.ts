@@ -158,8 +158,10 @@ describe('confirmWindowClose', () => {
 
   it('flushes the live editor BEFORE reading any dirty flag', async () => {
     // @milkdown/plugin-listener's onChange is 200ms-debounced, so a document
-    // edited moments before Cmd+W still reads isDirty: false. Without this
-    // flush the guard waves a genuinely unsaved document straight through.
+    // edited moments before a window close (the red button, Cmd+Shift+W --
+    // NOT Cmd+W, which closes the active tab instead and never reaches this
+    // guard) still reads isDirty: false. Without this flush the guard waves
+    // a genuinely unsaved document straight through.
     setTabs([tab({ id: 'a', filePath: '/tmp/a.md', content: '# stale', isDirty: false })])
     setCloseGuardFlush(() => {
       useDocumentStore.getState().updateContentForTab('a', '# the edit the debounce swallowed')

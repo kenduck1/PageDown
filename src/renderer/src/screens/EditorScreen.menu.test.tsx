@@ -180,6 +180,59 @@ describe('EditorScreen: application-menu commands', () => {
     })
   })
 
+  // Second-pass product-completeness audit: Close Tab. The whole point of
+  // routing this command through handleRequestCloseTab (the SAME function
+  // the tab bar's own "x" button calls) rather than a parallel, simplified
+  // closing path is that a dirty tab gets the identical confirm/flush/save/
+  // clear-autosave sequence no matter which control asked -- so the test
+  // that actually matters here is the dirty one: it fails the instant a
+  // future edit "simplifies" the handler back to a bare closeTab() call,
+  // which is exactly the Tier-0 data-loss bug this file's own header already
+  // warns against reintroducing. The full save/discard/cancel branch matrix
+  // is EditorScreen.test.tsx's job (it's the same function); this only has
+  // to prove the MENU path reaches it.
+  describe('file:closeTab', () => {
+    it('closes a clean tab immediately, with no confirmation prompt', () => {
+      const initialTabId = useDocumentStore.getState().activeTabId
+      render(<EditorScreen />)
+
+      emitMenuCommand('file:closeTab')
+
+      expect(window.api.confirmDiscardChanges).not.toHaveBeenCalled()
+      // closeTab never leaves zero tabs -- closing the sole (clean) tab
+      // replaces it with a fresh blank one, a DIFFERENT id than the one that
+      // was just closed.
+      expect(useDocumentStore.getState().tabs.some((tab) => tab.id === initialTabId)).toBe(false)
+      expect(useDocumentStore.getState().tabs).toHaveLength(1)
+    })
+
+    it('prompts before closing a dirty tab, and does nothing when the user cancels', async () => {
+      useDocumentStore.setState((state) => ({
+        filePath: '/tmp/report.md',
+        content: '# Report',
+        isDirty: true,
+        tabs: state.tabs.map((tab) =>
+          tab.id === state.activeTabId
+            ? { ...tab, filePath: '/tmp/report.md', content: '# Report', isDirty: true }
+            : tab
+        )
+      }))
+      const activeId = useDocumentStore.getState().activeTabId
+      vi.mocked(window.api.confirmDiscardChanges).mockResolvedValue('cancel')
+      render(<EditorScreen />)
+
+      emitMenuCommand('file:closeTab')
+
+      await vi.waitFor(() => {
+        expect(window.api.confirmDiscardChanges).toHaveBeenCalled()
+      })
+      expect(window.api.saveFile).not.toHaveBeenCalled()
+      expect(window.api.clearPendingAutosave).not.toHaveBeenCalled()
+      // Cancel means cancel -- the dirty tab is still exactly where it was.
+      expect(useDocumentStore.getState().tabs.some((tab) => tab.id === activeId)).toBe(true)
+    })
+  })
+
   // Export PDF still has a toolbar button; Print, HTML export and Page Setup's
   // keyboard route do NOT -- the single-row-toolbar pass removed the Print and
   // Export-as-HTML buttons outright, so for those two this menu path is the

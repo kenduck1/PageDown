@@ -42,11 +42,15 @@ export function setCloseGuardFlush(flush: (() => void) | null): void {
 export async function confirmWindowClose(): Promise<boolean> {
   // FIRST, before reading a single isDirty flag. @milkdown/plugin-listener's
   // onChange fires through an internal 200ms debounce, so a document edited
-  // within 200ms of Cmd+W is still `isDirty: false` in the store -- exactly
-  // the race `flush()` exists for on Save (CLAUDE.md's own writeup), and the
-  // one that would make this guard wave a genuinely-unsaved document straight
-  // through with no prompt at all. flush() is a documented no-op when nothing
-  // changed since mount, so calling it unconditionally is free.
+  // within 200ms of a window-close request (the red button, Cmd+Shift+W,
+  // Cmd+Q -- second-pass product-completeness audit: NOT Cmd+W any more,
+  // which now closes the active TAB instead and never reaches this guard at
+  // all, see app-menu-template.ts's own comment) is still `isDirty: false`
+  // in the store -- exactly the race `flush()` exists for on Save (CLAUDE.md's
+  // own writeup), and the one that would make this guard wave a
+  // genuinely-unsaved document straight through with no prompt at all.
+  // flush() is a documented no-op when nothing changed since mount, so
+  // calling it unconditionally is free.
   //
   // It also has to happen before the loop's first `switchTab`: switching tabs
   // remounts the editor, and the outgoing instance's own unmount flush would

@@ -25,6 +25,34 @@ describe('findStore', () => {
     expect(useFindStore.getState().replaceExpanded).toBe(true)
   })
 
+  // Second-pass product-completeness audit Tier 3: "After using Find-and-
+  // Replace once, plain Cmd+F keeps reopening with the Replace row
+  // expanded." Two tests, one per half of the fix -- a plain-Find open must
+  // COLLAPSE a leftover expanded Replace row on a genuine closed -> open
+  // transition, but must NOT collapse it if the bar is already open (Cmd+F
+  // is also how a user re-selects the query text mid-session, and yanking
+  // the Replace row out from under them because they pressed Cmd+F again
+  // would be the identical bug in the other direction).
+  it('openFind collapses a leftover expanded replace row on a closed -> open transition', () => {
+    // Simulates the exact repro: Find and Replace was used earlier and then
+    // closed, leaving replaceExpanded stuck at true (closeFind deliberately
+    // does not touch it -- see its own comment).
+    useFindStore.setState({ isOpen: false, replaceExpanded: true })
+    useFindStore.getState().openFind()
+    expect(useFindStore.getState().isOpen).toBe(true)
+    expect(useFindStore.getState().replaceExpanded).toBe(false)
+  })
+
+  it('openFind does NOT collapse an already-expanded replace row while the bar is already open', () => {
+    useFindStore.getState().openFindAndReplace()
+    expect(useFindStore.getState().replaceExpanded).toBe(true)
+
+    useFindStore.getState().openFind()
+
+    expect(useFindStore.getState().isOpen).toBe(true)
+    expect(useFindStore.getState().replaceExpanded).toBe(true)
+  })
+
   it('closeFind clears match state but keeps the query', () => {
     useFindStore.setState({
       isOpen: true,

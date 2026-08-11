@@ -632,12 +632,15 @@ function rememberRevealablePath(filePath: string): void {
 //
 // Before this existed there was NO `close` handler and NO `before-quit`
 // handler anywhere in this file, and no `beforeunload` anywhere in `src/` or
-// `resources/` either -- so closing a window (Cmd+W, the red button, File >
-// Close Window) or quitting (Cmd+Q, File > Exit) discarded every unsaved
-// document with no prompt at all. The app already knew how to ask (the
-// Save/Don't Save/Cancel dialog EditorScreen's "<- Home" button and its
-// dirty-tab close both run); the guard was simply absent from the two exits
-// users actually use.
+// `resources/` either -- so closing a window (the red button, File > Close
+// Window -- Cmd+W at the time this guard was built; the second-pass
+// product-completeness audit later moved Close Window to Cmd+Shift+W to make
+// room for a real Close Tab at the conventional slot, see app-menu-
+// template.ts's own comment) or quitting (Cmd+Q, File > Exit) discarded
+// every unsaved document with no prompt at all. The app already knew how to
+// ask (the Save/Don't Save/Cancel dialog EditorScreen's "<- Home" button and
+// its dirty-tab close both run); the guard was simply absent from the two
+// exits users actually use.
 //
 // Worst case was TOTAL loss rather than partial: `useAutosave` only fires for
 // a document that already has a file path, so a never-saved "Untitled" tab has
@@ -653,8 +656,9 @@ function rememberRevealablePath(filePath: string): void {
 // an entry cannot outlive its window.
 const closeApproved = new WeakSet<BrowserWindow>()
 
-// One in-flight approval round trip per window, so mashing Cmd+W while a
-// confirmation dialog is already up cannot start a second round of prompts.
+// One in-flight approval round trip per window, so mashing Cmd+Shift+W (or
+// the red button) while a confirmation dialog is already up cannot start a
+// second round of prompts.
 const pendingCloseApprovals = new WeakMap<BrowserWindow, Promise<boolean>>()
 
 // The `resolve` of the promise above, looked up when the renderer answers.
@@ -697,7 +701,7 @@ function requestCloseApproval(win: BrowserWindow): Promise<boolean> {
 
 // Closes a window through the guard, resolving true once it is genuinely
 // closing. Used by `win.on('close')`, i.e. the single-window exits (the red
-// button, Cmd+W, File > Close Window).
+// button, Cmd+Shift+W, File > Close Window).
 //
 // The quit sequence deliberately does NOT use this -- see `before-quit`
 // below for why closing as you go is wrong when a LATER window can still
@@ -1240,10 +1244,25 @@ app.whenReady().then(async () => {
     return updated
   })
 
+  // Second-pass product-completeness audit: "Clear all recents silently
+  // degrades an already-open document." Computed HERE, not inside
+  // clearRecentFiles itself, because this is the one place that can see
+  // every window's own reported open paths -- windowOpenPaths is populated
+  // from EVERY window's WINDOW_STATE_CHANNEL report (not just the requesting
+  // window's), so a document open only in a BACKGROUND window is preserved
+  // exactly like one open in front. See clearRecentFiles' own comment
+  // (recent-files.ts) for the full menu of fixes weighed and why exclusion
+  // beat a confirmation dialog or a re-add-after-the-fact.
   ipcMain.handle('file:clearRecents', async () => {
     const userDataDir = app.getPath('userData')
-    await clearRecentFiles(userDataDir)
+    const openPaths = new Set<string>()
+    for (const win of documentWindows) {
+      if (win.isDestroyed()) continue
+      for (const openPath of windowOpenPaths.get(win) ?? []) openPaths.add(openPath)
+    }
+    const preserved = await clearRecentFiles(userDataDir, [...openPaths])
     void refreshApplicationMenu()
+    return preserved
   })
 
   // filePath is renderer-supplied (documentStore's own active-tab mirror) --
@@ -1883,8 +1902,26 @@ app.whenReady().then(async () => {
   // for anything not in that set, matching this codebase's established
   // "a courtesy action degrades quietly, never as a user-visible error"
   // posture (autosave snapshots, menu refreshes, etc.).
-  ipcMain.handle('shell:showItemInFolder', (_event, filePath: unknown) => {
+  //
+  // Second-pass product-completeness audit Tier 3: this used to skip
+  // straight to shell.showItemInFolder with no existence check at all, so a
+  // since-moved-or-deleted export (the user renamed it, or emptied Trash)
+  // revealed nothing with zero feedback -- shell.showItemInFolder on a
+  // vanished path is a silent no-op on every platform this app ships for
+  // (Finder/Explorer simply doesn't open), and the renderer's own toast had
+  // already dismissed itself on click regardless of the outcome (see
+  // EditorToolbar.tsx's handleShowExportInFolder). `stat` first so a genuine
+  // failure is reported back to the caller instead of swallowed -- the
+  // membership check above is a SECURITY gate (only ever reveal a path this
+  // app itself just wrote), this one is a plain UX correctness check, and
+  // both must pass before the real reveal happens.
+  ipcMain.handle('shell:showItemInFolder', async (_event, filePath: unknown) => {
     if (typeof filePath !== 'string' || !revealableExportPaths.has(filePath)) return false
+    try {
+      await stat(filePath)
+    } catch {
+      return false
+    }
     shell.showItemInFolder(filePath)
     return true
   })

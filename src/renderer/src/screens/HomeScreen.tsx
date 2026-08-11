@@ -266,13 +266,13 @@ function HomeScreen(): React.JSX.Element {
   }
 
   // Product-completeness audit 0.6. Low-stakes, deliberately no confirmation
-  // dialog for either action: neither touches a real document or file on
-  // disk, only this app's own recents list -- and removing a path can never
-  // be a data-loss mistake the way discarding an edit is, since opening that
-  // file again via a real native dialog immediately re-adds it (isKnownPath
-  // never loses the ABILITY to open a file, only this app's own memory that
-  // it was opened recently). Sets state directly from each call's own
-  // response rather than a second getRecentFiles round trip.
+  // dialog: this touches only this app's own recents list, never a real
+  // document or file on disk, and removing a path can never be a data-loss
+  // mistake the way discarding an edit is -- opening that file again via a
+  // real native dialog immediately re-adds it (isKnownPath never loses the
+  // ABILITY to open a file, only this app's own memory that it was opened
+  // recently). Sets state directly from the call's own response rather than
+  // a second getRecentFiles round trip.
   const handleRemoveRecent = async (filePath: string): Promise<void> => {
     try {
       const updated = await window.api.removeRecentFile(filePath)
@@ -287,10 +287,43 @@ function HomeScreen(): React.JSX.Element {
     }
   }
 
+  // Second-pass product-completeness audit: the reasoning above --
+  // "recoverable by reopening" -- covers a REMOVED path but was silently
+  // wrong for a CLEARED one, because isKnownPath IS the recents list
+  // (recent-files.ts's own comment). Wiping it out from under a document
+  // that's open RIGHT NOW, in this window or any other, is not cosmetic:
+  // version history starts returning empty, the four autosave/version-
+  // history IPC handlers all drop-not-throw with no message (autosave
+  // snapshots silently stop being written), the next Cmd+S downgrades to a
+  // Save-As dialog with no explanation, and a dropped image fails with the
+  // misleading "Save the document before adding images" -- none of which
+  // "you can always reopen it" covers, because the document never closed.
+  //
+  // Three fixes were weighed: a confirmation dialog naming the consequence
+  // when a document is open, re-adding an open path immediately after
+  // wiping the list, or excluding open paths from the clear in the first
+  // place. Excluding won. It's a strictly better OUTCOME than re-add-after
+  // (re-adding leaves a real window, between the wipe and the re-add, where
+  // isKnownPath doesn't yet recognize a path this app still has open --
+  // excluding never creates that window), and it's genuinely CHEAP rather
+  // than new mechanism: Multi-window support already made every window
+  // report its own open tabs' paths to main, so main can compute "which
+  // paths are open ANYWHERE" from state it already has and just not clear
+  // those (see the file:clearRecents handler's own comment in
+  // src/main/index.ts, and clearRecentFiles' in recent-files.ts, for the
+  // mechanism). A confirmation dialog was rejected because it would need to
+  // re-explain isKnownPath's consequences in prose every time, for an
+  // action a user reasonably expects to be as low-stakes as the single-item
+  // remove above -- and excluding open paths is what makes that expectation
+  // true again instead of merely asserted.
+  //
+  // Returns the SURVIVING list (not necessarily []) for the same reason
+  // handleRemoveRecent reads its own response above: state is set from what
+  // main actually did, never assumed.
   const handleClearRecents = async (): Promise<void> => {
     try {
-      await window.api.clearRecentFiles()
-      setRecentFiles([])
+      const updated = await window.api.clearRecentFiles()
+      setRecentFiles(updated)
     } catch (err) {
       console.error('Failed to clear recent files', err)
     }

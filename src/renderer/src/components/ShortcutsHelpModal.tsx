@@ -94,7 +94,15 @@ const CATEGORIES: ShortcutCategory[] = [
       { keys: `${MOD}${ALT}E`, description: 'Export as HTML…' },
       { keys: `${MOD}P`, description: 'Print…' },
       { keys: `${MOD}${SHIFT}P`, description: 'Page setup…' },
-      { keys: `${MOD}W`, description: 'Close window' }
+      // Second-pass product-completeness audit: Cmd+W used to BE Close
+      // Window (Electron's role default), and this entry said so -- now
+      // stale twice over, since Close Tab claims Cmd+W and Close Window
+      // moved to Cmd+Shift+W (see app-menu-template.ts's own comment on
+      // both items). Listing the wrong binding here would be exactly the
+      // kind of stale-but-confident claim this file's own header warns
+      // against shipping.
+      { keys: `${MOD}W`, description: 'Close tab' },
+      { keys: `${MOD}${SHIFT}W`, description: 'Close window' }
     ]
   },
   {
