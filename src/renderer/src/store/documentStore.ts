@@ -27,6 +27,26 @@ export interface DocumentTab {
   // same path within one session, matching this feature's own "blocked by
   // default" posture rather than remembering a prior grant indefinitely.
   remoteImagesAllowed: boolean | null
+  // The 1-based page of THIS document the paginated (Split-mode) preview is
+  // showing. Product-completeness audit 2.4: this used to be a single
+  // per-WINDOW `appStore.currentPage`, which is the wrong scope by inspection
+  // -- "page 7" is a fact about one document, and there is no sense in which
+  // two documents share one. Two real symptoms came out of that:
+  //   - page 7 of tab A became page 1 on return, because the only thing
+  //     stopping tab A's page leaking onto tab B was an `useEffect` in
+  //     EditorScreen keyed on document identity that reset it to 1;
+  //   - that reset ran AFTER the render that switched tabs, so there was one
+  //     committed render in which the new document was on screen carrying the
+  //     OTHER document's page number -- passed to the status bar, the Pages
+  //     sidebar, and (as `targetPage`) to SplitPreview.
+  // Living on the tab removes both by construction rather than by timing:
+  // switchTab writes activeTabId and this mirror in the SAME set(), so no
+  // render can ever see them disagree, and each tab keeps its own place.
+  //
+  // Reset is likewise structural, not an effect: every route that puts a
+  // DIFFERENT document on screen either builds a fresh DocumentTab (which
+  // starts at 1) or focuses an existing one (which keeps its own page).
+  currentPage: number
 }
 
 interface DocumentStateValues {
@@ -44,6 +64,10 @@ interface DocumentStateValues {
   // Mirrors the active tab's own DocumentTab.remoteImagesAllowed -- see that
   // field's own doc comment.
   remoteImagesAllowed: boolean | null
+  // Mirrors the active tab's own DocumentTab.currentPage -- see that field's
+  // own doc comment for why the page belongs to the document rather than to
+  // the window.
+  currentPage: number
   // Deliberately global, not per-tab: nothing in this codebase surfaces a
   // per-background-tab error today (the only producers -- openFile/openPath/
   // save -- all operate on whatever tab is currently active), so scoping
@@ -267,6 +291,27 @@ interface DocumentState extends DocumentStateValues {
   // MilkdownEditor to remount; it only affects what image srcs the NEXT
   // render (Split preview / page count / export) is allowed to include.
   setRemoteImagesAllowed: (tabId: string, allowed: boolean) => void
+  // Records which page of the ACTIVE document the paginated preview is on.
+  //
+  // Deliberately active-tab-scoped (like updateContent, not like
+  // updateContentForTab): all three writers -- the status bar's chevrons/jump
+  // field, the Pages sidebar, and SplitPreview's own scroll/poll callback --
+  // are talking about whatever is currently on screen, and there is no caller
+  // that captures a tab id before an await the way handleRestoreVersion does
+  // for content.
+  //
+  // Disclosed, accepted residual (not a regression -- the per-window version
+  // had it too, less visibly): SplitPreview's 400ms page poll is a real IPC
+  // round trip, so a tick dispatched just before a tab switch can resolve just
+  // after it and write the OUTGOING document's page onto the incoming tab. It
+  // self-corrects within one poll interval and cannot cause a scroll jump,
+  // because SplitPreview writes lastAppliedPageRef before calling
+  // onPageChange, so the echoed targetPage is recognised as already-applied.
+  // Fixing it properly belongs in SplitPreview (ignore poll results older than
+  // the last sendDocument), not in a tab id here -- the closure that would
+  // carry the id is re-created with the NEW tab's id on the switch render, so
+  // an explicit tabId parameter would not actually catch this case.
+  setCurrentPage: (page: number) => void
 }
 
 // Monotonically increasing, not crypto-random: these ids are only ever used
@@ -288,7 +333,8 @@ function createBlankTab(): DocumentTab {
     content: '',
     isDirty: false,
     mtimeMs: null,
-    remoteImagesAllowed: null
+    remoteImagesAllowed: null,
+    currentPage: 1
   }
 }
 
@@ -318,12 +364,12 @@ function createBlankTab(): DocumentTab {
  *     content empty but the document genuinely touched (and it may carry
  *     undo history and an autosave snapshot).
  *
- * `mtimeMs`/`remoteImagesAllowed` are deliberately not checked: neither can
- * be anything but null on a tab satisfying the three conditions above (mtime
- * only ever arrives alongside a real path, and the remote-image banner can
- * only appear for a document that contains remote images, i.e. not an empty
- * one). Checking them would imply they are independent signals, which they
- * are not.
+ * `mtimeMs`/`remoteImagesAllowed`/`currentPage` are deliberately not checked:
+ * none can be anything but its default on a tab satisfying the three
+ * conditions above (mtime only ever arrives alongside a real path, the
+ * remote-image banner can only appear for a document that contains remote
+ * images, i.e. not an empty one, and an empty document is one page). Checking
+ * them would imply they are independent signals, which they are not.
  */
 export function isPristineBlankTab(tab: DocumentTab): boolean {
   return tab.filePath === null && tab.content === '' && !tab.isDirty
@@ -383,7 +429,12 @@ function openDocumentState(
     content: next.content,
     isDirty: next.startDirty,
     mtimeMs: next.mtimeMs,
-    remoteImagesAllowed: null
+    remoteImagesAllowed: null,
+    // A freshly-opened document starts at its first page -- including when
+    // this reuses a pristine blank tab's id, because that builds a whole new
+    // tab object rather than patching the old one. This is what replaced
+    // EditorScreen's own identity-keyed "reset currentPage to 1" effect.
+    currentPage: 1
   }
   return {
     tabs: reusable
@@ -405,13 +456,17 @@ function openDocumentState(
 // drifting apart.
 function activeMirror(
   tab: DocumentTab
-): Pick<DocumentTab, 'content' | 'filePath' | 'isDirty' | 'mtimeMs' | 'remoteImagesAllowed'> {
+): Pick<
+  DocumentTab,
+  'content' | 'filePath' | 'isDirty' | 'mtimeMs' | 'remoteImagesAllowed' | 'currentPage'
+> {
   return {
     content: tab.content,
     filePath: tab.filePath,
     isDirty: tab.isDirty,
     mtimeMs: tab.mtimeMs,
-    remoteImagesAllowed: tab.remoteImagesAllowed
+    remoteImagesAllowed: tab.remoteImagesAllowed,
+    currentPage: tab.currentPage
   }
 }
 
@@ -917,5 +972,22 @@ export const useDocumentStore = create<DocumentState>()((set, get) => ({
       )
       if (tabId !== state.activeTabId) return { tabs }
       return { tabs, remoteImagesAllowed: allowed }
+    }),
+  // Same finite/floor validation the per-window appStore version carried
+  // before this moved (a NaN would render as "Page NaN of 12"), just written
+  // through the tab as well as the mirror so the position survives a tab
+  // switch. Silently ignores a non-finite page rather than clamping it to 1:
+  // clamping would replace a real position with a wrong one, while ignoring
+  // leaves the last known-good page in place.
+  setCurrentPage: (page) =>
+    set((state) => {
+      if (!Number.isFinite(page)) return state
+      const currentPage = Math.max(1, Math.floor(page))
+      return {
+        tabs: state.tabs.map((tab) =>
+          tab.id === state.activeTabId ? { ...tab, currentPage } : tab
+        ),
+        currentPage
+      }
     })
 }))

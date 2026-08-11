@@ -383,7 +383,8 @@ describe('EditorScreen', () => {
       content: '# Discarded edit',
       isDirty: true,
       mtimeMs: null,
-      remoteImagesAllowed: null
+      remoteImagesAllowed: null,
+      currentPage: 1
     }
     const other = {
       id: 'tab-other',
@@ -391,7 +392,8 @@ describe('EditorScreen', () => {
       content: '# Other document',
       isDirty: false,
       mtimeMs: null,
-      remoteImagesAllowed: null
+      remoteImagesAllowed: null,
+      currentPage: 1
     }
     useAppStore.setState({ screen: 'editor' })
     useDocumentStore.setState({
@@ -689,7 +691,8 @@ describe('EditorScreen', () => {
       content: '# A dirty edit',
       isDirty: true,
       mtimeMs: null,
-      remoteImagesAllowed: null
+      remoteImagesAllowed: null,
+      currentPage: 1
     }
     const tabB = {
       id: 'tab-b',
@@ -697,7 +700,8 @@ describe('EditorScreen', () => {
       content: '# B untouched',
       isDirty: false,
       mtimeMs: null,
-      remoteImagesAllowed: null
+      remoteImagesAllowed: null,
+      currentPage: 1
     }
     useDocumentStore.setState({
       tabs: [tabA, tabB],
@@ -850,7 +854,8 @@ describe('EditorScreen', () => {
         content: '# A dirty edit',
         isDirty: true,
         mtimeMs: null,
-        remoteImagesAllowed: null
+        remoteImagesAllowed: null,
+        currentPage: 1
       }
       const tabB = {
         id: 'tab-b',
@@ -858,7 +863,8 @@ describe('EditorScreen', () => {
         content: '# B clean',
         isDirty: false,
         mtimeMs: null,
-        remoteImagesAllowed: null
+        remoteImagesAllowed: null,
+        currentPage: 1
       }
       useDocumentStore.setState({
         tabs: [tabA, tabB],
@@ -920,7 +926,8 @@ describe('EditorScreen', () => {
         content: '# unsaved background work',
         isDirty: true,
         mtimeMs: null,
-        remoteImagesAllowed: null
+        remoteImagesAllowed: null,
+        currentPage: 1
       }
       const foreground = {
         id: 'tab-fg',
@@ -928,7 +935,8 @@ describe('EditorScreen', () => {
         content: '# foreground',
         isDirty: false,
         mtimeMs: null,
-        remoteImagesAllowed: null
+        remoteImagesAllowed: null,
+        currentPage: 1
       }
       useDocumentStore.setState({
         tabs: [background, foreground],
@@ -960,7 +968,8 @@ describe('EditorScreen', () => {
         content: '# unsaved background work',
         isDirty: true,
         mtimeMs: null,
-        remoteImagesAllowed: null
+        remoteImagesAllowed: null,
+        currentPage: 1
       }
       const foreground = {
         id: 'tab-fg',
@@ -968,7 +977,8 @@ describe('EditorScreen', () => {
         content: '# foreground',
         isDirty: false,
         mtimeMs: null,
-        remoteImagesAllowed: null
+        remoteImagesAllowed: null,
+        currentPage: 1
       }
       useDocumentStore.setState({
         tabs: [background, foreground],
@@ -1796,7 +1806,7 @@ describe('EditorScreen', () => {
       // boundaries, so navigating from Format has to take the user there,
       // AND the requested page has to survive the mode switch.
       expect(useAppStore.getState().viewMode).toBe('split')
-      expect(useAppStore.getState().currentPage).toBe(2)
+      expect(useDocumentStore.getState().currentPage).toBe(2)
     })
 
     it('navigating while already in Split mode does not change the mode', async () => {
@@ -1807,7 +1817,7 @@ describe('EditorScreen', () => {
       await user.click(screen.getByRole('button', { name: 'Next page' }))
 
       expect(useAppStore.getState().viewMode).toBe('split')
-      expect(useAppStore.getState().currentPage).toBe(2)
+      expect(useDocumentStore.getState().currentPage).toBe(2)
     })
 
     it('selecting a page in the Pages sidebar navigates to it', async () => {
@@ -1817,7 +1827,7 @@ describe('EditorScreen', () => {
 
       await user.click(screen.getByRole('button', { name: 'Page 4' }))
 
-      expect(useAppStore.getState().currentPage).toBe(4)
+      expect(useDocumentStore.getState().currentPage).toBe(4)
     })
 
     it('clamps a requested page to the real page count', async () => {
@@ -1833,15 +1843,15 @@ describe('EditorScreen', () => {
       await user.clear(input)
       await user.type(input, '99{Enter}')
 
-      expect(useAppStore.getState().currentPage).toBe(3)
+      expect(useDocumentStore.getState().currentPage).toBe(3)
     })
 
     it('resets to page 1 when a different document is loaded', async () => {
       await renderWithPages(12)
       act(() => {
-        useAppStore.getState().setCurrentPage(6)
+        useDocumentStore.getState().setCurrentPage(6)
       })
-      expect(useAppStore.getState().currentPage).toBe(6)
+      expect(useDocumentStore.getState().currentPage).toBe(6)
 
       // A different document is a different set of pages -- without the
       // reset, a 2-page letter opened from page 9 of a report leaves the
@@ -1850,7 +1860,39 @@ describe('EditorScreen', () => {
         useDocumentStore.getState().loadDocument('/tmp/other.md', '# Other', false)
       })
 
-      await waitFor(() => expect(useAppStore.getState().currentPage).toBe(1))
+      await waitFor(() => expect(useDocumentStore.getState().currentPage).toBe(1))
+    })
+
+    // Product-completeness audit 2.4: the page belongs to the DOCUMENT. This
+    // is the half a reset-on-switch could never provide -- going back to a tab
+    // has to put you back where you were, not on page 1 -- and it is what
+    // fails if `currentPage` is ever hoisted back into appStore with an
+    // identity-keyed reset effect in this screen.
+    it('remembers each tab’s own page, and puts the status bar back on it', async () => {
+      await renderWithPages(12)
+      const first = useDocumentStore.getState().activeTabId
+
+      act(() => {
+        useDocumentStore.getState().setCurrentPage(7)
+      })
+      await waitFor(() =>
+        expect(screen.getByRole('button', { name: /page 7 of 12/i })).toBeInTheDocument()
+      )
+
+      act(() => {
+        useDocumentStore.getState().openTab('/tmp/second.md', '# Second')
+      })
+      // A different document starts at its own first page.
+      await waitFor(() =>
+        expect(screen.getByRole('button', { name: /page 1 of 12/i })).toBeInTheDocument()
+      )
+
+      act(() => {
+        useDocumentStore.getState().switchTab(first)
+      })
+      await waitFor(() =>
+        expect(screen.getByRole('button', { name: /page 7 of 12/i })).toBeInTheDocument()
+      )
     })
   })
 

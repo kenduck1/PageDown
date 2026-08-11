@@ -42,6 +42,50 @@ describe('findStore', () => {
     expect(state.capped).toBe(false)
   })
 
+  // Product-completeness audit 2.4. Nothing used to clear this store when the
+  // editor moved to a different document -- closeFind was the only writer that
+  // reset the derived fields, and all three of its call sites are "the user
+  // closed the bar". So the bar kept advertising the previous document's
+  // count, and (worse) the cursor kept indexing the previous document's match
+  // list, which is what sent the first Find Next somewhere arbitrary.
+  it('resetForDocument drops the derived match state but keeps everything typed', () => {
+    useFindStore.setState({
+      isOpen: true,
+      replaceExpanded: true,
+      query: 'cat',
+      replacement: 'dog',
+      options: { caseSensitive: true, wholeWord: true },
+      matchCount: 12,
+      activeIndex: 3,
+      capped: true
+    })
+    useFindStore.getState().resetForDocument()
+    const state = useFindStore.getState()
+    // Dropped: everything that described the OLD document's text.
+    expect(state.matchCount).toBe(0)
+    expect(state.activeIndex).toBe(-1)
+    expect(state.capped).toBe(false)
+    // Kept: everything the user typed or chose. Switching documents mid-search
+    // means "find this same thing over here", so the bar stays open with the
+    // query intact -- the same reasoning closeFind already uses.
+    expect(state.isOpen).toBe(true)
+    expect(state.replaceExpanded).toBe(true)
+    expect(state.query).toBe('cat')
+    expect(state.replacement).toBe('dog')
+    expect(state.options).toEqual({ caseSensitive: true, wholeWord: true })
+  })
+
+  it('a reset cursor lands on the FIRST match once the new surface republishes', () => {
+    // -1 rather than 0 is load-bearing: -1 is the only correct value while the
+    // count is 0, and setMatches' own clamp turns it into 0 the moment the new
+    // document reports matches. Asserting the pair together is what proves the
+    // reset cannot leave a dangling index.
+    useFindStore.setState({ matchCount: 12, activeIndex: 9 })
+    useFindStore.getState().resetForDocument()
+    useFindStore.getState().setMatches(4, false)
+    expect(useFindStore.getState().activeIndex).toBe(0)
+  })
+
   it('setQuery resets the cursor to the first match', () => {
     useFindStore.setState({ matchCount: 5, activeIndex: 3 })
     useFindStore.getState().setQuery('dog')

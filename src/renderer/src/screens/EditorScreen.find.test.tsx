@@ -310,4 +310,98 @@ describe('EditorScreen find & replace', () => {
       expect(useFindStore.getState().matchCount).toBe(0)
     })
   })
+
+  // Product-completeness audit 2.4. Find state is per-DOCUMENT, and nothing
+  // cleared it on a tab switch: the bar kept showing the previous document's
+  // count, and `activeIndex` kept indexing the previous document's match
+  // list, so the first Find Next after a switch jumped somewhere arbitrary in
+  // the new document. See findStore.resetForDocument.
+  describe('switching documents', () => {
+    // BOTH documents deliberately contain the query, and the second contains
+    // MORE occurrences than the cursor's old position -- that is what makes
+    // this discriminating. If the fix were missing, the recomputed count for
+    // the new document would still look right (the live surface republishes
+    // it anyway), while the stale cursor would silently remain in range and
+    // point at the new document's third match.
+    function seedTwoTabs(): { first: string; second: string } {
+      useDocumentStore.setState({
+        ...initialDocumentState,
+        tabs: [
+          {
+            id: 'tab-a',
+            filePath: '/tmp/a.md',
+            content: 'alpha alpha alpha',
+            isDirty: false,
+            mtimeMs: null,
+            remoteImagesAllowed: null,
+            currentPage: 1
+          },
+          {
+            id: 'tab-b',
+            filePath: '/tmp/b.md',
+            content: 'alpha alpha alpha alpha',
+            isDirty: false,
+            mtimeMs: null,
+            remoteImagesAllowed: null,
+            currentPage: 1
+          }
+        ],
+        activeTabId: 'tab-a',
+        filePath: '/tmp/a.md',
+        content: 'alpha alpha alpha'
+      })
+      return { first: 'tab-a', second: 'tab-b' }
+    }
+
+    it('does not carry the previous document’s match cursor onto the new one', async () => {
+      const { second } = seedTwoTabs()
+      useAppStore.setState({ viewMode: 'source' })
+      const user = userEvent.setup()
+      render(<EditorScreen />)
+
+      act(() => {
+        useFindStore.getState().openFind()
+        useFindStore.getState().setQuery('alpha')
+      })
+      await user.click(screen.getByRole('button', { name: 'Next match' }))
+      await user.click(screen.getByRole('button', { name: 'Next match' }))
+      expect(useFindStore.getState().matchCount).toBe(3)
+      expect(useFindStore.getState().activeIndex).toBe(2)
+
+      act(() => {
+        useDocumentStore.getState().switchTab(second)
+      })
+
+      // The count now describes the new document, and -- the part that was
+      // broken -- the cursor is back at its FIRST match rather than still
+      // sitting at the old document's index 2.
+      expect(useFindStore.getState().matchCount).toBe(4)
+      expect(useFindStore.getState().activeIndex).toBe(0)
+    })
+
+    it('keeps the bar open with the query, so the search re-runs on the new document', async () => {
+      const { second } = seedTwoTabs()
+      useAppStore.setState({ viewMode: 'source' })
+      render(<EditorScreen />)
+
+      act(() => {
+        useFindStore.getState().openFind()
+        useFindStore.getState().setQuery('alpha')
+      })
+      act(() => {
+        useDocumentStore.getState().switchTab(second)
+      })
+
+      // "Find this same thing over here" is what every editor does on a
+      // document switch -- the reset drops only what was DERIVED from the old
+      // document, never what the user typed.
+      expect(useFindStore.getState().isOpen).toBe(true)
+      expect(useFindStore.getState().query).toBe('alpha')
+      const textarea = screen.getByRole('textbox', {
+        name: 'Markdown source'
+      }) as HTMLTextAreaElement
+      expect(textarea.selectionStart).toBe(0)
+      expect(textarea.selectionEnd).toBe(5)
+    })
+  })
 })

@@ -259,4 +259,174 @@ describe('EditorScreen insert link', () => {
     await user.click(screen.getByRole('button', { name: 'Remove link' }))
     expect(mockEditorHandle.removeLink).toHaveBeenCalledTimes(1)
   })
+
+  // Product-completeness audit 2.5. The composer is a LAYOUT ROW, which is
+  // exactly why it leaves the tab bar live and clickable -- so it was possible
+  // to select text in tab A, open Insert link, click tab B, press Insert, and
+  // have the link land in tab B, because handleInsertLink dispatches through
+  // `editorRef`, which always points at whichever editor is mounted right now.
+  describe('a composer belongs to the document it was opened against', () => {
+    function seedTwoTabs(): { first: string; second: string } {
+      useDocumentStore.setState({
+        ...initialDocumentState,
+        tabs: [
+          {
+            id: 'tab-a',
+            filePath: '/tmp/a.md',
+            content: '# A',
+            isDirty: false,
+            mtimeMs: null,
+            remoteImagesAllowed: null,
+            currentPage: 1
+          },
+          {
+            id: 'tab-b',
+            filePath: '/tmp/b.md',
+            content: '# B',
+            isDirty: false,
+            mtimeMs: null,
+            remoteImagesAllowed: null,
+            currentPage: 1
+          }
+        ],
+        activeTabId: 'tab-a',
+        filePath: '/tmp/a.md',
+        content: '# A'
+      })
+      return { first: 'tab-a', second: 'tab-b' }
+    }
+
+    it('closes the row when the user switches to another tab', async () => {
+      const { second } = seedTwoTabs()
+      const user = userEvent.setup()
+      render(<EditorScreen />)
+
+      await user.click(screen.getByRole('button', { name: 'Insert link' }))
+      expect(screen.getByRole('group', { name: 'Insert link' })).toBeInTheDocument()
+
+      act(() => {
+        useDocumentStore.getState().switchTab(second)
+      })
+
+      // The selection it was opened over is gone with the document, so the
+      // row goes too -- rather than sitting there looking usable and then
+      // refusing, or (the shipped bug) applying to the wrong document.
+      expect(screen.queryByRole('group', { name: 'Insert link' })).not.toBeInTheDocument()
+      expect(mockEditorHandle.insertLink).not.toHaveBeenCalled()
+    })
+
+    // The same-tab case a tab-id-only check would miss: openDocumentState
+    // REUSES a pristine blank tab's id, so File > Open Recent from an
+    // untouched Untitled tab puts a completely different document on screen
+    // under the same id. `revision` is what catches it.
+    it('closes the row when a different document is loaded into the SAME tab', async () => {
+      const user = userEvent.setup()
+      render(<EditorScreen />)
+      const tabId = useDocumentStore.getState().activeTabId
+
+      await user.click(screen.getByRole('button', { name: 'Insert link' }))
+      expect(screen.getByRole('group', { name: 'Insert link' })).toBeInTheDocument()
+
+      act(() => {
+        useDocumentStore.getState().loadDocument('/tmp/other.md', '# Other')
+      })
+
+      expect(useDocumentStore.getState().activeTabId).toBe(tabId)
+      expect(screen.queryByRole('group', { name: 'Insert link' })).not.toBeInTheDocument()
+    })
+
+    // The submit-time guard, on its own. The close above is the reachable
+    // path, so this constructs the state it protects against DELIBERATELY:
+    // activeTabId is moved without bumping `revision`, which is the one thing
+    // the close effect keys on. That is artificial by design -- the point is
+    // that the guard does not depend on the close having run, so a future
+    // restructuring of the rows cannot silently reopen a write to the wrong
+    // document.
+    it('refuses to insert into a document it was not opened against', async () => {
+      const { second } = seedTwoTabs()
+      const user = userEvent.setup()
+      render(<EditorScreen />)
+
+      await user.click(screen.getByRole('button', { name: 'Insert link' }))
+      await user.type(screen.getByRole('textbox', { name: 'Link URL' }), 'https://example.com')
+
+      act(() => {
+        useDocumentStore.setState({ activeTabId: second, filePath: '/tmp/b.md', content: '# B' })
+      })
+
+      await user.click(screen.getByRole('button', { name: 'Insert' }))
+
+      // Nothing reached the editor -- and the row is gone rather than left
+      // open pretending it will work next time.
+      expect(mockEditorHandle.insertLink).not.toHaveBeenCalled()
+      expect(screen.queryByRole('group', { name: 'Insert link' })).not.toBeInTheDocument()
+    })
+
+    it('refuses Remove link into a document it was not opened against', async () => {
+      const { second } = seedTwoTabs()
+      const user = userEvent.setup()
+      render(<EditorScreen />)
+
+      act(() => {
+        selectionListener.current?.({
+          from: 1,
+          to: 5,
+          empty: false,
+          hasFocus: true,
+          nodeSelection: false,
+          marks: { bold: false, italic: false, inlineCode: false, link: true },
+          linkHref: 'https://old.example.com',
+          headingLevel: null,
+          listType: null,
+          taskList: false,
+          table: null
+        })
+      })
+      await user.click(screen.getByRole('button', { name: 'Insert link' }))
+
+      act(() => {
+        useDocumentStore.setState({ activeTabId: second, filePath: '/tmp/b.md', content: '# B' })
+      })
+
+      await user.click(screen.getByRole('button', { name: 'Remove link' }))
+
+      expect(mockEditorHandle.removeLink).not.toHaveBeenCalled()
+    })
+
+    // The other half of the audit's 2.5 note ("the prefill is stale too"): a
+    // selection snapshot outlives the editor that produced it, so without
+    // scoping it to the mounted instance the row could open with the PREVIOUS
+    // document's URL already typed into it.
+    it('does not prefill from a selection reported by a previous editor instance', async () => {
+      const { second } = seedTwoTabs()
+      const user = userEvent.setup()
+      render(<EditorScreen />)
+
+      act(() => {
+        selectionListener.current?.({
+          from: 1,
+          to: 5,
+          empty: false,
+          hasFocus: true,
+          nodeSelection: false,
+          marks: { bold: false, italic: false, inlineCode: false, link: true },
+          linkHref: 'https://tab-a-only.example.com',
+          headingLevel: null,
+          listType: null,
+          taskList: false,
+          table: null
+        })
+      })
+      act(() => {
+        useDocumentStore.getState().switchTab(second)
+      })
+
+      await user.click(screen.getByRole('button', { name: 'Insert link' }))
+
+      expect(screen.getByRole('textbox', { name: 'Link URL' })).toHaveValue('')
+      // ...and with no link on the (fresh) selection there is nothing to
+      // remove, so that button is correctly absent too.
+      expect(screen.queryByRole('button', { name: 'Remove link' })).not.toBeInTheDocument()
+    })
+  })
 })
