@@ -77,6 +77,42 @@ interface UseSplitFollowScrollOptions {
   scrollElementRef: RefObject<HTMLDivElement | null>
   /** This document's own per-page content height (computePageGeometry's own `contentHeightPx`). */
   contentHeightPx: number
+  /**
+   * The CSS `zoom` currently applied to the page card INSIDE `scrollElementRef`
+   * (EditorScreen's Split fit-to-width scale, `computeFitScale`). 1 when
+   * nothing is scaled.
+   *
+   * LOAD-BEARING, and it invalidates this hook's original premise rather than
+   * merely refining it. `contentHeightPx` is a DOCUMENT-space length (the
+   * paginated page's own content box, the same number every other rendering
+   * surface uses), but `scrollElementRef.current.scrollTop` is measured in the
+   * SCROLL CONTAINER's space -- and standardized CSS `zoom` participates in
+   * layout, so the container's `scrollHeight`/`scrollTop` are the document's
+   * own lengths already multiplied by the scale. Measured directly rather than
+   * assumed: at `zoom: 0.9` the same document's pane reported `scrollHeight`
+   * 956 against 1062 unscaled (1062 x 0.9 = 955.8), and setting
+   * `scrollTop = 200` moved the page card's own client rect by exactly 200
+   * viewport px, i.e. 200 / 0.9 = 222.2 DOCUMENT px.
+   *
+   * So the two quantities live in different coordinate spaces the moment the
+   * scale is not 1, and dividing `scrollTop` by it is what puts them back in
+   * the same one. Skipping the division does not fail loudly -- it silently
+   * under-reports the page (at 0.7, page 4 of a document reads as page 3), so
+   * Follow lands the preview on the wrong page in exactly the mode
+   * fit-to-width exists for. This hook's own original comment reasoned it was
+   * safe to divide nothing "because Split's left pane is deliberately
+   * un-zoomed"; that premise is simply no longer true.
+   *
+   * NOTE the direction, because this codebase has two documented traps in the
+   * opposite direction and they are easy to pattern-match onto this one by
+   * mistake: `coordsAtPos` results must NOT be divided by zoom (they are
+   * already post-zoom viewport coordinates), and `getBoundingClientRect()`
+   * must NOT be multiplied by `devicePixelRatio` before `setSplitPreviewBounds`.
+   * Neither applies here: this is not a viewport coordinate being converted to
+   * another viewport coordinate, it is a scaled length being converted back
+   * into the unscaled length `contentHeightPx` is expressed in.
+   */
+  scale: number
   /** The status bar's own page count (`usePageCount`'s value) -- `null` before it resolves. */
   pageCount: number | null
   /** EditorScreen's `handleNavigateToPage` -- the existing click-driven page-nav path. */
@@ -112,6 +148,7 @@ export function useSplitFollowScroll({
   enabled,
   scrollElementRef,
   contentHeightPx,
+  scale,
   pageCount,
   onNavigate
 }: UseSplitFollowScrollOptions): SplitFollowScrollHandle {
@@ -129,6 +166,15 @@ export function useSplitFollowScroll({
   const contentHeightRef = useRef(contentHeightPx)
   useEffect(() => {
     contentHeightRef.current = contentHeightPx
+  })
+  // Threaded through a ref for the same reason as the other three, and with
+  // one extra consequence worth naming: the fit scale changes on every window
+  // resize and on every frame of a Split-divider drag, so depending on it
+  // directly would tear the interval down and RE-SEED `lastEstimateRef` (see
+  // the seeding comment below) tens of times during a single drag gesture.
+  const scaleRef = useRef(scale)
+  useEffect(() => {
+    scaleRef.current = scale
   })
   const pageCountRef = useRef(pageCount)
   useEffect(() => {
@@ -159,6 +205,25 @@ export function useSplitFollowScroll({
   useEffect(() => {
     if (!enabled) return
 
+    // The ONE place `scrollTop` is converted out of the (possibly scaled)
+    // scroll container's coordinate space into the document space
+    // `contentHeightPx` is expressed in -- see `scale`'s own doc comment above
+    // for the measurement behind it. Both the seed below and every tick go
+    // through this deliberately: with the division written out twice, one call
+    // site could be corrected while the other silently was not, and the
+    // resulting bug (a seed computed in the wrong space) would only surface as
+    // one spurious page jump on activation.
+    const estimateFor = (el: HTMLDivElement, count: number): number => {
+      const currentScale = scaleRef.current
+      // `> 0` is false for NaN as well as for 0 and negatives, so every input
+      // that cannot be divided by falls back to treating the pane as unscaled
+      // rather than producing Infinity/NaN -- which `clampPageIndex` would
+      // resolve to the LAST page and to page 1 respectively, both plausible
+      // enough to look like a real answer.
+      const documentOffsetPx = currentScale > 0 ? el.scrollTop / currentScale : el.scrollTop
+      return estimatePageFromScrollOffset(documentOffsetPx, contentHeightRef.current, count)
+    }
+
     // Seed from whatever the editor pane is ALREADY scrolled to right now,
     // not from `null`/1 -- load-bearing, not a style choice. A real,
     // reproduced regression found building this: switching into Split
@@ -178,9 +243,7 @@ export function useSplitFollowScroll({
     const seedEl = scrollElementRef.current
     const seedCount = pageCountRef.current
     lastEstimateRef.current =
-      seedEl && seedCount !== null && seedCount > 0
-        ? estimatePageFromScrollOffset(seedEl.scrollTop, contentHeightRef.current, seedCount)
-        : null
+      seedEl && seedCount !== null && seedCount > 0 ? estimateFor(seedEl, seedCount) : null
     inFlightRef.current = false
 
     const tick = (): void => {
@@ -196,7 +259,7 @@ export function useSplitFollowScroll({
       // either way, matching the existing scroll/poll paths' own treatment
       // of that same sentinel in SplitPreview.tsx.
       if (count === null || count <= 0) return
-      const estimate = estimatePageFromScrollOffset(el.scrollTop, contentHeightRef.current, count)
+      const estimate = estimateFor(el, count)
       if (estimate === lastEstimateRef.current) return
       lastEstimateRef.current = estimate
       inFlightRef.current = true

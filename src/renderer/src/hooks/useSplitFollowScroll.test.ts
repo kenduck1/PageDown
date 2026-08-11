@@ -31,6 +31,7 @@ describe('useSplitFollowScroll', () => {
         enabled: false,
         scrollElementRef,
         contentHeightPx: CONTENT_HEIGHT_PX,
+        scale: 1,
         pageCount: 20,
         onNavigate
       })
@@ -53,6 +54,7 @@ describe('useSplitFollowScroll', () => {
         enabled: true,
         scrollElementRef,
         contentHeightPx: CONTENT_HEIGHT_PX,
+        scale: 1,
         pageCount: 20,
         onNavigate
       })
@@ -69,6 +71,7 @@ describe('useSplitFollowScroll', () => {
         enabled: true,
         scrollElementRef,
         contentHeightPx: CONTENT_HEIGHT_PX,
+        scale: 1,
         pageCount: 20,
         onNavigate
       })
@@ -88,6 +91,7 @@ describe('useSplitFollowScroll', () => {
         enabled: true,
         scrollElementRef,
         contentHeightPx: CONTENT_HEIGHT_PX,
+        scale: 1,
         pageCount: 20,
         onNavigate
       })
@@ -122,6 +126,7 @@ describe('useSplitFollowScroll', () => {
         enabled: true,
         scrollElementRef,
         contentHeightPx: CONTENT_HEIGHT_PX,
+        scale: 1,
         pageCount: 20,
         onNavigate
       })
@@ -153,6 +158,7 @@ describe('useSplitFollowScroll', () => {
         enabled: true,
         scrollElementRef,
         contentHeightPx: CONTENT_HEIGHT_PX,
+        scale: 1,
         pageCount: 20,
         onNavigate
       })
@@ -176,6 +182,7 @@ describe('useSplitFollowScroll', () => {
         enabled: true,
         scrollElementRef,
         contentHeightPx: CONTENT_HEIGHT_PX,
+        scale: 1,
         pageCount: 20,
         onNavigate
       })
@@ -207,6 +214,7 @@ describe('useSplitFollowScroll', () => {
           enabled: true,
           scrollElementRef,
           contentHeightPx: CONTENT_HEIGHT_PX,
+          scale: 1,
           pageCount,
           onNavigate
         }),
@@ -220,6 +228,117 @@ describe('useSplitFollowScroll', () => {
     expect(onNavigate).not.toHaveBeenCalled()
   })
 
+  // --- fit-to-width scale correction -------------------------------------
+  // Split mode's left pane now carries a CSS-`zoom`ed wrapper (EditorScreen's
+  // computeFitScale), so `scrollTop` is measured in a SCALED coordinate space
+  // while `contentHeightPx` is a document-space length. These four tests pin
+  // the conversion between them -- see the hook's own `scale` doc comment for
+  // the real-browser measurement the arithmetic is derived from.
+
+  it('converts a scaled pane scrollTop back into document space before estimating', () => {
+    // The discriminating case, chosen so the right answer and the answer you
+    // get by forgetting the division are DIFFERENT pages rather than the same
+    // one. At scale 0.7, the top of document-space page 3 (2 x 864 = 1728px)
+    // sits at scrollTop 1209.6; the extra 10px puts the pane just inside it.
+    //   with the division:    1219.6 / 0.7 = 1742.3 -> page 3
+    //   without the division: 1219.6           -> page 2
+    const scale = 0.7
+    const scrollElementRef = makeScrollRef(0)
+    const onNavigate = vi.fn()
+    renderHook(() =>
+      useSplitFollowScroll({
+        enabled: true,
+        scrollElementRef,
+        contentHeightPx: CONTENT_HEIGHT_PX,
+        scale,
+        pageCount: 20,
+        onNavigate
+      })
+    )
+    scrollElementRef.current.scrollTop = CONTENT_HEIGHT_PX * 2 * scale + 10
+    vi.advanceTimersByTime(FOLLOW_INTERVAL_MS)
+    expect(onNavigate).toHaveBeenCalledTimes(1)
+    expect(onNavigate).toHaveBeenCalledWith(3)
+  })
+
+  it('applies the same conversion when SEEDING, not only on each tick', () => {
+    // The seed and the tick are two separate call sites of the same
+    // arithmetic, which is exactly why the hook routes both through one local
+    // helper. This test is what fails if only one of them is ever corrected:
+    // a seed computed in the wrong space (page 2) against a tick computed in
+    // the right one (page 3) makes the very first tick dispatch a page the
+    // user never scrolled to, undoing whatever navigation just landed -- the
+    // same class of regression the seeding logic itself exists to prevent.
+    const scale = 0.7
+    const scrollElementRef = makeScrollRef(CONTENT_HEIGHT_PX * 2 * scale + 10)
+    const onNavigate = vi.fn()
+    renderHook(() =>
+      useSplitFollowScroll({
+        enabled: true,
+        scrollElementRef,
+        contentHeightPx: CONTENT_HEIGHT_PX,
+        scale,
+        pageCount: 20,
+        onNavigate
+      })
+    )
+    vi.advanceTimersByTime(FOLLOW_INTERVAL_MS * 4)
+    expect(onNavigate).not.toHaveBeenCalled()
+  })
+
+  it('treats a non-positive or non-finite scale as unscaled rather than dividing by it', () => {
+    // 0 / NaN can only come from a caller bug, but dividing by either turns a
+    // real offset into Infinity or NaN, which clampPageIndex resolves to the
+    // LAST page and to page 1 respectively -- both confident-looking wrong
+    // answers. Falling back to "unscaled" at least reports the page the pane
+    // would be on if nothing were scaled, which is what every non-Split
+    // surface genuinely is.
+    for (const scale of [0, Number.NaN, -1]) {
+      const scrollElementRef = makeScrollRef(0)
+      const onNavigate = vi.fn()
+      const { unmount } = renderHook(() =>
+        useSplitFollowScroll({
+          enabled: true,
+          scrollElementRef,
+          contentHeightPx: CONTENT_HEIGHT_PX,
+          scale,
+          pageCount: 20,
+          onNavigate
+        })
+      )
+      scrollElementRef.current.scrollTop = CONTENT_HEIGHT_PX * 2 + 10
+      vi.advanceTimersByTime(FOLLOW_INTERVAL_MS)
+      expect(onNavigate, `scale ${String(scale)}`).toHaveBeenCalledWith(3)
+      unmount()
+    }
+  })
+
+  it('picks up a changed scale without restarting the interval', () => {
+    // The scale changes on every frame of a Split-divider drag and on every
+    // window resize, so it is threaded through a latest-ref rather than the
+    // effect's dependency array. This proves the ref is genuinely live: a
+    // stale 1 would read the same scrollTop as page 2, not page 4.
+    const scrollElementRef = makeScrollRef(0)
+    const onNavigate = vi.fn()
+    const { rerender } = renderHook(
+      ({ scale }: { scale: number }) =>
+        useSplitFollowScroll({
+          enabled: true,
+          scrollElementRef,
+          contentHeightPx: CONTENT_HEIGHT_PX,
+          scale,
+          pageCount: 20,
+          onNavigate
+        }),
+      { initialProps: { scale: 1 } }
+    )
+    rerender({ scale: 0.5 })
+    scrollElementRef.current.scrollTop = CONTENT_HEIGHT_PX * 3 * 0.5 + 10
+    vi.advanceTimersByTime(FOLLOW_INTERVAL_MS)
+    expect(onNavigate).toHaveBeenCalledTimes(1)
+    expect(onNavigate).toHaveBeenCalledWith(4)
+  })
+
   it('stops sampling once unmounted', () => {
     const scrollElementRef = makeScrollRef(0)
     const onNavigate = vi.fn()
@@ -228,6 +347,7 @@ describe('useSplitFollowScroll', () => {
         enabled: true,
         scrollElementRef,
         contentHeightPx: CONTENT_HEIGHT_PX,
+        scale: 1,
         pageCount: 20,
         onNavigate
       })
