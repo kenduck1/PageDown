@@ -281,6 +281,32 @@ interface DocumentState extends DocumentStateValues {
   // to prompt before calling this for a dirty tab.
   closeTab: (tabId: string) => void
   switchTab: (tabId: string) => void
+  // Moves an EXPLICIT tab to an explicit final position. `tabs` order is what
+  // EditorTabBar renders, so this array IS the tab order -- there is no
+  // separate ordering field to keep in sync.
+  //
+  // Takes a tabId rather than acting on the active tab, following
+  // updateContentForTab/replaceContentForTab/setRemoteImagesAllowed: the
+  // caller is a drag gesture (or a keyboard reorder) that names the tab it
+  // grabbed, and the dragged tab is very often NOT the active one -- dragging
+  // a background tab must not first switch to it.
+  //
+  // CONTRACT: `toIndex` is the index the moved tab ENDS UP AT, in the
+  // resulting array -- not an insertion point in the pre-move array. Those
+  // two differ by one whenever the tab moves rightward (removing it first
+  // shifts everything after it left), which is the classic off-by-one in
+  // every hand-rolled array-move; naming the contract as the FINAL index
+  // makes both the implementation and every test unambiguous. Out-of-range
+  // values are clamped rather than rejected.
+  //
+  // Deliberately touches NOTHING but the array: not activeTabId (reordering
+  // is not selection -- a drag must not steal focus from the document you are
+  // editing), not the activeMirror fields (no tab's content/path/dirtiness
+  // changed), not `revision` (bumping it would remount MilkdownEditor and
+  // destroy the live editor's undo history on every drag), and not isDirty
+  // (tab order is window state, not document content -- it is not saved to
+  // the .md file and must never make a clean document look unsaved).
+  reorderTab: (tabId: string, toIndex: number) => void
   // Records the user's Load/Keep-blocked decision for a specific tab's
   // remote images -- takes an explicit tabId (not "whichever tab is active
   // right now") for the same reason updateContentForTab/replaceContentForTab
@@ -757,6 +783,23 @@ export const useDocumentStore = create<DocumentState>()((set, get) => ({
         error: null,
         revision: state.revision + 1
       }
+    }),
+  // See this action's own declaration comment above for the toIndex contract
+  // and for why nothing but `tabs` is written. Returning `{}` for a no-op
+  // (unknown tab, or a move that would not change the order) matches
+  // switchTab/closeTab's own convention and keeps Zustand from notifying
+  // subscribers -- which matters here because this fires on every drop,
+  // including a drag that ends exactly where it started.
+  reorderTab: (tabId, toIndex) =>
+    set((state) => {
+      const fromIndex = state.tabs.findIndex((tab) => tab.id === tabId)
+      if (fromIndex === -1) return {}
+      const target = Math.min(Math.max(toIndex, 0), state.tabs.length - 1)
+      if (target === fromIndex) return {}
+      const next = state.tabs.slice()
+      const [moved] = next.splice(fromIndex, 1)
+      next.splice(target, 0, moved)
+      return { tabs: next }
     }),
   switchTab: (tabId) =>
     set((state) => {

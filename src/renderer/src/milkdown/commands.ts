@@ -1,7 +1,7 @@
 import { $command, $prose, $useKeymap } from '@milkdown/utils'
 import { commandsCtx } from '@milkdown/core'
 import type { Ctx } from '@milkdown/ctx'
-import { history, undo, redo } from '@milkdown/prose/history'
+import { history, undo, redo, closeHistory } from '@milkdown/prose/history'
 import { wrapIn, setBlockType } from '@milkdown/prose/commands'
 import { Plugin, TextSelection } from '@milkdown/prose/state'
 import type { EditorState, Transaction } from '@milkdown/prose/state'
@@ -47,7 +47,152 @@ import { columnCellPositions, findTableContext, type TableAlignment } from './ta
 // addToHistory is undefined, and undefined !== false) -- exactly the
 // property flush()/Save-race protection needs to keep holding now that a
 // real undo/redo path exists. No change to that filter was needed.
-export const historyProse = $prose(() => history())
+// UNDO GROUPING: semantic boundaries first, elapsed time only as a backstop.
+//
+// The reported symptom was "undo is choppy and sometimes undoes too much",
+// which sounds like two complaints but is one: `history()` with its defaults
+// groups PURELY on elapsed time (`newGroupDelay: 500`, plus an adjacency check
+// -- read from prosemirror-history's own applyTransaction, see historyProse's
+// comment below). Nothing about what was typed enters into it. So the size of
+// an undo step was a function of the user's typing speed and nothing else: a
+// fast typist got a whole sentence removed by one Cmd+Z, a hunt-and-peck
+// typist got one character per press, and the same person got both on
+// different days. Neither behaviour is reachable on purpose, which is exactly
+// why it reads as flaky rather than as a setting someone chose.
+//
+// What conventional editors do instead -- Word, VS Code, Google Docs -- is
+// break undo at SEMANTIC boundaries: a word ends, a sentence ends, a line
+// ends. Typing speed changes nothing. That is what these two changes together
+// implement:
+//
+//   1. `newGroupDelay: 2000` (below) demotes time to a backstop. It can now
+//      only split a group in the middle of a single uninterrupted word --
+//      because any word boundary already splits it explicitly -- so the value
+//      is "how long a pause means you have stopped composing this word",
+//      where 500ms meant "how long a pause means you have stopped typing",
+//      which is far too short for a person who is thinking. Note that a pause
+//      is NOT the only thing that already split a group: prosemirror-history
+//      also splits whenever the new change is not adjacent to the previous
+//      one, so moving the caret elsewhere and typing still starts a fresh
+//      group no matter how long this delay is. That is what makes raising it
+//      safe.
+//   2. `historyGroupingProse` (below) closes the group whenever the text just
+//      typed ENDS at a word boundary, so an undo step is a word-ish unit.
+//
+// `depth` is deliberately left at its default 100. It bounds how many undo
+// steps are retained, not how big one is, so it has no bearing on either half
+// of the report -- and raising it would only make each step's retained doc
+// snapshots cost more memory.
+const NEW_GROUP_DELAY_MS = 2000
+
+// What counts as the end of a "word" for grouping purposes: whitespace (which
+// includes the "\n" a block split serialises to, see insertedTextOf) and
+// punctuation.
+//
+// Apostrophes are excluded on purpose. `\p{P}` includes both the straight and
+// the typographic apostrophe, so without this carve-out "don't" would be two
+// undo steps ("don" then "'t") -- exactly the choppiness this whole change
+// exists to remove, and in one of the most common words in English prose. No
+// other punctuation has this problem, because no other punctuation routinely
+// appears WITHIN a word.
+//
+// `\p{S}` (symbols) is deliberately NOT a boundary: it would make "$50" and
+// "€100" split mid-token, and this app's own stated use case (reports,
+// letters, resumes) is full of both.
+const WORD_BOUNDARY_RE = /[\s\p{P}]/u
+const NOT_A_BOUNDARY = new Set(["'", '’'])
+
+// The text a transaction INSERTS, concatenated across its steps.
+//
+// `'\n'` as the block separator is doing real work, not formatting: pressing
+// Enter produces a ReplaceStep whose slice content is two empty textblocks
+// (prosemirror-transform's `Transform.split`), which carries no text at all --
+// but Fragment.textBetween emits the separator BETWEEN two block children, so
+// a split reads out as exactly "\n" and lands on the whitespace branch of
+// WORD_BOUNDARY_RE with no special case of its own. A plain character insert
+// reads out as that character; a delete, a mark toggle or a selection-only
+// transaction reads out as "" and is therefore never a boundary.
+function insertedTextOf(tr: Transaction): string {
+  let text = ''
+  for (const step of tr.steps) {
+    // Duck-typed rather than instanceof-checked against ReplaceStep/
+    // ReplaceAroundStep: those are the two step classes that carry a slice
+    // today, but AddMarkStep/RemoveMarkStep/AttrStep simply have no `slice`
+    // property, so asking for one is both narrower and future-proof.
+    const slice = (step as unknown as { slice?: { content: Fragment } }).slice
+    if (!slice || slice.content.size === 0) continue
+    text += slice.content.textBetween(0, slice.content.size, '\n')
+  }
+  return text
+}
+
+function endsAtWordBoundary(tr: Transaction): boolean {
+  // Never on our own no-op transaction (no steps -> no inserted text), which
+  // is what stops appendTransaction below from recursing.
+  if (!tr.docChanged) return false
+  // `addToHistory: false` transactions are invisible to the history plugin
+  // entirely (preset-commonmark's heading-id assignment dispatches one on
+  // every mount), so closing a group in response to one would split the
+  // user's undo history on an edit they never made.
+  if (tr.getMeta('addToHistory') === false) return false
+  // IME composition: prosemirror-history has its own composition grouping
+  // (`prevComposition`), which deliberately keeps an entire composed run in
+  // one undo event. Forcing a split mid-composition would fight it, and the
+  // boundary characters an IME emits are not the user's own keystrokes.
+  if (tr.getMeta('composition') != null) return false
+  const inserted = insertedTextOf(tr)
+  if (inserted === '') return false
+  const last = inserted[inserted.length - 1]
+  return WORD_BOUNDARY_RE.test(last) && !NOT_A_BOUNDARY.has(last)
+}
+
+// Stamps `closeHistory` on a zero-step transaction appended immediately after
+// any transaction that ended at a word boundary, so the NEXT thing typed
+// starts a fresh undo group.
+//
+// The mechanism, read out of prosemirror-history's own applyTransaction rather
+// than assumed, because it hinges on one specific line ordering: the
+// `closeHistoryKey` meta is honoured (resetting prevTime to 0 and prevRanges
+// to null) BEFORE the `if (tr.steps.length == 0) return history` early exit.
+// So a transaction with no steps at all can still close a group without ever
+// being recorded as an undoable event of its own. That is the entire trick,
+// and it is why this is an appendTransaction rather than an attempt to
+// intercept the user's own transaction.
+//
+// WHY NOT the obvious alternatives, both tried on paper first:
+//   - `handleTextInput`, dispatching the boundary character ourselves with
+//     closeHistory already on it. This is the one that looks cleanest and is
+//     the most dangerous: prosemirror-inputrules is ALSO implemented as a
+//     handleTextInput, and returning true from ours would pre-empt it. Since
+//     the trigger character for nearly every input rule in this editor is the
+//     space -- "# ", "- ", "> ", "1. " -- that would silently disable
+//     markdown input rules, i.e. break heading/list/blockquote creation, in
+//     exchange for tidier undo.
+//   - Overriding `dispatchTransaction`. Milkdown owns the view's options
+//     (editorViewOptionsCtx), so this means reaching into its lifecycle to
+//     wrap a function it may itself set -- a far larger blast radius than a
+//     plugin that only ever appends a no-op.
+//
+// Closing AFTER the boundary character (rather than before it) is what makes
+// the boundary character travel with the word it terminates: typing
+// "hello world" leaves undo steps ["hello ", "world"], so one Cmd+Z removes
+// the last word and leaves the space that preceded it -- the same thing
+// Cmd+Backspace does, and the same thing Word does.
+//
+// It also means this can never interfere with runSlashItemIn's atomic
+// {delete, insert} group (slash-plugin.ts): that gesture's delete inserts no
+// text at all, so no boundary is detected between the delete and the
+// insertion, and any close this triggers lands strictly AFTER both.
+export const historyGroupingProse = $prose(() => {
+  return new Plugin({
+    appendTransaction: (transactions, _oldState, newState) => {
+      if (!transactions.some(endsAtWordBoundary)) return null
+      return closeHistory(newState.tr)
+    }
+  })
+})
+
+export const historyProse = $prose(() => history({ newGroupDelay: NEW_GROUP_DELAY_MS }))
 
 // prosemirror-history's own `undo`/`redo` already have the exact `Command`
 // shape `$command`'s `cmd` callback expects to return (`(ctx) => (payload?)
@@ -836,6 +981,11 @@ export const unlinkCommand = $command('Unlink', (ctx) => () => (state, dispatch)
 // remember it themselves.
 export const EDITOR_COMMAND_PLUGINS = [
   historyProse,
+  // Must be mounted wherever historyProse is -- it is the half of the undo
+  // grouping design that does the semantic splitting, and historyProse's
+  // raised newGroupDelay is only safe BECAUSE of it. See historyGroupingProse's
+  // own doc comment.
+  historyGroupingProse,
   undoCommand,
   redoCommand,
   historyKeymap,

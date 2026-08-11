@@ -1,6 +1,6 @@
 import { act } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import EditorTabBar from './EditorTabBar'
 import { useDocumentStore, initialDocumentState } from '../store/documentStore'
@@ -285,6 +285,251 @@ describe('EditorTabBar', () => {
   // can prove data-theme gets set, not that anything actually paints
   // differently"); real paint verification for this fix would need the same
   // kind of Playwright gate, not a unit test.
+  // ------------------------------------------------------------------
+  // Drag to reorder
+  // ------------------------------------------------------------------
+  //
+  // jsdom implements no drag-and-drop pipeline and no layout, so both halves
+  // of a real drop have to be staged: a hand-built DataTransfer (jsdom has no
+  // DataTransfer constructor at all -- confirmed by `typeof DataTransfer`
+  // being 'undefined' here), and a stubbed getBoundingClientRect so
+  // isDropAfter has a real geometry to answer against. What that leaves
+  // genuinely covered is everything above the browser's own event plumbing:
+  // that the component reads the drag's payload, resolves left-half/right-half
+  // against the target's box, and calls the store with the right FINAL index.
+  // The index arithmetic itself is separately and exhaustively covered in
+  // lib/tab-reorder.test.ts.
+  describe('drag to reorder', () => {
+    interface FakeDataTransfer {
+      types: string[]
+      dropEffect: string
+      effectAllowed: string
+      setData: (type: string, value: string) => void
+      getData: (type: string) => string
+    }
+
+    function makeDataTransfer(initial?: Record<string, string>): FakeDataTransfer {
+      const store = new Map<string, string>(Object.entries(initial ?? {}))
+      return {
+        get types() {
+          return [...store.keys()]
+        },
+        dropEffect: 'none',
+        effectAllowed: 'none',
+        setData: (type, value) => {
+          store.set(type, value)
+        },
+        getData: (type) => store.get(type) ?? ''
+      } as FakeDataTransfer
+    }
+
+    // Stakes out a 100px-wide tab starting at x=0, so clientX 10 is the left
+    // half and clientX 90 the right half.
+    function stubBox(el: HTMLElement): void {
+      el.getBoundingClientRect = (() =>
+        ({ left: 0, width: 100, right: 100, top: 0, bottom: 30, height: 30 }) as DOMRect) as never
+    }
+
+    // fireEvent.dragOver/.drop CANNOT carry clientX, and this is a real trap
+    // rather than a nicety: jsdom implements no DragEvent constructor, so
+    // @testing-library/dom falls back to a plain Event, which silently ignores
+    // every unknown init field -- `clientX` arrives as `undefined`, and
+    // `undefined >= midpoint` is false, so EVERY drop reads as a left-half
+    // drop. That made a right-half test pass against the wrong final index
+    // while a left-half test passed for the wrong reason. Constructing a real
+    // MouseEvent (which jsdom does implement, and which honours clientX)
+    // fixes it; dataTransfer is attached by hand because that is the one
+    // property MouseEvent has no init for.
+    function fireDragEvent(
+      el: HTMLElement,
+      type: 'dragover' | 'drop',
+      dataTransfer: FakeDataTransfer,
+      clientX: number
+    ): void {
+      const event = new MouseEvent(type, { bubbles: true, cancelable: true, clientX })
+      Object.defineProperty(event, 'dataTransfer', { value: dataTransfer })
+      fireEvent(el, event)
+    }
+
+    function openThree(): void {
+      useDocumentStore.getState().openTab('/tmp/a.md', '# A')
+      useDocumentStore.getState().openTab('/tmp/b.md', '# B')
+      useDocumentStore.getState().openTab('/tmp/c.md', '# C')
+    }
+
+    function paths(): (string | null)[] {
+      return useDocumentStore.getState().tabs.map((tab) => tab.filePath)
+    }
+
+    it('dragging a tab onto the RIGHT half of a later tab moves it after that tab', () => {
+      openThree()
+      render(<EditorTabBar />)
+      const dataTransfer = makeDataTransfer()
+
+      const dragged = screen.getByRole('tab', { name: 'a.md' })
+      const target = screen.getByRole('tab', { name: 'c.md' })
+      stubBox(target)
+
+      fireEvent.dragStart(dragged, { dataTransfer })
+      fireDragEvent(target, 'dragover', dataTransfer, 90)
+      fireDragEvent(target, 'drop', dataTransfer, 90)
+
+      expect(paths()).toEqual([null, '/tmp/b.md', '/tmp/c.md', '/tmp/a.md'])
+    })
+
+    it('dragging a tab onto the LEFT half of an earlier tab moves it before that tab', () => {
+      openThree()
+      render(<EditorTabBar />)
+      const dataTransfer = makeDataTransfer()
+
+      const dragged = screen.getByRole('tab', { name: 'c.md' })
+      const target = screen.getByRole('tab', { name: 'a.md' })
+      stubBox(target)
+
+      fireEvent.dragStart(dragged, { dataTransfer })
+      fireDragEvent(target, 'dragover', dataTransfer, 10)
+      fireDragEvent(target, 'drop', dataTransfer, 10)
+
+      expect(paths()).toEqual([null, '/tmp/c.md', '/tmp/a.md', '/tmp/b.md'])
+    })
+
+    it('a drag carrying no tab payload (e.g. a real file from the OS) is ignored entirely', () => {
+      openThree()
+      render(<EditorTabBar />)
+      const before = paths()
+      // What a file drag from Finder actually looks like -- and the case that
+      // must fall through untouched, since dropping an image on the editor is
+      // a real feature elsewhere in this app.
+      const dataTransfer = makeDataTransfer({ 'text/plain': '/tmp/some-image.png' })
+      const target = screen.getByRole('tab', { name: 'a.md' })
+      stubBox(target)
+
+      fireDragEvent(target, 'dragover', dataTransfer, 90)
+      fireDragEvent(target, 'drop', dataTransfer, 90)
+
+      expect(paths()).toEqual(before)
+    })
+
+    it('the drag payload carries ONLY the private tab type, never text/plain', () => {
+      openThree()
+      render(<EditorTabBar />)
+      const dataTransfer = makeDataTransfer()
+
+      fireEvent.dragStart(screen.getByRole('tab', { name: 'a.md' }), { dataTransfer })
+
+      // Advertising text/plain would make a tab dropped on the document body
+      // insert its own id as literal text, via ProseMirror's default drop
+      // handling -- see EditorTabBar's TAB_DRAG_TYPE comment.
+      expect(dataTransfer.types).toEqual(['application/x-pagedown-tab'])
+      expect(dataTransfer.getData('application/x-pagedown-tab')).toBe(
+        useDocumentStore.getState().tabs[1].id
+      )
+    })
+
+    it('reordering does not switch the active tab', () => {
+      openThree()
+      render(<EditorTabBar />)
+      const activeBefore = useDocumentStore.getState().activeTabId
+      const dataTransfer = makeDataTransfer()
+
+      const dragged = screen.getByRole('tab', { name: 'a.md' })
+      const target = screen.getByRole('tab', { name: 'c.md' })
+      stubBox(target)
+      fireEvent.dragStart(dragged, { dataTransfer })
+      fireDragEvent(target, 'drop', dataTransfer, 90)
+
+      expect(useDocumentStore.getState().activeTabId).toBe(activeBefore)
+    })
+  })
+
+  // ------------------------------------------------------------------
+  // Keyboard reordering
+  // ------------------------------------------------------------------
+  //
+  // Drag-only reordering is unreachable without a pointer, and this bar
+  // already has a full keyboard model to hang the modifier off.
+  describe('keyboard reordering', () => {
+    it('Mod+Shift+ArrowRight moves the focused tab one place right', async () => {
+      useDocumentStore.getState().openTab('/tmp/a.md', '# A')
+      useDocumentStore.getState().openTab('/tmp/b.md', '# B')
+      render(<EditorTabBar />)
+
+      const tabA = screen.getByRole('tab', { name: 'a.md' })
+      tabA.focus()
+      fireEvent.keyDown(tabA, { key: 'ArrowRight', metaKey: true, shiftKey: true })
+
+      expect(useDocumentStore.getState().tabs.map((tab) => tab.filePath)).toEqual([
+        null,
+        '/tmp/b.md',
+        '/tmp/a.md'
+      ])
+      // Focus follows the tab to its new position, so the chord can be
+      // pressed again without re-finding it. Deferred by one microtask (see
+      // focusTabAt) because the DOM order only settles after React re-renders.
+      await waitFor(() => expect(screen.getByRole('tab', { name: 'a.md' })).toHaveFocus())
+    })
+
+    it('Ctrl+Shift+ArrowLeft moves the focused tab one place left', () => {
+      useDocumentStore.getState().openTab('/tmp/a.md', '# A')
+      useDocumentStore.getState().openTab('/tmp/b.md', '# B')
+      render(<EditorTabBar />)
+
+      const tabB = screen.getByRole('tab', { name: 'b.md' })
+      tabB.focus()
+      fireEvent.keyDown(tabB, { key: 'ArrowLeft', ctrlKey: true, shiftKey: true })
+
+      expect(useDocumentStore.getState().tabs.map((tab) => tab.filePath)).toEqual([
+        null,
+        '/tmp/b.md',
+        '/tmp/a.md'
+      ])
+    })
+
+    it('clamps at the ends rather than wrapping, unlike plain-arrow navigation', () => {
+      useDocumentStore.getState().openTab('/tmp/a.md', '# A')
+      render(<EditorTabBar />)
+      const before = useDocumentStore.getState().tabs.map((tab) => tab.filePath)
+
+      const tabA = screen.getByRole('tab', { name: 'a.md' })
+      tabA.focus()
+      // Already last -- a wrapping move would teleport it to the front.
+      fireEvent.keyDown(tabA, { key: 'ArrowRight', metaKey: true, shiftKey: true })
+
+      expect(useDocumentStore.getState().tabs.map((tab) => tab.filePath)).toEqual(before)
+    })
+
+    it('plain ArrowRight still only moves focus/selection, never the tab order', () => {
+      useDocumentStore.getState().openTab('/tmp/a.md', '# A')
+      useDocumentStore.getState().openTab('/tmp/b.md', '# B')
+      render(<EditorTabBar />)
+      const before = useDocumentStore.getState().tabs.map((tab) => tab.filePath)
+
+      const tabB = screen.getByRole('tab', { name: 'b.md' })
+      tabB.focus()
+      fireEvent.keyDown(tabB, { key: 'ArrowRight' })
+
+      expect(useDocumentStore.getState().tabs.map((tab) => tab.filePath)).toEqual(before)
+      expect(screen.getByRole('tab', { name: 'Untitled' })).toHaveAttribute('aria-selected', 'true')
+    })
+  })
+
+  // The "+" button was visibly low against the tabs. Root cause: the tablist
+  // is `items-end`, which aligns a flex item by the BOTTOM of its margin box,
+  // so the `mt-[5px]` it used to carry could not move it at all -- a top
+  // margin only extends the box upward. Asserted against the className for the
+  // same reason the close-button opacity test below does: this project's
+  // Vitest config runs jsdom with no CSS pipeline, so a computed style here
+  // would read the CSS-initial value regardless of which utilities are
+  // present. The real numbers (label centre 57.63 vs button centre 65 before;
+  // 58.0 after) were measured in the real built app.
+  it('aligns the "+" button with a BOTTOM margin, the only side items-end responds to', () => {
+    render(<EditorTabBar />)
+    const plus = screen.getByRole('button', { name: 'New tab' })
+
+    expect(plus.className).toContain('mb-[7px]')
+    expect(plus.className).not.toContain('mt-[')
+  })
+
   it("keeps focus:opacity-100 on an inactive tab's close button", () => {
     useDocumentStore.getState().openTab('/tmp/a.md', '# A')
     useDocumentStore.getState().openTab('/tmp/b.md', '# B')

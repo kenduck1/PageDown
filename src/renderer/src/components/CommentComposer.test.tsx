@@ -99,6 +99,74 @@ describe('CommentComposer', () => {
     ).not.toBeInTheDocument()
   })
 
+  // The reported bug: the field was a single-line <input>, so a user could not
+  // type a multi-paragraph comment at all. Note the constraint this does NOT
+  // touch -- a comment MARK still cannot span two blocks (addCommentCommand
+  // refuses, by design, because remark-stringify serialises block nodes
+  // independently). That is about which text can be marked; this is about what
+  // the comment BODY can say, and the body is base64-encoded JSON inside an
+  // HTML comment, so newlines in it are safe by construction.
+  describe('multi-line comment bodies', () => {
+    it('is a real textarea, so a body can have more than one line at all', () => {
+      useAppStore.setState({ commentComposerOpen: true })
+      render(<CommentComposer onAddComment={vi.fn()} />)
+
+      expect(screen.getByRole('textbox', { name: 'Comment text' }).tagName).toBe('TEXTAREA')
+    })
+
+    it('Shift+Enter inserts a newline instead of submitting', async () => {
+      useAppStore.setState({ commentComposerOpen: true })
+      const onAddComment = vi.fn(() => true)
+      const user = userEvent.setup()
+      render(<CommentComposer onAddComment={onAddComment} />)
+
+      const field = screen.getByRole('textbox', { name: 'Comment text' })
+      await user.type(field, 'first line{Shift>}{Enter}{/Shift}second line')
+
+      expect(onAddComment).not.toHaveBeenCalled()
+      expect(field).toHaveValue('first line\nsecond line')
+    })
+
+    it('plain Enter still submits, and submits the whole multi-line body', async () => {
+      useAppStore.setState({ commentComposerOpen: true })
+      const onAddComment = vi.fn(() => true)
+      const user = userEvent.setup()
+      render(<CommentComposer onAddComment={onAddComment} />)
+
+      await user.type(
+        screen.getByRole('textbox', { name: 'Comment text' }),
+        'Para one.{Shift>}{Enter}{Enter}{/Shift}Para two.{Enter}'
+      )
+
+      expect(onAddComment).toHaveBeenCalledWith('Para one.\n\nPara two.')
+      expect(useAppStore.getState().commentComposerOpen).toBe(false)
+    })
+
+    it('trims a trailing newline the user changed their mind about', async () => {
+      useAppStore.setState({ commentComposerOpen: true })
+      const onAddComment = vi.fn(() => true)
+      const user = userEvent.setup()
+      render(<CommentComposer onAddComment={onAddComment} />)
+
+      await user.type(
+        screen.getByRole('textbox', { name: 'Comment text' }),
+        'a note{Shift>}{Enter}{/Shift}{Enter}'
+      )
+
+      expect(onAddComment).toHaveBeenCalledWith('a note')
+    })
+
+    it('tells the user about Shift+Enter, which is otherwise undiscoverable', () => {
+      useAppStore.setState({ commentComposerOpen: true })
+      render(<CommentComposer onAddComment={vi.fn()} />)
+
+      expect(screen.getByRole('textbox', { name: 'Comment text' })).toHaveAttribute(
+        'placeholder',
+        expect.stringContaining('Shift+Enter')
+      )
+    })
+  })
+
   it('Cancel closes without submitting and clears the typed text', async () => {
     useAppStore.setState({ commentComposerOpen: true })
     const onAddComment = vi.fn()

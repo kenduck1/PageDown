@@ -39,7 +39,17 @@ function EditorComments({
             <span className="block truncate text-11-5 italic text-text-tertiary">
               &quot;{comment.matchedText || '(empty span)'}&quot;
             </span>
-            <span className="block text-12-5 text-text-primary">{comment.text}</span>
+            {/* `whitespace-pre-wrap` is load-bearing now that the composer
+                takes multi-line bodies (Shift+Enter): HTML collapses a run of
+                whitespace, so without it a two-paragraph comment renders as
+                one run-on line here -- the blank line between the paragraphs
+                disappears entirely and the two paragraphs fuse with a single
+                space. `break-words` covers the other half: this rail is a
+                216px column, so an unbroken long token (a URL, a file path)
+                would otherwise overflow it rather than wrap. */}
+            <span className="block whitespace-pre-wrap break-words text-12-5 text-text-primary">
+              {comment.text}
+            </span>
             <span className="block text-11 text-text-tertiary">{comment.author || 'You'}</span>
           </button>
           <button

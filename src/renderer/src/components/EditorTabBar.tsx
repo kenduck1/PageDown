@@ -1,8 +1,22 @@
-import { useRef } from 'react'
+import { useRef, useState } from 'react'
 import { useDocumentStore } from '../store/documentStore'
 // Moved out to lib/ when the window-close guard needed the identical label for
 // its "save the changes you made to <name>?" dialog -- see that module.
 import { tabLabel } from '../lib/tab-label'
+import { computeReorderIndex, isDropAfter } from '../lib/tab-reorder'
+
+// The ONLY dataTransfer type a tab drag carries, and deliberately a private
+// one -- no `text/plain`, no `text/uri-list`.
+//
+// That is not tidiness, it is what stops a tab dropped on the document from
+// typing itself into it. MilkdownEditor mounts a real ProseMirror drop handler
+// (drop-image.ts) that ignores a drag with no image File in it, at which point
+// ProseMirror's OWN default drop handling takes over -- and that reads
+// text/html then text/plain off the dataTransfer and inserts whatever it
+// finds. A drag advertising only a type nothing else recognises is inert
+// everywhere outside this component, and is also what lets the handlers below
+// tell a tab drag apart from a real file being dragged in from the OS.
+const TAB_DRAG_TYPE = 'application/x-pagedown-tab'
 
 // Per docs/design-handoff/README.md, "Editor -- shared chrome", item 2 ("Tab
 // bar") and the matching markup in docs/design-handoff/PageDown.dc.html
@@ -56,6 +70,15 @@ function EditorTabBar({ onRequestCloseTab }: EditorTabBarProps): React.JSX.Eleme
   // same one-query-not-N-refs convention useModalDialog.ts's focus trap
   // uses for its own focusable-descendant list).
   const tabListRef = useRef<HTMLDivElement>(null)
+  const reorderTab = useDocumentStore((state) => state.reorderTab)
+  // Which tab is being dragged, and where a drop would currently land. Both
+  // are PURELY presentational (a dimmed source tab, an insertion line) --
+  // nothing about the reorder itself reads them, so a state update that
+  // arrives late can only ever mis-paint a hint for a frame, never mis-move a
+  // tab. The authoritative dragged-tab id travels in the dataTransfer, which
+  // is what the drop handler actually reads.
+  const [draggingTabId, setDraggingTabId] = useState<string | null>(null)
+  const [dropHint, setDropHint] = useState<{ index: number; after: boolean } | null>(null)
 
   const handleClose = (tabId: string): void => {
     if (onRequestCloseTab) {
@@ -63,6 +86,91 @@ function EditorTabBar({ onRequestCloseTab }: EditorTabBarProps): React.JSX.Eleme
       return
     }
     closeTab(tabId)
+  }
+
+  // Moves real DOM focus onto the tab that ends up at `index` AFTER a reorder
+  // has been applied. Deliberately separate from -- not a replacement for --
+  // the synchronous querySelectorAll the plain arrow navigation below does:
+  // that one never changes the order, so the element at the target index is
+  // already the right one and focusing it synchronously is correct.
+  //
+  // A reorder is the opposite: `tabs` has moved, so the element sitting at
+  // `index` right now is still the PRE-move occupant, and focusing it
+  // synchronously would land on whatever the dragged tab swapped with.
+  // Deferring to a microtask fixes that by ordering, not by luck -- calling
+  // reorderTab() has already made Zustand notify React synchronously, so
+  // React's own sync-lane flush microtask is queued BEFORE this one, and
+  // microtasks run FIFO.
+  //
+  // Same fresh-query-not-a-ref-array reasoning as handleTabKeyDown's own
+  // comment below, and for the extra reason that a ref array would itself
+  // still be in pre-reorder order at this instant.
+  const focusTabAt = (index: number): void => {
+    queueMicrotask(() => {
+      const tabEls = tabListRef.current?.querySelectorAll<HTMLElement>('[role="tab"]')
+      tabEls?.[index]?.focus()
+    })
+  }
+
+  // ---------------------------------------------------------------------
+  // Drag to reorder
+  // ---------------------------------------------------------------------
+  //
+  // Native HTML5 drag and drop, not a pointer-event drag implementation:
+  // `tabs` is a short, single-row, same-window list, which is precisely the
+  // case native DnD handles well, and it comes with the OS drag image, the
+  // Escape-cancels-the-drag contract and the correct cursor for free. A
+  // pointermove-based reimplementation would have to recreate all three.
+  //
+  // Reordering deliberately does NOT switch to the dragged tab. A drag never
+  // fires `click`, so this is not something we have to suppress -- it is
+  // simply what the gesture means: rearranging the shelf is not the same
+  // action as picking a book off it, and stealing the active document
+  // mid-drag would swap the canvas out from under the user.
+  const handleDragStart = (event: React.DragEvent, tabId: string): void => {
+    event.dataTransfer.setData(TAB_DRAG_TYPE, tabId)
+    event.dataTransfer.effectAllowed = 'move'
+    setDraggingTabId(tabId)
+  }
+
+  const handleDragOver = (event: React.DragEvent, index: number): void => {
+    // A drag carrying anything else -- most plausibly a real image file being
+    // dragged in from the OS, which this app genuinely handles elsewhere
+    // (drop-image.ts) -- must fall through untouched rather than be silently
+    // eaten by the tab bar. Not calling preventDefault() is what refuses the
+    // drop, per the HTML drag-and-drop model.
+    if (!event.dataTransfer.types.includes(TAB_DRAG_TYPE)) return
+    event.preventDefault()
+    event.dataTransfer.dropEffect = 'move'
+    const rect = event.currentTarget.getBoundingClientRect()
+    setDropHint({ index, after: isDropAfter(event.clientX, rect.left, rect.width) })
+  }
+
+  const handleDrop = (event: React.DragEvent, overIndex: number): void => {
+    if (!event.dataTransfer.types.includes(TAB_DRAG_TYPE)) return
+    event.preventDefault()
+    // Read from the dataTransfer rather than from `draggingTabId`: this is the
+    // one value the whole operation turns on, and the dataTransfer is the
+    // drag's own authoritative carrier of it. (getData is readable in `drop`;
+    // it deliberately is not in `dragover`, which is why the hint above works
+    // off the type list alone.)
+    const tabId = event.dataTransfer.getData(TAB_DRAG_TYPE)
+    setDraggingTabId(null)
+    setDropHint(null)
+    if (!tabId) return
+    const fromIndex = tabs.findIndex((tab) => tab.id === tabId)
+    if (fromIndex === -1) return
+    const rect = event.currentTarget.getBoundingClientRect()
+    const after = isDropAfter(event.clientX, rect.left, rect.width)
+    reorderTab(tabId, computeReorderIndex(fromIndex, overIndex, after))
+  }
+
+  // Fires whether the drag ended in a drop, outside the bar, or via Escape --
+  // so this, not handleDrop alone, is what guarantees the visual state cannot
+  // get stuck mid-drag.
+  const handleDragEnd = (): void => {
+    setDraggingTabId(null)
+    setDropHint(null)
   }
 
   // Completes the roving-tabindex pattern this component only half-had:
@@ -91,6 +199,38 @@ function EditorTabBar({ onRequestCloseTab }: EditorTabBarProps): React.JSX.Eleme
 
     const currentIndex = tabs.findIndex((tab) => tab.id === tabId)
     if (currentIndex === -1) return
+
+    // KEYBOARD REORDERING, and yes it should exist: a drag-only reorder is
+    // unreachable for anyone who cannot operate a pointer, and this bar
+    // already has a complete keyboard model (roving tabindex + arrows) for the
+    // modifier to build on -- "arrows move focus, arrows + Cmd/Ctrl+Shift move
+    // the tab" is the most learnable mapping available, because the unmodified
+    // gesture is already right there.
+    //
+    // Cmd/Ctrl+Shift+Arrow specifically: checked against
+    // src/main/app-menu-template.ts's full accelerator list (read, not
+    // assumed) -- nothing there binds an arrow key at all, so this cannot be
+    // shadowed by a menu accelerator, which would win unconditionally if it
+    // existed. It also only ever fires with a TAB focused (this is the tab's
+    // own onKeyDown), so it cannot collide with the same chord's
+    // extend-selection meaning inside a text field.
+    //
+    // Clamped rather than wrapped, unlike the plain-arrow navigation below.
+    // Wrapping focus past the end is a convenience; wrapping a MOVE past the
+    // end would teleport a tab from one end of the bar to the other on a
+    // keystroke whose whole point is a one-step nudge.
+    if ((event.metaKey || event.ctrlKey) && event.shiftKey) {
+      const delta = event.key === 'ArrowRight' ? 1 : event.key === 'ArrowLeft' ? -1 : 0
+      if (delta === 0) return
+      event.preventDefault()
+      const destination = Math.min(Math.max(currentIndex + delta, 0), tabs.length - 1)
+      if (destination === currentIndex) return
+      reorderTab(tabId, destination)
+      // Focus follows the tab, not the position -- a user nudging a tab along
+      // must be able to press the chord again without re-finding it.
+      focusTabAt(destination)
+      return
+    }
 
     let targetIndex: number
     switch (event.key) {
@@ -136,9 +276,20 @@ function EditorTabBar({ onRequestCloseTab }: EditorTabBarProps): React.JSX.Eleme
       aria-label="Open documents"
       className="flex h-[38px] flex-none items-end gap-0.5 border-b border-border-chrome bg-chrome-light px-2.5"
     >
-      {tabs.map((tab) => {
+      {tabs.map((tab, index) => {
         const isActive = tab.id === activeTabId
         const label = tabLabel(tab.filePath)
+        // The insertion line. An INSET box-shadow rather than a real border or
+        // a spacer element on purpose: it paints inside the tab's existing
+        // box, so showing it cannot change any tab's width or position -- and
+        // a drop indicator that reflows the very bar you are aiming at would
+        // move the target out from under the pointer.
+        const dropEdge =
+          dropHint && dropHint.index === index
+            ? dropHint.after
+              ? 'shadow-[inset_-2px_0_0_0_var(--color-accent)]'
+              : 'shadow-[inset_2px_0_0_0_var(--color-accent)]'
+            : ''
         return (
           <div
             key={tab.id}
@@ -146,13 +297,26 @@ function EditorTabBar({ onRequestCloseTab }: EditorTabBarProps): React.JSX.Eleme
             aria-selected={isActive}
             aria-label={label}
             tabIndex={isActive ? 0 : -1}
+            draggable
+            onDragStart={(event) => handleDragStart(event, tab.id)}
+            onDragOver={(event) => handleDragOver(event, index)}
+            onDrop={(event) => handleDrop(event, index)}
+            onDragEnd={handleDragEnd}
             onClick={() => switchTab(tab.id)}
             onKeyDown={(event) => handleTabKeyDown(event, tab.id)}
-            className={
+            className={[
               isActive
                 ? 'group flex cursor-default items-center gap-2 rounded-t-md border border-border-chrome border-b-page bg-page pb-[9px] pl-3.5 pr-2.5 pt-2 text-12-5 text-text-primary'
-                : 'group flex cursor-pointer items-center gap-2 pb-[9px] pl-3.5 pr-2.5 pt-2 text-12-5 text-text-secondary'
-            }
+                : 'group flex cursor-pointer items-center gap-2 pb-[9px] pl-3.5 pr-2.5 pt-2 text-12-5 text-text-secondary',
+              // The tab being dragged stays in place and dims, rather than
+              // being removed from the row: pulling it out would reflow every
+              // other tab the instant the drag started, so the row the user is
+              // aiming into would no longer be the row they grabbed from.
+              tab.id === draggingTabId ? 'opacity-40' : '',
+              dropEdge
+            ]
+              .filter(Boolean)
+              .join(' ')}
           >
             {/* The unsaved-changes marker. This square was previously rendered
                 UNCONDITIONALLY (a decorative "kind tag" from the design
@@ -207,11 +371,25 @@ function EditorTabBar({ onRequestCloseTab }: EditorTabBarProps): React.JSX.Eleme
           </div>
         )
       })}
+      {/* `mb-[7px]`, NOT the `mt-[5px]` this used to carry. The old margin was
+          on the wrong side for the alignment this row actually uses, and was
+          therefore doing nothing at all: the tablist is `items-end`, which
+          aligns each item by the BOTTOM of its margin box, so a top margin
+          only extends the box upward and cannot move the button. The button
+          simply sat flush with the bottom of a 38px row while the tabs' own
+          labels sit `pb-[9px]` up from it -- so a 24px button bottom-aligned
+          against ~38px tabs landed visibly low.
+
+          The 7px is measured in the real built app, not guessed: before this
+          fix the first tab's label centred on y=57.63 and the button on y=65,
+          a 7.37px drop. Raising the button's bottom edge by 7px puts its
+          centre at 58.0 -- 0.37px from the label's, and 0.13px from the tab
+          box's own centre (58.13), i.e. inside half a pixel of both. */}
       <button
         type="button"
         aria-label="New tab"
         onClick={() => openTab(null, '')}
-        className="ml-1 mt-[5px] flex h-6 w-6 flex-none items-center justify-center rounded-sm text-text-secondary"
+        className="mb-[7px] ml-1 flex h-6 w-6 flex-none items-center justify-center rounded-sm text-text-secondary"
       >
         <svg
           width="14"

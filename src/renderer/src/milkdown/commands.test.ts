@@ -1,8 +1,10 @@
-import { describe, it, expect, afterEach } from 'vitest'
+import { describe, it, expect, afterEach, vi } from 'vitest'
 import { cleanup } from '@testing-library/react'
+import type { Editor } from '@milkdown/core'
 import { commandsCtx, editorViewCtx } from '@milkdown/core'
 import { getMarkdown, insert } from '@milkdown/utils'
 import { TextSelection } from '@milkdown/prose/state'
+import { splitBlock } from '@milkdown/prose/commands'
 import type { EditorView } from '@milkdown/prose/view'
 import { createTestEditor } from './test-editor'
 import {
@@ -18,6 +20,7 @@ import {
   isInsideTableCell
 } from './commands'
 import { EDITOR_SCHEMA_PLUGINS } from './plugins'
+import { extractComments } from '../lib/extractComments'
 
 afterEach(() => {
   cleanup()
@@ -110,6 +113,37 @@ describe('comment mark commands', () => {
     expect(output).toContain('plain')
     expect(output).toContain('<!--comment id="')
     expect(output).toContain('<!--/comment id="')
+  })
+
+  // The save/reload round trip for a MULTI-LINE comment body, driven through
+  // the real editor rather than the plugin in isolation: the editor serialises
+  // to markdown bytes (what a Save writes), and extractComments reads those
+  // bytes back exactly as the Comments sidebar does on the next open.
+  //
+  // Note what this does NOT change: the comment MARK still spans inline
+  // content within one block ("plain"), which is the design's real, deliberate
+  // scope boundary. Only the body is multi-line.
+  it('a multi-line comment BODY survives serialisation and is read back with its newlines', async () => {
+    const editor = await createTestEditor('Some plain text here.', PLUGINS)
+    const view = editor.action((ctx) => ctx.get(editorViewCtx)) as EditorView
+    view.dispatch(view.state.tr.setSelection(TextSelection.create(view.state.doc, 6, 11)))
+
+    const body = 'First paragraph.\n\nSecond paragraph, after a blank line.'
+    const applied = editor.action((ctx) =>
+      ctx.get(commandsCtx).call(addCommentCommand.key, { author: 'Kai', text: body })
+    )
+    expect(applied).toBe(true)
+
+    const saved = editor.action(getMarkdown())
+    // The marker itself stays ONE line no matter how many lines the body has
+    // -- base64 emits no newline -- which is what keeps the one-line marker
+    // regexes in comment-plugin.ts valid.
+    const markerLine = saved.split('\n').find((line) => line.includes('<!--comment id='))
+    expect(markerLine).toContain('<!--/comment id=')
+
+    const [reloaded] = extractComments(saved)
+    expect(reloaded.text).toBe(body)
+    expect(reloaded.matchedText).toBe('plain')
   })
 
   it('addCommentCommand refuses an empty selection', async () => {
@@ -397,5 +431,172 @@ describe('isInsideTableCell', () => {
     view.dispatch(view.state.tr.setSelection(TextSelection.create(view.state.doc, cellTextPos!)))
     const result = editor.action((ctx) => isInsideTableCell(ctx, view.state))
     expect(result).toBe(true)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Undo grouping (historyProse's newGroupDelay + historyGroupingProse)
+// ---------------------------------------------------------------------------
+//
+// The reported bug was "undo is choppy and sometimes undoes too much", which
+// is one bug, not two: with `history()`'s defaults, grouping is purely
+// time-based (`newGroupDelay: 500`), so how much one Cmd+Z removes is a
+// function of TYPING SPEED and nothing else. These tests pin the property the
+// fix is actually for -- that the number of undos to clear a sentence is the
+// same whether it was typed quickly or slowly, and that it lands on word-ish
+// units either way.
+//
+// Only `Date` is faked, never `setTimeout`: prosemirror-history reads
+// `tr.time`, which Transaction's constructor sets from `Date.now()` (read from
+// prosemirror-state's own source), so faking Date is exactly enough to control
+// grouping -- while Milkdown's own async editor construction still needs real
+// timers to resolve at all. `vi.useFakeTimers({ toFake: ['Date'] })` is what
+// gives one without the other.
+describe('undo grouping', () => {
+  const START = new Date('2026-08-11T09:00:00.000Z')
+
+  // Types one character per transaction, exactly like real keystrokes do
+  // (each keypress is its own transaction carrying a one-character
+  // ReplaceStep). `msBetweenKeystrokes` advances only the fake clock, so a
+  // "slow" run is deterministic rather than a real wall-clock sleep.
+  //
+  // Dispatching transactions directly rather than firing key events is
+  // forced, not preferred: this file's own historyKeymap comment records that
+  // a real keydown does not reach prosemirror-keymap under jsdom at all. The
+  // transaction shape is identical either way, which is what makes this a
+  // faithful proxy for the thing under test (grouping is decided from
+  // transactions, never from events).
+  function type(view: EditorView, text: string, msBetweenKeystrokes = 0): void {
+    for (const ch of text) {
+      if (msBetweenKeystrokes > 0) vi.setSystemTime(new Date(Date.now() + msBetweenKeystrokes))
+      view.dispatch(view.state.tr.insertText(ch))
+    }
+  }
+
+  // How many Cmd+Z presses it takes to get back to an empty document --
+  // literally the user-visible quantity the bug report is about. Bounded so a
+  // regression fails with a real number instead of hanging.
+  function undosToClear(editor: Editor, view: EditorView): number {
+    let count = 0
+    while (view.state.doc.textContent !== '' && count < 60) {
+      editor.action((ctx) => ctx.get(commandsCtx).call(undoCommand.key))
+      count++
+    }
+    return count
+  }
+
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  async function newEditor(): Promise<{ editor: Editor; view: EditorView }> {
+    const editor = await createTestEditor('', EDITOR_COMMAND_PLUGINS)
+    const view = editor.action((ctx) => ctx.get(editorViewCtx)) as EditorView
+    return { editor, view }
+  }
+
+  it('a four-word sentence takes exactly four undos when typed FAST', async () => {
+    const { editor, view } = await newEditor()
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(START)
+
+    // Zero delay between keystrokes: every character lands inside
+    // newGroupDelay, so time-based grouping alone would merge the entire
+    // sentence into ONE undo step (which is exactly the "undoes too much"
+    // half of the report). The word boundaries are what split it.
+    type(view, 'The quick brown fox.')
+    expect(view.state.doc.textContent).toBe('The quick brown fox.')
+
+    expect(undosToClear(editor, view)).toBe(4)
+  })
+
+  it('the SAME sentence takes exactly four undos when typed SLOWLY, too', async () => {
+    const { editor, view } = await newEditor()
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(START)
+
+    // 600ms per keystroke is past the OLD 500ms newGroupDelay, so before this
+    // fix this same sentence took one undo per CHARACTER (20 of them) -- the
+    // "choppy" half of the report, from the same defaults that produced the
+    // "undoes too much" half above. Same count as the fast run is the whole
+    // point: undo steps are now a property of the text, not of the typist.
+    type(view, 'The quick brown fox.', 600)
+
+    expect(undosToClear(editor, view)).toBe(4)
+  })
+
+  it('one undo removes exactly the last word, leaving the rest intact', async () => {
+    const { editor, view } = await newEditor()
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(START)
+    type(view, 'alpha beta gamma')
+
+    editor.action((ctx) => ctx.get(commandsCtx).call(undoCommand.key))
+
+    // The boundary character travels with the word it TERMINATES, so the
+    // space after "beta" survives -- the same thing Cmd+Backspace does, and
+    // the reason historyGroupingProse closes the group AFTER the boundary
+    // rather than before it.
+    expect(view.state.doc.textContent).toBe('alpha beta ')
+  })
+
+  it('an apostrophe does not split a word ("don\'t" stays one undo step)', async () => {
+    const { editor, view } = await newEditor()
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(START)
+
+    // Without the NOT_A_BOUNDARY carve-out, \p{P} would match the apostrophe
+    // and make this THREE steps ("don" / "'t " / "stop") -- reintroducing
+    // exactly the choppiness this change removes, in one of the commonest
+    // words in English prose.
+    type(view, "don't stop")
+
+    expect(undosToClear(editor, view)).toBe(2)
+  })
+
+  it('pressing Enter is a boundary, so a second line is its own undo step', async () => {
+    const { editor, view } = await newEditor()
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(START)
+
+    type(view, 'one')
+    // A real block split, the same transaction Enter produces. It carries no
+    // text at all -- insertedTextOf reads it as "\n" purely because
+    // Fragment.textBetween emits the block separator between the two
+    // textblocks the split creates, which is what makes Enter a boundary with
+    // no special case of its own.
+    splitBlock(view.state, view.dispatch)
+    type(view, 'two')
+
+    expect(undosToClear(editor, view)).toBe(2)
+  })
+
+  it('a long pause mid-word still splits, so elapsed time remains a real backstop', async () => {
+    const { editor, view } = await newEditor()
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(START)
+
+    type(view, 'hel')
+    // Past the raised 2000ms newGroupDelay: nothing about this is a word
+    // boundary, so if time had been removed as a grouping input entirely this
+    // would be a single step.
+    vi.setSystemTime(new Date(Date.now() + 5000))
+    type(view, 'lo world')
+
+    // "hel" | "lo " | "world"
+    expect(undosToClear(editor, view)).toBe(3)
+  })
+
+  it('redo still walks back up the same groups (Undo/Redo stay symmetric)', async () => {
+    const { editor, view } = await newEditor()
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(START)
+    type(view, 'alpha beta')
+
+    editor.action((ctx) => ctx.get(commandsCtx).call(undoCommand.key))
+    expect(view.state.doc.textContent).toBe('alpha ')
+
+    editor.action((ctx) => ctx.get(commandsCtx).call(redoCommand.key))
+    expect(view.state.doc.textContent).toBe('alpha beta')
   })
 })
