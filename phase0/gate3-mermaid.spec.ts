@@ -608,6 +608,192 @@ test('Gate 3: the Mermaid label font is a real bundled face, loaded before rende
   }
 })
 
+// design:97's content-addressed render cache, and the cross-document
+// height-inheritance bug that keying retained sizes by POSITION caused.
+//
+// Two halves, in one run on ONE long-lived harness (which is what Split mode
+// actually is), because each half is the other's anti-vacuity control:
+//
+//   1. THE CACHE IS REAL. Proven by CSP style-src violation count, not by a
+//      timer and not by an instrumentation counter this app would otherwise
+//      have no reason to expose. Mermaid's own internal d3 painting logs a
+//      large, reproducible number of "Applying inline style violates..."
+//      violations on every mermaid.render() call, and nothing else in a
+//      render pass does (see resources/pagination-render/index.ts's DOMParser
+//      comment for why they exist and are unavoidable) — so that count IS a
+//      behavioural fingerprint of whether Mermaid ran. Measured against the
+//      3-diagram corpus before the cache existed: two byte-identical sends
+//      logged 970 violations EACH. A wall-clock assertion was rejected as the
+//      primary signal because it is load-dependent and this suite's own
+//      documented environmental flake lives on exactly that axis.
+//
+//   2. RETENTION STILL WORKS, AND ONLY WITHIN ONE DOCUMENT. design:107 wants
+//      a broken diagram's placeholder to keep the last known-good height so
+//      page counts don't thrash mid-typing. CLAUDE.md recorded the cost of
+//      doing that positionally: "on a long-lived harness a broken diagram can
+//      inherit the height of a DIFFERENT document's diagram that happened to
+//      sit at the same index". Asserting only that retention works would pass
+//      against the old buggy code; asserting only that cross-document
+//      inheritance is gone would pass against code that simply deleted
+//      retention. Both are asserted, against two documents whose diagram
+//      heights are deliberately far apart so the two outcomes cannot be
+//      confused for each other.
+//
+// The retained size is a min-height FLOOR on the placeholder, so a
+// cross-document inheritance shows up as a placeholder inflated to the other
+// document's diagram height — which is what the numbers below discriminate.
+const TALL_DIAGRAM = `flowchart TD
+  A[Alpha stage one] --> B[Alpha stage two]
+  B --> C[Alpha stage three]
+  C --> D[Alpha stage four]
+  D --> E[Alpha stage five]
+  E --> F[Alpha stage six]`
+
+const SHORT_DIAGRAM = `flowchart TD
+  X[Beta] --> Y[Gamma]`
+
+// Document B's own half-typed edit of SHORT_DIAGRAM — an unterminated node
+// label, the same shape as BROKEN_DIAGRAM further down. Declared separately
+// rather than reusing that constant purely for ordering (it is defined below
+// this test), and it should be a distinct string anyway: this is document B's
+// content, not the other fixture's.
+const SHORT_DIAGRAM_BROKEN = `flowchart TD
+  X[Beta] --> Y[Gamma`
+
+function singleDiagramDocument(heading: string, prose: string, diagram: string): string {
+  return [`# ${heading}`, '', prose, '', '```mermaid', diagram, '```', ''].join('\n')
+}
+
+// DOC_A and DOC_B differ in every component of the slot scope
+// (resources/pagination-render/index.ts's diagramSlotScope): different
+// heading, different prose length, different anchor text. DOC_B_VALID and
+// DOC_B_BROKEN differ ONLY inside the fence, which is precisely the edit
+// scope is designed to be invariant under — that is what makes half 2's two
+// assertions test opposite things rather than the same thing twice.
+const DOC_A = singleDiagramDocument(
+  'Alpha Document',
+  'Prose that belongs to the first document only.',
+  TALL_DIAGRAM
+)
+const DOC_B_VALID = singleDiagramDocument('Beta', 'Second document.', SHORT_DIAGRAM)
+const DOC_B_BROKEN = singleDiagramDocument('Beta', 'Second document.', SHORT_DIAGRAM_BROKEN)
+
+test('Gate 3: an unchanged diagram is served from the content-addressed cache, and a retained placeholder size never crosses documents', async () => {
+  const { app, close } = await launchIsolatedApp(['.'])
+
+  try {
+    const docA = markdownToHtml(DOC_A).html
+    const docBValid = markdownToHtml(DOC_B_VALID).html
+    const docBBroken = markdownToHtml(DOC_B_BROKEN).html
+
+    const result = await app.evaluate(
+      async ({ BaseWindow }, { docA, docBValid, docBBroken, geometry, documentStyle }) => {
+        const { createPaginationHarness } = (
+          globalThis as unknown as {
+            __pagedownPhase0: {
+              createPaginationHarness: (typeof import('../src/main/pagination-window'))['createPaginationHarness']
+            }
+          }
+        ).__pagedownPhase0
+        const win = new BaseWindow({ show: false })
+        const harness = await createPaginationHarness(win)
+
+        const consoleMessages: string[] = []
+        harness.view.webContents.on('console-message', (event) => {
+          consoleMessages.push(event.message)
+        })
+
+        // Sends one document and reports both its result and the CSP
+        // violations attributable to THAT send specifically (snapshot-and-diff,
+        // the same isolation technique the injection test above uses, and for
+        // the same reason: the absolute count is dominated by noise from
+        // earlier sends on this same long-lived harness).
+        const send = async (
+          html: string
+        ): Promise<{
+          height: number
+          pageCount: number
+          violations: number
+          boxes: DiagramBox[]
+        }> => {
+          const before = consoleMessages.length
+          const r = await harness.sendDocument(html, geometry, documentStyle)
+          const violations = consoleMessages
+            .slice(before)
+            .filter((m) => /content security policy|refused to/i.test(m)).length
+          return {
+            height: r.diagramBoxes[0]?.height ?? 0,
+            pageCount: r.pageCount,
+            violations,
+            boxes: r.diagramBoxes
+          }
+        }
+
+        const aFirst = await send(docA)
+        // Immediately re-sent, byte-identical: the cache-hit case.
+        const aRepeat = await send(docA)
+
+        // A DIFFERENT document whose only diagram is broken, sent with no
+        // valid render of ITS OWN ever having happened on this harness. The
+        // only height available to inherit is document A's.
+        const bBrokenCold = await send(docBBroken)
+
+        // Now give document B a real known-good render, then break it — the
+        // genuine design:107 mid-typing case.
+        const bValid = await send(docBValid)
+        const bBrokenWarm = await send(docBBroken)
+
+        return { aFirst, aRepeat, bBrokenCold, bValid, bBrokenWarm }
+      },
+      { docA, docBValid, docBBroken, geometry: LETTER_GEOMETRY, documentStyle: DEFAULT_STYLE }
+    )
+
+    console.log('Gate 3 cache + cross-document retention:', JSON.stringify(result, null, 2))
+
+    // --- Half 1: the cache is real -----------------------------------------
+    // The first render of document A must genuinely run Mermaid...
+    expect(
+      result.aFirst.violations,
+      'the first render of a diagram must actually run mermaid.render()'
+    ).toBeGreaterThan(0)
+    // ...and the byte-identical repeat must not. Compared as a fraction of
+    // the first send rather than to an absolute number, because the absolute
+    // count is a Mermaid implementation detail this app does not control (the
+    // corpus test above deliberately refuses to pin its own 972 for the same
+    // reason). A cache miss would reproduce essentially the whole count.
+    expect(
+      result.aRepeat.violations,
+      'a byte-identical re-render must be served from the cache, not re-rendered'
+    ).toBeLessThan(result.aFirst.violations / 4)
+
+    // A cache that returns something subtly different from what an uncached
+    // render would have produced is worse than no cache: page geometry here is
+    // pinned to fractional pixels everywhere else in this suite.
+    expect(result.aRepeat.boxes).toEqual(result.aFirst.boxes)
+    expect(result.aRepeat.pageCount).toBe(result.aFirst.pageCount)
+
+    // --- Half 2: retention is scoped to one document -----------------------
+    // The two documents' diagrams must be far enough apart for the two
+    // assertions below to be distinguishable at all — asserted, not assumed,
+    // so this test can never silently degrade into comparing two equal
+    // numbers.
+    expect(result.aFirst.height).toBeGreaterThan(result.bValid.height * 1.5)
+
+    // THE BUG. Document B's placeholder must not be inflated to document A's
+    // diagram height. With the old positional key it inherited exactly that.
+    expect(
+      result.bBrokenCold.height,
+      "a broken diagram must not inherit a different document's diagram height"
+    ).toBeLessThan(result.aFirst.height)
+
+    // ...and the feature that key was protecting still works: once document B
+    // has its own known-good render, breaking it retains B's OWN height.
+    expect(result.bBrokenWarm.height).toBeCloseTo(result.bValid.height, 0)
+  } finally {
+    await close()
+  }
+})
+
 // A3 (docs/superpowers/plans/2026-08-09-design-doc-gap-audit.md): one
 // malformed Mermaid diagram used to abort pagination of the ENTIRE document.
 // `await renderMermaidToSvg(...)` was unguarded inside the per-diagram loop

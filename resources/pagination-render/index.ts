@@ -952,32 +952,188 @@ function ensureMermaidStylesInjected(): void {
   mermaidStylesInjected = true
 }
 
-// The last SUCCESSFULLY RENDERED, really-laid-out size of each diagram,
-// keyed by its positional element id and surviving across render passes for
-// this render context's lifetime. Written only by rememberGoodDiagramSizes
-// (post-pagination, from real boxes — not from the SVG's own viewBox, which
-// is its UNCLAMPED natural size and therefore wrong for any diagram wide
-// enough to hit the `max-width: 100%` clamp), read only by the error
-// placeholder below.
+// --- design:97's content-addressed diagram render cache ---------------------
 //
-// This is the design doc's "render an error placeholder that retains the
-// last known-good diagram's dimensions rather than collapsing to a different
-// size, to avoid pagination thrashing while the user is mid-edit"
-// (design:107). Position is the right identity for exactly that case: a
-// diagram being edited into temporary invalidity is the same block, at the
-// same index, as the one that rendered a moment ago.
+// design:97: "render once per diagram, keyed by a content hash (+ theme +
+// page config), and reuse the resulting fixed-dimension SVG verbatim ...
+// Cache by content hash so an unchanged diagram is never re-rendered on
+// subsequent re-pagination passes." Unbuilt until this change:
+// renderMermaidDiagrams re-queried and unconditionally re-rendered every
+// block on every pass, which on Split mode's long-lived harness means every
+// diagram re-renders on every settled edit — directly on the latency path
+// that mode's own disclosed ceiling already lives on.
 //
-// Two honest limitations, neither of which this is worth building the design
-// doc's full content-hash render cache (design:97, still unbuilt) to fix:
-// position is NOT a document-independent identity, so on a long-lived
-// harness (Split mode's persistent WebContentsView, shared across tab
-// switches) a broken diagram can inherit the height of a DIFFERENT
-// document's diagram that happened to sit at the same index; and only the
-// height is retained (as a min-height), since the wrapper is a full-width
-// block either way and height is the only axis pagination depends on. The
-// cost of both is bounded to the size of an error placeholder — never to
-// real content.
-const lastGoodDiagramSizes = new Map<string, { width: number; height: number }>()
+// MEASURED before building it, rather than assumed: two byte-identical
+// sendDocument() calls on ONE harness against phase0/corpus/mermaid-
+// diagrams.md logged 970 CSP style-src violations EACH. That count is a
+// direct behavioural fingerprint of Mermaid's own internal d3 painting (see
+// renderMermaidDiagrams's DOMParser comment for why those violations exist
+// and are unavoidable), so it is positive proof the second render genuinely
+// re-ran mermaid.render() for all three diagrams rather than reusing
+// anything. Gate 3 now asserts the post-cache version of exactly that
+// number.
+interface MermaidCacheEntry {
+  // The rendered SVG AFTER hoistInlineStyleAttributes has already stripped
+  // every `style=""` attribute out of it, so re-importing it into this live,
+  // CSP-governed document can never re-trigger the style-src violations that
+  // hoisting exists to prevent.
+  svgHtml: string
+  hoistedCss: string
+  // Characters, not bytes — this is a UTF-16 string, so real memory is
+  // roughly double. Used for the byte-axis bound below.
+  sizeChars: number
+  // The last SUCCESSFULLY RENDERED, really-laid-out size of THIS diagram
+  // (this exact source, at this style/geometry). Written only by
+  // rememberGoodDiagramSizes, post-pagination, from real measured boxes —
+  // never from the SVG's own viewBox, which is its UNCLAMPED natural size and
+  // therefore wrong for any diagram wide enough to hit `max-width: 100%`.
+  lastGoodSize?: { width: number; height: number }
+}
+
+// KEY = elementId + styleKey + the diagram's exact source text. Three
+// deliberate choices, each of which a "simplification" would break:
+//
+// (1) The SOURCE TEXT ITSELF, never a hash of it. This context renders
+//     UNTRUSTED document content, and a short non-cryptographic hash is a
+//     forgeable collision: a document could carry two diagrams whose hashes
+//     collide and get one rendered in the other's place. The entry payload
+//     (~15KB of SVG markup for the corpus's small flowchart, measured) dwarfs
+//     the key either way, so hashing would buy no memory worth the risk, and
+//     a cryptographic hash would mean growing this bundle's dependency
+//     surface — the one thing this context must not do.
+// (2) elementId, because MERMAID BAKES IT INTO THE OUTPUT. Measured directly
+//     rather than assumed: the corpus's small flowchart renders descendant
+//     ids `pagedown-mermaid-0_flowchart-v2-pointEnd` (plus five more) and a
+//     real `url(#pagedown-mermaid-0_flowchart-v2-pointEnd)` marker reference.
+//     Reusing one slot's cached markup at a DIFFERENT slot would therefore
+//     duplicate those ids within one document and let two diagrams' arrowhead
+//     markers resolve against each other's <defs>. The only cost of including
+//     it is that the same diagram appearing twice in one document renders
+//     twice — strictly better than an id collision.
+// (3) styleKey = the WHOLE DocumentStyle plus the content box, deliberately a
+//     SUPERSET of what can currently matter. Today renderMermaidToSvg pins
+//     one global Mermaid config, so the MARKUP depends on neither; but the
+//     `lastGoodSize` recorded on this entry depends on the `max-width: 100%`
+//     clamp (contentWidthPx), and design:97 names theme and page config
+//     explicitly. A superset key can only ever cost an extra miss; a subset
+//     key can serve a stale render, which is the failure that actually hurts.
+function mermaidStyleKey(geometry: PageGeometry, style: DocumentStyle): string {
+  // JSON.stringify key order is stable here because both objects are built by
+  // resolveDocumentStyle/computePageGeometry and arrive over one JSON round
+  // trip that preserves it -- and a reordering would only ever cost a miss.
+  return `${geometry.contentWidthPx}x${geometry.contentHeightPx}|${JSON.stringify(style)}`
+}
+
+// Bounded on BOTH axes, and that is not belt-and-braces: an entry count alone
+// bounds nothing when one entry can be an enormous diagram's markup (the same
+// lesson the renderer's own local-image cache already records), while a byte
+// budget alone would let thousands of tiny diagrams accumulate Map overhead.
+// The per-entry ceiling additionally stops one pathological diagram from
+// evicting the entire working set to store itself.
+const MERMAID_CACHE_MAX_ENTRIES = 48
+const MERMAID_CACHE_MAX_CHARS = 4_000_000
+const MERMAID_CACHE_MAX_ENTRY_CHARS = 512_000
+
+// Insertion-ordered Map used as a real LRU: `mermaidCacheGet` re-inserts on
+// every hit so eviction takes the genuinely least-recently-used entry. A
+// plain FIFO would be actively wrong here — the diagram a user is editing is
+// the one touched most often, and a FIFO would evict it first.
+const mermaidRenderCache = new Map<string, MermaidCacheEntry>()
+let mermaidCacheChars = 0
+
+function mermaidCacheGet(key: string): MermaidCacheEntry | undefined {
+  const entry = mermaidRenderCache.get(key)
+  if (!entry) return undefined
+  mermaidRenderCache.delete(key)
+  mermaidRenderCache.set(key, entry)
+  return entry
+}
+
+function mermaidCachePut(key: string, entry: MermaidCacheEntry): void {
+  if (entry.sizeChars > MERMAID_CACHE_MAX_ENTRY_CHARS) return
+  const existing = mermaidRenderCache.get(key)
+  if (existing) mermaidCacheChars -= existing.sizeChars
+  mermaidRenderCache.set(key, entry)
+  mermaidCacheChars += entry.sizeChars
+  while (
+    mermaidRenderCache.size > MERMAID_CACHE_MAX_ENTRIES ||
+    mermaidCacheChars > MERMAID_CACHE_MAX_CHARS
+  ) {
+    const oldest = mermaidRenderCache.keys().next()
+    if (oldest.done) break
+    const evicted = mermaidRenderCache.get(oldest.value)
+    mermaidRenderCache.delete(oldest.value)
+    if (evicted) mermaidCacheChars -= evicted.sizeChars
+  }
+}
+
+// Which cache entry backs each diagram slot of the PREVIOUS pass, plus the
+// scope that pass belonged to. This is what design:107's retained error
+// placeholder size ("retains the last known-good diagram's dimensions rather
+// than collapsing to a different size, to avoid pagination thrashing while
+// the user is mid-edit") reads through, and it deliberately does NOT reuse
+// the content-addressed cache key for the lookup.
+//
+// WHY NOT, since everything else here is content-addressed: at the moment a
+// diagram breaks mid-typing its SOURCE HAS JUST CHANGED, so a content key
+// finds nothing by construction. The thing that must be stable across that
+// specific edit is the SLOT, not the content — which is exactly what the old
+// positional `lastGoodDiagramSizes` map got right, and exactly why its
+// document-independence was the bug (CLAUDE.md: "on a long-lived harness a
+// broken diagram can inherit the height of a DIFFERENT document's diagram
+// that happened to sit at the same index").
+//
+// `scope` is what closes that hole: it is a fingerprint of the document
+// AROUND the diagrams, so it is invariant under the one edit that has to keep
+// working (typing inside a ```mermaid fence changes no prose) and different
+// for two different documents. A scope mismatch means "this is not the
+// document that pass belonged to", and no size is inherited at all.
+interface MermaidPassLineage {
+  scope: string
+  entryByIndex: Map<number, MermaidCacheEntry>
+}
+let previousPassLineage: MermaidPassLineage | undefined
+
+// Rebuilt every pass: which cache entry each rendered elementId came from, so
+// rememberGoodDiagramSizes can write the measured size back onto the right
+// content-addressed entry after Paged.js has laid the document out.
+const currentPassEntryByElementId = new Map<string, MermaidCacheEntry>()
+
+// The document fingerprint described above. Three components, each carrying
+// its own weight:
+//   - the style key, so a theme/geometry change never inherits a size
+//     measured under the old one;
+//   - the diagram COUNT and the length of all NON-diagram text, both of which
+//     are invariant under editing inside a fence and both of which move when
+//     the surrounding document does;
+//   - each diagram's ANCHOR, the text of the element immediately before its
+//     <pre> (in practice its heading), capped so a pathological document
+//     cannot make this string grow without bound.
+// Deliberately NOT a hash of the whole document HTML: that changes on every
+// keystroke anywhere, which would break retention for the mid-typing case
+// this exists to serve. Deliberately NOT the diagram sources themselves,
+// for the same reason. The honest residual is that two documents agreeing on
+// all three components would still cross-inherit; the consequence is bounded
+// to one error placeholder's min-height floor, never to real content.
+function diagramSlotScope(
+  container: DocumentFragment,
+  codeBlocks: HTMLElement[],
+  styleKey: string
+): string {
+  let diagramChars = 0
+  const anchors: string[] = []
+  for (const code of codeBlocks) {
+    diagramChars += (code.textContent ?? '').length
+    const anchorText = code.parentElement?.previousElementSibling?.textContent ?? ''
+    anchors.push(anchorText.trim().slice(0, 120))
+  }
+  const nonDiagramChars = (container.textContent ?? '').length - diagramChars
+  // Control-character separators rather than a comma or a space: every
+  // component here can legitimately contain both (styleKey embeds JSON,
+  // anchors embed arbitrary heading text), and an ambiguous join would let
+  // two genuinely different documents collapse onto one identical scope.
+  return [styleKey, codeBlocks.length, nonDiagramChars, anchors.join('\u0001')].join('\u0000')
+}
 
 let mermaidLabelFontRegistered = false
 
@@ -1139,6 +1295,13 @@ function applyMermaidErrorSizes(rules: string[]): void {
 // Skips error placeholders explicitly: their box IS the retained size (or the
 // size of an error message), so recording it would let one failure's own
 // dimensions masquerade as a known-good measurement forever after.
+//
+// Writes onto the CONTENT-ADDRESSED cache entry this pass actually used for
+// that slot, via currentPassEntryByElementId, rather than into a map keyed by
+// the positional element id. That indirection is the whole point: the size
+// now belongs to "this diagram source, at this style and geometry" and can
+// never be handed to a different document's diagram that happens to sit at
+// the same index.
 function rememberGoodDiagramSizes(root: HTMLElement): void {
   const wrappers = Array.from(
     root.querySelectorAll(`.${MERMAID_DIAGRAM_CLASS}:not(.${MERMAID_ERROR_CLASS})`)
@@ -1147,9 +1310,11 @@ function rememberGoodDiagramSizes(root: HTMLElement): void {
     const id = wrapper.getAttribute('data-mermaid-diagram-id')
     const svg = wrapper.querySelector('svg')
     if (!id || !svg) continue
+    const entry = currentPassEntryByElementId.get(id)
+    if (!entry) continue
     const rect = svg.getBoundingClientRect()
     if (rect.width > 0 && rect.height > 0) {
-      lastGoodDiagramSizes.set(id, { width: rect.width, height: rect.height })
+      entry.lastGoodSize = { width: rect.width, height: rect.height }
     }
   }
 }
@@ -1231,6 +1396,33 @@ function buildMermaidErrorPlaceholder(
   return wrapper
 }
 
+// Turns a cache entry (fresh or reused) into a live, CSP-clean <svg> element
+// owned by THIS document. Shared by both the cache-hit and cache-miss paths —
+// see the call site for why a miss deliberately routes through here too.
+//
+// The parse target is a scratch DOMParser document rather than this page's
+// own, for the same reason the miss path's original parse was: a genuinely
+// separate Document has no CSP of its own. The stored markup is already
+// style-attribute-free, so this is belt-and-braces rather than load-bearing
+// here, but it keeps the two paths byte-identical.
+function instantiateDiagram(entry: MermaidCacheEntry, elementId: string): SVGElement {
+  const scratchDoc = new DOMParser().parseFromString(entry.svgHtml, 'text/html')
+  const scratchSvgElement = scratchDoc.body.firstElementChild as SVGElement | null
+  if (!scratchSvgElement) {
+    throw new Error(`Cached Mermaid markup for diagram "${elementId}" is not an <svg> element`)
+  }
+  const svgElement = document.importNode(scratchSvgElement, true) as SVGElement
+  // reattachNoncedStyles must run AFTER import, not before: it creates the
+  // replacement <style> via THIS page's own `document.createElement` (the only
+  // one the bootstrap nonce shim at the top of this file patches) so the fresh
+  // element actually receives a real, matching nonce — a <style> created via
+  // `scratchDoc.createElement` would carry no nonce at all, since the shim
+  // never touches the scratch document.
+  reattachNoncedStyles(svgElement, entry.hoistedCss)
+  fitSvgToNaturalSize(svgElement)
+  return svgElement
+}
+
 // hoistInlineStyleAttributes/reattachNoncedStyles used to live here as
 // Mermaid-specific, SVGElement-typed functions. The math-equations
 // sub-project generalized and extracted them to nonce-style-hoisting.ts
@@ -1254,11 +1446,25 @@ function buildMermaidErrorPlaceholder(
 // honored by CSP, by design, which is exactly why Paged.js's own Polisher
 // styles are created via `document.createElement` in the first place; see
 // this file's bootstrap comment at the top).
-async function renderMermaidDiagrams(container: DocumentFragment): Promise<void> {
+async function renderMermaidDiagrams(
+  container: DocumentFragment,
+  geometry: PageGeometry,
+  documentStyle: DocumentStyle
+): Promise<void> {
   const codeBlocks = Array.from(
     container.querySelectorAll('pre > code.language-mermaid')
   ) as HTMLElement[]
-  if (codeBlocks.length === 0) return
+  // Cleared BEFORE the early return, not after it: rememberGoodDiagramSizes
+  // runs unconditionally on every pass, and leaving a previous pass's map in
+  // place would let a diagram-free render write sizes onto stale entries.
+  currentPassEntryByElementId.clear()
+  if (codeBlocks.length === 0) {
+    // A document with no diagrams is not a continuation of one that had them,
+    // so the lineage is dropped rather than carried across. Fail-closed: the
+    // cost is one lost retained min-height, never a wrong one.
+    previousPassLineage = undefined
+    return
+  }
 
   // Per the design doc's resource-settling-gate ordering: layout-affecting
   // resources (fonts, images, diagrams) must be settled before anything
@@ -1316,10 +1522,23 @@ async function renderMermaidDiagrams(container: DocumentFragment): Promise<void>
   ensureMermaidStylesInjected()
 
   // Per-diagram retained-size rules for this pass only (see
-  // lastGoodDiagramSizes and applyMermaidErrorSizes below). Collected here
+  // previousPassLineage and applyMermaidErrorSizes below). Collected here
   // rather than written straight to the DOM so the whole set replaces the
   // previous pass's wholesale, with no accumulation.
   const errorSizeRules: string[] = []
+
+  const styleKey = mermaidStyleKey(geometry, documentStyle)
+  // Computed BEFORE the loop, which mutates `container` by replacing each
+  // <pre> with a rendered wrapper -- the anchors this reads (each diagram's
+  // preceding sibling) and the non-diagram text length would both be measured
+  // against a partially-rewritten document otherwise.
+  const slotScope = diagramSlotScope(container, codeBlocks, styleKey)
+  const lineage = new Map<number, MermaidCacheEntry>()
+  // Only a lineage from the SAME document (see diagramSlotScope) may donate a
+  // retained size. This single comparison is what closes the cross-document
+  // height-inheritance bug the positional map had.
+  const inheritableLineage =
+    previousPassLineage?.scope === slotScope ? previousPassLineage.entryByIndex : undefined
 
   for (let i = 0; i < codeBlocks.length; i++) {
     const code = codeBlocks[i]
@@ -1338,74 +1557,98 @@ async function renderMermaidDiagrams(container: DocumentFragment): Promise<void>
     // Mirrors the per-equation guard renderMathPlaceholder already has in
     // katex-render.ts, for the identical reason.
     try {
-      const svgMarkup = await renderMermaidToSvg(diagramSource, elementId)
+      // design:97's cache lookup. A hit skips mermaid.render() entirely --
+      // which is where essentially all of this pass's cost AND all of its
+      // unavoidable CSP style-src console noise comes from (see the DOMParser
+      // comment below) -- so on Split mode's long-lived harness an unchanged
+      // diagram costs a parse and an import instead of a full re-render on
+      // every settled edit.
+      const cacheKey = `${elementId}\u0000${styleKey}\u0000${diagramSource}`
+      let entry = mermaidCacheGet(cacheKey)
 
-      // Parsed via a SEPARATE DOMParser document, not `element.innerHTML =`
-      // on a node already living in THIS page. Investigated, not assumed: a
-      // real Gate 3 run against this app's 3-diagram corpus logs 972 real
-      // "Applying inline style violates..." console violations — an exact,
-      // reproducible count across repeated runs, NOT a random/flaky number —
-      // regardless of whether this parsing step uses a live-document element
-      // or a DOMParser scratch document (measured both ways, identical counts
-      // either way) — meaning essentially ALL of
-      // them come from EARLIER, inside `renderMermaidToSvg` itself: Mermaid's
-      // own internal rendering (see mermaidAPI.render() in
-      // node_modules/mermaid/dist/mermaid.core.mjs) draws the diagram using
-      // real d3 selections, appended live to this page's actual
-      // `document.body` (`appendDivSvgG(select("body"), ...)`), and d3's
-      // `.style(...)` calls set inline style properties directly — CSP
-      // evaluates and blocks each one, on the spot, as an unavoidable
-      // byproduct of Mermaid's implementation running under this app's strict,
-      // no-`unsafe-inline` `style-src`. No post-processing of the STRING
-      // `renderMermaidToSvg` eventually returns can prevent violations that
-      // already fired before that string existed — see this task's
-      // report/findings-doc entry for the fuller writeup and why this doesn't
-      // change Gate 3's sizing verdict (geometry comes from SVG attributes and
-      // the properly-nonced <style> block's font metrics, not from these
-      // blocked, paint-only per-element declarations).
-      //
-      // What THIS parsing choice actually still buys: Mermaid's OUTPUT STRING
-      // (even after its own DOMPurify.sanitize() pass under
-      // `securityLevel: 'strict'`) legitimately keeps plain `style="..."`
-      // attributes on individual shape elements (DOMPurify's default allowlist
-      // permits `style`, unlike `nonce` — confirmed by dumping the raw
-      // returned string). Parsing that string directly into a node owned by
-      // THIS page's live document, then removing those attributes a moment
-      // later (hoistInlineStyleAttributes below), still risks re-triggering
-      // the same class of violation for THIS app's own parsing step, on top of
-      // Mermaid's already-unavoidable internal ones. A `DOMParser` result
-      // document is a genuinely separate Document with no CSP of its own — the
-      // same mechanism DOMPurify itself relies on internally to sanitize
-      // untrusted markup without tripping the host page's policy — so doing
-      // the parse and all style-attribute stripping/hoisting there, and only
-      // importing the result into this page's live document via
-      // `document.importNode()` once it no longer carries any `style=""`
-      // attribute at all, keeps this app's OWN contribution to the violation
-      // count at zero, whatever Mermaid's internals do on their own.
-      const scratchDoc = new DOMParser().parseFromString(svgMarkup, 'text/html')
-      const scratchSvgElement = scratchDoc.body.firstElementChild as SVGElement | null
-      if (!scratchSvgElement) {
-        throw new Error(
-          `Mermaid render for diagram "${elementId}" did not produce an <svg> element`
-        )
+      if (!entry) {
+        const svgMarkup = await renderMermaidToSvg(diagramSource, elementId)
+
+        // Parsed via a SEPARATE DOMParser document, not `element.innerHTML =`
+        // on a node already living in THIS page. Investigated, not assumed: a
+        // real Gate 3 run against this app's 3-diagram corpus logs 972 real
+        // "Applying inline style violates..." console violations — an exact,
+        // reproducible count across repeated runs, NOT a random/flaky number —
+        // regardless of whether this parsing step uses a live-document element
+        // or a DOMParser scratch document (measured both ways, identical counts
+        // either way) — meaning essentially ALL of
+        // them come from EARLIER, inside `renderMermaidToSvg` itself: Mermaid's
+        // own internal rendering (see mermaidAPI.render() in
+        // node_modules/mermaid/dist/mermaid.core.mjs) draws the diagram using
+        // real d3 selections, appended live to this page's actual
+        // `document.body` (`appendDivSvgG(select("body"), ...)`), and d3's
+        // `.style(...)` calls set inline style properties directly — CSP
+        // evaluates and blocks each one, on the spot, as an unavoidable
+        // byproduct of Mermaid's implementation running under this app's strict,
+        // no-`unsafe-inline` `style-src`. No post-processing of the STRING
+        // `renderMermaidToSvg` eventually returns can prevent violations that
+        // already fired before that string existed — see this task's
+        // report/findings-doc entry for the fuller writeup and why this doesn't
+        // change Gate 3's sizing verdict (geometry comes from SVG attributes and
+        // the properly-nonced <style> block's font metrics, not from these
+        // blocked, paint-only per-element declarations).
+        //
+        // What THIS parsing choice actually still buys: Mermaid's OUTPUT STRING
+        // (even after its own DOMPurify.sanitize() pass under
+        // `securityLevel: 'strict'`) legitimately keeps plain `style="..."`
+        // attributes on individual shape elements (DOMPurify's default allowlist
+        // permits `style`, unlike `nonce` — confirmed by dumping the raw
+        // returned string). Parsing that string directly into a node owned by
+        // THIS page's live document, then removing those attributes a moment
+        // later (hoistInlineStyleAttributes below), still risks re-triggering
+        // the same class of violation for THIS app's own parsing step, on top of
+        // Mermaid's already-unavoidable internal ones. A `DOMParser` result
+        // document is a genuinely separate Document with no CSP of its own — the
+        // same mechanism DOMPurify itself relies on internally to sanitize
+        // untrusted markup without tripping the host page's policy — so doing
+        // the parse and all style-attribute stripping/hoisting there, and only
+        // importing the result into this page's live document via
+        // `document.importNode()` once it no longer carries any `style=""`
+        // attribute at all, keeps this app's OWN contribution to the violation
+        // count at zero, whatever Mermaid's internals do on their own.
+        const scratchDoc = new DOMParser().parseFromString(svgMarkup, 'text/html')
+        const scratchSvgElement = scratchDoc.body.firstElementChild as SVGElement | null
+        if (!scratchSvgElement) {
+          throw new Error(
+            `Mermaid render for diagram "${elementId}" did not produce an <svg> element`
+          )
+        }
+
+        // Hoisting runs here, on the scratch element, BEFORE import — order is
+        // load-bearing: it must remove every `style=""` attribute while the
+        // element is still in the CSP-free scratch document, so nothing is left
+        // to trigger a violation at the moment importNode below moves it into
+        // this page's own CSP-governed document.
+        //
+        // It is also why the CACHED form is captured here, after hoisting
+        // rather than before: the stored markup then carries no `style=""` at
+        // all, so a later cache hit re-importing it into this live document
+        // cannot reintroduce the very violations hoisting exists to remove.
+        // The synthetic `.pd-hoisted-style-N` class names frozen into it are
+        // safe to persist because that counter is module-level and strictly
+        // monotonic (nonce-style-hoisting.ts) — it never reissues a name, so a
+        // cached entry's rules can never collide with a later diagram's.
+        const hoistedCss = hoistInlineStyleAttributes(scratchSvgElement)
+        const svgHtml = scratchSvgElement.outerHTML
+        entry = { svgHtml, hoistedCss, sizeChars: svgHtml.length + hoistedCss.length }
+        mermaidCachePut(cacheKey, entry)
       }
 
-      // Hoisting runs here, on the scratch element, BEFORE import — order is
-      // load-bearing: it must remove every `style=""` attribute while the
-      // element is still in the CSP-free scratch document, so nothing is left
-      // to trigger a violation at the moment importNode below moves it into
-      // this page's own CSP-governed document.
-      const hoistedCss = hoistInlineStyleAttributes(scratchSvgElement)
-
-      const svgElement = document.importNode(scratchSvgElement, true) as SVGElement
-      // reattachNoncedStyles must run AFTER import, not before: it creates
-      // the replacement <style> via THIS page's own `document.createElement`
-      // (the only one the bootstrap nonce shim at the top of this file
-      // patches) so the fresh element actually receives a real, matching
-      // nonce — a <style> created via `scratchDoc.createElement` would carry
-      // no nonce at all, since the shim never touches the scratch document.
-      reattachNoncedStyles(svgElement, hoistedCss)
-      fitSvgToNaturalSize(svgElement)
+      // ONE instantiation path for both a cache hit and a cache miss, on
+      // purpose: a miss re-parses the markup it just produced rather than
+      // reusing the scratch element it already has in hand. That costs one
+      // extra parse of ~15KB (negligible beside a mermaid.render() call) and
+      // buys the property that a hit and a miss cannot produce different DOM
+      // — which matters because Gate 3 pins diagram geometry to fractional
+      // pixels, and a second, subtly different code path is exactly how a
+      // cache starts returning something that is nearly, but not quite, what
+      // the uncached render would have.
+      const svgElement = instantiateDiagram(entry, elementId)
 
       const wrapper = document.createElement('div')
       wrapper.className = MERMAID_DIAGRAM_CLASS
@@ -1413,6 +1656,8 @@ async function renderMermaidDiagrams(container: DocumentFragment): Promise<void>
       wrapper.appendChild(svgElement)
 
       pre.replaceWith(wrapper)
+      currentPassEntryByElementId.set(elementId, entry)
+      lineage.set(i, entry)
     } catch (err) {
       // One bad diagram, one bad figure — the rest of the document still
       // paginates. Logged rather than swallowed silently (this context has no
@@ -1423,7 +1668,18 @@ async function renderMermaidDiagrams(container: DocumentFragment): Promise<void>
       console.warn(`Mermaid diagram "${elementId}" failed to render:`, err)
       removeMermaidTempElements(elementId)
 
-      const retained = lastGoodDiagramSizes.get(elementId)
+      // design:107's retained size, now read through the slot lineage rather
+      // than a positional map. `inheritableLineage` is undefined unless the
+      // previous pass belonged to the SAME document (diagramSlotScope), so a
+      // broken diagram in document B can no longer inherit the height of
+      // document A's diagram at the same index on a long-lived harness.
+      const inherited = inheritableLineage?.get(i)
+      const retained = inherited?.lastGoodSize
+      // Carried forward even though nothing rendered here: without this, a
+      // SECOND consecutive broken pass (the user keeps typing) would find an
+      // empty lineage slot and lose the retained floor mid-edit — precisely
+      // the pagination thrash design:107 exists to prevent.
+      if (inherited) lineage.set(i, inherited)
       if (retained) {
         // Attribute selector on an id THIS function assigned (never
         // document-supplied), so there is nothing here for content to inject
@@ -1442,6 +1698,7 @@ async function renderMermaidDiagrams(container: DocumentFragment): Promise<void>
   }
 
   applyMermaidErrorSizes(errorSizeRules)
+  previousPassLineage = { scope: slotScope, entryByIndex: lineage }
 }
 
 // Reads back real, on-screen bounding boxes for every mermaid diagram
@@ -1721,7 +1978,12 @@ window.addEventListener('message', async (event: MessageEvent<IncomingMessage>) 
     // valid — see that function's own comment for why round-tripping
     // through a string would silently break them.
     const container = document.createRange().createContextualFragment(html)
-    await renderMermaidDiagrams(container)
+    // geometry/documentStyle are threaded in for design:97's cache key: an
+    // entry records a diagram's really-measured size, which depends on the
+    // content box it was clamped against and on the document's typography, so
+    // reusing one across a page-size or theme change would retain a size that
+    // was never true for the current document.
+    await renderMermaidDiagrams(container, geometry, documentStyle)
     // Synchronous (unlike renderMermaidDiagrams) -- katex.renderToString does
     // no async work, so this needs no `await`. Must still run before
     // buildDocumentStylesheet below, since its return value decides whether
