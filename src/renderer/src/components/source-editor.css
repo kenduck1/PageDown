@@ -1,0 +1,260 @@
+/* Source mode's editing surface: a real <textarea> holding the exact document
+   bytes, rendered TRANSPARENT, over a syntax-coloured <pre> mirror that paints
+   the same bytes. See SourceEditor.tsx for why the textarea itself is kept
+   rather than replaced by an editor component.
+
+   NOT in src/typography/document-typography.css, and that is a hard rule
+   rather than a filing preference: that stylesheet is shared verbatim with the
+   sandboxed pagination render context, where source syntax colouring must
+   never appear -- an exported PDF renders the DOCUMENT, not a view of its
+   markup. Identical reasoning, and identical precedent, to
+   .pagedown-find-match / .pagedown-comment-mark / .pagedown-slash-query, which
+   all live in base.css for exactly this reason. Kept in its own file rather
+   than added to base.css so this feature owns its own surface area.
+
+   ALIGNMENT CONTRACT
+   ------------------
+   Every glyph the <pre> paints must land on the character the <textarea>
+   thinks is there, or the caret drifts away from the text under it. The
+   textarea is the real, sighted surface for the caret, the selection and every
+   hit test; the <pre> only paints. So the two boxes must lay text out
+   identically, and the only way to guarantee that is for both to take their
+   metrics from ONE rule with both selectors on it -- which is what the block
+   below is. Do not add a font, spacing, wrapping or padding declaration to
+   either element individually; put it here, or the two silently diverge and
+   nobody notices until a line wraps. */
+
+:root {
+  /* A Markdown source palette. Existing app-shell tokens are reused wherever
+     one genuinely fits (--color-text-secondary for inert punctuation,
+     --color-accent for headings and destinations); these five exist because
+     nothing in base.css carries the hue, and they live here rather than in
+     base.css's @theme static block because they are consumed only by this
+     file's own plain-CSS rules -- no Tailwind utility is ever generated from
+     them, which is the only thing @theme static buys.
+
+     Every value is checked against --color-canvas, the surface this text
+     actually sits on (#e6e6ea light / #18181a dark), not against white: the
+     light-mode values clear 4.2:1 and the dark-mode values clear 5.8:1. That
+     check is also why inert punctuation uses --color-text-secondary rather
+     than the visually-tempting --color-text-tertiary, which is only 2.1:1 on
+     the light canvas -- recessive is the intent, illegible is not. */
+  --color-src-code: #9b2f61;
+  --color-src-list: #9a5b00;
+  --color-src-quote: #3f7a5c;
+  --color-src-meta: #6a4bb0;
+  --color-src-code-bg: rgba(155, 47, 97, 0.08);
+}
+
+:root[data-theme='dark'] {
+  --color-src-code: #ef97c1;
+  --color-src-list: #e0a458;
+  --color-src-quote: #7fc3a0;
+  --color-src-meta: #b7a2ee;
+  --color-src-code-bg: rgba(239, 151, 193, 0.12);
+}
+
+.pagedown-source-shell {
+  position: relative;
+  height: 100%;
+  width: 100%;
+  overflow: hidden;
+  background: var(--color-canvas);
+}
+
+/* THE shared rule. Both selectors, one declaration block, by design. */
+.pagedown-source-shell .pagedown-source-editor,
+.pagedown-source-shell .pagedown-source-highlight {
+  box-sizing: border-box;
+  margin: 0;
+  border: 0;
+  padding: 32px;
+
+  font-family: var(--font-mono);
+  font-size: var(--text-13);
+  /* An explicit px line-height, not `normal`: `normal` resolves from font
+     metrics, and while both elements would resolve it identically today, an
+     explicit value also removes the last way a UA stylesheet difference
+     between a form control and a <pre> could move one box relative to the
+     other. useFindController additionally parses this value back out of
+     getComputedStyle to convert a match's line number into a scroll offset,
+     and reads a fixed fallback when it comes back unresolved -- a real px
+     value here keeps that path on its measured branch. */
+  line-height: 21px;
+  font-weight: 400;
+  font-style: normal;
+  font-variant: normal;
+  /* Chromium renders form-control text through a slightly different path from
+     ordinary block text; pinning every discretionary shaping feature to the
+     same value on both elements removes that as a source of sub-pixel drift
+     instead of hoping the defaults agree. */
+  font-variant-ligatures: none;
+  font-feature-settings: normal;
+  font-kerning: none;
+  letter-spacing: normal;
+  word-spacing: normal;
+  text-indent: 0;
+  text-transform: none;
+  text-align: left;
+  text-rendering: auto;
+  unicode-bidi: isolate;
+
+  /* CommonMark measures indentation in 4-column tab stops, so a Markdown
+     source view showing 4 is showing what the parser sees. Chromium's default
+     for both elements is 8; what matters here is that they agree. */
+  tab-size: 4;
+  /* Chromium's UA stylesheet already gives a <textarea> `white-space:
+     pre-wrap` and `overflow-wrap: break-word`. Both are restated for BOTH
+     elements because the <pre> gets neither by default, and a wrapping
+     mismatch is the failure mode that shows up only on long lines. */
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+  word-break: normal;
+}
+
+.pagedown-source-shell .pagedown-source-highlight {
+  position: absolute;
+  inset: 0;
+  /* Clipped, and scrolled programmatically from the textarea's own scroll
+     event -- it is a mirror, never an independent scroll container. */
+  overflow: hidden;
+  /* The textarea above owns every interaction. Without these, a drag that
+     began over the layer could select its text and paint a second, offset
+     selection under the real one. */
+  pointer-events: none;
+  user-select: none;
+  color: var(--color-text-primary);
+  /* The textarea's own vertical scrollbar eats real content width from IT but
+     not from this layer, so without matching that width here the two boxes
+     wrap long lines at different columns. The gutter is measured from the live
+     element (offsetWidth - clientWidth) and published as this custom property
+     by SourceEditor, because it is not a constant: it is 0 with macOS overlay
+     scrollbars and non-zero with classic ones, and it appears and disappears
+     as the document grows past one screen. */
+  padding-right: calc(32px + var(--pagedown-source-gutter, 0px));
+}
+
+.pagedown-source-shell .pagedown-source-editor {
+  position: relative;
+  display: block;
+  height: 100%;
+  width: 100%;
+  resize: none;
+  overflow: auto;
+  background: transparent;
+  /* The textarea holds the text and paints none of it; the layer beneath
+     paints all of it. caret-color has to be restated because `currentColor`
+     would now be invisible. */
+  color: transparent;
+  caret-color: var(--color-text-primary);
+  outline: none;
+}
+
+/* While an IME composition is in flight, Chromium paints the in-progress
+   (uncommitted) text inside the textarea itself with its own underline -- text
+   the highlight layer cannot mirror because it is not in the element's value
+   yet. Transparent text would make every CJK/Vietnamese/etc. composition
+   invisible until the moment it commits. So during a composition the real text
+   becomes visible and the mirror is hidden: plain, uncoloured, correct. */
+.pagedown-source-shell.pagedown-source-composing .pagedown-source-editor {
+  color: var(--color-text-primary);
+}
+
+.pagedown-source-shell.pagedown-source-composing .pagedown-source-highlight {
+  visibility: hidden;
+}
+
+/* Overrides base.css's own `.pagedown-source-editor::selection`, and the
+   descendant selector is the mechanism, not an accident: this file is
+   @imported into the same cascade layer NEAR THE TOP of base.css, so source
+   order would hand the win to base.css's rule. Specificity (0,2,0 vs 0,1,0)
+   is what makes this deterministic regardless of import position.
+
+   The yellow background is unchanged and deliberately so -- it is the find
+   affordance base.css documents, and it applies to every selection in this
+   textarea, not only search matches. What changes is the TEXT colour, for two
+   reasons this feature created and one it inherited. Created: the textarea's
+   own text is now transparent, so ::selection's `color` is the only thing that
+   can paint a selected character at all, and it paints OVER the mirror (the
+   textarea is the later, higher sibling), so the selection reads as one solid
+   legible run rather than syntax colours muddied through a translucent wash.
+   Inherited: base.css set it to --color-text-primary, which is near-white in
+   dark mode and left white-on-gold at about 2.6:1 -- CLAUDE.md flags that rule
+   as never confirmed by eye, and that is what an eye would have found. A dark
+   literal reads on gold in BOTH themes (about 10.5:1 light, 7:1 dark), which
+   is the same reason .pagedown-image-note hardcodes rather than tokenizes: a
+   token that flips with the chrome is wrong under a background that does
+   not. */
+.pagedown-source-shell .pagedown-source-editor::selection {
+  background: var(--color-find-match-active);
+  color: #1c1c1e;
+}
+
+/* Token colours. Nothing here may set padding, border, margin, font-size,
+   font-family, letter-spacing, line-height or vertical-align: those move
+   glyphs, and a glyph that moves breaks the contract at the top of this file.
+   Colour, background, font-weight, font-style and text-decoration are all
+   safe -- weight and slant are drawn from the same variable/synthesised face
+   at the same advance width in a monospace font. */
+.pagedown-src-marker {
+  color: var(--color-text-secondary);
+}
+
+.pagedown-src-heading {
+  color: var(--color-accent);
+  font-weight: 700;
+}
+
+.pagedown-src-strong {
+  font-weight: 700;
+}
+
+.pagedown-src-emphasis {
+  font-style: italic;
+}
+
+.pagedown-src-strike {
+  color: var(--color-text-secondary);
+  text-decoration: line-through;
+}
+
+.pagedown-src-code,
+.pagedown-src-math {
+  color: var(--color-src-code);
+  background: var(--color-src-code-bg);
+}
+
+.pagedown-src-code-info {
+  color: var(--color-src-code);
+}
+
+.pagedown-src-link-text {
+  color: var(--color-text-primary);
+}
+
+.pagedown-src-link-url {
+  color: var(--color-accent);
+}
+
+.pagedown-src-list {
+  color: var(--color-src-list);
+  font-weight: 700;
+}
+
+.pagedown-src-quote {
+  color: var(--color-src-quote);
+  font-weight: 700;
+}
+
+.pagedown-src-rule {
+  color: var(--color-text-secondary);
+}
+
+.pagedown-src-html {
+  color: var(--color-text-secondary);
+  font-style: italic;
+}
+
+.pagedown-src-frontmatter {
+  color: var(--color-src-meta);
+}

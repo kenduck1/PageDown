@@ -1,7 +1,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { renderHook } from '@testing-library/react'
+import { cleanup, renderHook } from '@testing-library/react'
 
 import { useAutosave } from './useAutosave'
+import { useDocumentStore, initialDocumentState } from '../store/documentStore'
 
 beforeEach(() => {
   vi.useFakeTimers()
@@ -26,6 +27,13 @@ beforeEach(() => {
     getVersionHistory: vi.fn(),
     restoreVersionContent: vi.fn(),
     clearPendingAutosave: vi.fn(),
+    // Crash protection for never-saved documents. Required (not optional) on
+    // FileApi, so a missing entry here is a compile error rather than a
+    // runtime surprise -- see index.d.ts for why that tradeoff was taken.
+    autosaveUnsavedDraft: vi.fn().mockResolvedValue(null),
+    listUnsavedDrafts: vi.fn().mockResolvedValue([]),
+    readUnsavedDraft: vi.fn().mockResolvedValue(null),
+    discardUnsavedDraft: vi.fn().mockResolvedValue(undefined),
     setSplitPreviewBounds: vi.fn(),
     sendSplitPreviewDocument: vi.fn(),
     destroySplitPreview: vi.fn(),
@@ -178,5 +186,100 @@ describe('useAutosave', () => {
     // transition, this would tip it over the 45s mark (30s + 30s = 60s).
     vi.advanceTimersByTime(30_000)
     expect(window.api.autosaveSnapshot).not.toHaveBeenCalled()
+  })
+})
+
+// --- Crash protection for NEVER-SAVED (untitled) documents ----------------
+//
+// The same tick also drives documentStore.snapshotUnsavedDrafts(). Two
+// properties matter and neither is visible from the path-keyed tests above:
+// the tick must fire for a document with NO path (the whole point), and it
+// must fire even when the ACTIVE document -- the only one this hook's props
+// describe -- is clean.
+describe('useAutosave: unsaved-document drafts', () => {
+  function setTabs(tabs: Array<Record<string, unknown>>): void {
+    useDocumentStore.setState({
+      tabs: tabs as never,
+      activeTabId: tabs[0].id as string
+    })
+  }
+
+  const untitled = {
+    id: 'draft-tab',
+    filePath: null,
+    content: '# Untitled work',
+    isDirty: true,
+    mtimeMs: null,
+    remoteImagesAllowed: null,
+    currentPage: 1,
+    draftId: null
+  }
+
+  beforeEach(() => {
+    // This file has no RTL auto-cleanup, so every renderHook from an earlier
+    // test in it stays MOUNTED with its interval live -- measured, not
+    // assumed: without this the first assertion below saw five leaked
+    // autosaveSnapshot calls carrying a previous test's props. Unmounting
+    // here keeps these tests reading only their own hook's behaviour.
+    cleanup()
+    useDocumentStore.setState(initialDocumentState)
+  })
+
+  it('writes a draft for a never-saved document, which autosaveSnapshot cannot protect', () => {
+    setTabs([untitled])
+    renderHook(() => useAutosave({ content: '# Untitled work', filePath: null, isDirty: true }))
+
+    vi.advanceTimersByTime(45_000)
+
+    // The path-keyed call is correctly skipped -- there is no path to key on.
+    expect(window.api.autosaveSnapshot).not.toHaveBeenCalled()
+    expect(window.api.autosaveUnsavedDraft).toHaveBeenCalledWith(null, '# Untitled work')
+  })
+
+  it('does not fire before the interval elapses', () => {
+    setTabs([untitled])
+    renderHook(() => useAutosave({ content: '# Untitled work', filePath: null, isDirty: true }))
+    vi.advanceTimersByTime(44_000)
+    expect(window.api.autosaveUnsavedDraft).not.toHaveBeenCalled()
+  })
+
+  // The active-tab-only limitation this hook carries for SAVED documents is
+  // survivable there (the file on disk holds the last saved state) and total
+  // here (the draft is the only copy), so it is deliberately not inherited.
+  // This is the case a props-only hook structurally cannot see: the ACTIVE
+  // document is a clean, saved file, and the untitled work is in the
+  // background.
+  it('runs the timer for a dirty BACKGROUND untitled tab while the active document is clean', () => {
+    setTabs([
+      {
+        id: 'active-clean',
+        filePath: '/saved.md',
+        content: '# saved',
+        isDirty: false,
+        mtimeMs: 1,
+        remoteImagesAllowed: null,
+        currentPage: 1,
+        draftId: null
+      },
+      { ...untitled, id: 'background-untitled' }
+    ])
+
+    renderHook(() => useAutosave({ content: '# saved', filePath: '/saved.md', isDirty: false }))
+    vi.advanceTimersByTime(45_000)
+
+    expect(window.api.autosaveUnsavedDraft).toHaveBeenCalledWith(null, '# Untitled work')
+  })
+
+  it('does not tick at all when nothing anywhere is dirty', () => {
+    renderHook(() => useAutosave({ content: '', filePath: null, isDirty: false }))
+    vi.advanceTimersByTime(90_000)
+    expect(window.api.autosaveUnsavedDraft).not.toHaveBeenCalled()
+  })
+
+  it('does not write a draft for a byte-empty untitled tab', () => {
+    setTabs([{ ...untitled, content: '' }])
+    renderHook(() => useAutosave({ content: '', filePath: null, isDirty: true }))
+    vi.advanceTimersByTime(45_000)
+    expect(window.api.autosaveUnsavedDraft).not.toHaveBeenCalled()
   })
 })

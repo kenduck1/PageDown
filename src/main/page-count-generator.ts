@@ -5,6 +5,7 @@ import { resolvePageConfigWithWarnings } from '../markdown/page-config'
 import { computePageGeometry } from '../typography/page-geometry'
 import { resolveDocumentStyle } from '../typography/document-style'
 import type { DocumentWarning } from '../markdown/document-warnings'
+import type { PageBreakPosition } from '../pagination/page-breaks'
 import {
   createPaginationHarness,
   registerAssetRoot,
@@ -200,7 +201,7 @@ let lastDocumentDir: string | null = null
 // stale, pre-consent page count until some unrelated edit invalidated the
 // cache by changing `content`.
 let lastAllowRemoteImages = false
-let lastResult: { pageCount: number; warnings: DocumentWarning[] } | null = null
+let lastResult: PageCountResult | null = null
 
 /**
  * Returns the real, correct page count for a document's raw Markdown
@@ -234,12 +235,35 @@ let lastResult: { pageCount: number; warnings: DocumentWarning[] } | null = null
  * renderer" pass both warning producers can piggyback on with zero new
  * parsing, zero new debounce, and zero new IPC channel. See
  * `usePageCount.ts`/`DocumentWarningsBanner.tsx` for the renderer side.
+ *
+ * `pageBreaks`/`blockCount` (the editor page-break guides, design:50-58) ride
+ * this same round trip for exactly the same reason, and the precedent is
+ * deliberate rather than coincidental -- adding a second debounced
+ * markdownToHtml + harness render just to answer "where do the pages break"
+ * would double the cost of the most expensive thing the editor does per
+ * settled edit, on a document length where CLAUDE.md already records the
+ * ceiling as painful (~2.5s for 300 pages). Note this is the count-generator
+ * harness, NOT Split mode's own live preview harness: the guides are a
+ * FORMAT-mode feature and must work with Split mode closed.
  */
+export interface PageCountResult {
+  pageCount: number
+  warnings: DocumentWarning[]
+  pageBreaks: PageBreakPosition[]
+  /**
+   * `markdownToHtml`'s own top-level block count for the content this result
+   * describes. The renderer compares it against the live editor document's
+   * own top-level node count to decide whether `pageBreaks` still describes
+   * the document on screen -- see src/pagination/page-breaks.ts.
+   */
+  blockCount: number
+}
+
 export async function getPageCount(
   content: string,
   documentPath?: string,
   allowRemoteImages = false
-): Promise<{ pageCount: number; warnings: DocumentWarning[] }> {
+): Promise<PageCountResult> {
   const documentDir = documentPath ? dirname(documentPath) : null
   if (
     lastContent === content &&
@@ -262,7 +286,11 @@ export async function getPageCount(
       // `warnings` here are markdownToHtml's own pagebreak-related notices
       // (inline occurrences, alternate syntax kept as written) -- see
       // pagebreak-plugin.ts's `collectPagebreakWarnings`.
-      const { html, warnings: pagebreakWarnings } = markdownToHtml(content, {
+      const {
+        html,
+        warnings: pagebreakWarnings,
+        blockCount
+      } = markdownToHtml(content, {
         assetToken,
         allowRemoteImages
       })
@@ -294,9 +322,11 @@ export async function getPageCount(
       // array in order -- not that order carries any functional weight, only
       // that it's stable and deterministic across identical content rather
       // than depending on object-spread iteration order accidents.
-      const pageCount = {
+      const pageCount: PageCountResult = {
         pageCount: result.pageCount,
-        warnings: [...frontmatterWarnings, ...pagebreakWarnings]
+        warnings: [...frontmatterWarnings, ...pagebreakWarnings],
+        pageBreaks: result.pageBreaks,
+        blockCount
       }
       lastContent = content
       lastDocumentDir = documentDir

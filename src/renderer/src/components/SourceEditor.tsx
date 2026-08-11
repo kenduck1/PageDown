@@ -1,4 +1,13 @@
-import { forwardRef, useEffect, useImperativeHandle, useRef } from 'react'
+import {
+  forwardRef,
+  useCallback,
+  useEffect,
+  useImperativeHandle,
+  useLayoutEffect,
+  useRef,
+  useState
+} from 'react'
+import SourceHighlightLayer from './SourceHighlightLayer'
 
 interface SourceEditorProps {
   content: string
@@ -26,11 +35,41 @@ export interface SourceEditorHandle {
 // docs/superpowers/specs/2026-08-07-source-mode-design.md. Deliberately a
 // plain, fully-controlled <textarea>, not CodeMirror: Format mode already
 // provides the rich view, and Source mode's whole purpose is showing the
-// EXACT underlying bytes as plain text, which a syntax-highlighting editor
-// would visually editorialize. No page-card wrapper (no white sheet, no
-// shadow, no fixed page width) -- pagination is a Format/Split-mode
+// EXACT underlying bytes as plain text. No page-card wrapper (no white sheet,
+// no shadow, no fixed page width) -- pagination is a Format/Split-mode
 // concept; this is a flat, unpaginated view of the raw file, same as
 // opening a .md file in a plain text editor.
+//
+// SYNTAX HIGHLIGHTING, and why it did not change any of that
+// ----------------------------------------------------------
+// The original decision recorded here read "not CodeMirror or any
+// syntax-highlighting editor, since the point is showing the file as it
+// actually is". That argument defends showing the real BYTES; it never
+// required showing them unstyled -- colour is a rendering of the same bytes,
+// not a transformation of them, and every Markdown editor a user has met
+// colours its source. So the bytes stayed and the colour arrived, via the
+// classic mirrored-overlay: this real <textarea> is rendered with transparent
+// text over a <pre> (SourceHighlightLayer) painting the same characters in
+// colour, both laid out by ONE shared rule in source-editor.css.
+//
+// CodeMirror 6 was the alternative and was rejected on what it would have
+// COST rather than on weight. Five properties of this component are load-
+// bearing and documented elsewhere in the codebase against THIS element:
+// `value={content}` being a genuinely controlled binding (the mutation-tested
+// F3 finding below); Find & Replace driving the browser's own selection via
+// setSelectionRange on the real DOM node, which phase0/gate17 reads back as
+// selectionStart/selectionEnd; drag-and-drop image insertion at
+// selectionStart; base.css's ::selection rule existing because Chromium mutes
+// an unfocused selection; and gate17/gate21 asserting exact document bytes by
+// reading this textarea's `value`. Every one of those is a statement about a
+// real <textarea>, and CodeMirror has no textarea to make them about -- each
+// would have had to be rebuilt against a different API and re-proven. The
+// overlay keeps all five by construction, because the textarea is still
+// literally here. What it gives up in exchange is the alignment guarantee: a
+// real editor component cannot get its own text out of register with its own
+// caret, whereas this can, which is why the metrics live in one shared rule
+// and why phase0/gate38 measures a real painted token's box against the real
+// character under it rather than trusting the CSS.
 //
 // Fully controlled with a direct string binding -- unlike MilkdownEditor,
 // there is no internal document model to keep in sync via a debounce: the
@@ -63,6 +102,9 @@ const SourceEditor = forwardRef<SourceEditorHandle, SourceEditorProps>(function 
   ref
 ) {
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const highlightRef = useRef<HTMLPreElement>(null)
+  const shellRef = useRef<HTMLDivElement>(null)
+  const [composing, setComposing] = useState(false)
 
   // Read by handleDrop's own async continuation, which fires after a real
   // IPC round trip -- by the time it resolves, `content`/`onChange` from the
@@ -78,6 +120,72 @@ const SourceEditor = forwardRef<SourceEditorHandle, SourceEditorProps>(function 
     contentRef.current = content
     onChangeRef.current = onChange
   })
+
+  // The two things the highlight layer cannot derive from `content` alone, and
+  // the only JS this feature needs at all: where the textarea is scrolled to,
+  // and how much width its own scrollbar is taking away from it.
+  //
+  // The textarea deliberately remains the ONE scroll container. Making the
+  // wrapper scroll instead (with the textarea sized to its content) would have
+  // removed this sync entirely -- but useFindController reveals a Source-mode
+  // match by assigning `textarea.scrollTop` directly, which is a no-op on an
+  // element that does not scroll, so Find would have kept selecting the right
+  // range and silently stopped bringing it on screen. Keeping the scroll where
+  // it already was is what makes this feature invisible to every existing
+  // consumer of this element.
+  //
+  // The gutter half is why this cannot be pure CSS. `scrollbar-gutter: stable`
+  // reserves space on a scroll container, but the mirror is `overflow: hidden`
+  // and reserves nothing, so there is no CSS expression for "however wide the
+  // other element's scrollbar currently is". It is genuinely variable: zero
+  // under macOS overlay scrollbars, ~15px with classic ones, and it appears
+  // and disappears as the document crosses one screen in length. Left
+  // unmatched, the mirror's lines are that much wider than the textarea's and
+  // every WRAPPED line drifts -- the exact "breaks silently on resize" failure
+  // this approach is warned about, closed by measuring instead of assuming.
+  //
+  // Every write below is guarded by an equality check, and those guards are
+  // not micro-optimization: this runs on EVERY render, i.e. every keystroke,
+  // and an unconditional `setProperty` re-declares a custom property the
+  // mirror's own `padding-right` depends on, which invalidates style for the
+  // whole mirror subtree even when the value did not change. Reading first and
+  // writing only on a real change keeps the common keystroke (scroll unmoved,
+  // scrollbar unchanged) down to reads that the browser has to do anyway.
+  const syncMirror = useCallback((): void => {
+    const textarea = textareaRef.current
+    const highlight = highlightRef.current
+    const shell = shellRef.current
+    if (!textarea || !highlight || !shell) return
+    if (highlight.scrollTop !== textarea.scrollTop) highlight.scrollTop = textarea.scrollTop
+    if (highlight.scrollLeft !== textarea.scrollLeft) highlight.scrollLeft = textarea.scrollLeft
+    // `border: 0` is pinned on this element in source-editor.css, so this
+    // difference is exactly the scrollbar's width and nothing else.
+    const gutter = `${textarea.offsetWidth - textarea.clientWidth}px`
+    if (shell.style.getPropertyValue('--pagedown-source-gutter') !== gutter) {
+      shell.style.setProperty('--pagedown-source-gutter', gutter)
+    }
+  }, [])
+
+  // Deliberately unconditional (no dependency array) and a LAYOUT effect. Every
+  // render is a render whose content may have changed the scrollable extent --
+  // deleting a page's worth of text clamps scrollTop, which must be mirrored --
+  // and running before paint is what stops a freshly mounted or freshly
+  // resized surface showing one frame with the mirror wrapped at the wrong
+  // column.
+  useLayoutEffect(syncMirror)
+
+  // Catches the two size changes that do not come with a React render: the
+  // window resizing, and -- the one that matters -- the textarea's own
+  // scrollbar appearing or disappearing, which changes its CONTENT box while
+  // leaving its border box alone. ResizeObserver's default box is the content
+  // box, so it observes exactly that.
+  useEffect(() => {
+    const textarea = textareaRef.current
+    if (!textarea) return
+    const observer = new ResizeObserver(syncMirror)
+    observer.observe(textarea)
+    return () => observer.disconnect()
+  }, [syncMirror])
 
   useImperativeHandle(ref, () => ({
     getTextarea: () => textareaRef.current,
@@ -139,16 +247,42 @@ const SourceEditor = forwardRef<SourceEditorHandle, SourceEditorProps>(function 
     onChangeRef.current(current.slice(0, insertAt) + insertText + current.slice(insertAt))
   }
 
+  // The textarea carries NO Tailwind utility classes any more, and that is
+  // required rather than tidier: Tailwind emits utilities into @layer
+  // utilities, which beats @layer base where source-editor.css lives, so a
+  // leftover `p-8`/`font-mono`/`text-13` here would silently win over the
+  // shared metrics rule for the textarea only -- i.e. it would break alignment
+  // with the mirror in precisely the way that rule exists to prevent.
+  //
+  // The mirror is rendered BEFORE the textarea so the textarea, a positioned
+  // later sibling, paints above it: the mirror shows through the textarea's
+  // transparent text, while the textarea keeps every hit test, the caret and
+  // the selection.
   return (
-    <textarea
-      ref={textareaRef}
-      value={content}
-      onChange={(event) => onChange(event.target.value)}
-      onDrop={handleDrop}
-      spellCheck={false}
-      aria-label="Markdown source"
-      className="pagedown-source-editor h-full w-full resize-none bg-canvas p-8 font-mono text-13 text-text-primary outline-none"
-    />
+    <div
+      ref={shellRef}
+      className={
+        composing ? 'pagedown-source-shell pagedown-source-composing' : 'pagedown-source-shell'
+      }
+    >
+      <SourceHighlightLayer content={content} preRef={highlightRef} />
+      <textarea
+        ref={textareaRef}
+        value={content}
+        onChange={(event) => onChange(event.target.value)}
+        onScroll={syncMirror}
+        onDrop={handleDrop}
+        // An IME composition paints uncommitted text inside the textarea
+        // itself, where the mirror cannot see it -- see source-editor.css's
+        // .pagedown-source-composing rules for why that would otherwise make
+        // every CJK composition invisible until it committed.
+        onCompositionStart={() => setComposing(true)}
+        onCompositionEnd={() => setComposing(false)}
+        spellCheck={false}
+        aria-label="Markdown source"
+        className="pagedown-source-editor"
+      />
+    </div>
   )
 })
 

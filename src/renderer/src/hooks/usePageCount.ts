@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import type { DocumentWarning } from '../../../markdown/document-warnings'
+import type { PageBreakPosition } from '../../../pagination/page-breaks'
 
 interface PageCountState {
   pageCount: number | null
@@ -17,6 +18,30 @@ interface PageCountState {
   // popping in and out on every debounce tick while a fetch is merely in
   // flight would be its own, self-inflicted noise.
   warnings: DocumentWarning[]
+  // Where Paged.js put every page break, in top-level-source-block
+  // coordinates (design:50-58's editor break guides). Rides the SAME
+  // debounced round trip as the count and the warnings -- see
+  // page-count-generator.ts for why that reuse is deliberate rather than
+  // convenient.
+  //
+  // Given the same "keep the last known value" treatment as the two fields
+  // above, and here that choice has a second, sharper justification: the
+  // guides are drawn INSIDE the editor, so dropping them for the ~500ms+
+  // between a keystroke and a settled render would make horizontal lines
+  // blink out of the document on every burst of typing. Keeping them means
+  // they are briefly stale in POSITION while a fresh render is in flight,
+  // which is exactly the "true but slightly stale rather than fast but
+  // wrong" trade the design doc argues for at length (design:71).
+  pageBreaks: PageBreakPosition[]
+  // The top-level block count of the document `pageBreaks` was computed
+  // from. Paired with it everywhere, never read alone: a consumer compares
+  // it against the LIVE document's own block count and suppresses the guides
+  // outright when they disagree, because a structural edit (adding or
+  // deleting a whole block) shifts every index after it and would otherwise
+  // draw every guide below the edit in the wrong place. `0` means "no usable
+  // result yet", which fails that comparison for any non-empty document and
+  // therefore also means "no guides".
+  blockCount: number
 }
 
 // The pagination render harness backing `window.api.getPageCount` handles
@@ -74,7 +99,9 @@ export function usePageCount(
     pageCount: null,
     loading: true,
     error: null,
-    warnings: []
+    warnings: [],
+    pageBreaks: [],
+    blockCount: 0
   })
 
   if (prevContent !== content) {
@@ -92,7 +119,9 @@ export function usePageCount(
       pageCount: prev.pageCount,
       loading: true,
       error: null,
-      warnings: prev.warnings
+      warnings: prev.warnings,
+      pageBreaks: prev.pageBreaks,
+      blockCount: prev.blockCount
     }))
   }
 
@@ -125,7 +154,9 @@ export function usePageCount(
             pageCount: result.pageCount,
             loading: false,
             error: null,
-            warnings: result.warnings ?? []
+            warnings: result.warnings ?? [],
+            pageBreaks: result.pageBreaks ?? [],
+            blockCount: result.blockCount ?? 0
           })
         })
         .catch((err: unknown) => {
@@ -150,7 +181,9 @@ export function usePageCount(
             pageCount: prev.pageCount,
             loading: false,
             error: err instanceof Error ? err.message : String(err),
-            warnings: prev.warnings
+            warnings: prev.warnings,
+            pageBreaks: prev.pageBreaks,
+            blockCount: prev.blockCount
           }))
         })
     }, debounceMs)

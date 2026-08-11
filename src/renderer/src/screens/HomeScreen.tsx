@@ -11,7 +11,7 @@ import { COVER_LETTER_TEMPLATE } from '../templates/cover-letter.md'
 import { MEETING_NOTES_TEMPLATE } from '../templates/meeting-notes.md'
 import { INVOICE_TEMPLATE } from '../templates/invoice.md'
 import { NEWSLETTER_TEMPLATE } from '../templates/newsletter.md'
-import type { RecentFileEntry } from '../../../preload/index.d'
+import type { RecentFileEntry, UnsavedDraftMeta } from '../../../preload/index.d'
 
 interface Template {
   id: string
@@ -201,6 +201,85 @@ function RecentRow({
   )
 }
 
+/**
+ * One never-saved document that survived a crash or a force-quit, offered
+ * back to the user (src/main/unsaved-drafts.ts).
+ *
+ * This is the LAUNCH-TIME RECOVERY SURFACE, and Home is where it belongs
+ * rather than a startup modal: the drafts list is empty for almost every
+ * launch, and a modal that fires on the rare launch where it is not would
+ * interrupt someone who was going somewhere else. Home is also already the
+ * "pick up where you left off" screen -- it is where Recent lives -- so a
+ * recovered draft reads as one more thing to reopen rather than as an alarm.
+ *
+ * DISCARD IS TWO-STEP, unlike "Remove from recents" one section below, and
+ * the asymmetry is deliberate. Removing a recents row deletes nothing and is
+ * undone by reopening the file; discarding a draft destroys the only copy of
+ * real work that exists anywhere. A native confirmation dialog was the
+ * alternative and was rejected: it needs a new IPC channel and a new
+ * main-process dialog for one button, while an inline confirm needs neither
+ * and puts the question in the same place as the answer.
+ */
+function UnsavedDraftRow({
+  draft,
+  onRecover,
+  onDiscard
+}: {
+  draft: UnsavedDraftMeta
+  onRecover: () => void
+  onDiscard: () => void
+}): React.JSX.Element {
+  const [confirmingDiscard, setConfirmingDiscard] = useState(false)
+
+  return (
+    <div className="flex w-full items-center gap-3 rounded-md border border-border-subtle bg-page px-3 py-2">
+      <div className="flex min-w-0 flex-1 flex-col">
+        <span className="truncate text-13 font-semibold text-text-primary">
+          {/* An empty preview is possible (a draft that is only whitespace),
+          so it cannot be the only label -- fall back to naming what the row
+          IS rather than rendering a blank line. */}
+          {draft.preview || 'Untitled document'}
+        </span>
+        <span className="text-11-5 text-text-tertiary">
+          Never saved · {formatRelativeTime(draft.updatedAt)}
+        </span>
+      </div>
+      {confirmingDiscard ? (
+        <>
+          <span className="text-11-5 text-text-secondary">Discard permanently?</span>
+          <button
+            onClick={onDiscard}
+            className="whitespace-nowrap rounded-sm px-2 py-1 text-11-5 font-semibold text-red-600 hover:bg-accent/9"
+          >
+            Discard
+          </button>
+          <button
+            onClick={() => setConfirmingDiscard(false)}
+            className="whitespace-nowrap rounded-sm px-2 py-1 text-11-5 text-text-tertiary hover:bg-accent/9 hover:text-text-primary"
+          >
+            Keep
+          </button>
+        </>
+      ) : (
+        <>
+          <button
+            onClick={onRecover}
+            className="whitespace-nowrap rounded-md bg-accent px-3 py-1.5 text-11-5 font-semibold text-on-accent"
+          >
+            Recover
+          </button>
+          <button
+            onClick={() => setConfirmingDiscard(true)}
+            className="whitespace-nowrap rounded-sm px-2 py-1 text-11-5 text-text-tertiary hover:bg-accent/9 hover:text-text-primary"
+          >
+            Discard
+          </button>
+        </>
+      )}
+    </div>
+  )
+}
+
 function HomeScreen(): React.JSX.Element {
   const goEditor = useAppStore((state) => state.goEditor)
   const goSettings = useAppStore((state) => state.goSettings)
@@ -215,13 +294,39 @@ function HomeScreen(): React.JSX.Element {
   // rather than being reimplemented for the menu.
   const handleNewDocument = useCreateDocument()
 
+  // Crash protection for never-saved documents: recovery is a real document
+  // operation (it opens a tab), so it goes through the store, while listing
+  // and discarding are app-level list management with no document state --
+  // called directly on window.api, matching this component's own established
+  // treatment of the recents list right beside it.
+  const recoverUnsavedDraft = useDocumentStore((state) => state.recoverUnsavedDraft)
+
   const [recentFiles, setRecentFiles] = useState<RecentFileEntry[]>([])
   const [recentFilter, setRecentFilter] = useState('')
+  const [unsavedDrafts, setUnsavedDrafts] = useState<UnsavedDraftMeta[]>([])
   const templatesSectionRef = useRef<HTMLElement>(null)
   const recentSectionRef = useRef<HTMLElement>(null)
 
   useEffect(() => {
     window.api.getRecentFiles().then(setRecentFiles)
+  }, [])
+
+  // A SEPARATE effect from the recents fetch above, not a combined one: these
+  // are two independent round trips into two unrelated stores, and folding
+  // them together would make a failure in either hide the other's result.
+  // Refetched on every mount of this screen (not once per app run), so
+  // returning to Home after saving a recovered draft shows it gone.
+  useEffect(() => {
+    window.api
+      .listUnsavedDrafts()
+      .then(setUnsavedDrafts)
+      .catch((err: unknown) => {
+        // Best-effort, matching this file's established "log and move on"
+        // treatment for its other list fetches: worst case the recovery
+        // section is absent for this visit, which is the same as the (very
+        // common) no-drafts case rather than a broken screen.
+        console.error('Failed to list unsaved documents', err)
+      })
   }, [])
 
   const handleNavClick = (section: 'recent' | 'templates'): void => {
@@ -329,6 +434,28 @@ function HomeScreen(): React.JSX.Element {
     }
   }
 
+  // Removes the row optimistically on success only. A draft that could not be
+  // read (already recovered in another window, or discarded there) resolves
+  // false rather than throwing, and the row is dropped either way -- it names
+  // something that is no longer there.
+  const handleRecoverDraft = async (draftId: string): Promise<void> => {
+    const recovered = await recoverUnsavedDraft(draftId)
+    setUnsavedDrafts((drafts) => drafts.filter((draft) => draft.draftId !== draftId))
+    if (recovered) goEditor()
+  }
+
+  // The row's own two-step confirm is what makes this safe to run without a
+  // dialog -- see UnsavedDraftRow's comment. Fire-and-forget on the IPC and
+  // remove the row regardless: the decision is already final, and a failed
+  // delete leaves a row that reappears on the next visit rather than blocking
+  // the user here.
+  const handleDiscardDraft = (draftId: string): void => {
+    window.api.discardUnsavedDraft(draftId).catch((err: unknown) => {
+      console.error('Failed to discard unsaved document', err)
+    })
+    setUnsavedDrafts((drafts) => drafts.filter((draft) => draft.draftId !== draftId))
+  }
+
   // Matches against the same basename RecentRow itself displays (not the
   // full path) -- filtering on a directory segment the user never sees
   // would be confusing when it silently included or excluded a row.
@@ -404,6 +531,39 @@ function HomeScreen(): React.JSX.Element {
               Dismiss
             </button>
           </div>
+        )}
+
+        {/* FIRST on the page, above both Templates and Recent, and rendered
+        only when there is genuinely something to recover. Position is the
+        argument: this is work that would otherwise be lost, it appears on a
+        small minority of launches, and burying it under an eight-card
+        template gallery would make the one launch it matters on the one
+        launch the user scrolls past it. It takes no space at all otherwise.
+
+        No nav entry beside Templates/Recent, deliberately: those two are
+        permanent destinations with a persisted active-section highlight
+        (appStore's homeActiveSection), and a third item that exists only
+        sometimes would leave that highlight pointing at a section that is
+        not there. */}
+        {unsavedDrafts.length > 0 && (
+          <section className="mb-8">
+            <h2 className="mb-1 text-11 font-bold uppercase tracking-[.05em] text-text-secondary">
+              Unsaved documents
+            </h2>
+            <p className="mb-3 text-11-5 text-text-tertiary">
+              These were never saved to a file. PageDown kept a copy.
+            </p>
+            <div className="flex flex-col gap-2">
+              {unsavedDrafts.map((draft) => (
+                <UnsavedDraftRow
+                  key={draft.draftId}
+                  draft={draft}
+                  onRecover={() => void handleRecoverDraft(draft.draftId)}
+                  onDiscard={() => handleDiscardDraft(draft.draftId)}
+                />
+              ))}
+            </div>
+          </section>
         )}
 
         <section ref={templatesSectionRef} className="mb-8">

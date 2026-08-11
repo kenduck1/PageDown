@@ -30,6 +30,13 @@ beforeEach(() => {
     getVersionHistory: vi.fn(),
     restoreVersionContent: vi.fn(),
     clearPendingAutosave: vi.fn(),
+    // Crash protection for never-saved documents. Required (not optional) on
+    // FileApi, so a missing entry here is a compile error rather than a
+    // runtime surprise -- see index.d.ts for why that tradeoff was taken.
+    autosaveUnsavedDraft: vi.fn().mockResolvedValue(null),
+    listUnsavedDrafts: vi.fn().mockResolvedValue([]),
+    readUnsavedDraft: vi.fn().mockResolvedValue(null),
+    discardUnsavedDraft: vi.fn().mockResolvedValue(undefined),
     setSplitPreviewBounds: vi.fn(),
     // Resolved (not a bare vi.fn()) as of Task 5, which wires SplitPreview
     // into EditorScreen for real -- SplitPreview.tsx's own effects call
@@ -401,7 +408,8 @@ describe('EditorScreen', () => {
       isDirty: true,
       mtimeMs: null,
       remoteImagesAllowed: null,
-      currentPage: 1
+      currentPage: 1,
+      draftId: null
     }
     const other = {
       id: 'tab-other',
@@ -410,7 +418,8 @@ describe('EditorScreen', () => {
       isDirty: false,
       mtimeMs: null,
       remoteImagesAllowed: null,
-      currentPage: 1
+      currentPage: 1,
+      draftId: null
     }
     useAppStore.setState({ screen: 'editor' })
     useDocumentStore.setState({
@@ -709,7 +718,8 @@ describe('EditorScreen', () => {
       isDirty: true,
       mtimeMs: null,
       remoteImagesAllowed: null,
-      currentPage: 1
+      currentPage: 1,
+      draftId: null
     }
     const tabB = {
       id: 'tab-b',
@@ -718,7 +728,8 @@ describe('EditorScreen', () => {
       isDirty: false,
       mtimeMs: null,
       remoteImagesAllowed: null,
-      currentPage: 1
+      currentPage: 1,
+      draftId: null
     }
     useDocumentStore.setState({
       tabs: [tabA, tabB],
@@ -872,7 +883,8 @@ describe('EditorScreen', () => {
         isDirty: true,
         mtimeMs: null,
         remoteImagesAllowed: null,
-        currentPage: 1
+        currentPage: 1,
+        draftId: null
       }
       const tabB = {
         id: 'tab-b',
@@ -881,7 +893,8 @@ describe('EditorScreen', () => {
         isDirty: false,
         mtimeMs: null,
         remoteImagesAllowed: null,
-        currentPage: 1
+        currentPage: 1,
+        draftId: null
       }
       useDocumentStore.setState({
         tabs: [tabA, tabB],
@@ -944,7 +957,8 @@ describe('EditorScreen', () => {
         isDirty: true,
         mtimeMs: null,
         remoteImagesAllowed: null,
-        currentPage: 1
+        currentPage: 1,
+        draftId: null
       }
       const foreground = {
         id: 'tab-fg',
@@ -953,7 +967,8 @@ describe('EditorScreen', () => {
         isDirty: false,
         mtimeMs: null,
         remoteImagesAllowed: null,
-        currentPage: 1
+        currentPage: 1,
+        draftId: null
       }
       useDocumentStore.setState({
         tabs: [background, foreground],
@@ -986,7 +1001,8 @@ describe('EditorScreen', () => {
         isDirty: true,
         mtimeMs: null,
         remoteImagesAllowed: null,
-        currentPage: 1
+        currentPage: 1,
+        draftId: null
       }
       const foreground = {
         id: 'tab-fg',
@@ -995,7 +1011,8 @@ describe('EditorScreen', () => {
         isDirty: false,
         mtimeMs: null,
         remoteImagesAllowed: null,
-        currentPage: 1
+        currentPage: 1,
+        draftId: null
       }
       useDocumentStore.setState({
         tabs: [background, foreground],

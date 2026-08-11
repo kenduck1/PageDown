@@ -19,6 +19,7 @@ import { createDropImagePlugin, insertDroppedImages } from './drop-image'
 import { createImageResolverPlugin } from './image-security'
 import { createSelectionPlugin, type SelectionSnapshot } from './selection-plugin'
 import { createSlashPlugin, type SlashSession } from './slash-plugin'
+import { applyPageGuides, createPageGuidePlugin, type PageGuideInput } from './page-guide-plugin'
 import { enabledSlashItems } from './slash-items'
 import type { PageGeometry } from '../../../typography/page-geometry'
 import { documentStyleClasses, type DocumentStyle } from '../../../typography/document-style'
@@ -81,6 +82,22 @@ interface MilkdownEditorProps {
   // same as every other callback prop here. Task 5's hooks/useSlashMenu.ts
   // is the one real consumer today.
   onSlashStateChanged?: (session: SlashSession | null) => void
+  // Where Paged.js put every page break, in top-level-source-block
+  // coordinates, plus the block count of the document they were computed
+  // from -- the editor page-break guides (design:50-58). Pushed IN as a prop
+  // rather than fetched here, because this component takes no window.api or
+  // store dependency anywhere else (the same boundary onDropImage /
+  // onResolveLocalImage respect); EditorScreen wires it to usePageCount's
+  // own already-debounced round trip.
+  //
+  // Unlike every other prop here, this one is applied by a dedicated effect
+  // AFTER mount rather than read at construction, because it genuinely
+  // changes over the life of one mount -- a fresh set arrives every time a
+  // render settles, without the document being reloaded. Omitting it means
+  // no guides, which is the correct behaviour for any caller that has no
+  // pagination result to offer (every test that mounts this component
+  // directly, for one).
+  pageGuides?: PageGuideInput
 }
 
 // Extends EditorCommands (editor-commands.ts) with flush() -- the one
@@ -146,7 +163,8 @@ const MilkdownEditor = forwardRef<MilkdownEditorHandle, MilkdownEditorProps>(
       onDropImage,
       onResolveLocalImage,
       onSelectionChanged,
-      onSlashStateChanged
+      onSlashStateChanged,
+      pageGuides
     },
     ref
   ) {
@@ -247,6 +265,34 @@ const MilkdownEditor = forwardRef<MilkdownEditorHandle, MilkdownEditorProps>(
     // this can't live in buildEditorCommands (it needs this component's own
     // onDropImage prop, not just a live Editor instance).
     const insertImagesRef = useRef<((files: File[]) => void) | null>(null)
+
+    // Same "set once construction finishes, null otherwise" treatment again,
+    // for pushing page-break guides into the live view.
+    const applyPageGuidesRef = useRef<((next: PageGuideInput) => void) | null>(null)
+
+    // A latest-ref for a DATA prop rather than a callback -- the only one
+    // here. It exists so the mount effect's `.then` can apply whatever guides
+    // have already arrived without taking `pageGuides` as a dependency of an
+    // effect whose whole contract is running exactly once per mount. Assigned
+    // during render, not in the bare effect above, because the `.then`
+    // callback can resolve BEFORE React commits any effect (editor
+    // construction is a microtask chain, and nothing awaits paint), so a ref
+    // written only in a post-commit effect would still be null there on a
+    // fast mount.
+    const pageGuidesRef = useRef(pageGuides)
+    pageGuidesRef.current = pageGuides
+
+    // Applies a freshly-settled render's guides to an already-mounted
+    // editor. Deliberately NOT part of the mount effect: this value changes
+    // repeatedly over one mount's lifetime (a new one arrives every time the
+    // debounced page-count round trip settles), which is exactly the thing
+    // the mount effect's empty dependency array exists to avoid reacting to.
+    // `applyPageGuides` is itself a no-op when nothing actually changed, so
+    // an unrelated re-render costs nothing.
+    useEffect(() => {
+      if (!pageGuides) return
+      applyPageGuidesRef.current?.(pageGuides)
+    }, [pageGuides])
 
     useImperativeHandle(ref, () => ({
       flush: () => flushRef.current?.(),
@@ -424,6 +470,15 @@ const MilkdownEditor = forwardRef<MilkdownEditorHandle, MilkdownEditorProps>(
         )
       )
 
+      // Takes no callback at all, unlike every other $prose plugin above:
+      // guides flow strictly one way (in), so there is nothing to report
+      // back to React and therefore no latest-ref to close over. It is still
+      // constructed here rather than hoisted into the static
+      // EDITOR_COMMAND_PLUGINS list because a Plugin instance carries
+      // per-view state and must not be shared across two live editors -- the
+      // same reason findProse/selectionProse are built per mount.
+      const pageGuideProse = $prose(() => createPageGuidePlugin())
+
       Editor.make()
         .config((ctx) => {
           ctx.set(rootCtx, root)
@@ -474,6 +529,7 @@ const MilkdownEditor = forwardRef<MilkdownEditorHandle, MilkdownEditorProps>(
         .use(dropImageProse)
         .use(imageResolverProse)
         .use(slashProse)
+        .use(pageGuideProse)
         .create()
         .then((created) => {
           if (cancelled) {
@@ -494,6 +550,21 @@ const MilkdownEditor = forwardRef<MilkdownEditorHandle, MilkdownEditorProps>(
           // extraction exists (closing a real, verified mutation-testing
           // gap).
           commandsRef.current = buildEditorCommands(created)
+          applyPageGuidesRef.current = (next) => {
+            created.action((ctx) => {
+              applyPageGuides(ctx.get(editorViewCtx), next)
+            })
+          }
+          // Apply whatever has already arrived. Required, not belt-and-
+          // braces: `usePageCount` keeps its last settled result across a
+          // `key={revision}` remount, so on a remount (a tab switch, a Page
+          // Setup apply, a mode switch) the prop's value has typically NOT
+          // changed -- the effect below would see identical deps and never
+          // fire, and the freshly-created editor would show no guides until
+          // the user's next edit happened to produce a new result.
+          if (pageGuidesRef.current) {
+            applyPageGuidesRef.current(pageGuidesRef.current)
+          }
           insertImagesRef.current = (files) => {
             if (files.length === 0) return
             created.action((ctx) => {
@@ -528,6 +599,7 @@ const MilkdownEditor = forwardRef<MilkdownEditorHandle, MilkdownEditorProps>(
         flushRef.current = null
         commandsRef.current = null
         insertImagesRef.current = null
+        applyPageGuidesRef.current = null
         if (editorRef.current) {
           void editorRef.current.destroy()
           editorRef.current = null
@@ -577,7 +649,13 @@ const MilkdownEditor = forwardRef<MilkdownEditorHandle, MilkdownEditorProps>(
         // is what keeps the two surfaces in typographic parity -- Gate 10
         // measures exactly that. `default`/`source-serif-4` deliberately
         // have no rules at all, so those two classes are inert by design.
-        className={`milkdown-mount pagedown-document ${documentStyleClasses(documentStyle).join(' ')} flow-root min-h-full mx-auto py-6`}
+        // `relative` is the positioned ancestor the page-break guides resolve
+        // their `left: 0; right: 0` against (base.css's
+        // .pagedown-page-guide), so a guide spans exactly the document's own
+        // content width. Layout-neutral by construction -- `position:
+        // relative` with no offsets moves nothing and changes no box -- which
+        // is what lets it be added without touching Gate 10's parity numbers.
+        className={`milkdown-mount pagedown-document ${documentStyleClasses(documentStyle).join(' ')} relative flow-root min-h-full mx-auto py-6`}
         // The native `dir` attribute, not a CSS `direction` override: it
         // also drives the browser's own bidi text-run resolution and list/
         // table mirroring, which a bare `direction:` CSS property does not

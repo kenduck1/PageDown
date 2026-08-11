@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react'
+import { useDocumentStore } from '../store/documentStore'
 
 // Kept as the DEFAULT (not removed) even now that Settings can override
 // it (see intervalMs below) -- it's still what every test and every caller
@@ -56,6 +57,33 @@ interface UseAutosaveArgs {
  * per-tab value. A dirty BACKGROUND tab therefore does not autosave until
  * the user switches back to it. This matches the hook's own signature (no
  * per-tab argument) and is out of scope for this task, not an oversight.
+ *
+ * --- UNSAVED (untitled) DOCUMENTS ---
+ *
+ * The same tick ALSO drives crash protection for never-saved documents, via
+ * `documentStore.snapshotUnsavedDrafts()`. Three things about that half are
+ * deliberately different from the path-keyed half above:
+ *
+ * 1. It does NOT inherit the active-tab-only limitation. That limitation is
+ *    survivable for a saved document -- the file on disk still holds the last
+ *    saved state -- but for an untitled one the draft is the ONLY copy, so a
+ *    background tab inheriting it would leave the exact hole this protection
+ *    exists to close, one tab switch away. It was cheap to avoid because the
+ *    store action reads `tabs` itself; nothing had to change at the call site
+ *    (`EditorScreen`, which this hook cannot see), which is the constraint
+ *    that made the saved half's limitation expensive to fix in the first
+ *    place.
+ * 2. It is therefore gated on `hasUnsavedDraftWork` (read from the store)
+ *    rather than on the `isDirty` prop, so the timer runs even when the
+ *    ACTIVE tab is clean and only a background untitled tab is dirty.
+ * 3. Adding that flag to the effect's dependency array does NOT weaken the
+ *    countdown-restart guarantee documented above. That guarantee is
+ *    specifically about a tick never landing inside MTIME_TOLERANCE_MS of a
+ *    SAVE; `hasUnsavedDraftWork` can only flip when a never-saved document
+ *    starts or stops having unsaved work, which by definition involves no
+ *    save at all. In the overwhelmingly common case it flips on the very same
+ *    keystroke as `isDirty` (a blank tab's first character makes both true at
+ *    once), so it adds no extra restarts there either.
  */
 export function useAutosave({
   content,
@@ -63,6 +91,15 @@ export function useAutosave({
   isDirty,
   intervalMs = AUTOSAVE_INTERVAL_MS
 }: UseAutosaveArgs): void {
+  // "Is there any never-saved document with real unsaved work in it, in ANY
+  // tab" -- read from the store rather than derived from this hook's props,
+  // which describe only the active tab. `content !== ''` mirrors
+  // documentStore's own isPristineBlankTab predicate: an empty tab has
+  // nothing to protect.
+  const hasUnsavedDraftWork = useDocumentStore((state) =>
+    state.tabs.some((tab) => tab.filePath === null && tab.isDirty && tab.content !== '')
+  )
+
   // Tick-time reads go through this ref rather than the closed-over
   // content/filePath/isDirty, so a stale closure inside a long-lived
   // setInterval never fires a snapshot of outdated content.
@@ -72,7 +109,7 @@ export function useAutosave({
   })
 
   useEffect(() => {
-    if (!isDirty) return
+    if (!isDirty && !hasUnsavedDraftWork) return
     const interval = setInterval(() => {
       const {
         content: currentContent,
@@ -82,7 +119,11 @@ export function useAutosave({
       if (currentIsDirty && currentFilePath) {
         void window.api.autosaveSnapshot(currentContent, currentFilePath)
       }
+      // Reads the live store rather than this tick's captured props, and
+      // re-filters there, so it is a no-op (zero IPC) whenever there is
+      // nothing untitled to protect -- no second guard is needed here.
+      void useDocumentStore.getState().snapshotUnsavedDrafts()
     }, intervalMs)
     return () => clearInterval(interval)
-  }, [isDirty, intervalMs])
+  }, [isDirty, hasUnsavedDraftWork, intervalMs])
 }

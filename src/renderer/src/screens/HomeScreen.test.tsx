@@ -38,6 +38,13 @@ beforeEach(() => {
     getVersionHistory: vi.fn(),
     restoreVersionContent: vi.fn(),
     clearPendingAutosave: vi.fn(),
+    // Crash protection for never-saved documents. Required (not optional) on
+    // FileApi, so a missing entry here is a compile error rather than a
+    // runtime surprise -- see index.d.ts for why that tradeoff was taken.
+    autosaveUnsavedDraft: vi.fn().mockResolvedValue(null),
+    listUnsavedDrafts: vi.fn().mockResolvedValue([]),
+    readUnsavedDraft: vi.fn().mockResolvedValue(null),
+    discardUnsavedDraft: vi.fn().mockResolvedValue(undefined),
     setSplitPreviewBounds: vi.fn(),
     sendSplitPreviewDocument: vi.fn(),
     destroySplitPreview: vi.fn(),
@@ -480,5 +487,108 @@ describe('HomeScreen navigation order matches content order', () => {
 
     expect(firstHeading).toBe('Start new')
     expect(useAppStore.getState().homeActiveSection).toBe('templates')
+  })
+})
+
+// --- Launch-time recovery surface for NEVER-SAVED documents ---------------
+//
+// Home is where a crashed-but-never-saved document is offered back. These
+// cover the surface itself; documentStore.test.ts covers what Recover then
+// does to the store, and src/main/unsaved-drafts.test.ts covers the storage.
+describe('HomeScreen: unsaved documents', () => {
+  const draft = {
+    draftId: 'a'.repeat(32),
+    updatedAt: new Date().toISOString(),
+    sizeBytes: 42,
+    preview: 'Quarterly report'
+  }
+
+  it('renders nothing at all when there are no drafts', async () => {
+    vi.mocked(window.api.listUnsavedDrafts).mockResolvedValue([])
+    render(<HomeScreen />)
+
+    await waitFor(() => expect(window.api.listUnsavedDrafts).toHaveBeenCalled())
+    expect(screen.queryByText('Unsaved documents')).not.toBeInTheDocument()
+  })
+
+  it('offers a recovered draft by its own preview text', async () => {
+    vi.mocked(window.api.listUnsavedDrafts).mockResolvedValue([draft])
+    render(<HomeScreen />)
+
+    expect(await screen.findByText('Unsaved documents')).toBeInTheDocument()
+    expect(screen.getByText('Quarterly report')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Recover' })).toBeInTheDocument()
+  })
+
+  it('falls back to a real label rather than a blank line for a preview-less draft', async () => {
+    vi.mocked(window.api.listUnsavedDrafts).mockResolvedValue([{ ...draft, preview: '' }])
+    render(<HomeScreen />)
+
+    expect(await screen.findByText('Untitled document')).toBeInTheDocument()
+  })
+
+  it('Recover loads the draft as a dirty untitled document and navigates to Editor', async () => {
+    vi.mocked(window.api.listUnsavedDrafts).mockResolvedValue([draft])
+    vi.mocked(window.api.readUnsavedDraft).mockResolvedValue('# Quarterly report\n\nBody.')
+    const user = userEvent.setup()
+    render(<HomeScreen />)
+
+    await user.click(await screen.findByRole('button', { name: 'Recover' }))
+
+    await waitFor(() => expect(useAppStore.getState().screen).toBe('editor'))
+    expect(useDocumentStore.getState().content).toBe('# Quarterly report\n\nBody.')
+    expect(useDocumentStore.getState().filePath).toBeNull()
+    expect(useDocumentStore.getState().isDirty).toBe(true)
+  })
+
+  // The row's two-step confirm, and why it exists: "Remove from recents" one
+  // section below deletes nothing and is undone by reopening the file, while
+  // this destroys the only copy of real work in existence. A single stray
+  // click must not be able to do that.
+  it('does NOT discard on the first Discard click -- it asks first', async () => {
+    vi.mocked(window.api.listUnsavedDrafts).mockResolvedValue([draft])
+    const user = userEvent.setup()
+    render(<HomeScreen />)
+
+    await user.click(await screen.findByRole('button', { name: 'Discard' }))
+
+    expect(window.api.discardUnsavedDraft).not.toHaveBeenCalled()
+    expect(screen.getByText('Discard permanently?')).toBeInTheDocument()
+    // And the work is still on screen, still offered.
+    expect(screen.getByText('Quarterly report')).toBeInTheDocument()
+  })
+
+  it('Keep backs out of the confirm without discarding', async () => {
+    vi.mocked(window.api.listUnsavedDrafts).mockResolvedValue([draft])
+    const user = userEvent.setup()
+    render(<HomeScreen />)
+
+    await user.click(await screen.findByRole('button', { name: 'Discard' }))
+    await user.click(screen.getByRole('button', { name: 'Keep' }))
+
+    expect(window.api.discardUnsavedDraft).not.toHaveBeenCalled()
+    expect(screen.getByRole('button', { name: 'Recover' })).toBeInTheDocument()
+  })
+
+  it('confirming Discard removes the row and really asks main to delete it', async () => {
+    vi.mocked(window.api.listUnsavedDrafts).mockResolvedValue([draft])
+    const user = userEvent.setup()
+    render(<HomeScreen />)
+
+    await user.click(await screen.findByRole('button', { name: 'Discard' }))
+    await user.click(screen.getByRole('button', { name: 'Discard' }))
+
+    expect(window.api.discardUnsavedDraft).toHaveBeenCalledWith('a'.repeat(32))
+    await waitFor(() => expect(screen.queryByText('Quarterly report')).not.toBeInTheDocument())
+  })
+
+  it('survives a failed listing rather than breaking the whole screen', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    vi.mocked(window.api.listUnsavedDrafts).mockRejectedValue(new Error('nope'))
+    render(<HomeScreen />)
+
+    // The rest of Home still renders.
+    expect(await screen.findByRole('button', { name: 'New document' })).toBeInTheDocument()
+    expect(screen.queryByText('Unsaved documents')).not.toBeInTheDocument()
   })
 })

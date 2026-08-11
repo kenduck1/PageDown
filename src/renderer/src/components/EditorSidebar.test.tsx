@@ -206,6 +206,13 @@ describe('EditorSidebar', () => {
       getVersionHistory: vi.fn().mockResolvedValue([]),
       restoreVersionContent: vi.fn(),
       clearPendingAutosave: vi.fn(),
+      // Crash protection for never-saved documents. Required (not optional) on
+      // FileApi, so a missing entry here is a compile error rather than a
+      // runtime surprise -- see index.d.ts for why that tradeoff was taken.
+      autosaveUnsavedDraft: vi.fn().mockResolvedValue(null),
+      listUnsavedDrafts: vi.fn().mockResolvedValue([]),
+      readUnsavedDraft: vi.fn().mockResolvedValue(null),
+      discardUnsavedDraft: vi.fn().mockResolvedValue(undefined),
       setSplitPreviewBounds: vi.fn(),
       sendSplitPreviewDocument: vi.fn(),
       destroySplitPreview: vi.fn(),
@@ -275,6 +282,13 @@ describe('EditorSidebar', () => {
       getVersionHistory: vi.fn().mockResolvedValue([]),
       restoreVersionContent: vi.fn(),
       clearPendingAutosave: vi.fn(),
+      // Crash protection for never-saved documents. Required (not optional) on
+      // FileApi, so a missing entry here is a compile error rather than a
+      // runtime surprise -- see index.d.ts for why that tradeoff was taken.
+      autosaveUnsavedDraft: vi.fn().mockResolvedValue(null),
+      listUnsavedDrafts: vi.fn().mockResolvedValue([]),
+      readUnsavedDraft: vi.fn().mockResolvedValue(null),
+      discardUnsavedDraft: vi.fn().mockResolvedValue(undefined),
       setSplitPreviewBounds: vi.fn(),
       sendSplitPreviewDocument: vi.fn(),
       destroySplitPreview: vi.fn(),

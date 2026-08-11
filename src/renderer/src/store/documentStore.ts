@@ -48,6 +48,29 @@ export interface DocumentTab {
   // DIFFERENT document on screen either builds a fresh DocumentTab (which
   // starts at 1) or focuses an existing one (which keeps its own page).
   currentPage: number
+  // Crash protection for a NEVER-SAVED document: the id of this tab's
+  // unsaved-draft file (src/main/unsaved-drafts.ts), or `null` when it has
+  // none -- which is every tab that either has a real `filePath` (the
+  // path-keyed version-history machinery protects those instead) or has not
+  // yet reached its first autosave tick.
+  //
+  // MINTED BY THE MAIN PROCESS, never here, and that is load-bearing rather
+  // than incidental. `DocumentTab.id` above is the obvious candidate and is
+  // WRONG: generateTabId is a module-level `tab-1`, `tab-2`, ... counter that
+  // RESTARTS at 1 on every launch, so it is neither stable across the crash
+  // it would have to survive nor unique across launches -- yesterday's
+  // `tab-1` and today's would be two different documents sharing one storage
+  // key. `draftId` is 128 bits of main-process randomness, handed back by the
+  // first `autosaveUnsavedDraft` call and echoed on every later one so a
+  // document keeps overwriting ONE draft file rather than leaving one per
+  // 45-second tick.
+  //
+  // INVARIANT: non-null only while `filePath === null`. runSave clears it (and
+  // discards the draft) the moment the document gets a real path, so exactly
+  // one mechanism protects a document at any time -- see runSave's promotion
+  // step and snapshotUnsavedDrafts' own post-await re-check, which both exist
+  // to keep this true across their respective await gaps.
+  draftId: string | null
 }
 
 interface DocumentStateValues {
@@ -287,6 +310,49 @@ interface DocumentState extends DocumentStateValues {
     startDirty?: boolean,
     mtimeMs?: number | null
   ) => void
+  /**
+   * Writes an unsaved-draft snapshot for EVERY dirty, never-saved, non-empty
+   * tab. Called on useAutosave's tick; never rejects.
+   *
+   * DELIBERATELY NOT ACTIVE-TAB-ONLY, unlike the path-keyed autosave beside
+   * it. `useAutosave` is fed EditorScreen's top-level `content`/`filePath`/
+   * `isDirty` mirror fields, so it structurally cannot see a background tab
+   * -- a documented, accepted limitation for SAVED documents, where the cost
+   * of inheriting it is bounded (the file on disk still holds the last saved
+   * state). For a never-saved document that cost is total: the draft is the
+   * only copy in existence, so a background untitled tab inheriting that
+   * limitation would leave exactly the hole this whole feature exists to
+   * close, one tab-switch away. Avoiding it is cheap here precisely because
+   * this action reads `tabs` from the store itself rather than taking the
+   * document as an argument, so no call site has to know which tab is
+   * active.
+   *
+   * `content !== ''` mirrors isPristineBlankTab's own byte-exact predicate:
+   * an empty tab has nothing to recover, and writing one would put an
+   * "unsaved document" row on Home for every blank tab ever opened.
+   */
+  snapshotUnsavedDrafts: () => Promise<void>
+  /**
+   * Reopens a draft offered by the Home screen's recovery section as a real,
+   * dirty, still-untitled tab that keeps writing to the SAME draft file.
+   *
+   * Lands dirty on purpose, reusing the flag `loadDocument` already threads
+   * for autosave-recovered files: a recovered draft genuinely has unsaved
+   * changes (it has never been saved anywhere), so it must inherit every
+   * existing unsaved-changes protection -- the close/quit guard, the
+   * dirty-check before Home navigation, the Save/Don't Save/Cancel prompt --
+   * rather than masquerading as a clean document one careless Cmd+W away
+   * from being lost a second time.
+   *
+   * Carrying the ORIGINAL draftId (rather than letting the next tick mint a
+   * fresh one) is what stops recovery from doubling the draft: without it,
+   * recovering and typing one character would leave two rows on Home, the
+   * stale original and the live copy, with nothing to tell them apart.
+   *
+   * Resolves false when the draft could not be read (already discarded in
+   * another window, or removed underneath us) -- the caller removes the row.
+   */
+  recoverUnsavedDraft: (draftId: string) => Promise<boolean>
   // Closing a dirty tab is a simple in-memory discard for this pass -- no
   // "Save changes before closing?" confirmation. EditorScreen's existing
   // dirty-check-before-navigate flow (window.api.confirmDiscardChanges) only
@@ -375,7 +441,12 @@ function createBlankTab(): DocumentTab {
     isDirty: false,
     mtimeMs: null,
     remoteImagesAllowed: null,
-    currentPage: 1
+    currentPage: 1,
+    // Deliberately null rather than eagerly minted: minting is a main-process
+    // IPC round trip, and a blank tab that is never typed into must leave
+    // nothing on disk at all. The first autosave tick that finds real content
+    // gets the id (see snapshotUnsavedDrafts).
+    draftId: null
   }
 }
 
@@ -405,12 +476,14 @@ function createBlankTab(): DocumentTab {
  *     content empty but the document genuinely touched (and it may carry
  *     undo history and an autosave snapshot).
  *
- * `mtimeMs`/`remoteImagesAllowed`/`currentPage` are deliberately not checked:
- * none can be anything but its default on a tab satisfying the three
+ * `mtimeMs`/`remoteImagesAllowed`/`currentPage`/`draftId` are deliberately not
+ * checked: none can be anything but its default on a tab satisfying the three
  * conditions above (mtime only ever arrives alongside a real path, the
  * remote-image banner can only appear for a document that contains remote
- * images, i.e. not an empty one, and an empty document is one page). Checking
- * them would imply they are independent signals, which they are not.
+ * images, i.e. not an empty one, an empty document is one page, and
+ * snapshotUnsavedDrafts refuses to write -- and therefore to mint an id for
+ * -- byte-empty content). Checking them would imply they are independent
+ * signals, which they are not.
  */
 export function isPristineBlankTab(tab: DocumentTab): boolean {
   return tab.filePath === null && tab.content === '' && !tab.isDirty
@@ -440,6 +513,11 @@ function openDocumentState(
     startDirty: boolean
     mtimeMs: number | null
     reusePristine: boolean
+    // Non-null ONLY for recoverUnsavedDraft, which reopens a document that
+    // already has a draft file on disk and must keep writing to that same
+    // file rather than minting a second one beside it. Every other caller
+    // passes null and lets the first autosave tick mint an id.
+    draftId?: string | null
   }
 ): Partial<DocumentStateValues> {
   if (next.filePath !== null) {
@@ -475,7 +553,8 @@ function openDocumentState(
     // this reuses a pristine blank tab's id, because that builds a whole new
     // tab object rather than patching the old one. This is what replaced
     // EditorScreen's own identity-keyed "reset currentPage to 1" effect.
-    currentPage: 1
+    currentPage: 1,
+    draftId: next.draftId ?? null
   }
   return {
     tabs: reusable
@@ -584,6 +663,12 @@ async function runSave(forceSaveAs: boolean): Promise<void> {
   // -- corrupting an unrelated background tab's isDirty/filePath while
   // leaving the tab that was truly saved still marked dirty.
   const { content, filePath, activeTabId: tabId, mtimeMs } = useDocumentStore.getState()
+  // Captured synchronously alongside `tabId`, and for exactly the same reason
+  // spelled out above: a tab switch during the IPC round trip below would
+  // make a resolve-time read describe a different document, and here that
+  // would mean discarding an UNRELATED untitled document's only copy.
+  const draftIdAtSave =
+    useDocumentStore.getState().tabs.find((tab) => tab.id === tabId)?.draftId ?? null
   try {
     const result = await window.api.saveFile(
       forceSaveAs ? null : filePath,
@@ -624,7 +709,19 @@ async function runSave(forceSaveAs: boolean): Promise<void> {
       useDocumentStore.setState((state) => {
         const tabs = state.tabs.map((tab) =>
           tab.id === tabId
-            ? { ...tab, filePath: result.filePath, isDirty: false, mtimeMs: result.mtimeMs }
+            ? {
+                ...tab,
+                filePath: result.filePath,
+                isDirty: false,
+                mtimeMs: result.mtimeMs,
+                // PROMOTION. This document now has a real path, so the
+                // path-keyed version-history machinery below takes over and
+                // this tab must stop being an unsaved draft -- kept in the
+                // SAME setState as filePath so no render can ever observe a
+                // tab that has both, which is the invariant DocumentTab.
+                // draftId documents.
+                draftId: null
+              }
             : tab
         )
         // Only refresh the top-level mirror fields when the SAVED tab is
@@ -656,6 +753,15 @@ async function runSave(forceSaveAs: boolean): Promise<void> {
       // forget regardless) can never undo or fail the Save the user just
       // performed.
       void window.api.autosaveSnapshot(content, result.filePath)
+      // The other half of promotion: the draft file itself. The content it
+      // holds is now on disk under a real path AND recorded as a
+      // version-history snapshot by the line above, so leaving it would put a
+      // permanent, un-dismissable "unsaved document" row on the Home screen
+      // for a document the user demonstrably DID save -- and offer it back,
+      // stale, forever. Fire-and-forget after an already-succeeded save, same
+      // best-effort contract (and same ordering) as the snapshot call it
+      // follows: a failed discard costs one orphaned row, never the save.
+      if (draftIdAtSave !== null) void window.api.discardUnsavedDraft(draftIdAtSave)
     }
   } catch (err) {
     useDocumentStore.setState({ error: errorMessage(err) })
@@ -761,7 +867,28 @@ export const useDocumentStore = create<DocumentState>()((set, get) => ({
     set((state) =>
       openDocumentState(state, { filePath, content, startDirty, mtimeMs, reusePristine: false })
     ),
-  closeTab: (tabId) =>
+  closeTab: (tabId) => {
+    // DISCARD-ON-CLOSE, read and dispatched BEFORE the set() below rather
+    // than inside it -- a set() callback is a reducer, and firing IPC from
+    // inside one hides a real side effect in something that reads as pure.
+    //
+    // This one line is what makes "Don't Save" genuinely discard an untitled
+    // document, and it is deliberately here rather than at any of the four
+    // call sites that ask the question. EVERY discard path in the app ends in
+    // closeTab: close-guard.ts's window/quit guard, EditorScreen's "<- Home"
+    // handler, and both of its tab-close handlers. Putting the discard at
+    // those call sites would mean four copies of it, and the one that got
+    // missed would silently resurrect explicitly-discarded work on the next
+    // launch -- precisely the failure CLAUDE.md records as this feature
+    // area's one shipped Critical bug. Here it is unmissable by construction.
+    //
+    // Note that the SAVE paths are already safe when they reach this: a
+    // successful save promotes the tab (clearing draftId and discarding the
+    // draft) before the close, so this finds nothing left to do, and a FAILED
+    // save never reaches closeTab at all -- both guards re-read the tab by id
+    // and bail while it is still dirty.
+    const closing = get().tabs.find((tab) => tab.id === tabId)
+    if (closing?.draftId) void window.api.discardUnsavedDraft(closing.draftId)
     set((state) => {
       const closingIndex = state.tabs.findIndex((tab) => tab.id === tabId)
       if (closingIndex === -1) return {}
@@ -798,7 +925,8 @@ export const useDocumentStore = create<DocumentState>()((set, get) => ({
         error: null,
         revision: state.revision + 1
       }
-    }),
+    })
+  },
   // See this action's own declaration comment above for the toIndex contract
   // and for why nothing but `tabs` is written. Returning `{}` for a no-op
   // (unknown tab, or a move that would not change the order) matches
@@ -891,6 +1019,74 @@ export const useDocumentStore = create<DocumentState>()((set, get) => ({
   },
   save: () => runSave(false),
   saveAs: () => runSave(true),
+  // See this action's own declaration comment above for why it iterates every
+  // tab rather than taking the active document as an argument.
+  snapshotUnsavedDrafts: async () => {
+    const pending = get().tabs.filter(
+      (tab) => tab.filePath === null && tab.isDirty && tab.content !== ''
+    )
+    if (pending.length === 0) return
+    await Promise.all(
+      pending.map(async (tab) => {
+        try {
+          const draftId = await window.api.autosaveUnsavedDraft(tab.draftId, tab.content)
+          // Re-validated across the untyped IPC boundary rather than trusting
+          // the declared `string | null` return type, the same posture
+          // coercePageNavState takes for split-preview:getPage: main returns
+          // null for "nothing written", but an `undefined` leaking through
+          // would otherwise be written onto the tab as its draft id and then
+          // echoed back on the next tick, where it fails validation.
+          if (typeof draftId !== 'string' || draftId === '') return
+          // Re-read the tab AFTER the await, and re-check that it is still an
+          // untitled document. Both matter, and the second is a real race
+          // rather than a defensive flourish: the user can hit Cmd+S during
+          // this round trip, in which case runSave has ALREADY promoted this
+          // tab (draftId null, nothing to discard) and writing the id back
+          // would strand a draft file holding pre-save content, offered
+          // forever on Home for a document that was saved. Discarding it here
+          // is the only moment anything still knows that id exists.
+          const current = useDocumentStore.getState().tabs.find((t) => t.id === tab.id)
+          if (!current || current.filePath !== null) {
+            void window.api.discardUnsavedDraft(draftId)
+            return
+          }
+          if (current.draftId === draftId) return
+          useDocumentStore.setState((state) => ({
+            tabs: state.tabs.map((t) => (t.id === tab.id ? { ...t, draftId } : t))
+          }))
+        } catch (err) {
+          // Best-effort, matching every other autosave path: a failed tick
+          // means slightly less protection until the next one, never an error
+          // in front of someone who was only typing.
+          console.error('Failed to write unsaved-document draft', err)
+        }
+      })
+    )
+  },
+  recoverUnsavedDraft: async (draftId) => {
+    try {
+      const content = await window.api.readUnsavedDraft(draftId)
+      if (content === null) return false
+      set((state) =>
+        openDocumentState(state, {
+          filePath: null,
+          content,
+          startDirty: true,
+          mtimeMs: null,
+          // Reuses a pristine blank tab, like newDocument/loadDocument and
+          // unlike openTab: recovery is "show me this document", not "give me
+          // another blank tab", so it must not leave a stray Untitled beside
+          // the recovered work.
+          reusePristine: true,
+          draftId
+        })
+      )
+      return true
+    } catch (err) {
+      set({ error: errorMessage(err) })
+      return false
+    }
+  },
   exportPdf: async () => {
     // Guard, set, and clear all read/write the STORE's own flag rather than a
     // component's local state -- see the isExporting field's own comment for

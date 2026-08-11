@@ -13,6 +13,10 @@ import { ElectronAPI } from '@electron-toolkit/preload'
 import type { MenuCommand } from '../menu/commands'
 import type { WindowUiState } from '../menu/window-state'
 import type { DocumentWarning } from '../markdown/document-warnings'
+// Same exception, same justification: src/pagination/page-breaks.ts is a
+// dependency-free contract module (it has to be -- it is bundled into the
+// sandboxed render context), shared by main, preload and renderer alike.
+import type { PageBreakPosition } from '../pagination/page-breaks'
 
 export interface RecentFileEntry {
   filePath: string
@@ -28,6 +32,22 @@ export interface SnapshotMeta {
   id: string
   timestamp: string
   sizeBytes: number
+}
+
+// Structurally identical to src/main/unsaved-drafts.ts's own
+// UnsavedDraftMeta -- deliberately re-declared here rather than imported,
+// exactly like SnapshotMeta/RecentFileEntry immediately above and for the
+// identical reason (src/main/** sits outside tsconfig.web.json's `include`,
+// which is what this file is checked under).
+export interface UnsavedDraftMeta {
+  draftId: string
+  updatedAt: string
+  sizeBytes: number
+  // A one-line human-readable label (first real line of the draft, with
+  // frontmatter and Markdown markers stripped) -- computed on every listing,
+  // never stored. Without it a list of three untitled drafts is
+  // distinguishable only by timestamp.
+  preview: string
 }
 
 // Structurally identical to src/main/preferences.ts's own DefaultPageConfig/
@@ -155,7 +175,20 @@ export interface FileApi {
     content: string,
     filePath?: string | null,
     allowRemoteImages?: boolean
-  ) => Promise<{ pageCount: number; warnings?: DocumentWarning[] }>
+  ) => Promise<{
+    pageCount: number
+    warnings?: DocumentWarning[]
+    // Editor page-break guides (design:50-58). OPTIONAL for exactly the same
+    // reason `warnings` is -- the real handler always sends both, but the
+    // pre-existing `{ pageCount: N }`-only mocks scattered through this
+    // repo's own test suite would otherwise all have to be updated to keep
+    // type-checking, and `usePageCount` already defaults each to a safe
+    // empty value. A missing `pageBreaks` means "no guides"; a missing
+    // `blockCount` means "0", which fails the renderer's own structural
+    // integrity check and therefore also means "no guides".
+    pageBreaks?: PageBreakPosition[]
+    blockCount?: number
+  }>
   // `documentName` is a display-only label naming WHICH document the dialog is
   // about -- required once several tabs can be prompted about in a row (the
   // window-close guard). Omitted keeps the original document-agnostic wording.
@@ -191,6 +224,30 @@ export interface FileApi {
   getVersionHistory: (filePath: string) => Promise<SnapshotMeta[]>
   restoreVersionContent: (filePath: string, snapshotId: string) => Promise<string | null>
   clearPendingAutosave: (filePath: string) => Promise<void>
+  // Crash protection for NEVER-SAVED documents -- the untitled counterpart of
+  // the four path-keyed version-history entries immediately above. These key
+  // on a main-minted `draftId` instead of a file path, because an untitled
+  // document has no path to key on; see src/main/unsaved-drafts.ts's own
+  // module comment for the full design and for what deliberately did NOT
+  // transfer from version-history.ts.
+  //
+  // REQUIRED, not optional, unlike getPageCount's `warnings` field above: a
+  // call site that forgets one of these silently loses crash protection with
+  // no other symptom, so making the omission a compile error is worth the
+  // cost of updating every window.api fixture in the suite.
+  //
+  // Pass `draftId: null` the first time a given untitled document is
+  // protected; the returned id must be remembered and echoed back on every
+  // later call, or each tick writes a NEW draft. `null` back means nothing
+  // was written (byte-empty content, or an already-logged failure).
+  autosaveUnsavedDraft: (draftId: string | null, content: string) => Promise<string | null>
+  listUnsavedDrafts: () => Promise<UnsavedDraftMeta[]>
+  readUnsavedDraft: (draftId: string) => Promise<string | null>
+  // Unconditional removal -- no cutoff parameter, deliberately. See
+  // discardUnsavedDraft's own comment in src/main/unsaved-drafts.ts for why
+  // the renderer-supplied-cutoff bug that shipped in clearPendingAutosave
+  // structurally cannot recur here.
+  discardUnsavedDraft: (draftId: string) => Promise<void>
   setSplitPreviewBounds: (bounds: SplitPreviewBounds) => void
   sendSplitPreviewDocument: (
     content: string,

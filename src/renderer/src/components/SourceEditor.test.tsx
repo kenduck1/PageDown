@@ -81,6 +81,84 @@ describe('SourceEditor', () => {
     expect(ref.current?.getTextarea()?.value).toBe('after')
   })
 
+  describe('syntax-highlight mirror', () => {
+    // jsdom has no layout engine, so nothing here can prove ALIGNMENT -- that
+    // is phase0/gate38's job, measuring a real painted token's box against the
+    // real character under it in Chromium. What jsdom can prove is the
+    // structural contract the alignment rests on, and these are those parts.
+    it('renders a mirror painting exactly the textarea value, hidden from assistive tech', () => {
+      const { container } = render(
+        <SourceEditor content={'# Title\n\n**bold**'} onChange={vi.fn()} />
+      )
+      const pre = container.querySelector('pre.pagedown-source-highlight')!
+      // The trailing newline is deliberate -- see SourceHighlightLayer.
+      expect(pre.textContent).toBe('# Title\n\n**bold**\n')
+      expect(pre).toHaveAttribute('aria-hidden', 'true')
+      expect(pre.querySelector('.pagedown-src-strong')?.textContent).toBe('**bold**')
+    })
+
+    // The textarea must remain THE accessible control and THE value holder:
+    // gate17 and gate21 both read exact document bytes off this element, and
+    // gate23 finds it by its accessible name.
+    it('keeps a single textbox, still named "Markdown source", still holding the bytes', () => {
+      render(<SourceEditor content="# Hello" onChange={vi.fn()} />)
+      const textareas = screen.getAllByRole('textbox')
+      expect(textareas).toHaveLength(1)
+      expect(textareas[0]).toHaveAccessibleName('Markdown source')
+      expect(textareas[0]).toHaveValue('# Hello')
+      // The mirror must carry NO Tailwind utility class competing with the
+      // shared metrics rule -- utilities beat @layer base, so one left here
+      // would silently move the textarea's text off the mirror's.
+      expect(textareas[0].className).toBe('pagedown-source-editor')
+    })
+
+    it('mirrors the external content change that the controlled binding lands', () => {
+      const { container, rerender } = render(<SourceEditor content="before" onChange={() => {}} />)
+      rerender(<SourceEditor content="after" onChange={() => {}} />)
+      expect(container.querySelector('pre.pagedown-source-highlight')?.textContent).toBe('after\n')
+    })
+
+    it('publishes the measured scrollbar gutter onto the shell', () => {
+      // jsdom reports 0 for every box, so the VALUE here is necessarily 0px;
+      // what this pins is that the measurement runs at all and reaches the
+      // custom property the mirror's padding-right reads. Its real, non-zero
+      // behaviour under classic scrollbars is gate38's.
+      const { container } = render(<SourceEditor content="x" onChange={vi.fn()} />)
+      const shell = container.querySelector<HTMLElement>('.pagedown-source-shell')!
+      expect(shell.style.getPropertyValue('--pagedown-source-gutter')).toBe('0px')
+    })
+
+    it('syncs the mirror scroll offset from the textarea scroll event', () => {
+      const ref = createRef<SourceEditorHandle>()
+      const { container } = render(
+        <SourceEditor ref={ref} content={'a\n'.repeat(200)} onChange={vi.fn()} />
+      )
+      const textarea = ref.current!.getTextarea()!
+      const pre = container.querySelector<HTMLPreElement>('pre.pagedown-source-highlight')!
+      // jsdom will not move an unlaid-out element's scrollTop on its own, so
+      // both sides are driven explicitly; the assertion is that the handler
+      // copies across, which is the only logic this component owns here.
+      Object.defineProperty(textarea, 'scrollTop', { value: 137, configurable: true })
+      fireEvent.scroll(textarea)
+      expect(pre.scrollTop).toBe(137)
+    })
+
+    // An IME paints uncommitted text inside the textarea itself, where the
+    // mirror cannot see it -- transparent text would make every CJK
+    // composition invisible until the moment it committed.
+    it('reveals the real text and hides the mirror while an IME composition is in flight', () => {
+      const ref = createRef<SourceEditorHandle>()
+      const { container } = render(<SourceEditor ref={ref} content="x" onChange={vi.fn()} />)
+      const textarea = ref.current!.getTextarea()!
+      const shell = container.querySelector('.pagedown-source-shell')!
+      expect(shell).not.toHaveClass('pagedown-source-composing')
+      fireEvent.compositionStart(textarea)
+      expect(shell).toHaveClass('pagedown-source-composing')
+      fireEvent.compositionEnd(textarea)
+      expect(shell).not.toHaveClass('pagedown-source-composing')
+    })
+  })
+
   describe('image drag-and-drop', () => {
     it('inserts a real markdown image reference at the cursor for a dropped image file', async () => {
       const onChange = vi.fn()
