@@ -56,6 +56,24 @@ afterEach(() => {
   cleanup()
 })
 
+// This file's jsdom environment reports `navigator.platform === ''`
+// (confirmed by direct inspection, not assumed) -- `''.toUpperCase().includes
+// ('MAC')` is `false`, so isMacPlatform() already reads "not a Mac" with no
+// override at all. The Ctrl+H tests below still set it explicitly (Win32 /
+// MacIntel) rather than relying on that default, so the intent reads
+// directly off the test rather than off an unstated environment fact, and so
+// the macOS case is actually exercised at all (its assertion would trivially
+// "pass" against the untouched default for the wrong reason). Restored after
+// each test that touches it so this file's own platform doesn't leak into
+// whichever test happens to run next in the same worker.
+const ORIGINAL_PLATFORM = navigator.platform
+function setPlatform(platform: string): void {
+  Object.defineProperty(navigator, 'platform', { value: platform, configurable: true })
+}
+afterEach(() => {
+  setPlatform(ORIGINAL_PLATFORM)
+})
+
 describe('useFindShortcuts', () => {
   it('opens the find bar on Cmd+F', () => {
     renderHook(() => useFindShortcuts({ getSelectedText: () => '', queryInputRef: createRef() }))
@@ -75,6 +93,40 @@ describe('useFindShortcuts', () => {
     press('f', { meta: true, alt: true })
     expect(useFindStore.getState().isOpen).toBe(true)
     expect(useFindStore.getState().replaceExpanded).toBe(true)
+  })
+
+  // Windows/Linux convention (Word, VS Code, Notepad++, Sublime, Chrome
+  // DevTools) -- the whole reason this binding was added: Ctrl+Alt+F alone
+  // (the pre-existing test above, which fires on every platform since
+  // `event.altKey` is read unconditionally) is nobody's muscle memory there.
+  it('opens with replace expanded on Ctrl+H on Windows/Linux', () => {
+    setPlatform('Win32')
+    renderHook(() => useFindShortcuts({ getSelectedText: () => '', queryInputRef: createRef() }))
+    press('h', { ctrl: true })
+    expect(useFindStore.getState().isOpen).toBe(true)
+    expect(useFindStore.getState().replaceExpanded).toBe(true)
+  })
+
+  // The critical negative case: Cmd+H is macOS's own system-reserved Hide
+  // Application shortcut. This test uses `ctrl: true` (a real, distinct
+  // physical key from Cmd on any Mac keyboard) rather than `meta: true`,
+  // because a real Cmd+H is intercepted by the OS before any renderer's
+  // `window` listener would ever see it -- the interesting, actually
+  // reachable case is a Mac user's bare Control+H, which must ALSO stay a
+  // no-op rather than accidentally opening Find and Replace via a binding
+  // this app never advertises on macOS at all.
+  it('does NOT open on Ctrl+H on macOS', () => {
+    setPlatform('MacIntel')
+    renderHook(() => useFindShortcuts({ getSelectedText: () => '', queryInputRef: createRef() }))
+    press('h', { ctrl: true })
+    expect(useFindStore.getState().isOpen).toBe(false)
+  })
+
+  it('does not open on Ctrl+Shift+H, matching the existing Shift-excluded convention for F', () => {
+    setPlatform('Win32')
+    renderHook(() => useFindShortcuts({ getSelectedText: () => '', queryInputRef: createRef() }))
+    press('H', { ctrl: true, shift: true, code: 'KeyH' })
+    expect(useFindStore.getState().isOpen).toBe(false)
   })
 
   it('seeds the query from the current selection', () => {

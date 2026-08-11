@@ -164,11 +164,30 @@ describe('buildAppMenuTemplate: accelerators', () => {
     expect(exportItem.accelerator).not.toBe('CmdOrCtrl+E')
   })
 
-  it('binds Find/Find Next/Find Previous', () => {
+  it('binds Find/Find and Replace/Find Next/Find Previous', () => {
     const editMenu = submenuOf(build({ state: EDITING }).template, 'Edit')
     expect(itemIn(editMenu, 'Find…').accelerator).toBe('CmdOrCtrl+F')
+    expect(itemIn(editMenu, 'Find and Replace…').accelerator).toBe('Cmd+Alt+F')
     expect(itemIn(editMenu, 'Find Next').accelerator).toBe('CmdOrCtrl+G')
     expect(itemIn(editMenu, 'Find Previous').accelerator).toBe('CmdOrCtrl+Shift+G')
+  })
+
+  it('binds Find and Replace to Ctrl+H on Windows/Linux, NOT Cmd+H or Ctrl+Alt+F', () => {
+    // The regression this guards: Cmd+H is macOS's own system-reserved Hide
+    // Application shortcut, so a naive `CmdOrCtrl+…` form applied to a
+    // literal H accelerator would be correct on Windows/Linux but would
+    // hijack Hide on macOS the moment this test's own darwin case (above)
+    // used the same accelerator string. The two platforms must produce
+    // GENUINELY DIFFERENT literal strings, not one shared form -- asserted
+    // here on win32/linux and above on darwin, rather than trusting the
+    // ternary that produces them.
+    for (const platform of ['win32', 'linux'] as const) {
+      const editMenu = submenuOf(build({ state: EDITING, platform }).template, 'Edit')
+      const item = itemIn(editMenu, 'Find and Replace…')
+      expect(item.accelerator).toBe('Ctrl+H')
+      expect(item.accelerator).not.toBe('Cmd+H')
+      expect(item.accelerator).not.toBe('CmdOrCtrl+Alt+F')
+    }
   })
 
   it('binds view-mode, zoom and sidebar accelerators', () => {
@@ -208,7 +227,7 @@ describe('buildAppMenuTemplate: enablement', () => {
       expect(itemIn(fileMenu, label).enabled).toBe(false)
     }
     const editMenu = submenuOf(template, 'Edit')
-    for (const label of ['Find…', 'Find Next', 'Find Previous']) {
+    for (const label of ['Find…', 'Find and Replace…', 'Find Next', 'Find Previous']) {
       expect(itemIn(editMenu, label).enabled).toBe(false)
     }
     const viewMenu = submenuOf(template, 'View')
@@ -332,6 +351,7 @@ describe('buildAppMenuTemplate: command dispatch', () => {
     click('File', 'Save')
     click('File', 'Save As…')
     click('File', 'Export as PDF…')
+    click('Edit', 'Find and Replace…')
     click('View', 'Split')
     click('View', 'Toggle Sidebar')
     click('Help', 'Keyboard Shortcuts')
@@ -341,6 +361,7 @@ describe('buildAppMenuTemplate: command dispatch', () => {
       'file:save',
       'file:saveAs',
       'file:exportPdf',
+      'edit:findReplace',
       'view:split',
       'view:toggleSidebar',
       'app:shortcuts'

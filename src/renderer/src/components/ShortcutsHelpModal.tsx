@@ -1,4 +1,5 @@
 import { useModalDialog } from '../hooks/useModalDialog'
+import { isMacPlatform } from '../lib/platform'
 
 // A real, honest reference of every keyboard shortcut that actually exists
 // in this app right now -- every entry below was verified directly against
@@ -14,9 +15,20 @@ import { useModalDialog } from '../hooks/useModalDialog'
 //   the menu existed; the menu accelerator is what actually fires in the real
 //   app now (it consumes the keystroke before the page sees it), which is why
 //   both paths deliberately run the same function.
-// - Find & Replace (Mod-Alt-F) and Escape-to-close: still ONLY
-//   useFindShortcuts.ts's bare `window` keydown listener -- neither is a menu
-//   item, so neither has an accelerator competing with it.
+// - Find & Replace: a REAL application-menu item now too (`Edit > Find and
+//   Replace…`, src/main/app-menu-template.ts), with a platform-specific
+//   accelerator -- Option+Cmd+F on macOS (the existing TextEdit/Pages/Xcode
+//   convention, unchanged), Ctrl+H on Windows/Linux (Word/VS Code/Notepad++/
+//   Sublime/Chrome DevTools convention -- NOT Ctrl+Alt+F, which was
+//   discoverable by nobody and is what this entry used to advertise via a
+//   bare `${MOD}${ALT}F` that rendered as the unreadable, non-conventional
+//   "CtrlAltF"). Cmd+H is deliberately never bound on macOS -- it is
+//   system-reserved for Hide Application, and hijacking it would be a real
+//   bug. useFindShortcuts.ts's bare `window` listener binds the SAME two
+//   platform-specific combos directly (Cmd+Alt+F / Ctrl+H), for the same
+//   "menu may be absent" reason Find itself keeps its own listener -- see
+//   that file's header. Escape-to-close remains listener-only, since it is
+//   not (and does not need to be) a menu item at all.
 // - Undo/Redo: src/renderer/src/milkdown/commands.ts's historyKeymap, a
 //   real $useKeymap() ProseMirror plugin this project added (previously,
 //   Format mode's toolbar Undo/Redo buttons worked but no keyboard shortcut
@@ -40,15 +52,14 @@ import { useModalDialog } from '../hooks/useModalDialog'
 // which work from anywhere) are marked as such below -- Source mode is a
 // plain <textarea> with the browser's own native text-editing shortcuts
 // (including its own free native undo/redo), not these ProseMirror keymaps.
-// navigator.platform is deprecated but still functionally reports "MacIntel"
-// on every real Mac (Intel or Apple Silicon, via Rosetta-compatibility
-// reporting) -- reliable enough for "is this a Mac" specifically, which is
-// all this needs. No IPC round trip to the main process's real
-// process.platform: this is display-only labeling, not behavior that needs
-// to be correct with 100% certainty (useFindShortcuts.ts's own real
-// shortcut handling checks `event.metaKey || event.ctrlKey` directly at
-// keydown time regardless of what's shown here).
-const IS_MAC = navigator.platform.toUpperCase().includes('MAC')
+// isMacPlatform() (src/renderer/src/lib/platform.ts) is display-only HERE --
+// this modal never gates behavior on it, only which glyphs to print -- but
+// the same function is no longer display-only everywhere: useFindShortcuts.ts
+// now also uses it to decide whether Ctrl+H opens Find and Replace. That
+// second, behavioral use is exactly why the check was extracted into a
+// shared module instead of staying a local const in each file -- see that
+// module's own header for the full reasoning.
+const IS_MAC = isMacPlatform()
 const MOD = IS_MAC ? '⌘' : 'Ctrl'
 const ALT = IS_MAC ? '⌥' : 'Alt'
 const SHIFT = '⇧'
@@ -82,7 +93,17 @@ const CATEGORIES: ShortcutCategory[] = [
     name: 'App',
     shortcuts: [
       { keys: `${MOD}F`, description: 'Find' },
-      { keys: `${MOD}${ALT}F`, description: 'Find and Replace' },
+      // Deliberately NOT `${MOD}${ALT}F` on non-mac -- unlike every other
+      // `${MOD}${ALT}…` entry in this file (Structure/Formatting below),
+      // where the SAME physical keys are bound on every platform and only
+      // the modifier glyphs differ, Find and Replace binds a genuinely
+      // DIFFERENT key per platform (see app-menu-template.ts/
+      // useFindShortcuts.ts): Option+Cmd+F on macOS, Ctrl+H on Windows/Linux
+      // (Cmd+H is never bound -- macOS's own Hide Application shortcut).
+      // `${MOD}${ALT}F` would have rendered as "CtrlAltF" on Windows/Linux,
+      // documenting a binding this app no longer even advertises as the
+      // primary one there.
+      { keys: IS_MAC ? `${MOD}${ALT}F` : 'Ctrl+H', description: 'Find and Replace' },
       { keys: `${MOD}G`, description: 'Find next' },
       { keys: `${MOD}${SHIFT}G`, description: 'Find previous' },
       { keys: 'Esc', description: 'Close Find (while open)' },
