@@ -43,6 +43,7 @@ describe('SLASH_ITEMS catalogue shape', () => {
         'blockquote',
         'horizontal-rule',
         'page-break',
+        'table-of-contents',
         'math-block',
         'mermaid-diagram'
       ].sort()
@@ -418,19 +419,22 @@ describe('enabledSlashItems: the one formula countMatching and getSlashItems mus
     expect(enabled.map((item) => item.id)).toEqual(['heading-1', 'heading-2', 'heading-3'])
   })
 
-  it('reproduces the HARD REQUIREMENT scenario: 11 items, not 13 -- filterSlashItems alone would over-report by exactly the 2 block-replacing items', async () => {
+  it('reproduces the HARD REQUIREMENT scenario: 12 items, not 14 -- filterSlashItems alone would over-report by exactly the 2 block-replacing items', async () => {
     // Byte-for-byte the same fixture as the "math-block / mermaid-diagram"
     // describe block above -- this is the exact scenario fix round 1 of the
     // item-catalogue task (I3) pinned as the real, measured "13 counted vs
     // 11 rendered" desync this function exists to make structurally
-    // impossible to reintroduce.
+    // impossible to reintroduce. Both totals moved by one when the "Table of
+    // contents" item was added -- it is NOT block-replacing (see its own
+    // isEnabled comment), so it appears on both sides and the GAP of exactly
+    // 2, which is what this test is actually about, is unchanged.
     const editor = await createTestEditor('Important prose here /and more text', PLUGINS)
     const view = editor.action((ctx) => ctx.get(editorViewCtx)) as EditorView
     selectAt(view, 'Important prose here /'.length)
     const queryOnlyCount = filterSlashItems(SLASH_ITEMS, '').length
     const enabled = editor.action((ctx: Ctx) => enabledSlashItems(ctx, view.state, ''))
-    expect(queryOnlyCount).toBe(13)
-    expect(enabled.length).toBe(11)
+    expect(queryOnlyCount).toBe(14)
+    expect(enabled.length).toBe(12)
     expect(enabled.some((item) => item.id === 'math-block')).toBe(false)
     expect(enabled.some((item) => item.id === 'mermaid-diagram')).toBe(false)
   })

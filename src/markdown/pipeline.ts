@@ -16,6 +16,8 @@ import { visit } from 'unist-util-visit'
 import { annotateSourceOffsets, type SourceMap } from './source-map'
 import { remarkPagebreak, PAGEBREAK_CLASS, collectPagebreakWarnings } from './pagebreak-plugin'
 import { createPagebreakToHast } from './pagebreak-to-hast'
+import { remarkToc, TOC_CLASS, collectTocWarnings } from './toc-plugin'
+import { createTocToHast } from './toc-to-hast'
 import type { DocumentWarning } from './document-warnings'
 import { createMathBlockToHast, createMathInlineToHast } from './math-to-hast'
 import { remarkComment } from './comment-plugin'
@@ -294,6 +296,13 @@ export function markdownToHtml(
     .use(remarkFrontmatter, ['yaml'])
     .use(remarkMath, { singleDollarTextMath: false })
     .use(remarkPagebreak)
+    // AFTER remarkPagebreak and BEFORE remarkComment purely for readability;
+    // the three transforms are genuinely order-independent (each matches a
+    // disjoint set of node shapes). What is NOT order-independent, and is the
+    // reason this sits in the parse processor at all rather than in a second
+    // pass: `remarkToc` reads every `heading` in the finished tree, so it has
+    // to run after parsing is complete -- which `.runSync()` below guarantees.
+    .use(remarkToc)
     .use(remarkComment)
 
   const parsedTree = parseProcessor.parse(source) as Root
@@ -311,7 +320,7 @@ export function markdownToHtml(
   // that only destructures `{ html }` is fine (a DocumentWarning with no
   // consumer is harmless), but at least one real consumer must exist, and
   // does -- see page-count-generator.ts's `getPageCount`.
-  const warnings = collectPagebreakWarnings(tree)
+  const warnings = [...collectPagebreakWarnings(tree), ...collectTocWarnings(tree)]
 
   // Per-render random token: without this, the whole-tree sanitize() pass
   // below can't tell pagebreakToHast's own trusted output apart from
@@ -336,6 +345,14 @@ export function markdownToHtml(
   // cross-contamination the first time either format changes.
   const blockIndexToken = randomBytes(16).toString('hex')
 
+  // A THIRD independent token, for the table-of-contents container's class,
+  // kept separate from the other two for the reason the block-index token's
+  // own comment gives: three tokens means three replacements whose search
+  // strings are unrelated to each other, so no future format change can make
+  // one a prefix of another and cross-contaminate.
+  const tocToken = randomBytes(16).toString('hex')
+  const tocClassName = `${TOC_CLASS}-${tocToken}`
+
   // allowDangerousHtml: true here does NOT mean unsafe output — it means
   // "don't drop raw HTML, turn it into `raw` hast nodes for `raw()` and
   // `sanitize()` below to resolve and clean up." `pagebreak`-typed nodes are
@@ -348,6 +365,7 @@ export function markdownToHtml(
       clobberPrefix: CLOBBER_PREFIX,
       handlers: {
         pagebreak: createPagebreakToHast(tokenClassName),
+        toc: createTocToHast(tocClassName, CLOBBER_PREFIX),
         math: createMathBlockToHast(),
         inlineMath: createMathInlineToHast(),
         comment: createCommentToHast()
@@ -381,7 +399,17 @@ export function markdownToHtml(
     ],
     attributes: {
       ...defaultSchema.attributes,
-      div: [...(defaultSchema.attributes?.div ?? []), ['className', tokenClassName]],
+      // TWO allowed values on ONE `className` entry -- the pagebreak marker's
+      // container and the table of contents' container, each carrying THIS
+      // render's own unguessable token class. Both must live in the SAME
+      // tuple: `hast-util-sanitize`'s `findDefinition` returns the FIRST
+      // entry whose name matches (read directly from its source, not
+      // assumed), so a second `['className', ...]` entry alongside the first
+      // is dead configuration and the TOC's class would be silently stripped.
+      // A tuple's trailing elements ARE a real value allowlist
+      // (`propertyValuePrimitive` walks all of them), so this widens the
+      // surface by exactly one more unguessable string.
+      div: [...(defaultSchema.attributes?.div ?? []), ['className', tokenClassName, tocClassName]],
       // The block-index stamp, allowed on ANY element (`'*'`) because the
       // top-level block it lands on can be a `p`, `h1`-`h6`, `ul`, `table`,
       // `pre`, `blockquote` or `div` -- but constrained to a value matching
@@ -471,16 +499,17 @@ export function markdownToHtml(
   // realistic language mix.
   const highlighted = unified().use(rehypeHighlight).runSync(sanitized) as HastRoot
 
-  // Both replacements swap a per-render token back out of the emitted HTML,
-  // for the same reason: the token exists only to make the sanitize schema
-  // exception above unforgeable, and nothing downstream should have to know
-  // it. The pagebreak one restores the stable public class name; the
-  // block-index one leaves a bare `data-pd-block="7"` for the sandboxed
-  // paginator to read back.
+  // All three replacements swap a per-render token back out of the emitted
+  // HTML, for the same reason: the token exists only to make the sanitize
+  // schema exception above unforgeable, and nothing downstream should have to
+  // know it. The pagebreak and TOC ones restore their stable public class
+  // names; the block-index one leaves a bare `data-pd-block="7"` for the
+  // sandboxed paginator to read back.
   const html = unified()
     .use(rehypeStringify)
     .stringify(highlighted)
     .replaceAll(tokenClassName, PAGEBREAK_CLASS)
+    .replaceAll(tocClassName, TOC_CLASS)
     .replaceAll(`${blockIndexToken}-`, '')
 
   return { html, sourceMap, warnings, blockCount: tree.children.length }

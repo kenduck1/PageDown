@@ -3,7 +3,8 @@ import remarkParse from 'remark-parse'
 import remarkGfm from 'remark-gfm'
 import remarkFrontmatter from 'remark-frontmatter'
 import { visit } from 'unist-util-visit'
-import type { Root, Heading, Text, InlineCode } from 'mdast'
+import type { Root, Heading } from 'mdast'
+import { headingPlainText } from '../../../markdown/toc-plugin'
 
 export interface OutlineHeading {
   depth: number
@@ -11,24 +12,14 @@ export interface OutlineHeading {
   sourceOffset: number
 }
 
-// Flattens a heading's inline content to plain text by concatenating every
-// text/inlineCode leaf's value, in document order. Deliberately narrow
-// rather than pulling in `mdast-util-to-string`: that package is only a
-// transitive dependency here (nothing in package.json declares it), and
-// under pnpm's strict node_modules layout a transitive-only package isn't
-// resolvable via a plain `import` from application code. Headings only ever
-// contain phrasing content (plain text, emphasis/strong/delete wrapping
-// text, inline code, links/images wrapping text) -- walking every
-// text/inlineCode leaf covers all of it.
-function headingText(node: Heading): string {
-  let text = ''
-  visit(node, (child) => {
-    if (child.type === 'text' || child.type === 'inlineCode') {
-      text += (child as Text | InlineCode).value
-    }
-  })
-  return text
-}
+// The flattener this file used to define privately now lives in
+// src/markdown/toc-plugin.ts and is SHARED with the rendered table of
+// contents. That is a real anti-drift requirement rather than tidiness: the
+// Outline sidebar and a rendered `<!-- toc -->` list are two views of the same
+// heading set, and a user seeing one heading named differently in each would
+// be looking at a bug with no plausible cause. See that function's own comment
+// for why it is hand-rolled rather than `mdast-util-to-string` (pnpm's strict
+// layout makes a transitive-only package unimportable).
 
 /**
  * Parses raw Markdown and returns every heading found, in document order,
@@ -68,7 +59,7 @@ export function extractOutline(source: string): OutlineHeading[] {
   visit(tree, 'heading', (node: Heading) => {
     const sourceOffset = node.position?.start.offset
     if (sourceOffset == null) return
-    headings.push({ depth: node.depth, text: headingText(node), sourceOffset })
+    headings.push({ depth: node.depth, text: headingPlainText(node), sourceOffset })
   })
 
   return headings

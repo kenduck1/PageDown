@@ -4,6 +4,7 @@ import { gfm } from '@milkdown/preset-gfm'
 import { frontmatterRemark, frontmatterNode } from './nodes/frontmatter'
 import { pagebreakRemark, pagebreakRemarkToMarkdown, pagebreakNode } from './nodes/pagebreak'
 import { commentRemark, commentRemarkToMarkdown, commentSchema } from './nodes/comment'
+import { tocRemark, tocRemarkToMarkdown, tocNode } from './nodes/toc'
 import { linkReferenceSchema, imageReferenceNode, definitionNode } from './nodes/reference'
 import { tableCellSchemaNoBr, tableHeaderSchemaNoBr } from './table-cell-empty-fix'
 import {
@@ -62,6 +63,13 @@ export const EDITOR_SCHEMA_PLUGINS = [
   commentRemark,
   commentRemarkToMarkdown,
   commentSchema,
+  // Schema only. The live-rendering node view (tocViewProse) is deliberately
+  // NOT here, matching safeImageViewProse's placement in EDITOR_COMMAND_PLUGINS
+  // -- it is rendering behaviour, not document schema, and this list's whole
+  // job is to be exactly what round-trip fidelity depends on.
+  tocRemark,
+  tocRemarkToMarkdown,
+  tocNode,
   // Reference-style links: required, not optional, once
   // remarkInlineLinkPlugin is gone -- ParserState.#matchTarget THROWS on an
   // mdast node type no schema claims. See nodes/reference.ts.

@@ -745,19 +745,22 @@ describe('slash-plugin: itemCount agrees with the real, isEnabled-aware catalogu
     openSlashSessionAt(view, posOf(view, 'and'))
 
     // Independently computed expectation, not trusted from the plugin's own
-    // report -- the query-only catalogue size (all 13 items, unfiltered by
+    // report -- the query-only catalogue size (all 14 items, unfiltered by
     // isEnabled) versus the real, isEnabled-aware count a palette built the
-    // way Task 5 is expected to build it would actually render.
-    expect(filterSlashItems(SLASH_ITEMS, '').length).toBe(13)
+    // way Task 5 is expected to build it would actually render. Both numbers
+    // moved by one when the "Table of contents" item landed; it is not
+    // block-replacing, so it counts on both sides and the GAP of exactly 2 --
+    // the thing this test is about -- is unchanged.
+    expect(filterSlashItems(SLASH_ITEMS, '').length).toBe(14)
     const reallyEnabled = editor.action(
       (ctx) =>
         filterSlashItems(SLASH_ITEMS, '').filter((item) => item.isEnabled(ctx, view.state)).length
     )
-    expect(reallyEnabled).toBe(11) // math-block + mermaid-diagram both disabled here
+    expect(reallyEnabled).toBe(12) // math-block + mermaid-diagram both disabled here
 
     // The plugin's own itemCount must agree with the real, rendered count --
     // not the larger, query-only number the pre-fix code would have reported.
-    expect(session(view)?.itemCount).toBe(11)
+    expect(session(view)?.itemCount).toBe(12)
   })
 
   it('ArrowDown never lands past the last REAL item in that scenario -- the desync this fix closes', async () => {
@@ -777,13 +780,13 @@ describe('slash-plugin: itemCount agrees with the real, isEnabled-aware catalogu
     const view = editor.action((ctx) => ctx.get(editorViewCtx)) as EditorView
     openSlashSessionAt(view, posOf(view, 'and'))
     const itemCount = session(view)?.itemCount
-    expect(itemCount).toBe(11)
+    expect(itemCount).toBe(12)
 
     for (let i = 0; i < (itemCount as number); i++) {
       fireEvent.keyDown(view.dom, { key: 'ArrowDown' })
     }
     // Wrapped all the way around exactly once -- back to 0, a real,
-    // in-range item, not 11 (which would be `items[11]`, undefined, per the
+    // in-range item, not 12 (which would be `items[12]`, undefined, per the
     // desync this fix closes).
     expect(session(view)?.activeIndex).toBe(0)
   })
