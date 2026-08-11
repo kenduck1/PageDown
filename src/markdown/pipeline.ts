@@ -21,6 +21,7 @@ import { createMathBlockToHast, createMathInlineToHast } from './math-to-hast'
 import { remarkComment } from './comment-plugin'
 import { createCommentToHast } from './comment-to-hast'
 import { isRelativeLocalPath, isRemoteImageSrc, urlToRelativePath } from './local-image-src'
+import { BLOCK_INDEX_HAST_PROPERTY } from '../pagination/page-breaks'
 
 export type { SourceMap }
 
@@ -73,6 +74,62 @@ function undoDoubleClobberPrefix(value: unknown): unknown {
     return value.map(undoDoubleClobberPrefix)
   }
   return value
+}
+
+// Stamps every top-level element with its own index into the document's mdast
+// ROOT CHILDREN, so the sandboxed paginator can report a recovered page break
+// (src/pagination/page-breaks.ts) in a coordinate space the Milkdown editor
+// also speaks. The claim that both sides agree on that index -- that
+// `mdast.children[i]` is the same block as the ProseMirror doc's i-th
+// top-level node, even though the two are produced by two entirely separate
+// parses -- is not assumed: it is pinned by
+// src/markdown/block-correspondence.test.ts across the whole reference
+// corpus, every shipped template, and the constructs most likely to break it.
+//
+// Matching hast elements to mdast nodes by SOURCE POSITION rather than by
+// ordinal is load-bearing, not fussiness. mdast-util-to-hast emits nothing at
+// all for several root node types (`yaml` frontmatter, `definition`) and
+// RELOCATES another (every `footnoteDefinition` is collected into one
+// generated `<section class="footnotes">` appended at the very end of the
+// document), so hast's root children are neither the same length nor the same
+// order as mdast's -- an ordinal walk would silently misattribute every block
+// after the first frontmatter block or link definition. Position matching is
+// exact because every handler that can produce a root-level element calls
+// `state.patch(node, result)`, which copies the source node's own `position`
+// across; that includes both of this pipeline's own custom handlers
+// (createPagebreakToHast, createMathBlockToHast).
+//
+// Deliberately NOT implemented as an mdast transform setting
+// `node.data.hProperties`, which is the more obvious route: mdast-util-to-hast
+// only applies hProperties through `state.applyData`, and
+// `createMathBlockToHast` specifically CANNOT call applyData (mdast-util-math
+// stamps its own `data.hName`/`data.hChildren` at parse time, which applyData
+// would honour INSTEAD of the inert placeholder shape the math feature needs
+// -- see math-to-hast.ts's own comment). A block equation would silently lose
+// its stamp, and a lost stamp is invisible: it degrades to a missing page
+// guide, not an error.
+//
+// The value carries this render's own unguessable token because a bare
+// `data-pd-block="7"` written by hand in a document's raw HTML would otherwise
+// survive the sanitize exception below and forge a page boundary in the
+// editor. Same mechanism, and the same reasoning, as the pagebreak marker's
+// own per-render token class; the token is stripped back out of the final
+// HTML string at the end of markdownToHtml, exactly as the pagebreak class is.
+function stampBlockIndices(mdastTree: Root, hastTree: HastRoot, token: string): void {
+  const indexByStartOffset = new Map<number, number>()
+  mdastTree.children.forEach((node, index) => {
+    const offset = node.position?.start?.offset
+    if (typeof offset === 'number') indexByStartOffset.set(offset, index)
+  })
+
+  for (const node of hastTree.children) {
+    if (node.type !== 'element') continue
+    const offset = node.position?.start?.offset
+    if (typeof offset !== 'number') continue
+    const index = indexByStartOffset.get(offset)
+    if (index === undefined) continue
+    node.properties[BLOCK_INDEX_HAST_PROPERTY] = `${token}-${index}`
+  }
 }
 
 // Rewrites every relative local `img src` in the tree into the sandboxed
@@ -187,7 +244,18 @@ function applyRemoteImagePolicy(tree: HastRoot, allowRemoteImages: boolean): voi
 export function markdownToHtml(
   source: string,
   options?: { assetToken?: string; allowRemoteImages?: boolean }
-): { html: string; sourceMap: SourceMap; warnings: DocumentWarning[] } {
+): {
+  html: string
+  sourceMap: SourceMap
+  warnings: DocumentWarning[]
+  /**
+   * How many top-level blocks the document has, i.e. `mdast.children.length`.
+   * Consumers of the `data-pd-block` stamps need this to tell a stale set of
+   * recovered page breaks (computed against a structurally different document)
+   * from a current one -- see src/pagination/page-breaks.ts.
+   */
+  blockCount: number
+} {
   // unified's `.parse()` only performs the parse phase — it does NOT run
   // attached transformers (remarkPagebreak's tree mutation only executes
   // during `.run()`/`.runSync()`). remarkGfm/remarkFrontmatter don't need
@@ -259,6 +327,15 @@ export function markdownToHtml(
   const pagebreakToken = randomBytes(16).toString('hex')
   const tokenClassName = `${PAGEBREAK_CLASS}-${pagebreakToken}`
 
+  // A SECOND, independent per-render token, for the block-index stamps
+  // (stampBlockIndices above). Kept separate from the pagebreak one rather
+  // than shared: the two are swapped back out of the final HTML by two
+  // different string replacements, and a single shared token would make each
+  // replacement's search string a prefix-relative of the other's -- fine
+  // today, but exactly the kind of coupling that turns into a silent
+  // cross-contamination the first time either format changes.
+  const blockIndexToken = randomBytes(16).toString('hex')
+
   // allowDangerousHtml: true here does NOT mean unsafe output — it means
   // "don't drop raw HTML, turn it into `raw` hast nodes for `raw()` and
   // `sanitize()` below to resolve and clean up." `pagebreak`-typed nodes are
@@ -277,6 +354,8 @@ export function markdownToHtml(
       }
     })
     .runSync(tree) as HastRoot
+
+  stampBlockIndices(tree, hastTree, blockIndexToken)
 
   // hast-util-sanitize's default (GitHub-style) schema doesn't allow a plain
   // `class` on `div` at all — reasonable for arbitrary author-supplied raw
@@ -302,7 +381,27 @@ export function markdownToHtml(
     ],
     attributes: {
       ...defaultSchema.attributes,
-      div: [...(defaultSchema.attributes?.div ?? []), ['className', tokenClassName]]
+      div: [...(defaultSchema.attributes?.div ?? []), ['className', tokenClassName]],
+      // The block-index stamp, allowed on ANY element (`'*'`) because the
+      // top-level block it lands on can be a `p`, `h1`-`h6`, `ul`, `table`,
+      // `pre`, `blockquote` or `div` -- but constrained to a value matching
+      // THIS render's own token, so it is exactly as unforgeable as the
+      // pagebreak exception above. A hand-written `<p data-pd-block="7">` in a
+      // document's own raw HTML fails the pattern and is stripped like any
+      // other unknown attribute.
+      //
+      // A regex rather than an enumerated value list: hast-util-sanitize
+      // supports both (its own docs give `span: [['className', /^hljs-/]]` as
+      // the example), and enumerating one string per block would be an
+      // O(blocks) linear scan per attribute per element -- ~10^7 string
+      // comparisons on this repo's own `very-long.md` corpus fixture, which
+      // has 3859 top-level blocks. Anchored at both ends, with `\d+` rather
+      // than `.*`, so the token prefix cannot be a prefix of some longer
+      // attacker-chosen value.
+      '*': [
+        ...(defaultSchema.attributes?.['*'] ?? []),
+        [BLOCK_INDEX_HAST_PROPERTY, new RegExp(`^${blockIndexToken}-\\d+$`)]
+      ]
     }
   }
 
@@ -372,10 +471,17 @@ export function markdownToHtml(
   // realistic language mix.
   const highlighted = unified().use(rehypeHighlight).runSync(sanitized) as HastRoot
 
+  // Both replacements swap a per-render token back out of the emitted HTML,
+  // for the same reason: the token exists only to make the sanitize schema
+  // exception above unforgeable, and nothing downstream should have to know
+  // it. The pagebreak one restores the stable public class name; the
+  // block-index one leaves a bare `data-pd-block="7"` for the sandboxed
+  // paginator to read back.
   const html = unified()
     .use(rehypeStringify)
     .stringify(highlighted)
     .replaceAll(tokenClassName, PAGEBREAK_CLASS)
+    .replaceAll(`${blockIndexToken}-`, '')
 
-  return { html, sourceMap, warnings }
+  return { html, sourceMap, warnings, blockCount: tree.children.length }
 }

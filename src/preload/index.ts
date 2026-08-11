@@ -119,6 +119,29 @@ const api = {
   // mtime, not accepted from the renderer.
   clearPendingAutosave: (filePath: string) =>
     ipcRenderer.invoke('file:clearPendingAutosave', filePath),
+  // Crash protection for NEVER-SAVED documents. The four entries below are the
+  // untitled counterpart of the four version-history entries just above, and
+  // the shape difference is the whole design: those key on a file PATH, these
+  // key on a `draftId` because there is no path -- see src/main/unsaved-
+  // drafts.ts for why a synthetic path (or the renderer's own tab id, which
+  // restarts at `tab-1` every launch) could not work.
+  //
+  // The id is MINTED BY MAIN and returned from the first write; the renderer
+  // remembers it on the tab and echoes it back so later ticks overwrite the
+  // same draft instead of accumulating one file per tick. `null` in means
+  // "this document has no draft yet"; `null` out means nothing was written
+  // (empty content, or an already-logged failure).
+  //
+  // No isKnownPath rule applies to any of these because none of them takes a
+  // path -- containment is carried entirely by main's strict anchored
+  // draft-id pattern. See the handlers' own comment in src/main/index.ts.
+  autosaveUnsavedDraft: (draftId: string | null, content: string): Promise<string | null> =>
+    ipcRenderer.invoke('file:autosaveUnsavedDraft', draftId, content),
+  listUnsavedDrafts: () => ipcRenderer.invoke('file:listUnsavedDrafts'),
+  readUnsavedDraft: (draftId: string): Promise<string | null> =>
+    ipcRenderer.invoke('file:readUnsavedDraft', draftId),
+  discardUnsavedDraft: (draftId: string): Promise<void> =>
+    ipcRenderer.invoke('file:discardUnsavedDraft', draftId),
   // `ipcRenderer.send`, not `invoke` -- this fires on every ResizeObserver
   // tick from the Split mode preview pane and has no result the caller needs
   // to await (see the split-preview:setBounds handler's own comment in

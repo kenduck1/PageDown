@@ -1,5 +1,10 @@
 @import 'tailwindcss';
 @import '../../../typography/document-typography.css' layer(base);
+/* Source mode's textarea + syntax-highlight mirror. Its own file (rather than
+   rules added here) because it owns a self-contained surface, and layer(base)
+   rather than unlayered because an unlayered rule beats every Tailwind
+   utility -- the trap this file's own @layer base comment records. */
+@import '../components/source-editor.css' layer(base);
 
 @font-face {
   font-family: 'Source Serif 4';
@@ -51,6 +56,8 @@
   --color-find-match-active: #f7c948;
   --color-comment-mark: #e3d6fb;
   --color-slash-query: #d9e6fb;
+  --color-page-guide: #c8ccd2;
+  --color-page-guide-label: #7a8089;
 
   /* Font families */
   --font-sans: -apple-system, 'Segoe UI', system-ui, sans-serif;
@@ -295,6 +302,80 @@
   .milkdown-mount .ProseMirror .pagedown-slash-query {
     background: var(--color-slash-query);
     border-radius: 2px;
+  }
+
+  /* Editor page-break guides (design:50-58), an EDITOR-ONLY affordance for
+     the same reason and by the same rule as the four above -- a page
+     boundary drawn in the paginated preview or an exported PDF would be
+     drawing a line ON the page break it describes. The sandboxed context
+     never sees this file at all, so scoping the rule here rather than in
+     src/typography/document-typography.css is what keeps that true.
+
+     The colours are TOKENS rather than the hardcoded literals
+     .pagedown-image's note uses, and the distinction is deliberate: these
+     two tokens are declared ONLY in the light `@theme static` block, with no
+     `:root[data-theme='dark']` counterpart, so they resolve to the same
+     value under either app theme. That gives the "document content never
+     goes dark" exemption for free while still keeping the values with every
+     other colour in this file instead of buried in a rule body.
+
+     GEOMETRY IS THE LOAD-BEARING PART OF THIS RULE, not the colour.
+     `position: absolute` takes the widget out of flow entirely, which buys
+     two things that a zero-height in-flow element does not:
+
+     1. It contributes NOTHING to layout height, so inserting a guide cannot
+        move a single block in the document. That is what keeps
+        phase0/gate10-editor-layout-parity.spec.ts's 0.000px editor/paginator
+        parity intact -- and Gate 10 cannot prove it, because its own
+        REPORT_TEMPLATE fixture is single-page and therefore has no page
+        breaks to draw at all. The real proof is Gate 36, which measures
+        every block's position in a multi-page document before and after the
+        guides arrive.
+     2. Out-of-flow boxes do not participate in margin collapsing, so the
+        margins of the two blocks a guide sits between still collapse
+        THROUGH it exactly as they did when they were adjacent siblings. An
+        in-flow zero-height div would have separated them, silently turning
+        one collapsed margin into two stacked ones -- a real layout change,
+        invisible in a screenshot, that would have broken parity on every
+        page boundary.
+
+     `top` is deliberately left `auto`: for an absolutely positioned box that
+     resolves to the STATIC position, i.e. exactly where the box would have
+     sat in flow, which is the boundary we want. The positioned ancestor is
+     `.milkdown-mount` (which carries Tailwind's `relative`), so `left`/
+     `right` span the document's own content width. */
+  .milkdown-mount .ProseMirror .pagedown-page-guide {
+    position: absolute;
+    left: 0;
+    right: 0;
+    height: 0;
+    border-top: 1px dashed var(--color-page-guide);
+    pointer-events: none;
+    user-select: none;
+  }
+
+  /* A break that falls INSIDE a block cannot be drawn where it really is --
+     the editor has no sub-block coordinate to address (see
+     src/pagination/page-breaks.ts). A dotted, lighter line says "this one is
+     approximate" without needing the label to be read, matching design:69's
+     instruction to downgrade honestly and SAY SO rather than present a guess
+     as a fact. */
+  .milkdown-mount .ProseMirror .pagedown-page-guide.is-approximate {
+    border-top-style: dotted;
+  }
+
+  /* Absolutely positioned relative to the guide so the label, like the line
+     itself, contributes no layout height. Sits just above the line at the
+     right-hand edge, where it is out of the way of the text it annotates. */
+  .milkdown-mount .ProseMirror .pagedown-page-guide-label {
+    position: absolute;
+    right: 0;
+    bottom: 2px;
+    font-family: var(--font-sans);
+    font-size: var(--text-11);
+    line-height: 1;
+    color: var(--color-page-guide-label);
+    white-space: nowrap;
   }
 
   /* The image node view's wrapper (src/renderer/src/milkdown/image-security.ts).

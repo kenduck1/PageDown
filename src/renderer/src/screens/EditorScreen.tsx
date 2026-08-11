@@ -301,7 +301,9 @@ function EditorScreen(): React.JSX.Element {
   const {
     pageCount,
     loading: pageCountPending,
-    warnings: documentWarnings
+    warnings: documentWarnings,
+    pageBreaks,
+    blockCount
   } = usePageCount(content, filePath, undefined, remoteImagesAllowed === true)
   // undefined (not preferences?.autosaveIntervalMs ?? somethingElse) when
   // preferences haven't loaded yet -- useAutosave's own default parameter
@@ -1276,6 +1278,14 @@ function EditorScreen(): React.JSX.Element {
   // document's typography any more than they can about its page box.
   const documentStyle = useMemo(() => resolveDocumentStyle(pageConfig), [pageConfig])
 
+  // Bundles the two halves of one settled pagination result into the single
+  // stable object MilkdownEditor's own guide effect keys on. Memoized on the
+  // two values it wraps, so it changes identity exactly when a NEW render
+  // settles -- not on every keystroke, which is what an inline literal would
+  // do (and which would dispatch a ProseMirror transaction per keystroke for
+  // guides that had not moved).
+  const pageGuides = useMemo(() => ({ breaks: pageBreaks, blockCount }), [pageBreaks, blockCount])
+
   // Split mode's fit-to-width scale (src/renderer/src/lib/fit-scale.ts holds
   // the arithmetic and, more importantly, the argued FLOOR).
   //
@@ -1653,6 +1663,15 @@ function EditorScreen(): React.JSX.Element {
         onResolveLocalImage={resolveLocalImage}
         onSelectionChanged={handleSelectionChanged}
         onSlashStateChanged={slashMenu.handleSlashStateChanged}
+        // Editor page-break guides (design:50-58), derived from the SAME
+        // Paged.js render the status bar's page count already comes from --
+        // see usePageCount / page-count-generator.ts for why that reuse is
+        // the point rather than a shortcut. Memoized because MilkdownEditor
+        // applies it through an effect keyed on identity: a fresh object
+        // literal every render would dispatch a ProseMirror transaction on
+        // every unrelated EditorScreen re-render (of which there are many --
+        // every keystroke moves `content`).
+        pageGuides={pageGuides}
       />
     </div>
   )

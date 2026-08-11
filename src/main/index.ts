@@ -68,6 +68,13 @@ import {
   readSnapshotContent,
   clearPendingAutosaveForFile
 } from './version-history'
+import {
+  writeUnsavedDraft,
+  readUnsavedDraft,
+  listUnsavedDrafts,
+  discardUnsavedDraft,
+  pruneExpiredDrafts
+} from './unsaved-drafts'
 import { PAGE_WIDTH_PX, PAGE_HEIGHT_PX } from '../typography/page-geometry'
 import { applyWindowUiState, initApplicationMenu, refreshApplicationMenu } from './app-menu'
 import { getActiveWindow, initWindowFocusTracking } from './focused-window'
@@ -1461,6 +1468,20 @@ app.whenReady().then(async () => {
     session.defaultSession.setSpellCheckerEnabled(preferences.spellcheckEnabled)
   })
 
+  // Age out unsaved-document drafts nobody has recovered in 30 days. Runs
+  // once per launch, AFTER the window already exists, and fire-and-forget --
+  // this is a housekeeping pass over a directory that is empty for most
+  // users, and a slow or failed sweep must never delay a launch. Deliberately
+  // not gated on `documentWindows.size`: it reads and deletes only from the
+  // drafts directory, and touches nothing any live window holds (a draft
+  // still open in a tab is rewritten on its next autosave tick, which
+  // refreshes the mtime this prune measures). See pruneExpiredDrafts' own
+  // comment for why deleting user work on a timer is the right tradeoff here
+  // and what the alternative degrades into.
+  pruneExpiredDrafts(app.getPath('userData'), new Date()).catch((err: unknown) => {
+    console.error('Failed to prune expired unsaved-document drafts', err)
+  })
+
   // Context menu attachment moved into createWindow() itself (Multi-window
   // support) -- every window gets its own now, not just this first one.
   // See attachContextMenu's own comment for the full spelling-suggestion
@@ -1821,6 +1842,75 @@ app.whenReady().then(async () => {
       await clearPendingAutosaveForFile(userDataDir, canonicalPath, filePath)
     } catch (err) {
       console.error('Failed to clear pending autosave snapshots', err)
+    }
+  })
+
+  // --- Crash protection for NEVER-SAVED (untitled) documents ------------
+  //
+  // The four handlers below are the untitled-document counterpart of the four
+  // version-history handlers immediately above, and every one of them is
+  // best-effort in exactly the same way: wrapped in its own try/catch,
+  // never rejecting, so a failed draft write degrades to "slightly less
+  // protection" and can never surface as an error attributed to whatever the
+  // user was actually doing. The renderer calls the write and the discard
+  // fire-and-forget (`void ...`), so an unhandled rejection here would show
+  // up as a console error unrelated to anything the user did.
+  //
+  // WHY NO isKnownPath CHECK ON ANY OF THEM. That invariant governs
+  // renderer-supplied PATHS -- and none of these take one. There is no path
+  // to take: the document has never been saved, which is the entire premise.
+  // The only renderer-supplied value that reaches disk here is a draft id,
+  // which is contained by unsaved-drafts.ts's strict anchored
+  // DRAFT_ID_PATTERN (a match-or-refuse allowlist, not a sanitizer) plus a
+  // throwing backstop inside its own path builder -- the same two-layer
+  // treatment version-history.ts gives SNAPSHOT_ID_PATTERN, for the same
+  // reason. Note the id is MINTED HERE, in main, and the renderer can only
+  // ever echo one back; it can never name a fresh one.
+  //
+  // `file:autosaveUnsavedDraft` returns the id in use (minting one on the
+  // first call for a given document) so the renderer can keep overwriting the
+  // same draft instead of leaving one file per 45-second tick. `null` means
+  // nothing was written -- empty content, or a failure that has already been
+  // logged.
+  ipcMain.handle(
+    'file:autosaveUnsavedDraft',
+    async (_event, draftId: string | null, content: string) => {
+      try {
+        return await writeUnsavedDraft(
+          app.getPath('userData'),
+          typeof draftId === 'string' ? draftId : null,
+          content
+        )
+      } catch (err) {
+        console.error('Failed to write unsaved-document draft', err)
+        return null
+      }
+    }
+  )
+
+  ipcMain.handle('file:listUnsavedDrafts', async () => {
+    try {
+      return await listUnsavedDrafts(app.getPath('userData'))
+    } catch (err) {
+      console.error('Failed to list unsaved-document drafts', err)
+      return []
+    }
+  })
+
+  ipcMain.handle('file:readUnsavedDraft', async (_event, draftId: string) => {
+    try {
+      return await readUnsavedDraft(app.getPath('userData'), draftId)
+    } catch (err) {
+      console.error('Failed to read unsaved-document draft', err)
+      return null
+    }
+  })
+
+  ipcMain.handle('file:discardUnsavedDraft', async (_event, draftId: string) => {
+    try {
+      await discardUnsavedDraft(app.getPath('userData'), draftId)
+    } catch (err) {
+      console.error('Failed to discard unsaved-document draft', err)
     }
   })
 

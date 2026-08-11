@@ -247,7 +247,8 @@ export async function createSplitPreviewHarness(
             ready: result.ready,
             layoutMs: result.layoutMs,
             diagramBoxes: result.diagramBoxes ?? [],
-            imageBoxes: result.imageBoxes ?? []
+            imageBoxes: result.imageBoxes ?? [],
+            pageBreaks: result.pageBreaks ?? []
           }
         }
         await new Promise((resolve) => setTimeout(resolve, 50))

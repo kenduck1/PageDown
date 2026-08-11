@@ -12,6 +12,7 @@ function tab(overrides: Partial<DocumentTab> & { id: string }): DocumentTab {
     mtimeMs: null,
     remoteImagesAllowed: null,
     currentPage: 1,
+    draftId: null,
     ...overrides
   }
 }

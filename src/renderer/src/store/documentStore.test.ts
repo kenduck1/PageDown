@@ -25,6 +25,13 @@ beforeEach(() => {
     getVersionHistory: vi.fn(),
     restoreVersionContent: vi.fn(),
     clearPendingAutosave: vi.fn(),
+    // Crash protection for never-saved documents. Required (not optional) on
+    // FileApi, so a missing entry here is a compile error rather than a
+    // runtime surprise -- see index.d.ts for why that tradeoff was taken.
+    autosaveUnsavedDraft: vi.fn().mockResolvedValue(null),
+    listUnsavedDrafts: vi.fn().mockResolvedValue([]),
+    readUnsavedDraft: vi.fn().mockResolvedValue(null),
+    discardUnsavedDraft: vi.fn().mockResolvedValue(undefined),
     setSplitPreviewBounds: vi.fn(),
     sendSplitPreviewDocument: vi.fn(),
     destroySplitPreview: vi.fn(),
@@ -1205,5 +1212,294 @@ describe('useDocumentStore resolveLocalImage', () => {
     useDocumentStore.setState({ filePath: '/docs/report.md' })
 
     await expect(useDocumentStore.getState().resolveLocalImage('nope.png')).resolves.toBeNull()
+  })
+})
+
+// --- Crash protection for NEVER-SAVED (untitled) documents ----------------
+//
+// The path-keyed autosave/version-history machinery cannot protect a document
+// with no path: documentStore.save()'s post-save snapshot never fires,
+// useAutosave's tick has nothing to key on, and every version-history entry
+// point starts from canonicalizeDocumentPath(filePath). These cover the
+// renderer half of the replacement (src/main/unsaved-drafts.ts covers the
+// storage half, against a real temp directory).
+describe('unsaved-document drafts', () => {
+  function untitledTab(overrides: Record<string, unknown> = {}): void {
+    const tab = {
+      id: 'tab-draft',
+      filePath: null,
+      content: '# In progress',
+      isDirty: true,
+      mtimeMs: null,
+      remoteImagesAllowed: null,
+      currentPage: 1,
+      draftId: null,
+      ...overrides
+    }
+    useDocumentStore.setState({
+      tabs: [tab],
+      activeTabId: tab.id,
+      content: tab.content as string,
+      filePath: tab.filePath as string | null,
+      isDirty: tab.isDirty as boolean,
+      mtimeMs: null,
+      remoteImagesAllowed: null,
+      currentPage: 1
+    })
+  }
+
+  it('writes a draft for a dirty untitled document and remembers the minted id', async () => {
+    untitledTab()
+    vi.mocked(window.api.autosaveUnsavedDraft).mockResolvedValue('a'.repeat(32))
+
+    await useDocumentStore.getState().snapshotUnsavedDrafts()
+
+    expect(window.api.autosaveUnsavedDraft).toHaveBeenCalledWith(null, '# In progress')
+    expect(useDocumentStore.getState().tabs[0].draftId).toBe('a'.repeat(32))
+  })
+
+  // The point of remembering the id: without it every 45s tick would mint a
+  // fresh draft, so one document being written for an hour would leave ~80
+  // rows on the Home screen instead of one.
+  it('echoes the SAME id back on the next tick rather than minting another draft', async () => {
+    untitledTab({ draftId: 'b'.repeat(32) })
+    vi.mocked(window.api.autosaveUnsavedDraft).mockResolvedValue('b'.repeat(32))
+
+    await useDocumentStore.getState().snapshotUnsavedDrafts()
+
+    expect(window.api.autosaveUnsavedDraft).toHaveBeenCalledWith('b'.repeat(32), '# In progress')
+  })
+
+  it('writes nothing for a clean tab, a byte-empty tab, or a saved document', async () => {
+    useDocumentStore.setState({
+      tabs: [
+        {
+          id: 'clean',
+          filePath: null,
+          content: '# x',
+          isDirty: false,
+          mtimeMs: null,
+          remoteImagesAllowed: null,
+          currentPage: 1,
+          draftId: null
+        },
+        {
+          id: 'empty',
+          filePath: null,
+          content: '',
+          isDirty: true,
+          mtimeMs: null,
+          remoteImagesAllowed: null,
+          currentPage: 1,
+          draftId: null
+        },
+        {
+          id: 'saved',
+          filePath: '/a.md',
+          content: '# a',
+          isDirty: true,
+          mtimeMs: null,
+          remoteImagesAllowed: null,
+          currentPage: 1,
+          draftId: null
+        }
+      ],
+      activeTabId: 'clean'
+    })
+
+    await useDocumentStore.getState().snapshotUnsavedDrafts()
+
+    expect(window.api.autosaveUnsavedDraft).not.toHaveBeenCalled()
+  })
+
+  // The documented active-tab-only limitation useAutosave carries for SAVED
+  // documents must NOT be inherited here: for an untitled document the draft
+  // is the only copy in existence, so a background tab inheriting it would
+  // leave the exact hole this feature closes, one tab switch away.
+  it('protects BACKGROUND untitled tabs too, not just the active one', async () => {
+    useDocumentStore.setState({
+      tabs: [
+        {
+          id: 'front',
+          filePath: null,
+          content: '# front',
+          isDirty: true,
+          mtimeMs: null,
+          remoteImagesAllowed: null,
+          currentPage: 1,
+          draftId: null
+        },
+        {
+          id: 'back',
+          filePath: null,
+          content: '# back',
+          isDirty: true,
+          mtimeMs: null,
+          remoteImagesAllowed: null,
+          currentPage: 1,
+          draftId: null
+        }
+      ],
+      activeTabId: 'front'
+    })
+    vi.mocked(window.api.autosaveUnsavedDraft).mockResolvedValue('c'.repeat(32))
+
+    await useDocumentStore.getState().snapshotUnsavedDrafts()
+
+    expect(window.api.autosaveUnsavedDraft).toHaveBeenCalledTimes(2)
+    expect(window.api.autosaveUnsavedDraft).toHaveBeenCalledWith(null, '# front')
+    expect(window.api.autosaveUnsavedDraft).toHaveBeenCalledWith(null, '# back')
+  })
+
+  // A real race, not a defensive flourish: the user can hit Cmd+S during the
+  // write's IPC round trip, in which case runSave has already promoted the
+  // tab. Writing the id back then would strand a draft file holding pre-save
+  // content, offered forever on Home for a document that WAS saved.
+  it('discards the just-written draft if the document got saved during the round trip', async () => {
+    untitledTab()
+    vi.mocked(window.api.autosaveUnsavedDraft).mockImplementation(async () => {
+      useDocumentStore.setState((state) => ({
+        tabs: state.tabs.map((t) => ({ ...t, filePath: '/saved.md', isDirty: false }))
+      }))
+      return 'd'.repeat(32)
+    })
+
+    await useDocumentStore.getState().snapshotUnsavedDrafts()
+
+    expect(window.api.discardUnsavedDraft).toHaveBeenCalledWith('d'.repeat(32))
+    expect(useDocumentStore.getState().tabs[0].draftId).toBeNull()
+  })
+
+  it('never rejects when the draft write fails', async () => {
+    untitledTab()
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    vi.mocked(window.api.autosaveUnsavedDraft).mockRejectedValue(new Error('disk full'))
+
+    await expect(useDocumentStore.getState().snapshotUnsavedDrafts()).resolves.toBeUndefined()
+    expect(useDocumentStore.getState().tabs[0].draftId).toBeNull()
+  })
+
+  // PROMOTION. Once the document has a real path the path-keyed machinery
+  // takes over, so the draft must stop existing -- otherwise Home offers a
+  // permanent, stale "unsaved document" row for a document that was saved.
+  it('save() discards the draft and clears draftId, handing over to the path-keyed snapshot', async () => {
+    untitledTab({ draftId: 'e'.repeat(32) })
+    vi.mocked(window.api.saveFile).mockResolvedValue({ filePath: '/new.md', mtimeMs: 5000 })
+
+    await useDocumentStore.getState().save()
+
+    expect(window.api.discardUnsavedDraft).toHaveBeenCalledWith('e'.repeat(32))
+    expect(useDocumentStore.getState().tabs[0].draftId).toBeNull()
+    expect(useDocumentStore.getState().tabs[0].filePath).toBe('/new.md')
+    // The handover: from here on this document is protected by the existing
+    // path-keyed version-history store.
+    expect(window.api.autosaveSnapshot).toHaveBeenCalledWith('# In progress', '/new.md')
+  })
+
+  it('save() discards nothing when the document never had a draft', async () => {
+    untitledTab()
+    vi.mocked(window.api.saveFile).mockResolvedValue({ filePath: '/new.md', mtimeMs: 5000 })
+
+    await useDocumentStore.getState().save()
+
+    expect(window.api.discardUnsavedDraft).not.toHaveBeenCalled()
+  })
+
+  it('a CANCELLED Save-As leaves the draft alone', async () => {
+    untitledTab({ draftId: 'f'.repeat(32) })
+    vi.mocked(window.api.saveFile).mockResolvedValue(null)
+
+    await useDocumentStore.getState().save()
+
+    expect(window.api.discardUnsavedDraft).not.toHaveBeenCalled()
+    expect(useDocumentStore.getState().tabs[0].draftId).toBe('f'.repeat(32))
+  })
+
+  // "Don't Save" must actually discard. Every discard path in the app --
+  // close-guard.ts's window/quit guard, EditorScreen's "<- Home" handler and
+  // both of its tab-close handlers -- ends in closeTab, which is why the
+  // discard lives there rather than at four separate call sites.
+  it("closeTab discards the closed tab's draft", () => {
+    untitledTab({ draftId: '1'.repeat(32) })
+
+    useDocumentStore.getState().closeTab('tab-draft')
+
+    expect(window.api.discardUnsavedDraft).toHaveBeenCalledWith('1'.repeat(32))
+  })
+
+  it('closeTab discards the draft of a BACKGROUND tab, not the active one', () => {
+    useDocumentStore.setState({
+      tabs: [
+        {
+          id: 'front',
+          filePath: null,
+          content: '# front',
+          isDirty: true,
+          mtimeMs: null,
+          remoteImagesAllowed: null,
+          currentPage: 1,
+          draftId: '2'.repeat(32)
+        },
+        {
+          id: 'back',
+          filePath: null,
+          content: '# back',
+          isDirty: true,
+          mtimeMs: null,
+          remoteImagesAllowed: null,
+          currentPage: 1,
+          draftId: '3'.repeat(32)
+        }
+      ],
+      activeTabId: 'front'
+    })
+
+    useDocumentStore.getState().closeTab('back')
+
+    expect(window.api.discardUnsavedDraft).toHaveBeenCalledTimes(1)
+    expect(window.api.discardUnsavedDraft).toHaveBeenCalledWith('3'.repeat(32))
+  })
+
+  it('closeTab touches no draft for a tab that has none', () => {
+    untitledTab()
+    useDocumentStore.getState().closeTab('tab-draft')
+    expect(window.api.discardUnsavedDraft).not.toHaveBeenCalled()
+  })
+
+  it('recoverUnsavedDraft opens the draft as a DIRTY untitled tab carrying its original id', async () => {
+    vi.mocked(window.api.readUnsavedDraft).mockResolvedValue('# Recovered work')
+
+    const recovered = await useDocumentStore.getState().recoverUnsavedDraft('4'.repeat(32))
+
+    expect(recovered).toBe(true)
+    const state = useDocumentStore.getState()
+    expect(state.content).toBe('# Recovered work')
+    expect(state.filePath).toBeNull()
+    // Dirty, so it inherits every existing unsaved-changes protection rather
+    // than looking clean and being one careless Cmd+W from a second loss.
+    expect(state.isDirty).toBe(true)
+    // The SAME draft, so continuing to type overwrites it instead of leaving
+    // the stale original beside a live copy.
+    expect(state.tabs[state.tabs.length - 1].draftId).toBe('4'.repeat(32))
+  })
+
+  it('recoverUnsavedDraft returns false when the draft is gone', async () => {
+    vi.mocked(window.api.readUnsavedDraft).mockResolvedValue(null)
+    await expect(useDocumentStore.getState().recoverUnsavedDraft('5'.repeat(32))).resolves.toBe(
+      false
+    )
+  })
+
+  // A recovered draft that is then saved must promote exactly like any other
+  // untitled document -- this is the full round trip the feature promises.
+  it('recover -> save promotes the recovered draft and discards it', async () => {
+    vi.mocked(window.api.readUnsavedDraft).mockResolvedValue('# Recovered work')
+    vi.mocked(window.api.saveFile).mockResolvedValue({ filePath: '/kept.md', mtimeMs: 9000 })
+
+    await useDocumentStore.getState().recoverUnsavedDraft('6'.repeat(32))
+    await useDocumentStore.getState().save()
+
+    expect(window.api.discardUnsavedDraft).toHaveBeenCalledWith('6'.repeat(32))
+    expect(useDocumentStore.getState().filePath).toBe('/kept.md')
   })
 })

@@ -54,6 +54,37 @@ const DESTROY_WINDOWS_TIMEOUT_MS = 5_000
 interface LiveLaunch {
   userDataDir: string
   app?: ElectronApplication
+  // False when the CALLER supplied the directory (see LaunchOptions below) --
+  // this launch may then kill the process but must never delete the
+  // directory, because the caller is relaunching against it.
+  ownsUserDataDir: boolean
+}
+
+export interface LaunchOptions {
+  /**
+   * Reuse a caller-owned userData directory instead of creating (and later
+   * removing) a fresh one.
+   *
+   * Exists for exactly one thing that is otherwise inexpressible: proving
+   * something PERSISTED across a real process death. The default behaviour
+   * mkdtemps a directory and removes it in close(), so two launches can never
+   * share state -- which is right for every gate that measures one running
+   * app, and fatal for one that has to kill the app and relaunch on the same
+   * profile (gate36's crash simulation).
+   *
+   * The caller takes on both halves of the contract: create the directory,
+   * and remove it in its own `finally`. Create it with the
+   * `pagedown-gate-userdata-` prefix so the stale-directory janitor above
+   * still covers it if the worker is force-killed.
+   *
+   * Deliberately an OPTION on this helper rather than a bare
+   * `electron.launch()` at the call site: the userData isolation this module
+   * exists to enforce (CLAUDE.md makes it a hard rule) is preserved -- the
+   * directory is still an isolated temp one, never the developer's real
+   * profile -- and so are the whenReady() await and the bounded, SIGKILLing
+   * close() that every gate depends on.
+   */
+  userDataDir?: string
 }
 const liveLaunches = new Set<LiveLaunch>()
 
@@ -87,6 +118,10 @@ process.once('exit', () => {
     } catch {
       // Already gone.
     }
+    // Killing the process is always right; deleting the directory is not.
+    // A caller-supplied directory belongs to the caller (it is mid-relaunch,
+    // by definition) and is removed by that caller's own finally.
+    if (!live.ownsUserDataDir) continue
     try {
       rmSync(live.userDataDir, { recursive: true, force: true })
     } catch {
@@ -124,15 +159,20 @@ async function sweepStaleUserDataDirs(): Promise<void> {
   }
 }
 
-export async function launchIsolatedApp(args: string[]): Promise<IsolatedApp> {
+export async function launchIsolatedApp(
+  args: string[],
+  options: LaunchOptions = {}
+): Promise<IsolatedApp> {
   if (!sweptThisProcess) {
     sweptThisProcess = true
     // Fire-and-forget: a gate must never be delayed or failed by janitorial
     // work on unrelated directories.
     void sweepStaleUserDataDirs()
   }
-  const userDataDir = await mkdtemp(join(tmpdir(), 'pagedown-gate-userdata-'))
-  const live: LiveLaunch = { userDataDir }
+  const ownsUserDataDir = options.userDataDir === undefined
+  const userDataDir =
+    options.userDataDir ?? (await mkdtemp(join(tmpdir(), 'pagedown-gate-userdata-')))
+  const live: LiveLaunch = { userDataDir, ownsUserDataDir }
   liveLaunches.add(live)
   let app: ElectronApplication
   try {
@@ -140,9 +180,13 @@ export async function launchIsolatedApp(args: string[]): Promise<IsolatedApp> {
     live.app = app
   } catch (err) {
     // The temp directory exists but no close() will ever be handed to a
-    // caller, so this is the only chance to clean it up promptly.
+    // caller, so this is the only chance to clean it up promptly -- unless
+    // the CALLER owns it, in which case removing it here would destroy state
+    // that caller is still using.
     liveLaunches.delete(live)
-    await rm(userDataDir, { recursive: true, force: true }).catch(() => undefined)
+    if (ownsUserDataDir) {
+      await rm(userDataDir, { recursive: true, force: true }).catch(() => undefined)
+    }
     throw err
   }
   // SECOND, independent reason every gate must go through this helper (the
@@ -234,8 +278,13 @@ export async function launchIsolatedApp(args: string[]): Promise<IsolatedApp> {
         // directories (~353MB) had accumulated in $TMPDIR, because the old
         // body did `await app.close()` FIRST and only then rm()'d -- so any
         // hung or throwing close skipped the cleanup entirely.
+        //
+        // Skipped entirely for a caller-supplied directory: that caller is
+        // relaunching against it, and it removes it in its own finally.
         liveLaunches.delete(live)
-        await rm(userDataDir, { recursive: true, force: true }).catch(() => undefined)
+        if (ownsUserDataDir) {
+          await rm(userDataDir, { recursive: true, force: true }).catch(() => undefined)
+        }
       }
     }
   }

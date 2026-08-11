@@ -68,13 +68,21 @@ describe('markdownToHtml', () => {
 
   it('still emits pagedown-pagebreak divs correctly alongside whole-tree sanitization', () => {
     const { html } = markdownToHtml('One.\n\n<!-- pagebreak -->\n\nTwo.')
-    expect(html).toContain('<div class="pagedown-pagebreak"></div>')
+    // The `data-pd-block` half of this literal was added when the editor
+    // page-break guides landed: every top-level element now carries its own
+    // source-block index. Kept as one exact string rather than relaxed to a
+    // class-only substring, because that also pins the pagebreak div being
+    // stamped -- it comes from a CUSTOM mdast-to-hast handler, and this is
+    // the assertion that would notice if that handler ever stopped calling
+    // `state.patch` (which is what carries the source position the stamp is
+    // matched on).
+    expect(html).toContain('<div class="pagedown-pagebreak" data-pd-block="1"></div>')
   })
 
   it('recognizes \\newpage as equivalent to the canonical pagebreak marker', () => {
     const canonical = markdownToHtml('Paragraph one.\n\n<!-- pagebreak -->\n\nParagraph two.')
     const alternate = markdownToHtml('Paragraph one.\n\n\\newpage\n\nParagraph two.')
-    expect(alternate.html).toContain('<div class="pagedown-pagebreak"></div>')
+    expect(alternate.html).toContain('<div class="pagedown-pagebreak" data-pd-block="1"></div>')
     expect(alternate.html).toBe(canonical.html)
   })
 
@@ -116,7 +124,11 @@ describe('markdownToHtml', () => {
     const { html } = markdownToHtml('<style>body{background:url(https://evil/x)}</style>\n\nAfter.')
     expect(html).not.toContain('background')
     expect(html).not.toContain('evil')
-    expect(html).toContain('<p>After.</p>')
+    // `data-pd-block="1"`, not `"0"`: the stripped <style> block is still a
+    // top-level mdast node and still consumes index 0. That is the whole
+    // point of indexing the SOURCE tree rather than the emitted elements --
+    // the ProseMirror document has a node for it too.
+    expect(html).toContain('<p data-pd-block="1">After.</p>')
   })
 
   it("produces a well-formed sourceMap for a document containing raw HTML and a pagebreak marker (the spec's own open technical question)", () => {
@@ -178,10 +190,96 @@ describe('markdownToHtml — code block syntax highlighting', () => {
   })
 })
 
+// Editor page-break guides (design:50-58): every top-level element carries
+// its own index into the document's mdast root children, so the sandboxed
+// paginator can report a recovered break in a coordinate space the Milkdown
+// canvas also speaks. src/markdown/block-correspondence.test.ts pins the
+// other half of that claim (that the two independent parses agree on the
+// index); these pin the emitting half.
+describe('markdownToHtml — top-level block index stamps', () => {
+  // Indices are into the SOURCE tree, so a node that emits no element still
+  // consumes one -- which is exactly what makes them line up with the
+  // ProseMirror document, where frontmatter and link definitions ARE nodes.
+  it('numbers top-level elements from their source position, not their output position', () => {
+    const { html, blockCount } = markdownToHtml('# Title\n\nOne.\n\nTwo.\n')
+    expect(html).toContain('<h1 data-pd-block="0">')
+    expect(html).toContain('<p data-pd-block="1">')
+    expect(html).toContain('<p data-pd-block="2">')
+    expect(blockCount).toBe(3)
+  })
+
+  it('lets frontmatter consume an index even though it emits no element', () => {
+    const { html, blockCount } = markdownToHtml('---\ntitle: x\n---\n\n# H\n\nBody.\n')
+    expect(html).not.toContain('data-pd-block="0"')
+    expect(html).toContain('<h1 data-pd-block="1">')
+    expect(html).toContain('<p data-pd-block="2">')
+    expect(blockCount).toBe(3)
+  })
+
+  it('lets a link definition consume an index even though it emits no element', () => {
+    const { html, blockCount } = markdownToHtml('See [a].\n\n[a]: /b\n\nAfter.\n')
+    expect(html).toContain('<p data-pd-block="0">')
+    expect(html).toContain('<p data-pd-block="2">')
+    expect(blockCount).toBe(3)
+  })
+
+  it('stamps every block-level container type a guide can be anchored to', () => {
+    const { html } = markdownToHtml(
+      'A\n\n- one\n- two\n\n> quoted\n\n```js\nconst x = 1\n```\n\n| a |\n|---|\n| 1 |\n'
+    )
+    expect(html).toContain('<ul data-pd-block="1">')
+    expect(html).toContain('<blockquote data-pd-block="2">')
+    expect(html).toContain('<pre data-pd-block="3">')
+    expect(html).toContain('<table data-pd-block="4">')
+  })
+
+  it('leaves the generated footnotes section unstamped', () => {
+    // mdast-util-to-hast builds that <section> fresh at the end of the
+    // document rather than from any one source node, so there is no honest
+    // index for it. A break landing there produces no guide -- see
+    // recoverPageBreaks' own comment on why that beats inventing one.
+    const { html } = markdownToHtml('Text[^1].\n\n[^1]: A note.\n')
+    expect(html).toContain('class="footnotes"')
+    expect(html).not.toMatch(/<section[^>]*data-pd-block/)
+  })
+
+  // The security property, and the direct analogue of the pre-existing
+  // "strips a forged data-src-* attribute pair" test above. The sanitize
+  // schema exception only admits THIS render's own 128-bit token, which is
+  // generated after `source` is already fixed and stripped back out of the
+  // final HTML -- so a hand-written stamp cannot forge a page boundary in
+  // the editor, and would otherwise be indistinguishable from a real one.
+  it('strips a forged data-pd-block attribute written in the document itself', () => {
+    const { html } = markdownToHtml('A\n\n<p data-pd-block="0">forged</p>\n\nB\n')
+    expect(html).toContain('forged')
+    expect(html).toContain('<p>forged</p>')
+    expect(html).toContain('<p data-pd-block="0">A</p>')
+    expect(html).toContain('<p data-pd-block="2">B</p>')
+  })
+
+  it('never leaks the per-render token into the emitted HTML', () => {
+    // The token is what makes the schema exception unforgeable; leaving it
+    // in the output would hand the next document's author a valid one.
+    const { html } = markdownToHtml('One.\n\nTwo.\n')
+    expect(html).toMatch(/data-pd-block="\d+"/)
+    expect(html).not.toMatch(/data-pd-block="[0-9a-f]{32}/)
+  })
+
+  it('emits a different token per call, so a stamp cannot be replayed', () => {
+    // Both renders of the same source must produce identical HTML (the token
+    // is stripped), while the schema each was sanitized against differed.
+    const first = markdownToHtml('One.\n\nTwo.\n')
+    const second = markdownToHtml('One.\n\nTwo.\n')
+    expect(first.html).toBe(second.html)
+  })
+})
+
 describe('markdownToHtml — math equations', () => {
   it('preserves block math ($$ on its own lines) as an inert language-math-block placeholder', () => {
     const { html } = markdownToHtml('Before.\n\n$$\nx^2 + y^2 = z^2\n$$\n\nAfter.')
-    expect(html).toContain('<div><code class="language-math-block">x^2 + y^2 = z^2</code></div>')
+    expect(html).toContain(
+      '<div data-pd-block="1"><code class="language-math-block">x^2 + y^2 = z^2</code></div>'
+    )
     // A div-wrapped code element is structurally invisible to rehype-highlight
     // (it only ever touches `pre > code` — see math-to-hast.ts's own comment).
     expect(html).not.toContain('hljs')

@@ -5,6 +5,7 @@ import { readFile, realpath, stat } from 'node:fs/promises'
 import { PAGE_WIDTH_PX, PAGE_HEIGHT_PX, type PageGeometry } from '../typography/page-geometry'
 import type { DocumentStyle } from '../typography/document-style'
 import type { RenderRequestMessage } from '../pagination/render-message'
+import type { PageBreakPosition } from '../pagination/page-breaks'
 
 // __dirname here resolves at runtime to the directory of the bundled main
 // process output (out/main/), regardless of this file's pre-bundle source
@@ -426,6 +427,12 @@ export interface PaginationResult {
     naturalWidth: number
     naturalHeight: number
   }>
+  // Editor page-break guides: one entry per page TRANSITION, naming the
+  // top-level source block the break landed at or inside, recovered from the
+  // `data-pd-block` stamps markdownToHtml emits (see
+  // src/pagination/page-breaks.ts for the whole mechanism and its disclosed
+  // block-granularity limitation). `[]` for a single-page document.
+  pageBreaks: PageBreakPosition[]
 }
 
 export interface PaginationHarness {
@@ -570,7 +577,8 @@ export async function createPaginationHarness(win: BaseWindow): Promise<Paginati
           ready: result.ready,
           layoutMs: result.layoutMs,
           diagramBoxes: result.diagramBoxes ?? [],
-          imageBoxes: result.imageBoxes ?? []
+          imageBoxes: result.imageBoxes ?? [],
+          pageBreaks: result.pageBreaks ?? []
         }
       }
       await new Promise((resolve) => setTimeout(resolve, 50))

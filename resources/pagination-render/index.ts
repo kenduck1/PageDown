@@ -88,6 +88,11 @@ import {
 } from '../../src/typography/document-style'
 import type { RenderRequestMessage } from '../../src/pagination/render-message'
 import { clampPageIndex, pickCurrentPage, type PageNavState } from '../../src/pagination/page-nav'
+import {
+  readPageBlockIndices,
+  recoverPageBreaks,
+  type PageBreakPosition
+} from '../../src/pagination/page-breaks'
 
 // Task 10 / Gate 6: register the first-party keep-with-next/table-
 // continuation handlers exactly once, before the first `new Previewer()`
@@ -565,6 +570,25 @@ interface OutgoingSuccess {
     naturalWidth: number
     naturalHeight: number
   }>
+  // Editor page-break guides (design:50-58, the master design doc's own
+  // "review's highest-value finding"): one entry per page TRANSITION, saying
+  // which top-level source block the break landed at or inside. Recovered
+  // from the `data-pd-block` stamps markdownToHtml puts on the pre-pagination
+  // HTML, which survive into the paginated output because Paged.js's Chunker
+  // clones and relocates REAL DOM nodes rather than re-serializing.
+  //
+  // Read from the paginated DOM under `root` for the same reason
+  // `diagramBoxes`/`imageBoxes` are, and NOT from Paged.js's own
+  // `afterPageLayout`/`breakToken` hook, which is what design:57 originally
+  // called for. The design doc's own second-review correction (design:60)
+  // already establishes why that hook is the wrong instrument: a `breakToken`
+  // points into RENDERED text (`node`/`offset` after `**bold**` has become
+  // `bold`), so it can only be turned into a source position by machinery
+  // this codebase does not have. Reading the stamps back out of the finished
+  // pages needs none of it and answers the block-granularity question exactly.
+  // `[]` for a single-page document (no transitions) and for the
+  // empty-content short-circuit below.
+  pageBreaks: PageBreakPosition[]
 }
 
 interface OutgoingError {
@@ -782,8 +806,15 @@ declare global {
 // sanitization strips scripts and `script-src 'self'` blocks inline
 // execution -- and in the worst case an override could only break scrolling,
 // never escalate.
+// Paged.js's own per-page wrapper class. Named once and shared with the
+// page-break recovery in the 'render' handler below so the two cannot drift
+// apart -- they have to agree on what counts as a page, or the recovered
+// break positions would describe a different page numbering than the one
+// page navigation scrolls to.
+const PAGE_SELECTOR = '.pagedjs_page'
+
 function readPageElements(): HTMLElement[] {
-  return Array.from(document.querySelectorAll<HTMLElement>('.pagedjs_page'))
+  return Array.from(document.querySelectorAll<HTMLElement>(PAGE_SELECTOR))
 }
 
 function currentPageState(pages: HTMLElement[]): PageNavState {
@@ -1649,7 +1680,8 @@ window.addEventListener('message', async (event: MessageEvent<IncomingMessage>) 
         ready: true,
         layoutMs: 0,
         diagramBoxes: [],
-        imageBoxes: []
+        imageBoxes: [],
+        pageBreaks: []
       }
       if (currentRequestId === requestId) window.__pagedownResult = result
       return
@@ -1787,7 +1819,8 @@ window.addEventListener('message', async (event: MessageEvent<IncomingMessage>) 
       ready: true,
       layoutMs: t1 - t0,
       diagramBoxes: measureDiagramBoxes(root),
-      imageBoxes: measureImageBoxes(root)
+      imageBoxes: measureImageBoxes(root),
+      pageBreaks: recoverPageBreaks(readPageBlockIndices(root.querySelectorAll(PAGE_SELECTOR)))
     }
     window.__pagedownResult = result
   } catch (err) {

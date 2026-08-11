@@ -91,6 +91,13 @@ beforeEach(() => {
     getVersionHistory: vi.fn(),
     restoreVersionContent: vi.fn(),
     clearPendingAutosave: vi.fn(),
+    // Crash protection for never-saved documents. Required (not optional) on
+    // FileApi, so a missing entry here is a compile error rather than a
+    // runtime surprise -- see index.d.ts for why that tradeoff was taken.
+    autosaveUnsavedDraft: vi.fn().mockResolvedValue(null),
+    listUnsavedDrafts: vi.fn().mockResolvedValue([]),
+    readUnsavedDraft: vi.fn().mockResolvedValue(null),
+    discardUnsavedDraft: vi.fn().mockResolvedValue(undefined),
     setSplitPreviewBounds: vi.fn(),
     sendSplitPreviewDocument: vi.fn().mockResolvedValue({ pageCount: 1 }),
     destroySplitPreview: vi.fn(),
@@ -262,7 +269,8 @@ describe('EditorScreen comments', () => {
             isDirty: false,
             mtimeMs: null,
             remoteImagesAllowed: null,
-            currentPage: 1
+            currentPage: 1,
+            draftId: null
           },
           {
             id: 'tab-b',
@@ -271,7 +279,8 @@ describe('EditorScreen comments', () => {
             isDirty: false,
             mtimeMs: null,
             remoteImagesAllowed: null,
-            currentPage: 1
+            currentPage: 1,
+            draftId: null
           }
         ],
         activeTabId: 'tab-a',
