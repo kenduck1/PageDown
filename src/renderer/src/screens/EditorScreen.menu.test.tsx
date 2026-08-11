@@ -126,6 +126,9 @@ beforeEach(() => {
     openInNewWindow: vi.fn(),
     onMenuCommand: vi.fn().mockReturnValue(unsubscribe),
     setWindowState: vi.fn(),
+    // Preferences broadcast (multi-window): a real unsubscribe function,
+    // same contract as the other push channels here.
+    onPreferencesChanged: vi.fn().mockReturnValue(() => {}),
     // The window-close guard's two channels. onWindowCloseRequest must
     // return a real unsubscribe FUNCTION -- App.tsx calls it from an effect
     // cleanup, same contract as onMenuCommand above.

@@ -14,10 +14,9 @@ describe('formatWindowTitle', () => {
   it('shows filename then app name for a clean document', () => {
     expect(
       formatWindowTitle({
+        ...DEFAULT_WINDOW_UI_STATE,
         documentOpen: true,
-        viewMode: 'format',
-        fileName: 'report.md',
-        isDirty: false
+        fileName: 'report.md'
       })
     ).toBe('report.md — PageDown')
   })
@@ -25,8 +24,8 @@ describe('formatWindowTitle', () => {
   it('prefixes a bullet for unsaved changes', () => {
     expect(
       formatWindowTitle({
+        ...DEFAULT_WINDOW_UI_STATE,
         documentOpen: true,
-        viewMode: 'format',
         fileName: 'report.md',
         isDirty: true
       })
@@ -35,14 +34,22 @@ describe('formatWindowTitle', () => {
 
   it('calls a never-saved document Untitled', () => {
     expect(
-      formatWindowTitle({ documentOpen: true, viewMode: 'source', fileName: null, isDirty: true })
+      formatWindowTitle({
+        ...DEFAULT_WINDOW_UI_STATE,
+        documentOpen: true,
+        viewMode: 'source',
+        isDirty: true
+      })
     ).toBe('• Untitled — PageDown')
   })
 
   it('is unaffected by view mode', () => {
     // viewMode rides along in the same message purely because the MENU needs
     // it; the title must not move when the user switches Format/Split/Source.
-    const base = { documentOpen: true, fileName: 'a.md', isDirty: false } as const
+    // Spread from the shared default rather than a hand-built literal, so a
+    // new reported field does not break a title test that has nothing to do
+    // with it.
+    const base = { ...DEFAULT_WINDOW_UI_STATE, documentOpen: true, fileName: 'a.md' } as const
     expect(formatWindowTitle({ ...base, viewMode: 'format' })).toBe(
       formatWindowTitle({ ...base, viewMode: 'split' })
     )

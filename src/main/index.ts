@@ -6,6 +6,7 @@ import {
   ipcMain,
   Menu,
   screen,
+  session,
   type MenuItemConstructorOptions
 } from 'electron'
 import { join, isAbsolute } from 'path'
@@ -20,6 +21,7 @@ import {
   readWindowState,
   writeWindowState,
   resolveInitialWindowBounds,
+  boundsAreOnScreen,
   type WindowBounds,
   type InitialWindowBounds
 } from './window-bounds'
@@ -35,10 +37,17 @@ import { exportToPdf } from '../export/export-pdf'
 import { getThumbnail, destroyThumbnailHarness } from './thumbnail-generator'
 import { getPageCount, destroyPageCountHarness } from './page-count-generator'
 import { createSplitPreviewHarness, type SplitPreviewHarness } from './split-preview-window'
+import type { PageNavState } from '../pagination/page-nav'
 import { exportDocumentToPdf } from './pdf-exporter'
 import { exportDocumentToHtml } from './html-exporter'
 import { printDocument } from './print-exporter'
-import { readPreferences, writePreferences, type Preferences } from './preferences'
+import {
+  readPreferences,
+  writePreferences,
+  sanitizePreferences,
+  type Preferences
+} from './preferences'
+import { PREFERENCES_CHANGED_CHANNEL } from '../preferences/channel'
 import {
   openFileDialog,
   readFileByPath,
@@ -60,6 +69,7 @@ import {
 } from './version-history'
 import { PAGE_WIDTH_PX, PAGE_HEIGHT_PX } from '../typography/page-geometry'
 import { applyWindowUiState, initApplicationMenu, refreshApplicationMenu } from './app-menu'
+import { getActiveWindow, initWindowFocusTracking } from './focused-window'
 import { drainConfigWarnings } from './config-warnings'
 import { MENU_COMMAND_CHANNEL, WINDOW_STATE_CHANNEL, type MenuCommand } from '../menu/commands'
 import {
@@ -73,6 +83,14 @@ import { extractMarkdownPathFromArgv, looksLikeMarkdownPath } from './open-file-
 // event fires (see pagination-scheme.ts for why this scheme needs to be
 // privileged at all).
 registerPaginationScheme()
+
+// Registered before `app.whenReady()` so the very first `browser-window-focus`
+// of a launch is already being recorded -- see focused-window.ts for the two
+// measured bugs that reading `BrowserWindow.getFocusedWindow()` directly
+// caused. Deliberately first among this file's app-level listeners, so its
+// bookkeeping runs before app-menu.ts's own focus listener rebuilds a menu
+// that reads it.
+initWindowFocusTracking()
 
 // ---------------------------------------------------------------------------
 // Product-completeness audit 2.5: file associations, "Open With", and a
@@ -176,6 +194,36 @@ async function handleOpenRequestedPath(rawPath: string): Promise<void> {
   } catch (err) {
     console.error('Failed to record an OS-opened file as recent', err)
   }
+
+  // Already open somewhere? Raise that window instead of creating another.
+  //
+  // Without this, double-clicking the same .md in Finder three times produced
+  // three windows all editing one file -- verbatim the failure documentStore's
+  // own per-window tab dedup exists to prevent (two views of one document
+  // silently clobbering each other's saves inside MTIME_TOLERANCE_MS, and both
+  // autosaving into the same path-keyed version-history directory, interleaving
+  // snapshots from two independently-diverging in-memory documents). That dedup
+  // explicitly cannot reach across windows -- Zustand's store is per renderer
+  // PROCESS, so window A's tab list is structurally invisible to window B --
+  // which is exactly why the cross-window half has to be decided here.
+  //
+  // The command push is not redundant with the focus() call: the document may
+  // be in a BACKGROUND tab of that window, and raising the window alone would
+  // leave the user staring at a different document wondering why nothing
+  // happened. `file:openRecent` is the existing menu command for "open this
+  // exact path", and its renderer handler funnels into documentStore.openPath
+  // -> openTab, whose own dedup then focuses the existing tab rather than
+  // appending a duplicate. That also makes this correct under a STALE report:
+  // if the tab was closed between the window's last state report and this
+  // event, the same command simply opens it again, in the right window.
+  const existing = findWindowShowingDocument(validated)
+  if (existing) {
+    if (existing.isMinimized()) existing.restore()
+    existing.focus()
+    existing.webContents.send(MENU_COMMAND_CHANNEL, 'file:openRecent', validated)
+    return
+  }
+
   createWindow(validated)
 }
 
@@ -247,7 +295,14 @@ if (!gotSingleInstanceLock) {
 // front is the entire point of a single-instance lock, independent of
 // whatever else the second launch was trying to do.
 app.on('second-instance', (_event, argv) => {
-  const target = [...documentWindows][0]
+  // getActiveWindow(), not `[...documentWindows][0]`. That was INSERTION
+  // order, i.e. "the window created first" -- so a user working in window 2
+  // who double-clicked a .md in Explorer got window 1 raised in their face.
+  // The window that should come forward is the one they were last using; see
+  // focused-window.ts. The insertion-order fallback stays only for the case
+  // where nothing has ever held focus (a launch racing its own first focus
+  // event), where any window is as good an answer as any other.
+  const target = getActiveWindow() ?? [...documentWindows][0]
   if (target) {
     if (target.isMinimized()) target.restore()
     target.focus()
@@ -328,79 +383,131 @@ if (is.dev) {
   }
 }
 
-// Split mode's own lazily-created harness instance and its serializing
-// queue, both held in this module's scope -- mirrors the existing
-// mainWindow-closure pattern every other IPC handler in this file already
-// uses (see CLAUDE.md's "known pre-existing issues" section for the
-// documented staleness limitation that pattern carries; it applies here too
-// and is not re-solved by this task). Created lazily by whichever of
-// split-preview:setBounds/split-preview:sendDocument fires first, torn down
-// and cleared by split-preview:destroy so the next call recreates it fresh.
-let splitPreviewHarnessPromise: Promise<SplitPreviewHarness> | null = null
-
-function getOrCreateSplitPreviewHarness(win: BrowserWindow): Promise<SplitPreviewHarness> {
-  if (!splitPreviewHarnessPromise) {
-    splitPreviewHarnessPromise = createSplitPreviewHarness(win)
-  }
-  return splitPreviewHarnessPromise
+// ---------------------------------------------------------------------------
+// Split mode's preview harness -- PER WINDOW.
+//
+// This used to be ONE module-global `splitPreviewHarnessPromise` plus one
+// module-global queue, created against the captured `mainWindow` no matter
+// which window asked. CLAUDE.md disclosed that as "Split mode only works
+// correctly in the window the harness is attached to", but the measured
+// behaviour was strictly worse than that reads, and worse for the window that
+// did nothing wrong: clicking Split in window 2 attached an opaque
+// WebContentsView to WINDOW 1's contentView, at window 2's pane coordinates,
+// where it painted on top of window 1's Home screen while window 2's own
+// preview pane stayed empty. `split-preview:destroy` from either window
+// blanked the other's live preview for the same reason -- there was only ever
+// one harness to tear down.
+//
+// Keyed on the BrowserWindow itself via a WeakMap, not a Map keyed by
+// `win.id`: an entry then cannot outlive its window even if some future exit
+// path forgets to clean up, which is the same reasoning app-menu.ts's
+// `windowStates` and this file's own `closeApproved`/`pendingCloseApprovals`
+// already use.
+//
+// The queue moves with the harness, per window, deliberately: it exists
+// because resources/pagination-render/index.ts's render context handles
+// exactly ONE in-flight request at a time (CLAUDE.md's own invariant --
+// a single `currentRequestId` module variable, with any earlier request's
+// result silently discarded), and that is a property of ONE render context.
+// Two windows have two render contexts and cannot contend with each other, so
+// a shared queue would serialize window 2's renders behind window 1's for no
+// reason -- and, worse, would make one window's slow render delay the other's
+// harness teardown, since teardown runs on the same queue.
+interface SplitPreviewWindowState {
+  harnessPromise: Promise<SplitPreviewHarness> | null
+  queue: Promise<unknown>
 }
 
-// Serializes every call that dispatches work into the split-preview harness
-// -- required for exactly the reason thumbnail-generator.ts's and
+const splitPreviewStates = new WeakMap<BrowserWindow, SplitPreviewWindowState>()
+
+function getSplitPreviewState(win: BrowserWindow): SplitPreviewWindowState {
+  let state = splitPreviewStates.get(win)
+  if (!state) {
+    state = { harnessPromise: null, queue: Promise.resolve() }
+    splitPreviewStates.set(win, state)
+  }
+  return state
+}
+
+// Created lazily by whichever of split-preview:setBounds/sendDocument fires
+// first for a given window, torn down and cleared by split-preview:destroy
+// (that window's own "I left Split mode" signal) or by that window closing.
+function getOrCreateSplitPreviewHarness(win: BrowserWindow): Promise<SplitPreviewHarness> {
+  const state = getSplitPreviewState(win)
+  if (!state.harnessPromise) {
+    const pending = createSplitPreviewHarness(win)
+    state.harnessPromise = pending
+    // Self-heal on a REJECTED creation, closing the gap CLAUDE.md recorded as
+    // "a REJECTED getOrCreateSplitPreviewHarness promise is cached with no
+    // self-heal". Contained before only because leaving Split mode cleared
+    // the single module reference; with a per-window map, a window whose
+    // harness failed to construct once would otherwise keep handing that same
+    // rejected promise back for the rest of its life. Guarded on identity so
+    // a `destroy()` that already replaced the slot is not clobbered by a late
+    // rejection from the harness it just discarded. The `.catch()` also means
+    // `pending` always has a handler, so a creation failure nobody happens to
+    // be awaiting cannot surface as an unhandled rejection.
+    pending.catch(() => {
+      if (state.harnessPromise === pending) state.harnessPromise = null
+    })
+  }
+  return state.harnessPromise
+}
+
+// Serializes every call that dispatches work into ONE window's split-preview
+// harness -- required for exactly the reason thumbnail-generator.ts's and
 // page-count-generator.ts's own enqueueHarnessWork queues exist (see
 // CLAUDE.md's "the pagination render harness handles exactly ONE in-flight
-// request at a time" invariant): resources/pagination-render/index.ts's
-// render context tracks a single `currentRequestId` module variable and
-// silently drops the result of any request that isn't the most recently
-// dispatched one. Live typing in Split mode will produce a new
+// request at a time" invariant). Live typing in Split mode produces a new
 // split-preview:sendDocument call well within the previous one's round trip
-// -- the renderer's own debounce is 500ms, and a full relayout can exceed
-// that -- so without this queue, concurrent calls would race the render
-// context and intermittently time out after 10s. This is a SEPARATE queue
-// from both of those (and from the Phase-0-spike harness in this same
-// file), per this codebase's established "don't couple unrelated harness
-// consumers" rule. Also used to serialize split-preview:destroy behind any
-// already-queued sendDocument work, below, so the harness is never torn
+// -- the renderer's own debounce is 500ms and a full relayout can exceed that
+// -- so without this queue, concurrent calls race the render context and
+// intermittently time out after 10s. Also serializes split-preview:destroy
+// behind any already-queued sendDocument work, so a harness is never torn
 // down mid-render.
-let splitPreviewQueue: Promise<unknown> = Promise.resolve()
-
-function enqueueSplitPreviewWork<T>(task: () => Promise<T>): Promise<T> {
-  const result = splitPreviewQueue.then(task)
+function enqueueSplitPreviewWork<T>(win: BrowserWindow, task: () => Promise<T>): Promise<T> {
+  const state = getSplitPreviewState(win)
+  const result = state.queue.then(task)
   // Chain the queue's tail through a value- and rejection-swallowing
   // continuation, not `result` directly -- otherwise one rejected call would
-  // permanently wedge the queue for every caller after it (same fix as
-  // thumbnail-generator.ts's/page-count-generator.ts's identical pattern).
-  splitPreviewQueue = result.then(
+  // permanently wedge that window's queue for every caller after it (same fix
+  // as thumbnail-generator.ts's/page-count-generator.ts's identical pattern).
+  state.queue = result.then(
     () => undefined,
     () => undefined
   )
   return result
 }
 
-// Tears down the lazily-created split-preview harness (if one exists) and
-// clears the module-scope reference so the NEXT setBounds/sendDocument call
-// recreates it fresh. Shared by two callers: the split-preview:destroy IPC
-// handler below (the renderer's own explicit "left Split mode" signal) and
-// `createWindow`'s `mainWindow` `'closed'` handler just below this function
-// -- unlike thumbnail-generator.ts's/page-count-generator.ts's own harnesses,
-// which each own a SEPARATE, dedicated BaseWindow that mainWindow closing
-// never touches, this harness's WebContentsView is a CHILD of mainWindow's
-// own contentView (per Task 2's design, deliberately -- Split mode's whole
-// point is a visibly composited pane, not an off-screen render target).
-// Electron does not appear to destroy a child WebContentsView's own
-// WebContents just because its parent BrowserWindow closes (it's a sibling
-// compositing layer, not the window's primary WebContents) -- so without
-// this call, closing the app's real window while Split mode was ever visited
-// would leak that view's own sandboxed renderer process for the remainder of
-// the app's lifetime. `destroy()` itself is safe to call on an
-// already-destroyed mainWindow (guards with `mainWindow.isDestroyed()`
-// internally, per Task 2), matching the codebase's "never throw from
-// teardown" discipline every other harness here also follows.
-function destroySplitPreviewHarness(): Promise<void> {
-  const harnessPromise = splitPreviewHarnessPromise
-  splitPreviewHarnessPromise = null
+// Tears down ONE window's split-preview harness (if it has one) and clears
+// that window's stored reference so its NEXT setBounds/sendDocument call
+// recreates it fresh. Two callers, and both are required rather than
+// redundant:
+//
+//   - the split-preview:destroy IPC handler below, i.e. that window's
+//     renderer explicitly leaving Split mode; and
+//   - that window's own 'closed' handler in createWindow. Unlike
+//     thumbnail-generator.ts's/page-count-generator.ts's harnesses, which own
+//     a SEPARATE, dedicated BaseWindow no document window's close touches,
+//     this harness's WebContentsView is a CHILD of a real window's
+//     contentView (Split mode's whole point is a visibly composited pane).
+//     Electron does not destroy a child WebContentsView's own WebContents
+//     just because its parent BrowserWindow closes -- it is a sibling
+//     compositing layer, not the window's primary WebContents -- so without
+//     the close-time call, closing a window that ever visited Split mode
+//     leaks that view's sandboxed renderer process for the rest of the app's
+//     life.
+//
+// `destroy()` itself is safe on an already-destroyed window (it guards with
+// `isDestroyed()` internally), matching this codebase's "never throw from
+// teardown" discipline.
+function destroySplitPreviewHarness(win: BrowserWindow): Promise<void> {
+  const state = splitPreviewStates.get(win)
+  if (!state) return Promise.resolve()
+  const harnessPromise = state.harnessPromise
+  state.harnessPromise = null
   if (!harnessPromise) return Promise.resolve()
-  return enqueueSplitPreviewWork(async () => {
+  return enqueueSplitPreviewWork(win, async () => {
     try {
       const harness = await harnessPromise
       harness.destroy()
@@ -410,17 +517,80 @@ function destroySplitPreviewHarness(): Promise<void> {
   })
 }
 
+// The main process's "no harness for this window / nothing rendered yet"
+// sentinel, returned by both non-creating page-navigation handlers. The
+// renderer treats `pageCount === 0` as "not a real position" and ignores it
+// in BOTH its scroll and poll paths -- see SplitPreview.tsx. Frozen so a
+// future edit cannot accidentally hand a mutable shared object to two
+// callers.
+const EMPTY_PAGE_NAV_STATE: PageNavState = Object.freeze({ currentPage: 1, pageCount: 0 })
+
 // Every open document window (Multi-window support) -- NOT just the first
 // one createWindow() ever makes. Used so shared, process-wide harness
 // teardown (thumbnail/page-count generators, both dedicated invisible
 // BaseWindows unrelated to any specific document window -- see
 // thumbnail-generator.ts's own module comment) only fires once the LAST
-// window closes, not every time ANY window closes. Split mode's own
-// harness is deliberately NOT covered by this set-based teardown -- see
-// destroySplitPreviewHarness's own updated comment for why it stays tied
-// to the FIRST window specifically, a disclosed, narrower scope than full
-// per-window Split mode support.
+// window closes, not every time ANY window closes. Split mode's own harness
+// is per-window and is torn down with its own window instead (see
+// destroySplitPreviewHarness above), never on this set emptying.
+//
+// Insertion-ordered, and that ordering is used ONLY as a last-resort
+// tiebreak: "which window should act" is getActiveWindow()'s job
+// (focused-window.ts), because insertion order answers "which window was
+// created first", which is almost never the question anyone means.
 const documentWindows = new Set<BrowserWindow>()
+
+// Which documents each window currently has open, as reported by that
+// window's own renderer over WINDOW_STATE_CHANNEL (see
+// src/menu/window-state.ts's `openFilePaths` for why the renderer is the only
+// possible source of this). Read by `handleOpenRequestedPath` so an
+// OS-delivered file-open request lands in the window already showing that
+// document instead of opening a redundant second window on the same file.
+//
+// A WeakMap, iterated through `documentWindows` -- the same shape as
+// app-menu.ts's own per-window state map, and for the same reason: an entry
+// cannot outlive its window.
+const windowOpenPaths = new WeakMap<BrowserWindow, readonly string[]>()
+
+// Pushes a just-changed Preferences object to every OTHER window.
+//
+// WHY BROADCAST AT ALL (the alternative being "leave each window on whatever
+// it loaded at startup"): preferences are a single, shared, process-wide file,
+// and one of them -- spellcheck -- ALREADY applies globally the instant it
+// changes, because it is a session-level Electron toggle. Without a broadcast,
+// one visit to Settings left the app in a genuinely incoherent state: window 2
+// stops spellchecking (session-wide) but keeps the old colour scheme, the old
+// autosave interval, and the old default page config for File > New, until it
+// is relaunched. That incoherence WITHIN one settings change is what decided
+// this -- not a general preference for live sync. Settings is also a rare,
+// deliberate action, so the cost is a handful of messages per session.
+//
+// Excludes the sender: SettingsScreen already applied the change to its own
+// store synchronously before the IPC call (see its `applyChange`), so echoing
+// it back is at best a redundant re-render and at worst fights that screen's
+// own locally-buffered autosave-interval input.
+//
+// Fire-and-forget and individually guarded: a window that dies between the
+// snapshot and the send must not fail an already-completed preferences write.
+function broadcastPreferences(preferences: Preferences, senderWebContentsId: number): void {
+  for (const win of documentWindows) {
+    if (win.isDestroyed()) continue
+    if (win.webContents.isDestroyed()) continue
+    if (win.webContents.id === senderWebContentsId) continue
+    win.webContents.send(PREFERENCES_CHANGED_CHANNEL, preferences)
+  }
+}
+
+// The window (if any) that currently has `filePath` open in one of its tabs.
+// Raw string comparison, matching documentStore's own same-window tab dedup
+// -- see src/menu/window-state.ts's `openFilePaths` doc comment.
+function findWindowShowingDocument(filePath: string): BrowserWindow | null {
+  for (const win of documentWindows) {
+    if (win.isDestroyed()) continue
+    if (windowOpenPaths.get(win)?.includes(filePath)) return win
+  }
+  return null
+}
 
 // Product-completeness audit 2.3: "Show in folder" for a just-exported PDF/
 // HTML file. Deliberately NOT an arbitrary-path reveal primitive -- the
@@ -525,8 +695,12 @@ function requestCloseApproval(win: BrowserWindow): Promise<boolean> {
 }
 
 // Closes a window through the guard, resolving true once it is genuinely
-// closing. Shared by `win.on('close')` and the quit sequence below so both
-// exits run one implementation.
+// closing. Used by `win.on('close')`, i.e. the single-window exits (the red
+// button, Cmd+W, File > Close Window).
+//
+// The quit sequence deliberately does NOT use this -- see `before-quit`
+// below for why closing as you go is wrong when a LATER window can still
+// cancel.
 async function closeWindowWithApproval(win: BrowserWindow): Promise<boolean> {
   const allow = await requestCloseApproval(win)
   if (!allow) return false
@@ -539,9 +713,9 @@ async function closeWindowWithApproval(win: BrowserWindow): Promise<boolean> {
 // BEFORE any window gets a `close` event -- a quit that only relied on the
 // per-window guard would tear every window down without asking anything.
 //
-// The two cannot double-prompt: the loop below marks each window approved
-// before calling close(), so the `close` handler's own first line returns
-// immediately for it.
+// The two cannot double-prompt: once every window has agreed, the sequence
+// below marks them all approved before letting the quit proceed, so each
+// window's own `close` handler returns on its first line.
 let quitApproved = false
 let quitInProgress = false
 
@@ -556,14 +730,37 @@ app.on('before-quit', (event) => {
 
   void (async () => {
     try {
-      // A copied array, not the live Set: closing a window mutates
-      // `documentWindows` from its own 'closed' handler mid-iteration.
-      for (const win of [...documentWindows]) {
+      // TWO PHASES, and the split is the whole point: ask everything first,
+      // act only once every window has agreed.
+      //
+      // This loop used to call `closeWindowWithApproval`, which CLOSES each
+      // window as it is approved, and `return`ed on the first refusal. So
+      // "Cancel" did not cancel: window 1 answered, closed, and was destroyed;
+      // window 2's prompt got Cancel; the quit aborted -- and window 1 was
+      // already gone, unrecoverably. A user who chose "Don't Save" on window 1
+      // intending to reconsider by the end of the sequence had no way back.
+      // Nothing may be destroyed until the whole decision is known.
+      //
+      // A copied array, not the live Set: a window can still be closed by
+      // something else (a renderer crash prompt, the OS) while this awaits,
+      // which mutates `documentWindows` from its own 'closed' handler.
+      const windows = [...documentWindows]
+      for (const win of windows) {
         if (win.isDestroyed()) continue
         // ONE window cancelling cancels the whole quit -- the same semantics
         // every document-based app has, and the only safe reading of "Cancel"
         // when the alternative is discarding that window's work anyway.
-        if (!(await closeWindowWithApproval(win))) return
+        // Returning here now genuinely leaves every window standing, including
+        // the ones that already said yes.
+        if (!(await requestCloseApproval(win))) return
+      }
+      // Every window agreed. Mark them all approved BEFORE quitting, so each
+      // one's own `close` handler short-circuits instead of re-asking, then
+      // let app.quit() do the actual closing -- there is no need to close them
+      // by hand here, and doing so would only add a window in which a partial
+      // close could be left behind if something threw mid-loop.
+      for (const win of windows) {
+        if (!win.isDestroyed()) closeApproved.add(win)
       }
       quitApproved = true
       app.quit()
@@ -597,8 +794,13 @@ app.on('before-quit', (event) => {
 // command is dropped, which is correct -- Save/Export/Find have no document
 // to act on.
 function dispatchMenuCommand(command: MenuCommand, payload?: string): void {
-  const focused = BrowserWindow.getFocusedWindow()
-  const target = focused ?? documentWindows.values().next().value
+  // getActiveWindow() rather than BrowserWindow.getFocusedWindow(): the
+  // documented macOS gap this fallback was written for ("a window can be open
+  // while the app is not frontmost, in which case getFocusedWindow() is null")
+  // is now answered with the window the user was last actually in, rather than
+  // with insertion order. The insertion-order fallback remains for the case
+  // where nothing has ever held focus.
+  const target = getActiveWindow() ?? documentWindows.values().next().value
   if (!target || target.isDestroyed()) {
     if (command === 'file:new' || command === 'file:open') createWindow()
     return
@@ -646,27 +848,39 @@ function attachContextMenu(win: BrowserWindow): void {
 }
 
 // Debounced, best-effort window-bounds persistence (App identity/packaging
-// cleanup pass) -- keyed process-wide, not per-window: there is exactly one
-// window-state.json, remembering whichever window was most recently
-// resized/moved. That is correct for this app's default single-window
-// usage and no worse than most single-file "remember my window"
-// implementations elsewhere; a real per-window scheme would need a keyed
-// store the same way Split mode's own per-window limitation (see CLAUDE.md's
-// "Multi-window support" section) was deliberately not built out either.
+// cleanup pass). There is exactly one window-state.json, remembering whichever
+// window was most recently resized/moved -- that part is unchanged and is the
+// intended behaviour.
+//
+// The DEBOUNCE TIMER, however, is now per-window, and that is a real fix
+// rather than tidiness. It used to be one module-global timer, so any second
+// window touching it inside the 400ms window cancelled the first window's
+// pending write and substituted its own bounds: resize window 1, then resize
+// or close window 2 immediately after, and what landed in window-state.json
+// was window 2's geometry -- the user's most recent deliberate resize silently
+// discarded in favour of an incidental one. Per-window timers make each
+// window's own last action the thing that eventually writes, and "last writer
+// wins" then genuinely means last, rather than "whoever happened to reset the
+// shared timer".
+//
 // The short debounce avoids hammering disk on every drag-resize tick; the
-// 'close' listener wired below additionally flushes synchronously-read
-// bounds immediately, covering a resize-then-immediately-close sequence the
-// debounce would otherwise drop.
-let windowBoundsSaveTimer: ReturnType<typeof setTimeout> | null = null
+// 'close' listener wired below additionally flushes synchronously-read bounds
+// immediately, covering a resize-then-immediately-close sequence the debounce
+// would otherwise drop.
+const windowBoundsSaveTimers = new WeakMap<BrowserWindow, ReturnType<typeof setTimeout>>()
 
-function scheduleWindowBoundsSave(bounds: WindowBounds): void {
-  if (windowBoundsSaveTimer) clearTimeout(windowBoundsSaveTimer)
-  windowBoundsSaveTimer = setTimeout(() => {
-    windowBoundsSaveTimer = null
-    void writeWindowState(app.getPath('userData'), bounds).catch((err) => {
-      console.error('Failed to save window bounds', err)
-    })
-  }, 400)
+function scheduleWindowBoundsSave(win: BrowserWindow, bounds: WindowBounds): void {
+  const pending = windowBoundsSaveTimers.get(win)
+  if (pending) clearTimeout(pending)
+  windowBoundsSaveTimers.set(
+    win,
+    setTimeout(() => {
+      windowBoundsSaveTimers.delete(win)
+      void writeWindowState(app.getPath('userData'), bounds).catch((err) => {
+        console.error('Failed to save window bounds', err)
+      })
+    }, 400)
+  )
 }
 
 // A minimized window's getBounds() is unreliable across platforms (it can
@@ -676,14 +890,18 @@ function scheduleWindowBoundsSave(bounds: WindowBounds): void {
 function wireWindowBoundsPersistence(win: BrowserWindow): void {
   const persist = (): void => {
     if (win.isDestroyed() || win.isMinimized()) return
-    scheduleWindowBoundsSave(win.getBounds())
+    scheduleWindowBoundsSave(win, win.getBounds())
   }
   win.on('resize', persist)
   win.on('move', persist)
   win.on('close', () => {
-    if (windowBoundsSaveTimer) {
-      clearTimeout(windowBoundsSaveTimer)
-      windowBoundsSaveTimer = null
+    // Cancels only THIS window's pending write -- a closing window must not
+    // discard a sibling's pending one, which is precisely what the old shared
+    // timer did.
+    const pending = windowBoundsSaveTimers.get(win)
+    if (pending) {
+      clearTimeout(pending)
+      windowBoundsSaveTimers.delete(win)
     }
     if (win.isDestroyed() || win.isMinimized()) return
     // Fire-and-forget, matching this codebase's other best-effort
@@ -693,6 +911,32 @@ function wireWindowBoundsPersistence(win: BrowserWindow): void {
       console.error('Failed to save window bounds on close', err)
     })
   })
+}
+
+// How far a cascaded window is offset from the one it came from. Small enough
+// that the new window is obviously "the same size, just in front", large
+// enough that its title bar is grabbable without moving the one underneath.
+const WINDOW_CASCADE_OFFSET_PX = 24
+
+// Where an ADDITIONAL window should open: same size as the window the user is
+// currently in, nudged down-right so it doesn't land exactly on top of it.
+// Returns undefined when there is no window to cascade from (the caller then
+// falls back to the plain default), and drops the offset POSITION -- keeping
+// the size -- if the cascade would put the window entirely off every
+// connected display, reusing the same `boundsAreOnScreen` check the cold-launch
+// restore path already applies for exactly that reason (there is no
+// OS-universal affordance to drag a fully off-screen window back).
+function cascadeBoundsFrom(source: BrowserWindow | null): InitialWindowBounds | undefined {
+  if (!source || source.isDestroyed()) return undefined
+  const { x, y, width, height } = source.getBounds()
+  const cascaded = {
+    x: x + WINDOW_CASCADE_OFFSET_PX,
+    y: y + WINDOW_CASCADE_OFFSET_PX,
+    width,
+    height
+  }
+  const displays = screen.getAllDisplays().map((display) => display.workArea)
+  return boundsAreOnScreen(cascaded, displays) ? cascaded : { width, height }
 }
 
 // `openPath`, when given, is a document to load automatically once this
@@ -708,14 +952,21 @@ function wireWindowBoundsPersistence(win: BrowserWindow): void {
 // `initialBounds`, when given, seeds the window's starting size/position --
 // used only by the very first window app.whenReady() creates, which awaits
 // a real disk read (readWindowState) plus resolveInitialWindowBounds's
-// on-screen check before this function is ever called. Every OTHER caller
-// (File > New/Open with no window focused, "Open in New Window", macOS
-// `activate` with zero windows open) omits it and gets the plain default
-// size, centered -- a deliberate, narrower scope than "every new window
-// remembers the last used size": those are in-session actions creating an
-// ADDITIONAL window, not the cold-launch restore this feature exists for.
+// on-screen check before this function is ever called.
+//
+// Every OTHER caller ("Open in New Window", File > New/Open with no window
+// focused, an OS file-open request, macOS `activate` with zero windows open)
+// omits it and CASCADES from the window the user is currently in -- see
+// cascadeBoundsFrom below. It used to fall straight back to the 1000x840
+// default, so a user who had deliberately sized their window got a
+// differently-sized one every time they opened a second document, which reads
+// as the app forgetting a setting it demonstrably remembers across launches.
 function createWindow(openPath?: string, initialBounds?: InitialWindowBounds): BrowserWindow {
-  const bounds = initialBounds ?? { width: DEFAULT_WINDOW_WIDTH, height: DEFAULT_WINDOW_HEIGHT }
+  const bounds = initialBounds ??
+    cascadeBoundsFrom(getActiveWindow()) ?? {
+      width: DEFAULT_WINDOW_WIDTH,
+      height: DEFAULT_WINDOW_HEIGHT
+    }
   // Create the browser window.
   const win = new BrowserWindow({
     ...bounds,
@@ -816,6 +1067,20 @@ function createWindow(openPath?: string, initialBounds?: InitialWindowBounds): B
   // already gone.
   win.on('closed', () => {
     documentWindows.delete(win)
+    windowOpenPaths.delete(win)
+    // THIS window's own Split-mode harness, not a shared one. A child
+    // WebContentsView's WebContents is not destroyed by its parent window
+    // closing (see destroySplitPreviewHarness), so without this the sandboxed
+    // renderer process it owns leaks for the rest of the app's life. Scoped to
+    // this window specifically -- a sibling window's live Split preview must
+    // survive this close untouched, which the old single-harness design could
+    // not express at all.
+    void destroySplitPreviewHarness(win)
+    // The application menu describes the ACTIVE window, and the window that
+    // just closed may well have been it -- without this the menu keeps
+    // describing a destroyed window until something else happens to trigger a
+    // rebuild. Fire-and-forget, same as every other refresh call site.
+    void refreshApplicationMenu()
     if (documentWindows.size === 0) {
       destroyThumbnailHarness()
       destroyPageCountHarness()
@@ -1001,7 +1266,12 @@ app.whenReady().then(async () => {
   // already-closed window resolves to no window and is dropped.
   ipcMain.on(WINDOW_STATE_CHANNEL, (event, state: unknown) => {
     const win = BrowserWindow.fromWebContents(event.sender)
-    if (win) applyWindowUiState(win, state)
+    if (!win) return
+    // The returned value is the COERCED state, so `openFilePaths` has already
+    // been validated (array-of-non-empty-strings, capped) by the same single
+    // pass that fed the menu and the title -- see applyWindowUiState.
+    const applied = applyWindowUiState(win, state)
+    windowOpenPaths.set(win, applied.openFilePaths)
   })
 
   // The renderer's answer to the close guard's question (see the block above
@@ -1105,28 +1375,46 @@ app.whenReady().then(async () => {
     dispatch: dispatchMenuCommand
   })
 
-  // Applies the spellcheck half of a preferences change LIVE, on the same
-  // session document-editing windows already use, not just on the next app
-  // launch -- session.setSpellCheckerEnabled is a real runtime toggle (does
-  // NOT require recreating the BrowserWindow the way changing
-  // `webPreferences.spellcheck` at construction time would). Registered
-  // after `mainWindow` exists (not before, alongside `preferences:get`
-  // above) purely for readability -- the closure below only ever RUNS once
-  // a real IPC call arrives, well after this window is constructed, so
-  // ordering relative to `createWindow()` has no correctness effect, but
-  // referencing a `const` before its own declaration line reads as a bug
-  // even when it safely isn't one.
-  ipcMain.handle('preferences:set', async (_event, preferences: Preferences) => {
+  // Applies the spellcheck half of a preferences change LIVE, not just on the
+  // next app launch -- session.setSpellCheckerEnabled is a real runtime toggle
+  // (it does NOT require recreating the BrowserWindow the way changing
+  // `webPreferences.spellcheck` at construction time would).
+  //
+  // THE SESSION, NOT A WINDOW. This used to reach it as
+  // `mainWindow.webContents.session`, which crashed once mainWindow was closed
+  // while a second window stayed open: `writePreferences` had already
+  // succeeded, so the preference was on disk, but the handler then threw on a
+  // destroyed webContents -- and SettingsScreen calls this `void
+  // window.api.setPreferences(next)`, fire-and-forget, so the throw surfaced
+  // as an unhandled rejection and the live spellcheck toggle silently did
+  // nothing. `session.defaultSession` is the correct target regardless of
+  // which windows exist: createWindow's webPreferences names no `session` or
+  // `partition`, so every document window shares exactly this session (the
+  // sandboxed render context is the only thing on its own partition, via
+  // ensureRenderInfraRegistered). Spellcheck was therefore always a
+  // process-wide setting -- reading it off a particular window was incidental,
+  // and that incidental reference was the entire bug.
+  ipcMain.handle('preferences:set', async (event, raw: Preferences) => {
+    // Sanitized once, here, and the SANITIZED value is what gets written,
+    // applied and broadcast. Before the broadcast existed, a renderer-supplied
+    // payload only ever round-tripped through disk and came back through
+    // readPreferences' own sanitize on the next launch; now it is pushed live
+    // into sibling renderers that apply it directly, so it has to be validated
+    // on the way in instead.
+    const preferences = sanitizePreferences(raw)
     await writePreferences(app.getPath('userData'), preferences)
-    mainWindow.webContents.session.setSpellCheckerEnabled(preferences.spellcheckEnabled)
+    session.defaultSession.setSpellCheckerEnabled(preferences.spellcheckEnabled)
+    broadcastPreferences(preferences, event.sender.id)
   })
 
-  // Applies the PERSISTED spellcheck preference from the moment this window
-  // exists, not just after the user next opens Settings -- Electron
-  // defaults spellcheck to enabled, so without this, a user who previously
-  // disabled it would see it silently re-enabled every fresh launch.
+  // Applies the PERSISTED spellcheck preference from the moment the app
+  // starts, not just after the user next opens Settings -- Electron defaults
+  // spellcheck to enabled, so without this, a user who previously disabled it
+  // would see it silently re-enabled every fresh launch. Same
+  // session.defaultSession target as the handler above, and for the same
+  // reason: this is a process-wide setting, not window-scoped.
   readPreferences(app.getPath('userData')).then((preferences) => {
-    mainWindow.webContents.session.setSpellCheckerEnabled(preferences.spellcheckEnabled)
+    session.defaultSession.setSpellCheckerEnabled(preferences.spellcheckEnabled)
   })
 
   // Context menu attachment moved into createWindow() itself (Multi-window
@@ -1134,20 +1422,12 @@ app.whenReady().then(async () => {
   // See attachContextMenu's own comment for the full spelling-suggestion
   // rationale, unchanged from before this move.
 
-  // Split mode's own harness (getOrCreateSplitPreviewHarness, below) is
-  // deliberately still tied to THIS specific window only -- its
-  // WebContentsView is a child of mainWindow's own contentView (Split
-  // mode's architecture, unchanged by Multi-window support: see this
-  // file's own split-preview section for why generalizing it to a
-  // per-window harness map is real, separate, disclosed future work, not
-  // built here). So its teardown stays keyed to mainWindow's own close,
-  // not to `documentWindows` becoming empty -- a still-open SECOND window
-  // doesn't keep this harness alive (it was never that window's harness to
-  // use), and mainWindow closing orphans it regardless of what else is
-  // open (its parent contentView is gone either way).
-  mainWindow.on('closed', () => {
-    void destroySplitPreviewHarness()
-  })
+  // NOTE: Split mode's harness teardown is NOT wired here any more. It used to
+  // be a `mainWindow.on('closed')` registered exactly once, because there was
+  // exactly one harness and it was always mainWindow's. It is now per-window
+  // and torn down by each window's own 'closed' handler inside createWindow --
+  // which is also what makes closing a second window stop blanking the first
+  // one's live preview.
 
   // "Open in New Window" (Multi-window support) -- a genuinely new,
   // independent BrowserWindow with its own separate renderer process and
@@ -1223,10 +1503,14 @@ app.whenReady().then(async () => {
     }
   )
 
-  // Split mode IPC surface (Task 3 of the Split mode plan). All three share
-  // the single, lazily-created harness held in this module's scope (see
-  // getOrCreateSplitPreviewHarness above) -- created by whichever of
-  // setBounds/sendDocument fires first, torn down by destroy.
+  // Split mode IPC surface (Task 3 of the Split mode plan). All five resolve
+  // the harness for the window that ACTUALLY SENT the request, via
+  // `BrowserWindow.fromWebContents(event.sender)` -- the same pattern
+  // dialog:confirmDiscard/file:exportPdf/file:exportHtml/file:save already
+  // use. They previously ignored `event.sender` entirely and used the
+  // captured `mainWindow`, which meant Split mode in window 2 attached its
+  // preview to window 1 and painted over it (see the split-preview harness
+  // block near the top of this file for the full measured behaviour).
   //
   // split-preview:setBounds is `ipcMain.on`/`ipcRenderer.send`, not
   // `invoke`/`handle` -- it fires on every ResizeObserver tick from the
@@ -1236,7 +1520,9 @@ app.whenReady().then(async () => {
   // WebContentsView.setBounds's own Rectangle units via toViewBounds (Task 1,
   // renamed from toPhysicalBounds in the final whole-branch review -- it was
   // never converting to physical pixels at all, see that file's own comment),
-  // using mainWindow.webContents.getZoomFactor() as the scale factor.
+  // using the SENDING window's own webContents.getZoomFactor() as the scale
+  // factor -- it used to read mainWindow's, which is the wrong window's zoom
+  // level the moment a second window exists.
   //
   // WHY getZoomFactor() ALONE, WITH NO devicePixelRatio MULTIPLY: this was
   // flagged going in as UNVERIFIED (the plan's own formula multiplied by
@@ -1273,11 +1559,16 @@ app.whenReady().then(async () => {
   // rectangle it's given using Electron's own current zoom state.
   ipcMain.on(
     'split-preview:setBounds',
-    (_event, cssBounds: { x: number; y: number; width: number; height: number }) => {
-      void getOrCreateSplitPreviewHarness(mainWindow)
+    (event, cssBounds: { x: number; y: number; width: number; height: number }) => {
+      const win = BrowserWindow.fromWebContents(event.sender)
+      if (!win || win.isDestroyed()) return
+      void getOrCreateSplitPreviewHarness(win)
         .then((harness) => {
-          const scaleFactor = mainWindow.webContents.getZoomFactor()
-          harness.setBounds(cssBounds, scaleFactor)
+          // Re-checked AFTER the await: harness creation involves a real
+          // loadURL round trip, and a window can be closed inside it. Reading
+          // getZoomFactor() off a destroyed webContents throws.
+          if (win.isDestroyed()) return
+          harness.setBounds(cssBounds, win.webContents.getZoomFactor())
         })
         .catch((err) => {
           console.error('Failed to apply split preview bounds', err)
@@ -1301,16 +1592,20 @@ app.whenReady().then(async () => {
   // itself.
   ipcMain.handle(
     'split-preview:sendDocument',
-    async (
-      _event,
-      content: string,
-      filePath: string | null,
-      allowRemoteImages: boolean = false
-    ) => {
+    async (event, content: string, filePath: string | null, allowRemoteImages: boolean = false) => {
+      const win = BrowserWindow.fromWebContents(event.sender)
+      // Unreachable in practice -- the sender IS a live window's renderer by
+      // definition -- but this must not silently fall back to some OTHER
+      // window, which is precisely the bug being fixed here. SplitPreview.tsx
+      // already catches and logs a rejected send and retries on the next
+      // settled edit.
+      if (!win || win.isDestroyed()) {
+        throw new Error('split-preview:sendDocument: no live window for this request')
+      }
       const userDataDir = app.getPath('userData')
       const validatedPath = filePath && (await isKnownPath(userDataDir, filePath)) ? filePath : null
-      return enqueueSplitPreviewWork(async () => {
-        const harness = await getOrCreateSplitPreviewHarness(mainWindow)
+      return enqueueSplitPreviewWork(win, async () => {
+        const harness = await getOrCreateSplitPreviewHarness(win)
         return harness.sendDocument(content, validatedPath, allowRemoteImages)
       })
     }
@@ -1319,12 +1614,18 @@ app.whenReady().then(async () => {
   // Called by the renderer when viewMode leaves 'split' (Task 5), so a user
   // who never revisits Split mode doesn't keep a second WebContentsView (and
   // its own sandboxed renderer process) alive for the rest of the session.
-  // Delegates to destroySplitPreviewHarness (defined above, alongside the
-  // rest of this module's split-preview state) -- shared with mainWindow's
-  // own 'closed' handler, see that function's own comment for why both need
-  // it and how the module-scope reference is cleared before the queued
-  // destroy() actually runs.
-  ipcMain.handle('split-preview:destroy', () => destroySplitPreviewHarness())
+  //
+  // Scoped to the SENDING window: this used to tear down the one global
+  // harness, so leaving Split mode in window 2 blanked window 1's live
+  // preview -- the mirror image of the attach bug, from the same root cause.
+  // Shared with that window's own 'closed' handler; see
+  // destroySplitPreviewHarness for why both callers are required and how the
+  // stored reference is cleared before the queued destroy() actually runs.
+  ipcMain.handle('split-preview:destroy', (event) => {
+    const win = BrowserWindow.fromWebContents(event.sender)
+    if (!win) return
+    return destroySplitPreviewHarness(win)
+  })
 
   // Page navigation (docs/superpowers/specs/2026-08-08-page-navigation-design.md).
   //
@@ -1337,32 +1638,42 @@ app.whenReady().then(async () => {
   // No isKnownPath check applies: neither accepts a path, and the only
   // renderer-supplied value is an integer the sandbox clamps. Neither rejects
   // -- page navigation is a convenience and must never break editing.
-  ipcMain.handle('split-preview:scrollToPage', async (_event, pageIndex: number) => {
-    if (!splitPreviewHarnessPromise) return { currentPage: 1, pageCount: 0 }
-    return enqueueSplitPreviewWork(async () => {
-      const harnessPromise = splitPreviewHarnessPromise
-      if (!harnessPromise) return { currentPage: 1, pageCount: 0 }
+  //
+  // Both read the SENDING window's own harness state. Reading a shared one
+  // meant window 2's poll reported window 1's scroll position, and window 2's
+  // "next page" click scrolled window 1's preview.
+  ipcMain.handle('split-preview:scrollToPage', async (event, pageIndex: number) => {
+    const win = BrowserWindow.fromWebContents(event.sender)
+    const state = win ? splitPreviewStates.get(win) : undefined
+    if (!win || !state?.harnessPromise) return EMPTY_PAGE_NAV_STATE
+    return enqueueSplitPreviewWork(win, async () => {
+      // Re-read inside the queued task, not captured above: a destroy can be
+      // queued ahead of this and null the slot before this task runs.
+      const harnessPromise = state.harnessPromise
+      if (!harnessPromise) return EMPTY_PAGE_NAV_STATE
       try {
         const harness = await harnessPromise
         return await harness.scrollToPage(pageIndex)
       } catch (err) {
         console.error('Failed to scroll split preview', err)
-        return { currentPage: 1, pageCount: 0 }
+        return EMPTY_PAGE_NAV_STATE
       }
     })
   })
 
-  ipcMain.handle('split-preview:getPage', async () => {
-    if (!splitPreviewHarnessPromise) return { currentPage: 1, pageCount: 0 }
-    return enqueueSplitPreviewWork(async () => {
-      const harnessPromise = splitPreviewHarnessPromise
-      if (!harnessPromise) return { currentPage: 1, pageCount: 0 }
+  ipcMain.handle('split-preview:getPage', async (event) => {
+    const win = BrowserWindow.fromWebContents(event.sender)
+    const state = win ? splitPreviewStates.get(win) : undefined
+    if (!win || !state?.harnessPromise) return EMPTY_PAGE_NAV_STATE
+    return enqueueSplitPreviewWork(win, async () => {
+      const harnessPromise = state.harnessPromise
+      if (!harnessPromise) return EMPTY_PAGE_NAV_STATE
       try {
         const harness = await harnessPromise
         return await harness.getPage()
       } catch (err) {
         console.error('Failed to read split preview page', err)
-        return { currentPage: 1, pageCount: 0 }
+        return EMPTY_PAGE_NAV_STATE
       }
     })
   })

@@ -161,6 +161,10 @@ export interface FileApi {
   ) => Promise<{ cancelled: boolean }>
   getPreferences: () => Promise<Preferences>
   setPreferences: (preferences: Preferences) => Promise<void>
+  // Subscribes to "another window changed the shared preferences". Returns an
+  // unsubscribe function the caller MUST invoke on unmount, same contract (and
+  // same reason) as onMenuCommand below.
+  onPreferencesChanged: (callback: (preferences: Preferences) => void) => () => void
   autosaveSnapshot: (content: string, filePath: string) => Promise<void>
   getVersionHistory: (filePath: string) => Promise<SnapshotMeta[]>
   restoreVersionContent: (filePath: string, snapshotId: string) => Promise<string | null>
