@@ -150,6 +150,16 @@ describe('buildAppMenuTemplate: accelerators', () => {
     expect(itemIn(fileMenu, 'Save').accelerator).toBe('CmdOrCtrl+S')
     expect(itemIn(fileMenu, 'Save As…').accelerator).toBe('CmdOrCtrl+Shift+S')
     expect(itemIn(fileMenu, 'Print…').accelerator).toBe('CmdOrCtrl+P')
+    // Added by the single-row-toolbar pass, because these two are now the
+    // ONLY way to reach HTML export and Page Setup from the keyboard: their
+    // toolbar buttons went to make the toolbar fit on one line, and the rule
+    // for removing a toolbar control at all is that it keeps a real home.
+    // Alt+E pairs with Export as PDF's own Shift+E on the same base key;
+    // Shift+P is the platform's long-standing Page Setup accelerator. Both
+    // are additionally protected by the "never reuses one accelerator" test
+    // below.
+    expect(itemIn(fileMenu, 'Export as HTML…').accelerator).toBe('CmdOrCtrl+Alt+E')
+    expect(itemIn(fileMenu, 'Page Setup…').accelerator).toBe('CmdOrCtrl+Shift+P')
   })
 
   it('does NOT bind Cmd+E to Export as PDF', () => {
@@ -310,6 +320,57 @@ describe('buildAppMenuTemplate: enablement', () => {
     expect(itemIn(viewMenu, 'Source').checked).toBe(false)
     expect(itemIn(viewMenu, 'Split').type).toBe('radio')
   })
+
+  // Split Left Pane and Follow Preview Scroll are NOT duplicates of a toolbar
+  // control -- the single-row-toolbar pass made this menu their only home, so
+  // these items carry the whole feature. They therefore have to do what the
+  // pills did: report their own live state, and only be live where they mean
+  // something.
+  describe('Split Left Pane and Follow Preview Scroll', () => {
+    const inSplit = (overrides: Partial<WindowUiState> = {}): MenuItemConstructorOptions[] =>
+      submenuOf(build({ state: { ...EDITING, viewMode: 'split', ...overrides } }).template, 'View')
+
+    it('renders Split Left Pane as a radio pair checked from the reported mode', () => {
+      const pane = itemIn(inSplit({ splitLeftMode: 'source' }), 'Split Left Pane')
+      const options = pane.submenu as MenuItemConstructorOptions[]
+      expect(options.map((item) => item.label)).toEqual(['Format', 'Source'])
+      expect(itemIn(options, 'Format')).toMatchObject({ type: 'radio', checked: false })
+      expect(itemIn(options, 'Source')).toMatchObject({ type: 'radio', checked: true })
+    })
+
+    it('renders Follow Preview Scroll as a checkbox reflecting splitFollowEnabled', () => {
+      expect(itemIn(inSplit({ splitFollowEnabled: true }), 'Follow Preview Scroll')).toMatchObject({
+        type: 'checkbox',
+        checked: true
+      })
+      expect(itemIn(inSplit({ splitFollowEnabled: false }), 'Follow Preview Scroll')).toMatchObject(
+        {
+          checked: false
+        }
+      )
+    })
+
+    it('disables both outside Split mode, mirroring the pills that never rendered there', () => {
+      for (const viewMode of ['format', 'source'] as const) {
+        const viewMenu = submenuOf(build({ state: { ...EDITING, viewMode } }).template, 'View')
+        const options = itemIn(viewMenu, 'Split Left Pane').submenu as MenuItemConstructorOptions[]
+        expect(options.every((item) => item.enabled === false)).toBe(true)
+        expect(itemIn(viewMenu, 'Follow Preview Scroll').enabled).toBe(false)
+      }
+    })
+
+    it('disables Follow when the Split left pane is Source, but leaves the pane choice live', () => {
+      // Follow's arithmetic is keyed to the Milkdown page card's content-box
+      // height, which a plain <textarea> has no counterpart for -- the exact
+      // condition the toolbar pill encoded as `splitLeftMode === 'format'`.
+      // The pane choice itself must stay enabled or the user could not get
+      // back to Format and re-enable Follow at all.
+      const viewMenu = inSplit({ splitLeftMode: 'source' })
+      expect(itemIn(viewMenu, 'Follow Preview Scroll').enabled).toBe(false)
+      const options = itemIn(viewMenu, 'Split Left Pane').submenu as MenuItemConstructorOptions[]
+      expect(options.every((item) => item.enabled === true)).toBe(true)
+    })
+  })
 })
 
 describe('buildAppMenuTemplate: Open Recent', () => {
@@ -351,6 +412,11 @@ describe('buildAppMenuTemplate: command dispatch', () => {
     click('File', 'Save')
     click('File', 'Save As…')
     click('File', 'Export as PDF…')
+    // The three items that are now these commands' ONLY trigger, since the
+    // single-row-toolbar pass removed their toolbar buttons.
+    click('File', 'Export as HTML…')
+    click('File', 'Print…')
+    click('File', 'Page Setup…')
     click('Edit', 'Find and Replace…')
     click('View', 'Split')
     click('View', 'Toggle Sidebar')
@@ -361,10 +427,31 @@ describe('buildAppMenuTemplate: command dispatch', () => {
       'file:save',
       'file:saveAs',
       'file:exportPdf',
+      'file:exportHtml',
+      'file:print',
+      'file:pageSetup',
       'edit:findReplace',
       'view:split',
       'view:toggleSidebar',
       'app:shortcuts'
+    ])
+  })
+
+  it('sends the Split Left Pane and Follow commands from the View menu', () => {
+    const { template, send } = build({ state: { ...EDITING, viewMode: 'split' } })
+    const viewMenu = submenuOf(template, 'View')
+    const pane = itemIn(viewMenu, 'Split Left Pane').submenu as MenuItemConstructorOptions[]
+    const fire = (item: MenuItemConstructorOptions): void => {
+      item.click?.(undefined as never, undefined as never, undefined as never)
+    }
+    fire(itemIn(pane, 'Source'))
+    fire(itemIn(pane, 'Format'))
+    fire(itemIn(viewMenu, 'Follow Preview Scroll'))
+
+    expect(send.mock.calls.map((call) => call[0])).toEqual([
+      'view:splitLeftSource',
+      'view:splitLeftFormat',
+      'view:toggleSplitFollow'
     ])
   })
 })

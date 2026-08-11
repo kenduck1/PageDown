@@ -85,7 +85,15 @@ const CATEGORIES: ShortcutCategory[] = [
       // Deliberately NOT ⌘E, which @milkdown/preset-commonmark already binds
       // to inline code -- see app-menu-template.ts's own note.
       { keys: `${MOD}${SHIFT}E`, description: 'Export as PDF…' },
+      // Both added when the single-row-toolbar pass removed the Export-as-HTML
+      // button and gave Page Setup a keyboard route. Alt+E pairs with Export
+      // as PDF on the same base key; Shift+P is the platform's own
+      // long-standing Page Setup accelerator. Neither collides -- checked
+      // against this list and pinned by app-menu-template.test.ts's
+      // "never reuses one accelerator" sweep.
+      { keys: `${MOD}${ALT}E`, description: 'Export as HTML…' },
       { keys: `${MOD}P`, description: 'Print…' },
+      { keys: `${MOD}${SHIFT}P`, description: 'Page setup…' },
       { keys: `${MOD}W`, description: 'Close window' }
     ]
   },

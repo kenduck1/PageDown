@@ -16,6 +16,13 @@ function App(): React.JSX.Element {
   const goEditor = useAppStore((state) => state.goEditor)
   const goSettings = useAppStore((state) => state.goSettings)
   const viewMode = useAppStore((state) => state.viewMode)
+  // Reported alongside viewMode below, and only since the single-row-toolbar
+  // pass moved both of these controls out of EditorToolbar and into the View
+  // menu -- a menu radio/checkbox that cannot show its own state would be a
+  // downgrade on the pills it replaced, and main can only know the state a
+  // renderer tells it.
+  const splitLeftMode = useAppStore((state) => state.splitLeftMode)
+  const splitFollowEnabled = useAppStore((state) => state.splitFollowEnabled)
   const shortcutsHelpOpen = useAppStore((state) => state.shortcutsHelpOpen)
   const openShortcutsHelp = useAppStore((state) => state.openShortcutsHelp)
   const closeShortcutsHelp = useAppStore((state) => state.closeShortcutsHelp)
@@ -111,11 +118,13 @@ function App(): React.JSX.Element {
     window.api.setWindowState({
       documentOpen: screen === 'editor',
       viewMode,
+      splitLeftMode,
+      splitFollowEnabled,
       fileName: filePath ? (filePath.split(/[/\\]/).pop() ?? filePath) : null,
       isDirty,
       openFilePaths: openFilePathsKey ? openFilePathsKey.split('\0') : []
     })
-  }, [screen, viewMode, filePath, isDirty, openFilePathsKey])
+  }, [screen, viewMode, splitLeftMode, splitFollowEnabled, filePath, isDirty, openFilePathsKey])
 
   // Product-completeness audit Tier 3, C: the shortcuts reference used to be
   // reachable ONLY from inside EditorScreen -- both its `Mod-/` keydown

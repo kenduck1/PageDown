@@ -1,12 +1,15 @@
 import { useState } from 'react'
-import type {
-  Orientation,
-  PageConfig,
-  PageMargins,
-  PageNumberFormat,
-  PageRunningContent,
-  PageSize,
-  PageTheme
+import {
+  PAGE_FONT_SIZES,
+  type Orientation,
+  type PageConfig,
+  type PageFontFamily,
+  type PageFontSize,
+  type PageMargins,
+  type PageNumberFormat,
+  type PageRunningContent,
+  type PageSize,
+  type PageTheme
 } from '../../../markdown/page-config'
 import { useModalDialog } from '../hooks/useModalDialog'
 
@@ -63,6 +66,20 @@ const PAGE_NUMBER_FORMATS: { value: PageNumberFormat; label: string }[] = [
   { value: 'decimal', label: '1, 2, 3' },
   { value: 'roman', label: 'i, ii, iii' }
 ]
+// Moved here from EditorToolbar in the single-row-toolbar pass. The move is
+// not only about the 208px those two selects cost the toolbar: neither was
+// ever a selection-formatting control. `fontFamily` and `fontSize` are
+// PageConfig fields written into the DOCUMENT's own YAML frontmatter, so they
+// change every page at once -- which is what this dialog is for, and what the
+// toolbar's per-selection Bold/Italic/heading controls are not. Their previous
+// home actively invited the misreading: Font size shipped once with
+// `defaultValue="11"` and no onChange at all, reading as per-selection sizing
+// that silently did nothing.
+const FONT_FAMILIES: { value: PageFontFamily; label: string }[] = [
+  { value: 'source-serif-4', label: 'Source Serif 4' },
+  { value: 'inter', label: 'Inter' }
+]
+
 const THEMES: { value: PageTheme; label: string }[] = [
   { value: 'default', label: 'Default' },
   { value: 'resume', label: 'Résumé' },
@@ -542,6 +559,73 @@ function PageSetupModal({
                     {label}
                   </PillButton>
                 ))}
+              </div>
+            </section>
+
+            {/* Typography -- the toolbar's old font-family and font-size
+                selects, in the dialog that already owns every other
+                document-wide setting. Both are plain controlled <select>s over
+                the same draft PageConfig every control here edits, so they
+                reach the paginator, the editor canvas, thumbnails and the
+                exported PDF through the ONE `onApply` path rather than through
+                the second, parallel frontmatter writer EditorScreen used to
+                keep just for them (handleSetFontFamily/handleSetFontSize, both
+                now deleted).
+
+                Sitting directly beside Theme is deliberate: a theme is a
+                preset type scale and these two override it, so the two
+                type-related sections belong adjacent -- a user who did not get
+                what they wanted from one finds the other without leaving the
+                dialog, which is the whole point of consolidating them here. */}
+            <section className="mb-6">
+              <h3 className="text-eyebrow mb-2">Typography</h3>
+              <div className="grid grid-cols-2 gap-3">
+                <label className="flex flex-col gap-1">
+                  <span className="text-11-5 text-text-secondary">Font family</span>
+                  <select
+                    value={draft.fontFamily}
+                    onChange={(e) =>
+                      setDraft((prev) => ({
+                        ...prev,
+                        fontFamily: e.target.value as PageFontFamily
+                      }))
+                    }
+                    className="rounded-sm border border-border-subtle px-2 py-1 text-12-5 text-text-primary"
+                  >
+                    {FONT_FAMILIES.map(({ value, label }) => (
+                      <option key={value} value={value}>
+                        {label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="flex flex-col gap-1">
+                  <span className="text-11-5 text-text-secondary">Font size</span>
+                  <select
+                    value={String(draft.fontSize)}
+                    // 'default' is a real PageFontSize, not a null-ish
+                    // placeholder -- it means "whatever the theme says" and
+                    // emits no size class at all, so it must round-trip as the
+                    // string rather than being coerced through Number().
+                    onChange={(e) =>
+                      setDraft((prev) => ({
+                        ...prev,
+                        fontSize:
+                          e.target.value === 'default'
+                            ? 'default'
+                            : (Number(e.target.value) as PageFontSize)
+                      }))
+                    }
+                    className="rounded-sm border border-border-subtle px-2 py-1 text-12-5 text-text-primary"
+                  >
+                    <option value="default">Default</option>
+                    {PAGE_FONT_SIZES.map((size) => (
+                      <option key={size} value={String(size)}>
+                        {size}
+                      </option>
+                    ))}
+                  </select>
+                </label>
               </div>
             </section>
 

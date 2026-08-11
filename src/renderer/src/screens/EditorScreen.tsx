@@ -33,13 +33,7 @@ import { useMenuCommands } from '../hooks/useMenuCommands'
 import { useFindStore } from '../store/findStore'
 import { DEFAULT_ZOOM, nextZoomLevel, previousZoomLevel } from '../lib/zoom-levels'
 import { extractRawFrontmatter, replaceRawFrontmatter } from '../../../markdown/frontmatter-splice'
-import {
-  resolvePageConfig,
-  applyPageConfig,
-  type PageConfig,
-  type PageFontFamily,
-  type PageFontSize
-} from '../../../markdown/page-config'
+import { resolvePageConfig, applyPageConfig, type PageConfig } from '../../../markdown/page-config'
 import { computePageGeometry } from '../../../typography/page-geometry'
 import { resolveDocumentStyle } from '../../../typography/document-style'
 
@@ -76,6 +70,11 @@ function composerTargetIsLive(target: { tabId: string; revision: number } | null
 function EditorScreen(): React.JSX.Element {
   const goHome = useAppStore((state) => state.goHome)
   const pageSetupOpen = useAppStore((state) => state.pageSetupOpen)
+  // Read here as well as in EditorToolbar (which still renders the Page setup
+  // button) because File > Page Setup… is a second, independent trigger --
+  // added in the single-row-toolbar pass so the font family/size controls that
+  // moved into this dialog gained a keyboard route (Cmd+Shift+P).
+  const openPageSetup = useAppStore((state) => state.openPageSetup)
   const closePageSetup = useAppStore((state) => state.closePageSetup)
   const shortcutsHelpOpen = useAppStore((state) => state.shortcutsHelpOpen)
   const commentComposerOpen = useAppStore((state) => state.commentComposerOpen)
@@ -99,6 +98,12 @@ function EditorScreen(): React.JSX.Element {
   const viewMode = useAppStore((state) => state.viewMode)
   const setViewMode = useAppStore((state) => state.setViewMode)
   const splitLeftMode = useAppStore((state) => state.splitLeftMode)
+  // Bound here (not only in EditorToolbar, which no longer renders either
+  // control) because View > Split Left Pane and View > Follow Preview Scroll
+  // are now the only way to reach them -- see this screen's useMenuCommands
+  // map, and EditorToolbar.tsx's header for why they left the toolbar.
+  const setSplitLeftMode = useAppStore((state) => state.setSplitLeftMode)
+  const toggleSplitFollow = useAppStore((state) => state.toggleSplitFollow)
   const splitRatio = useAppStore((state) => state.splitRatio)
   const setSplitRatio = useAppStore((state) => state.setSplitRatio)
   // Per-TAB now, not per-window (product-completeness audit 2.4) -- "page 7"
@@ -126,8 +131,13 @@ function EditorScreen(): React.JSX.Element {
   const save = useDocumentStore((state) => state.save)
   const saveAs = useDocumentStore((state) => state.saveAs)
   const exportPdf = useDocumentStore((state) => state.exportPdf)
+  // Print and HTML export are now MENU-ONLY (their toolbar buttons went in the
+  // single-row-toolbar pass), so these two selectors are the sole remaining
+  // call sites for either action.
+  const exportHtml = useDocumentStore((state) => state.exportHtml)
   const print = useDocumentStore((state) => state.print)
   const saveDroppedImage = useDocumentStore((state) => state.saveDroppedImage)
+  const resolveLocalImage = useDocumentStore((state) => state.resolveLocalImage)
   const editorRef = useRef<MilkdownEditorHandle>(null)
   // One ref is correct even though renderSourceEditor() (below) has two call
   // sites (plain Source mode, and Split mode's left pane) -- the same
@@ -813,7 +823,15 @@ function EditorScreen(): React.JSX.Element {
     // Straight to the store actions the toolbar buttons also call, so the two
     // triggers share one in-flight guard (see documentStore's isExporting).
     'file:exportPdf': () => void exportPdf(),
+    // These three lost their toolbar buttons in the single-row-toolbar pass,
+    // so the menu is now their ONLY trigger rather than their second one --
+    // which is exactly why each had to have a menu item before its button
+    // could go (EditorToolbar.tsx's header states that rule). They call the
+    // same store actions the buttons did, so the in-flight guards and the
+    // export Toast are unchanged.
+    'file:exportHtml': () => void exportHtml(),
     'file:print': () => void print(),
+    'file:pageSetup': () => openPageSetup(),
     'edit:find': () =>
       openFindFromShortcut(
         { getSelectedText: findController.getSelectedText, queryInputRef: findQueryInputRef },
@@ -842,6 +860,17 @@ function EditorScreen(): React.JSX.Element {
     'view:format': () => handleSetViewMode('format'),
     'view:split': () => handleSetViewMode('split'),
     'view:source': () => handleSetViewMode('source'),
+    // The Split left-pane choice and the Follow toggle. These call the store
+    // actions DIRECTLY (not through handleSetViewMode) for exactly the reason
+    // the toolbar pills they replace did: Split's own left-pane ternary is a
+    // real element-type swap, so toggling it already unmounts the outgoing
+    // editor -- whose own cleanup flushes any pending edit -- and mounts a
+    // fresh one reading the current store content, with no key change needed.
+    // EditorScreen.test.tsx's 'toggling splitLeftMode ... does not lose an
+    // in-flight edit' tests exercise that against a real MilkdownEditor.
+    'view:splitLeftFormat': () => setSplitLeftMode('format'),
+    'view:splitLeftSource': () => setSplitLeftMode('source'),
+    'view:toggleSplitFollow': () => toggleSplitFollow(),
     // Stepped through the SAME level list the status bar's zoom <select>
     // renders -- an off-list value would blank that control (see
     // lib/zoom-levels.ts).
@@ -1266,35 +1295,14 @@ function EditorScreen(): React.JSX.Element {
     closePageSetup()
   }
 
-  // The toolbar's font-family control. Deliberately routed through the same
-  // frontmatter write path as Page Setup rather than held as UI-only state:
-  // the font is a property OF THE DOCUMENT (it has to survive save/reopen
-  // and reach the paginator and PDF export), so the document's own YAML is
-  // the only correct home for it. Consequence worth knowing: like any
-  // frontmatter change this bumps `revision` and therefore remounts the
-  // editor, which costs the cursor position -- the same tradeoff Page
-  // Setup's Apply already makes, and the reason this is a toolbar control
-  // rather than something wired to every keystroke.
-  const handleSetFontFamily = (fontFamily: PageFontFamily): void => {
-    const newRawYaml = applyPageConfig(extractRawFrontmatter(content), {
-      ...pageConfig,
-      fontFamily
-    })
-    replaceContent(replaceRawFrontmatter(content, newRawYaml))
-  }
-
-  // The toolbar's body-size control -- the same frontmatter write path, and
-  // the same tradeoffs (bumps `revision`, so the editor remounts and the
-  // cursor position is lost), as handleSetFontFamily immediately above. Kept
-  // as a sibling rather than folded into one generic handler so each stays
-  // readable at its own call site; both are one-line spreads over pageConfig.
-  const handleSetFontSize = (fontSize: PageFontSize): void => {
-    const newRawYaml = applyPageConfig(extractRawFrontmatter(content), {
-      ...pageConfig,
-      fontSize
-    })
-    replaceContent(replaceRawFrontmatter(content, newRawYaml))
-  }
+  // handleSetFontFamily / handleSetFontSize USED TO LIVE HERE, as a second
+  // frontmatter writer serving the toolbar's own font-family and font-size
+  // selects. Both are deleted: those selects moved into PageSetupModal's
+  // Typography section (single-row-toolbar pass -- see EditorToolbar.tsx's
+  // header for why they were never selection formatting in the first place),
+  // which routes through handleApplyPageConfig immediately above. That is
+  // strictly one path instead of two writing the same two PageConfig fields,
+  // and it removes the divergence risk that came with the duplication.
 
   // Returns the underlying flush+Save+replace promise (rather than
   // void-discarding it) so EditorHistory's handleRestore can `await` this
@@ -1558,6 +1566,12 @@ function EditorScreen(): React.JSX.Element {
         onError={(message) => useDocumentStore.setState({ error: message })}
         onFindMatchesChanged={findController.handleFormatMatches}
         onDropImage={saveDroppedImage}
+        // Deliberately the STORE action, not a closure over this render's
+        // `filePath`: the resolver is published into ProseMirror plugin
+        // state and read at image-render time, which can be well after this
+        // render (a resolution in flight, an image scrolled into view). The
+        // action reads the active tab's own filePath when it actually runs.
+        onResolveLocalImage={resolveLocalImage}
         onSelectionChanged={handleSelectionChanged}
         onSlashStateChanged={slashMenu.handleSlashStateChanged}
       />
@@ -1603,8 +1617,6 @@ function EditorScreen(): React.JSX.Element {
       <EditorToolbar
         editorRef={editorRef}
         onSetViewMode={handleSetViewMode}
-        onSetFontFamily={handleSetFontFamily}
-        onSetFontSize={handleSetFontSize}
         // The same snapshot the selection bubble runs on, reused here so
         // Bold/Italic/list buttons show real pressed state instead of the
         // hardcoded `active={false}` they carried since the design handoff.

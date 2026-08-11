@@ -135,7 +135,8 @@ beforeEach(() => {
     onWindowCloseRequest: vi.fn().mockReturnValue(() => {}),
     respondToWindowClose: vi.fn(),
     getStartupWarnings: vi.fn().mockResolvedValue([]),
-    getAppVersion: vi.fn().mockResolvedValue('1.0.0')
+    getAppVersion: vi.fn().mockResolvedValue('1.0.0'),
+    resolveLocalImage: vi.fn()
   }
 })
 
@@ -179,17 +180,58 @@ describe('EditorScreen: application-menu commands', () => {
     })
   })
 
-  it('file:exportPdf and file:print run the same store actions as the toolbar buttons', async () => {
+  // Export PDF still has a toolbar button; Print, HTML export and Page Setup's
+  // keyboard route do NOT -- the single-row-toolbar pass removed the Print and
+  // Export-as-HTML buttons outright, so for those two this menu path is the
+  // ONLY trigger in the app and this test is their whole end-to-end coverage
+  // at the renderer level.
+  it('file:exportPdf, file:print and file:exportHtml run the real store actions', async () => {
     useDocumentStore.setState({ filePath: '/tmp/report.md', content: '# Report' })
     render(<EditorScreen />)
 
     emitMenuCommand('file:exportPdf')
     emitMenuCommand('file:print')
+    emitMenuCommand('file:exportHtml')
 
     await vi.waitFor(() => {
       expect(window.api.exportPdf).toHaveBeenCalledWith('# Report', '/tmp/report.md', false)
       expect(window.api.print).toHaveBeenCalledWith('# Report', '/tmp/report.md', false)
+      expect(window.api.exportHtml).toHaveBeenCalledWith('# Report', '/tmp/report.md', false)
     })
+  })
+
+  it('file:pageSetup opens the Page Setup dialog', () => {
+    // Matters more than it looks: Page Setup is now also the home of the
+    // document's font family and body size, which used to be one click away
+    // in the toolbar and have no other UI at all.
+    useDocumentStore.setState({ filePath: '/tmp/report.md', content: '# Report' })
+    render(<EditorScreen />)
+
+    expect(useAppStore.getState().pageSetupOpen).toBe(false)
+    emitMenuCommand('file:pageSetup')
+    expect(useAppStore.getState().pageSetupOpen).toBe(true)
+  })
+
+  it('view:splitLeftFormat / view:splitLeftSource / view:toggleSplitFollow drive the real store', () => {
+    // These three replace toolbar pills that no longer exist, so the menu is
+    // their only surface. EditorScreen.test.tsx separately proves, against a
+    // REAL MilkdownEditor, that the left-pane switch does not lose an
+    // in-flight edit -- the invariant CLAUDE.md records a shipped Critical bug
+    // for.
+    useAppStore.setState({ viewMode: 'split', splitLeftMode: 'format' })
+    useDocumentStore.setState({ filePath: '/tmp/report.md', content: '# Report' })
+    render(<EditorScreen />)
+
+    emitMenuCommand('view:splitLeftSource')
+    expect(useAppStore.getState().splitLeftMode).toBe('source')
+    emitMenuCommand('view:splitLeftFormat')
+    expect(useAppStore.getState().splitLeftMode).toBe('format')
+
+    expect(useAppStore.getState().splitFollowEnabled).toBe(true)
+    emitMenuCommand('view:toggleSplitFollow')
+    expect(useAppStore.getState().splitFollowEnabled).toBe(false)
+    emitMenuCommand('view:toggleSplitFollow')
+    expect(useAppStore.getState().splitFollowEnabled).toBe(true)
   })
 
   it('view:split routes through handleSetViewMode, not the bare setViewMode', () => {

@@ -20,6 +20,10 @@
 // compile error in the renderer rather than a silent runtime mismatch.
 export type WindowViewMode = 'format' | 'split' | 'source'
 
+// Same deliberate-duplication reasoning as WindowViewMode above, for
+// appStore.ts's own `SplitLeftMode`.
+export type WindowSplitLeftMode = 'format' | 'source'
+
 export interface WindowUiState {
   // `screen === 'editor'`, i.e. there is a document on screen to act on.
   // Drives menu-item enablement for everything under File that operates on
@@ -29,6 +33,16 @@ export interface WindowUiState {
   documentOpen: boolean
   // Drives the View menu's Format/Split/Source radio checkmarks.
   viewMode: WindowViewMode
+  // Which editor the Split view's LEFT pane is showing, and whether the
+  // preview follows the editor's scroll position. Both drive real View-menu
+  // state (a radio pair and a checkbox), and both only became WindowUiState
+  // fields when the single-row-toolbar pass moved those two controls out of
+  // EditorToolbar and into the View menu -- the menu is now the ONLY place
+  // either one can be seen or changed, so reporting their live state is not
+  // optional polish: a radio group that never moves its checkmark, or a
+  // checkbox stuck at unchecked, would misreport the window it describes.
+  splitLeftMode: WindowSplitLeftMode
+  splitFollowEnabled: boolean
   // The document's BASENAME, not its full path -- the window title shows a
   // filename, and computing the basename in the renderer (which already
   // splits paths for the tab bar and the Home screen's recent rows) keeps the
@@ -63,12 +77,17 @@ export interface WindowUiState {
 export const DEFAULT_WINDOW_UI_STATE: WindowUiState = {
   documentOpen: false,
   viewMode: 'format',
+  // Matches appStore's own initialAppState for both fields -- a menu built
+  // before the first report must not contradict the store it describes.
+  splitLeftMode: 'format',
+  splitFollowEnabled: true,
   fileName: null,
   isDirty: false,
   openFilePaths: []
 }
 
 const VIEW_MODES: readonly string[] = ['format', 'split', 'source']
+const SPLIT_LEFT_MODES: readonly string[] = ['format', 'source']
 
 // A window with more open documents than this reports only the first
 // MAX_REPORTED_OPEN_PATHS -- a bound on what an (in principle compromised)
@@ -96,6 +115,14 @@ export function coerceWindowUiState(value: unknown): WindowUiState {
       typeof raw.viewMode === 'string' && VIEW_MODES.includes(raw.viewMode)
         ? (raw.viewMode as WindowViewMode)
         : DEFAULT_WINDOW_UI_STATE.viewMode,
+    splitLeftMode:
+      typeof raw.splitLeftMode === 'string' && SPLIT_LEFT_MODES.includes(raw.splitLeftMode)
+        ? (raw.splitLeftMode as WindowSplitLeftMode)
+        : DEFAULT_WINDOW_UI_STATE.splitLeftMode,
+    splitFollowEnabled:
+      typeof raw.splitFollowEnabled === 'boolean'
+        ? raw.splitFollowEnabled
+        : DEFAULT_WINDOW_UI_STATE.splitFollowEnabled,
     fileName: typeof raw.fileName === 'string' ? raw.fileName : DEFAULT_WINDOW_UI_STATE.fileName,
     isDirty: typeof raw.isDirty === 'boolean' ? raw.isDirty : DEFAULT_WINDOW_UI_STATE.isDirty,
     // Per-ELEMENT filtering, not a whole-array reject: one malformed entry
@@ -126,5 +153,13 @@ export function menuRelevantStateChanged(
   next: WindowUiState
 ): boolean {
   if (!previous) return true
-  return previous.documentOpen !== next.documentOpen || previous.viewMode !== next.viewMode
+  return (
+    previous.documentOpen !== next.documentOpen ||
+    previous.viewMode !== next.viewMode ||
+    // Both of these render as live menu state (a radio checkmark, a
+    // checkbox), so a change that did NOT rebuild the menu would leave the
+    // only surface these two controls have showing the wrong thing.
+    previous.splitLeftMode !== next.splitLeftMode ||
+    previous.splitFollowEnabled !== next.splitFollowEnabled
+  )
 }

@@ -303,4 +303,92 @@ describe('PageSetupModal', () => {
       )
     })
   })
+
+  // Font family and font size moved here from EditorToolbar in the
+  // single-row-toolbar pass. The move is not only about the 208px they cost
+  // that toolbar: neither was ever selection formatting -- both write
+  // PageConfig fields into the document's own frontmatter, changing every
+  // page at once, which is precisely what this dialog is for. These four
+  // tests are the toolbar suite's own font tests, brought across with the
+  // controls rather than dropped.
+  describe('Typography', () => {
+    it('shows the config’s real font family and applies a change', async () => {
+      const onApply = vi.fn()
+      const user = userEvent.setup()
+      render(
+        <PageSetupModal
+          open={true}
+          initialConfig={{ ...CONFIG, fontFamily: 'source-serif-4' }}
+          onApply={onApply}
+          onClose={vi.fn()}
+        />
+      )
+
+      const select = screen.getByLabelText('Font family')
+      expect(select).toHaveValue('source-serif-4')
+
+      await user.selectOptions(select, 'inter')
+      await user.click(screen.getByRole('button', { name: 'Apply' }))
+
+      expect(onApply).toHaveBeenCalledWith(expect.objectContaining({ fontFamily: 'inter' }))
+    })
+
+    it('shows the config’s real font size and applies a change', async () => {
+      // The assertion the ORIGINAL toolbar control could never have passed:
+      // it shipped with a hardcoded `defaultValue="11"` and no onChange at
+      // all, so it reported a size the document did not have and discarded
+      // every change made to it.
+      const onApply = vi.fn()
+      const user = userEvent.setup()
+      render(
+        <PageSetupModal
+          open={true}
+          initialConfig={{ ...CONFIG, fontSize: 12 }}
+          onApply={onApply}
+          onClose={vi.fn()}
+        />
+      )
+
+      const select = screen.getByLabelText('Font size')
+      expect(select).toHaveValue('12')
+
+      await user.selectOptions(select, '16')
+      await user.click(screen.getByRole('button', { name: 'Apply' }))
+
+      expect(onApply).toHaveBeenCalledWith(expect.objectContaining({ fontSize: 16 }))
+    })
+
+    it('round-trips the Default size as the STRING, not a number', async () => {
+      // 'default' is a real PageFontSize meaning "whatever the theme says",
+      // and it emits no size class at all. Coercing it through Number() would
+      // produce NaN and silently drop the field.
+      const onApply = vi.fn()
+      const user = userEvent.setup()
+      render(
+        <PageSetupModal
+          open={true}
+          initialConfig={{ ...CONFIG, fontSize: 12 }}
+          onApply={onApply}
+          onClose={vi.fn()}
+        />
+      )
+
+      await user.selectOptions(screen.getByLabelText('Font size'), 'default')
+      await user.click(screen.getByRole('button', { name: 'Apply' }))
+
+      expect(onApply).toHaveBeenCalledWith(expect.objectContaining({ fontSize: 'default' }))
+    })
+
+    it('falls back to Default for a config that sets no size', () => {
+      render(
+        <PageSetupModal
+          open={true}
+          initialConfig={{ ...CONFIG, fontSize: 'default' }}
+          onApply={vi.fn()}
+          onClose={vi.fn()}
+        />
+      )
+      expect(screen.getByLabelText('Font size')).toHaveValue('default')
+    })
+  })
 })
