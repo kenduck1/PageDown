@@ -407,7 +407,20 @@ test.describe('Gate 40: table of contents', () => {
     console.log(`Gate 40 canvas TOC: ${JSON.stringify(canvas)}`)
 
     expect(canvas.entries).toEqual(preview.tocEntries)
-    expect(canvas.after, 'the editing canvas must not paint a page number').toBe('normal')
+    // `none`, not `normal`. Per CSS Content Level 3 the initial value of
+    // `content` is `normal`, and on a ::before/::after pseudo-element `normal`
+    // COMPUTES TO `none` -- so `none` is exactly what a rejected declaration
+    // looks like from getComputedStyle, and it is what Chromium really
+    // reports here (this assertion originally said `normal` and was written
+    // from the spec's initial value rather than from a measurement).
+    //
+    // Asserted two ways rather than one, because the thing that must be true
+    // is "no page number is painted", and a single equality against one
+    // sentinel string would also pass if some future rule set `content: none`
+    // for an unrelated reason while another painted a number elsewhere. So:
+    // no generated box at all, AND nothing digit-shaped in the value.
+    expect(canvas.after, 'the editing canvas must not generate an ::after box').toBe('none')
+    expect(canvas.after, 'the editing canvas must not paint a page number').not.toMatch(/\d/)
   })
 })
 
