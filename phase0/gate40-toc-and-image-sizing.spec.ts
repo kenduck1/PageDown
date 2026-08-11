@@ -31,29 +31,28 @@ import { mergeRecentFiles, readRecentFiles, writeRecentFiles } from '../src/main
 // file never calls computePageGeometry or any of the code under test to work
 // out what it expects.
 //
-// RUN STATUS, RECORDED HONESTLY: this gate has NOT yet been observed green.
-// Two attempts on 2026-08-11 both failed inside `launchIsolatedApp` in
-// `beforeAll`, reaching no assertion, with a Worker teardown timeout -- the
-// exact environmental signature CLAUDE.md's Testing section describes. Three
-// things were checked before writing that off, in the order CLAUDE.md's own
-// methodology prescribes:
+// RUN STATUS: green, 5/5 in 6.6s on a quiet host (2026-08-11). This header
+// previously recorded the gate as never-observed-green after two runs failed
+// inside `launchIsolatedApp` in `beforeAll`, reaching no assertion -- the
+// environmental signature, correctly diagnosed. Run on a clear machine it
+// passes, and the two real defects it then found were both worth having:
 //
-//   - The built app itself BOOTS: `electron out/main/index.js
-//     --user-data-dir=<tmp>` ran to a clean SIGTERM with no output, ruling out
-//     "the feature broke startup, so the renderer never sets window.api and
-//     the hook waits forever" -- which produces this identical symptom and is
-//     the one failure mode that would be a real regression.
-//   - A CONTROL gate, phase0/gate11-editor-save-race.spec.ts, completely
-//     untouched by this work, failed with the SAME signature in the same
-//     conditions minutes later. CLAUDE.md is explicit that a passing control
-//     rules out the environment while a FAILING one implicates it; this is the
-//     failing case.
-//   - Both attempts ran while a second agent held its own Playwright worker
-//     and 9 live Electron processes (load average 6.6, then 3.9).
+//   - `<!-- pagebreak -->` did not break pages AT ALL. This gate's own TOC
+//     fixture uses one to guarantee a second page and got one page. Nothing in
+//     the app consumed `.pagedown-pagebreak`, so a page-first editor's Page
+//     Break button, slash-menu item and marker were inert on every output
+//     surface. Fixed in src/typography/document-typography.css -- and note the
+//     rule there is the ONE unscoped selector in that file, because Paged.js
+//     deletes `break-after` from the CSS and re-applies it by querying the
+//     content fragment, which has no `.pagedown-document` ancestor.
+//   - Two of this file's own assertions were written from a specification
+//     rather than from a measurement: `content: 'normal'` where a pseudo-
+//     element computes it to `none`, and a `data:` image URI that this app's
+//     sanitize schema strips by design. Both read like product bugs and were
+//     not. See PNG_1X1_BASE64 below.
 //
-// So: the next person to touch this should run it on a quiet host before
-// trusting it, and should treat a NAMED assertion failure here -- as opposed
-// to another bare hook timeout -- as a real product regression.
+// Treat a NAMED assertion failure here as a real regression; treat another
+// bare hook timeout as the host.
 
 // Letter at 96dpi with 1in margins -> 8.5*96 - 2*96. Restated as a literal on
 // purpose (see above); it is also what Gate 10 pins the editor canvas to.
@@ -64,8 +63,28 @@ const HALF_CONTENT_WIDTH_PX = CONTENT_WIDTH_PX / 2
 // that the RENDERED width comes from `{width=...}` and not from the image's
 // own intrinsic size -- an unsized control renders 1px wide, a `{width=50%}`
 // one renders 312px, and no plausible bug produces the second from the first.
-const PNG_1X1 =
-  'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=='
+//
+// It is written to DISK beside the fixture document and referenced by a
+// relative path, NOT inlined as a `data:` URI. That is not a style choice: a
+// `data:` image src does not survive this app's pipeline at all, by design.
+// `hast-util-sanitize`'s default schema pins `protocols.src` to
+// `['http', 'https']` (verified by reading the installed schema, and by
+// rendering one: `![Sized](data:image/png;base64,...)` emits
+// `<img alt="Sized" width="50%">` -- correct width, NO src). The first version
+// of this fixture used a data: URI, so the img had no source, Chromium painted
+// the alt text plus a broken-image icon, and the test measured 51.14px against
+// an expected 312 -- which reads exactly like an image-sizing bug and is not
+// one. The width attribute was right the whole time.
+//
+// Excluding `data:` here is deliberate rather than incidental, and worth not
+// "fixing": `data:image/svg+xml` can carry script, so a blanket `data:` src
+// allowance in a pipeline that renders untrusted document content is a real
+// XSS surface, not a convenience. Documents reference local images by relative
+// path and the asset-token registry resolves them -- which is the path this
+// fixture now exercises, and the one a real user takes.
+const PNG_1X1_BASE64 =
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=='
+const PNG_1X1_FILENAME = 'gate40-pixel.png'
 
 interface Probe {
   pageCount: number
@@ -251,6 +270,9 @@ test.beforeAll(async () => {
   win = await getMainWindow(app)
   await win.waitForFunction(() => (window as unknown as { api?: unknown }).api !== undefined)
   fixtureDir = await mkdtemp(join(tmpdir(), 'pagedown-gate40-'))
+  // Written once, beside every fixture document -- see PNG_1X1_BASE64 for why
+  // this is a real file on disk rather than a data: URI.
+  await writeFile(join(fixtureDir, PNG_1X1_FILENAME), Buffer.from(PNG_1X1_BASE64, 'base64'))
 })
 
 test.afterAll(async () => {
@@ -429,9 +451,9 @@ const IMAGE_FIXTURE = [
   '',
   '---',
   '',
-  `![Sized](${PNG_1X1}){width=50%}`,
+  `![Sized](${PNG_1X1_FILENAME}){width=50%}`,
   '',
-  `![Plain](${PNG_1X1})`,
+  `![Plain](${PNG_1X1_FILENAME})`,
   ''
 ].join('\n')
 
