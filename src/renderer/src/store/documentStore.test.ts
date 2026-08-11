@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { useDocumentStore, initialDocumentState } from './documentStore'
+import { clearLocalImageCache } from '../lib/local-image-cache'
 
 beforeEach(() => {
   useDocumentStore.setState(initialDocumentState)
@@ -48,7 +49,8 @@ beforeEach(() => {
     onWindowCloseRequest: vi.fn().mockReturnValue(() => {}),
     respondToWindowClose: vi.fn(),
     getStartupWarnings: vi.fn().mockResolvedValue([]),
-    getAppVersion: vi.fn().mockResolvedValue('1.0.0')
+    getAppVersion: vi.fn().mockResolvedValue('1.0.0'),
+    resolveLocalImage: vi.fn()
   }
 })
 
@@ -1165,5 +1167,43 @@ describe('useDocumentStore exportHtml', () => {
     await useDocumentStore.getState().exportHtml()
 
     expect(useDocumentStore.getState().exportNotice).toBeNull()
+  })
+})
+
+describe('useDocumentStore resolveLocalImage', () => {
+  beforeEach(() => {
+    clearLocalImageCache()
+  })
+
+  it('resolves through IPC using the ACTIVE tab own file path', async () => {
+    vi.mocked(window.api.resolveLocalImage).mockResolvedValue('data:image/png;base64,AAA')
+    useDocumentStore.setState({ filePath: '/docs/report.md' })
+
+    const result = await useDocumentStore.getState().resolveLocalImage('figures/chart.png')
+
+    expect(result).toBe('data:image/png;base64,AAA')
+    expect(window.api.resolveLocalImage).toHaveBeenCalledWith(
+      '/docs/report.md',
+      'figures/chart.png'
+    )
+  })
+
+  // The established "deny all local assets until saved" posture every other
+  // surface already takes -- and enforced here as well as in main, so an
+  // unsaved document generates no IPC traffic at all.
+  it('resolves null for an unsaved document without touching IPC', async () => {
+    useDocumentStore.setState({ filePath: null })
+
+    await expect(
+      useDocumentStore.getState().resolveLocalImage('figures/chart.png')
+    ).resolves.toBeNull()
+    expect(window.api.resolveLocalImage).not.toHaveBeenCalled()
+  })
+
+  it('passes a main-process denial straight through as null', async () => {
+    vi.mocked(window.api.resolveLocalImage).mockResolvedValue(null)
+    useDocumentStore.setState({ filePath: '/docs/report.md' })
+
+    await expect(useDocumentStore.getState().resolveLocalImage('nope.png')).resolves.toBeNull()
   })
 })

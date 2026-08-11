@@ -11,7 +11,9 @@
 // helpers) -- see inline-local-images.test.ts's own header for exactly how
 // it stubs `electron` just enough to import those real functions.
 import { readFile, stat } from 'node:fs/promises'
-import { isRelativeLocalPath, urlToRelativePath } from '../markdown/pipeline'
+import { dirname } from 'node:path'
+import { isRelativeLocalPath, urlToRelativePath } from '../markdown/local-image-src'
+import { isKnownPath } from './recent-files'
 import { resolveAssetPath, sniffImageContentType, MAX_ASSET_BYTES } from './pagination-window'
 
 // Every `<img>` tag as a whole, quote-aware -- NOT a naive `<img[^>]*>`,
@@ -50,7 +52,23 @@ function matchSrc(tag: string): string | null {
 // export that can't find/read/verify an image degrades to a missing picture
 // icon when the file is later opened, never a thrown error that would abort
 // the whole export over one bad reference.
-async function resolveLocalImageDataUri(documentDir: string, src: string): Promise<string | null> {
+//
+// EXPORTED for a second consumer: the `file:resolveLocalImage` IPC handler
+// (src/main/index.ts), which backs the Format-mode editor canvas's own image
+// rendering. That surface has exactly the same problem HTML export has -- it
+// needs real image bytes somewhere that cannot use the `pagedown-render://`
+// asset scheme (the privileged app-shell renderer has no such protocol
+// registered, and giving it one would hand a context with full
+// contextBridge/disk access a URL-shaped file-read primitive) -- so it needs
+// the same answer, produced by the same checks. Reusing this function rather
+// than writing a second "read an image the document points at" path is the
+// whole point: every one of the four security properties above (absolute-path
+// denial, symlink-resolved confinement, the 10 MiB stat-before-read cap, and
+// magic-byte sniffing) is enforced once, here, for both callers.
+export async function resolveLocalImageDataUri(
+  documentDir: string,
+  src: string
+): Promise<string | null> {
   const relativePath = urlToRelativePath(src)
   const resolved = await resolveAssetPath(documentDir, relativePath)
   if (!resolved) return null
@@ -116,4 +134,59 @@ export async function inlineLocalImages(html: string, documentDir: string | null
     if (!dataUri) return tag
     return tag.replace(new RegExp(SRC_ATTR_PATTERN_SOURCE, 'i'), `src="${dataUri}"`)
   })
+}
+
+// The whole body of the `file:resolveLocalImage` IPC handler, extracted here
+// rather than written inline in src/main/index.ts for one reason: `index.ts`
+// has NO unit tests at all (CLAUDE.md: app bootstrap and IPC registration
+// around already-unit-tested functions, verified via gates instead), and the
+// guards below are the security boundary of the whole editor-canvas image
+// feature. Living here they are directly unit-testable -- and directly
+// MUTATION-testable, which is the point: removing either guard has to make a
+// named test fail, not merely make a gate time out. Same precedent, and the
+// same reasoning, as `clearPendingAutosaveForFile` being pulled out of its
+// own handler into version-history.ts.
+//
+// Resolves one of `documentPath`'s own relative local image references to a
+// self-contained `data:` URI. Three guards, in order, each closing something
+// the next one does not:
+//
+//  1. `isRelativeLocalPath(src)` -- refuses anything scheme-prefixed
+//     (`file:`, `http:`, `data:`) or root-absolute BEFORE any path join
+//     happens. This is also what makes it structurally impossible for this
+//     function to be the way a REMOTE image renders: it cannot resolve one
+//     at all, so the per-document remote-image consent decision
+//     (documentStore.remoteImagesAllowed, enforced in pipeline.ts) has no
+//     bypass here, with or without consent.
+//  2. `isKnownPath(userDataDir, documentPath)` -- CLAUDE.md's File I/O
+//     security invariant. `documentPath` is renderer-supplied and its
+//     DIRECTORY becomes the root every subsequent read is confined to, so
+//     without this the function is a read-any-directory primitive: name
+//     `/Users/someone/.ssh/config` as the "document" and its directory
+//     becomes readable one file at a time.
+//  3. `resolveAssetPath` (inside resolveLocalImageDataUri) -- the
+//     symlink-resolved confinement check that denies `..` escapes and
+//     symlinks planted to point outside the document's own directory, plus
+//     the 10 MiB stat-before-read cap and the real magic-byte sniff.
+//
+// Guard 2 chooses WHICH directory; guard 3 keeps the read inside it. Neither
+// substitutes for the other, and the tests mutation-check them separately.
+//
+// Returns `null` for every denial reason alike -- never throws, never
+// distinguishes -- matching resolveAssetPath's own "don't hand a hostile
+// document an oracle for probing the filesystem" convention. An unknown
+// document path DROPS rather than throwing, matching file:getPageCount's
+// documented asymmetry with file:getThumbnail: a document aged out of the
+// 10-entry recents allowlist still opens and still edits, it just shows
+// unresolved-image placeholders, where throwing would produce one rejected
+// IPC call per image node on every editor remount.
+export async function resolveDocumentLocalImage(
+  userDataDir: string,
+  documentPath: unknown,
+  src: unknown
+): Promise<string | null> {
+  if (typeof documentPath !== 'string' || documentPath.length === 0) return null
+  if (typeof src !== 'string' || !isRelativeLocalPath(src)) return null
+  if (!(await isKnownPath(userDataDir, documentPath))) return null
+  return resolveLocalImageDataUri(dirname(documentPath), src)
 }

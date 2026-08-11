@@ -40,6 +40,7 @@ import { createSplitPreviewHarness, type SplitPreviewHarness } from './split-pre
 import type { PageNavState } from '../pagination/page-nav'
 import { exportDocumentToPdf } from './pdf-exporter'
 import { exportDocumentToHtml } from './html-exporter'
+import { resolveDocumentLocalImage } from './inline-local-images'
 import { printDocument } from './print-exporter'
 import {
   readPreferences,
@@ -1253,6 +1254,30 @@ app.whenReady().then(async () => {
     'file:saveDroppedImage',
     (_event, filePath: string | null, base64Data: string, suggestedFilename: string) =>
       saveDroppedImage(app.getPath('userData'), filePath, base64Data, suggestedFilename)
+  )
+
+  // Backs the Format-mode editor canvas's own local-image rendering
+  // (src/renderer/src/milkdown/image-security.ts). Every OTHER surface in
+  // this app -- the Split preview, PDF/print export, Home thumbnails --
+  // resolves a document's local images inside the SANDBOXED render context,
+  // through the `pagedown-render://__asset__/<token>/...` protocol handler
+  // and its per-load asset-root registry. The Milkdown canvas cannot: it
+  // lives in the privileged app-shell renderer (full contextBridge and, via
+  // it, real disk access), which is precisely the context that must never be
+  // handed a URL-shaped file-read primitive. So instead of giving the
+  // renderer a way to FETCH, this hands it already-read, already-vetted
+  // BYTES: main does the read, main runs every check, and what crosses the
+  // bridge is a self-contained `data:` URI with no filesystem meaning at all.
+  //
+  // Deliberately a one-line delegation with no logic of its own -- every
+  // guard (isRelativeLocalPath, isKnownPath, and resolveAssetPath's
+  // symlink-resolved confinement) lives in resolveDocumentLocalImage so it
+  // is directly unit- and mutation-testable; this file has no unit tests at
+  // all. See that function for what each guard closes and why none of them
+  // is redundant. Same shape, and same reasoning, as file:saveDroppedImage
+  // and file:clearPendingAutosave just above.
+  ipcMain.handle('file:resolveLocalImage', (_event, filePath: unknown, src: unknown) =>
+    resolveDocumentLocalImage(app.getPath('userData'), filePath, src)
   )
 
   ipcMain.handle('preferences:get', () => readPreferences(app.getPath('userData')))

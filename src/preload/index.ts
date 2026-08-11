@@ -139,6 +139,20 @@ const api = {
   // entire purpose is writing a new file next to the document.
   saveDroppedImage: (filePath: string | null, base64Data: string, suggestedFilename: string) =>
     ipcRenderer.invoke('file:saveDroppedImage', filePath, base64Data, suggestedFilename),
+  // Reads ONE of the open document's own local images and hands back a
+  // self-contained `data:` URI -- the only way the privileged app-shell
+  // renderer ever sees local image bytes, and deliberately not a way for it
+  // to name a file to read. `filePath` is the DOCUMENT's path (validated
+  // with isKnownPath on the other side, dropped if unknown); `src` is the
+  // relative reference exactly as it appears in the Markdown. Resolves
+  // `null` -- never rejects, never distinguishes why -- for every denial
+  // alike (unknown document path, absolute/`..`/symlink escape, missing
+  // file, oversize file, non-image bytes), matching resolveAssetPath's own
+  // "don't hand a hostile document a filesystem oracle" convention. A remote
+  // `http(s)` src is refused before any of that, so this can never be the
+  // path by which a remote image renders without consent.
+  resolveLocalImage: (filePath: string, src: string): Promise<string | null> =>
+    ipcRenderer.invoke('file:resolveLocalImage', filePath, src),
   // `filePath: null`/omitted opens a plain new window at Home, same as the
   // app's own first launch -- see createWindow's own doc comment in
   // src/main/index.ts for why no isKnownPath check is needed here

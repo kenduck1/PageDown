@@ -183,6 +183,11 @@ export interface FileApi {
     base64Data: string,
     suggestedFilename: string
   ) => Promise<{ relativePath: string } | { error: string }>
+  // One of the open document's own local images, as a self-contained `data:`
+  // URI, or `null` for every denial reason alike -- see the preload
+  // implementation's own comment for the full contract and why it can never
+  // resolve a remote src.
+  resolveLocalImage: (filePath: string, src: string) => Promise<string | null>
   openInNewWindow: (filePath?: string | null) => Promise<void>
   // Subscribes to native application-menu commands. Returns an unsubscribe
   // function the caller MUST invoke on unmount -- see the preload

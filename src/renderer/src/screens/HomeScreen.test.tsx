@@ -70,7 +70,8 @@ beforeEach(() => {
     onWindowCloseRequest: vi.fn().mockReturnValue(() => {}),
     respondToWindowClose: vi.fn(),
     getStartupWarnings: vi.fn().mockResolvedValue([]),
-    getAppVersion: vi.fn().mockResolvedValue('1.0.0')
+    getAppVersion: vi.fn().mockResolvedValue('1.0.0'),
+    resolveLocalImage: vi.fn()
   }
   usePreferencesStore.setState({ preferences: null, loaded: false })
 })
@@ -403,5 +404,47 @@ describe('HomeScreen', () => {
     expect(useAppStore.getState().homeActiveSection).toBe('templates')
 
     scrollIntoViewSpy.mockRestore()
+  })
+})
+
+describe('HomeScreen navigation order matches content order', () => {
+  // The reported defect: the nav listed Recent above Templates while `main`
+  // rendered Templates above Recent, so the second scroll link scrolled UP.
+  // Asserting the two orders against EACH OTHER rather than against a
+  // hardcoded expectation is what makes this a real regression test -- it
+  // fails if EITHER side is reordered on its own, in either direction.
+  it('lists the section links in the same order the sections themselves render', async () => {
+    vi.mocked(window.api.getRecentFiles).mockResolvedValue([])
+    render(<HomeScreen />)
+
+    const nav = document.querySelector('nav') as HTMLElement
+    const navLabels = Array.from(nav.querySelectorAll('button'))
+      .map((button) => button.textContent?.trim())
+      .filter((label) => label === 'Templates' || label === 'Recent')
+
+    const main = document.querySelector('main') as HTMLElement
+    const sectionHeadings = Array.from(main.querySelectorAll('h2'))
+      .map((heading) => heading.textContent?.trim())
+      // The templates section's own heading is "Start new"; map it onto the
+      // nav label that scrolls to it so the two lists are comparable.
+      .map((text) => (text === 'Start new' ? 'Templates' : text))
+      .filter((label) => label === 'Templates' || label === 'Recent')
+
+    expect(navLabels).toEqual(['Templates', 'Recent'])
+    expect(navLabels).toEqual(sectionHeadings)
+  })
+
+  // The third inconsistency in the same defect: the nav highlight claimed
+  // "Recent" on first paint while the content was scrolled to the top of
+  // Templates.
+  it('highlights the section that is actually at the top of the content on first paint', async () => {
+    vi.mocked(window.api.getRecentFiles).mockResolvedValue([])
+    render(<HomeScreen />)
+
+    const main = document.querySelector('main') as HTMLElement
+    const firstHeading = main.querySelector('h2')?.textContent?.trim()
+
+    expect(firstHeading).toBe('Start new')
+    expect(useAppStore.getState().homeActiveSection).toBe('templates')
   })
 })

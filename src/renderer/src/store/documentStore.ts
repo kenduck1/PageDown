@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import { tabLabel } from '../lib/tab-label'
+import { resolveCachedLocalImage } from '../lib/local-image-cache'
 
 // One open document "tab". Deliberately a subset of DocumentStateValues'
 // per-document fields (content/filePath/isDirty) -- `error` and `revision`
@@ -181,6 +182,20 @@ interface DocumentState extends DocumentStateValues {
   // into the editor at the drop position, which this action has no way to
   // do generically for both Format and Source mode.
   saveDroppedImage: (file: File) => Promise<{ relativePath: string } | { error: string }>
+  // Resolves ONE of the active document's own relative local image
+  // references to a self-contained `data:` URI, for the Format-mode canvas's
+  // image node view (milkdown/image-security.ts). Reads the ACTIVE tab's own
+  // filePath internally for the same reason saveDroppedImage does -- the
+  // caller is a ProseMirror node view, not a component with store access.
+  //
+  // Resolves `null` for an unsaved document (no path to resolve against),
+  // which is the established, correct "deny all local assets until saved"
+  // behaviour every other surface already takes -- and it is enforced HERE
+  // as well as in main so an unsaved document does not even generate the
+  // IPC traffic. Never rejects and never surfaces an error: a document can
+  // legitimately reference an image that is not there yet, and one broken
+  // reference must not produce an error banner over the whole document.
+  resolveLocalImage: (src: string) => Promise<string | null>
   updateContent: (content: string) => void
   // Same update as updateContent, but targets an EXPLICIT tab id rather
   // than "whichever tab is active right now" -- needed because
@@ -958,6 +973,16 @@ export const useDocumentStore = create<DocumentState>()((set, get) => ({
     } catch (err) {
       return { error: errorMessage(err) }
     }
+  },
+  resolveLocalImage: async (src) => {
+    const { filePath } = get()
+    if (!filePath) return null
+    // The cache (lib/local-image-cache.ts) sits between here and IPC, not
+    // inside the node view, so a document with the same image referenced
+    // many times -- and a document remounted repeatedly by key={revision} --
+    // costs one read rather than N. See that module for the TTL/eviction
+    // reasoning.
+    return resolveCachedLocalImage(filePath, src, window.api.resolveLocalImage)
   },
   updateContent: (content) => get().updateContentForTab(get().activeTabId, content),
   updateContentForTab: (tabId, content) =>
