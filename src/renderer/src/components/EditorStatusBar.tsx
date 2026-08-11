@@ -113,6 +113,23 @@ export interface EditorStatusBarProps {
   zoom: number
   onZoomChange: (zoom: number) => void
   /**
+   * Whether zoom can actually be applied to what is currently on screen.
+   * Defaults to `true`, so this component's own standalone tests (and any
+   * caller that has no mode concept) keep the pre-existing behaviour.
+   *
+   * `false` in Split mode, and that is a correctness fix rather than polish:
+   * Split's two-pane row renders outside `EditorScreen`'s zoom wrapper on
+   * purpose (its right pane is a native `WebContentsView` whose bounds come
+   * from a DOM rect that a CSS scale would silently desync), so the control
+   * used to accept a change, report it, and change nothing -- measured: 150%
+   * selected in Split left the pane transform at "none" and the page card's
+   * rect unchanged while this readout said 150%, and switching back to Format
+   * then jumped the document to 150% out of nowhere. Disabled, not hidden: the
+   * current level is still worth reading, and a control that disappears and
+   * reappears on every mode switch is its own kind of noise.
+   */
+  zoomEnabled?: boolean
+  /**
    * A message describing the most recent Split-mode preview render failure,
    * or `null`/omitted when the last attempt succeeded (or Split mode isn't
    * active). EditorScreen owns this -- it clears automatically on the next
@@ -212,6 +229,7 @@ function EditorStatusBar({
   onNavigateToPage,
   zoom,
   onZoomChange,
+  zoomEnabled = true,
   splitPreviewError
 }: EditorStatusBarProps): React.JSX.Element {
   const debouncedContent = useDebouncedValue(content, STATS_DEBOUNCE_MS)
@@ -315,7 +333,13 @@ function EditorStatusBar({
         <select
           value={String(zoom)}
           onChange={(event) => onZoomChange(Number(event.target.value))}
-          className="rounded-sm bg-transparent text-11-5 text-text-secondary"
+          disabled={!zoomEnabled}
+          // Names the reason before the click, the same convention the page
+          // navigation controls above already follow ("Next page (shown in
+          // Split view)") -- a greyed control with no explanation reads as
+          // broken.
+          title={zoomEnabled ? undefined : 'Zoom applies to Format and Source view, not Split view'}
+          className="rounded-sm bg-transparent text-11-5 text-text-secondary disabled:cursor-not-allowed disabled:opacity-40"
         >
           {ZOOM_OPTIONS.map((option) => (
             <option key={option.value} value={String(option.value)}>

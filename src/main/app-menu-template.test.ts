@@ -257,6 +257,34 @@ describe('buildAppMenuTemplate: enablement', () => {
     expect(itemIn(submenuOf(open, 'Help'), 'Keyboard Shortcuts').enabled).toBe(true)
   })
 
+  it('disables the three Zoom items in Split mode, and only those', () => {
+    // The one per-mode exception to this menu's deliberately coarse "gated on
+    // documentOpen" rule, and it is about capability: Split's two-pane row
+    // renders outside EditorScreen's zoom wrapper on purpose (its right pane
+    // is a native WebContentsView whose bounds come from a DOM rect a CSS
+    // scale would silently desync), so a live Zoom In there moved the status
+    // bar's readout, changed nothing on screen, and made the document jump on
+    // the next switch back to Format.
+    const viewMenu = submenuOf(build({ state: { ...EDITING, viewMode: 'split' } }).template, 'View')
+    for (const label of ['Zoom In', 'Zoom Out', 'Actual Size']) {
+      expect(itemIn(viewMenu, label).enabled).toBe(false)
+    }
+    // Everything else in this menu is untouched by the mode -- switching AWAY
+    // from Split has to stay reachable, or the disablement would be a trap.
+    for (const label of ['Format', 'Split', 'Source', 'Toggle Sidebar']) {
+      expect(itemIn(viewMenu, label).enabled).toBe(true)
+    }
+  })
+
+  it('enables the Zoom items in Format and Source mode', () => {
+    for (const viewMode of ['format', 'source'] as const) {
+      const viewMenu = submenuOf(build({ state: { ...EDITING, viewMode } }).template, 'View')
+      for (const label of ['Zoom In', 'Zoom Out', 'Actual Size']) {
+        expect(itemIn(viewMenu, label).enabled).toBe(true)
+      }
+    }
+  })
+
   it('checks the radio item matching the focused window view mode', () => {
     const viewMenu = submenuOf(build({ state: { ...EDITING, viewMode: 'split' } }).template, 'View')
     expect(itemIn(viewMenu, 'Format').checked).toBe(false)

@@ -269,7 +269,12 @@ describe('App', () => {
       emitMenuCommand('file:new')
 
       expect(useAppStore.getState().screen).toBe('editor')
-      expect(useDocumentStore.getState().tabs).toHaveLength(2)
+      // EXACTLY one tab, not two. This used to assert 2 -- the store's own
+      // seeded blank tab plus the newly created document -- which is precisely
+      // the stray-"Untitled" defect documentStore's pristine-tab reuse fixes:
+      // one File > New on a fresh launch left two identical Untitled tabs
+      // behind. See isPristineBlankTab.
+      expect(useDocumentStore.getState().tabs).toHaveLength(1)
     })
 
     it("file:new applies the user's own default page config, like the Home button does", async () => {

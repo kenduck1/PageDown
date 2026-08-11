@@ -236,6 +236,39 @@ describe('EditorScreen: application-menu commands', () => {
     expect(zoomSelect.value).toBe('1')
   })
 
+  it('zoom commands and the zoom select are both inert in Split mode', () => {
+    // Zoom has no effect at all in Split mode -- that row renders outside the
+    // zoom wrapper on purpose, because its right pane is a native
+    // WebContentsView positioned from a DOM rect a CSS scale would silently
+    // desync. Before this, the control stayed live and lied: 150% selected in
+    // Split changed nothing on screen while the readout said 150%, and the
+    // document then jumped to 150% on the next switch back to Format.
+    //
+    // Both halves are asserted because they are genuinely separate mechanisms
+    // and either alone leaves a live path: app-menu-template.ts disables the
+    // menu ITEMS, but menu enablement is reported asynchronously (the renderer
+    // pushes window UI state, main rebuilds), so the handler must refuse too.
+    render(<EditorScreen />)
+    const zoomSelect = screen.getByLabelText('Zoom level') as HTMLSelectElement
+
+    emitMenuCommand('view:split')
+    expect(useAppStore.getState().viewMode).toBe('split')
+    expect(zoomSelect).toBeDisabled()
+
+    emitMenuCommand('view:zoomIn')
+    expect(zoomSelect.value).toBe('1')
+    emitMenuCommand('view:zoomOut')
+    expect(zoomSelect.value).toBe('1')
+
+    // ...and it comes back to life on the way out, at the same level it had
+    // before -- the value is deliberately preserved across the round trip, not
+    // reset.
+    emitMenuCommand('view:format')
+    expect(zoomSelect).toBeEnabled()
+    emitMenuCommand('view:zoomIn')
+    expect(zoomSelect.value).toBe('1.25')
+  })
+
   it('edit:find opens the find bar AND seeds the query from the selection', () => {
     // The seeding is the part a naive `openFind()` handler would silently
     // drop: Cmd+F is now a menu accelerator, so this handler -- not
