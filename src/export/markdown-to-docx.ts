@@ -712,6 +712,14 @@ class DocxBuilder {
       // Nine levels because that is OOXML's own maximum list depth; the
       // format cycles decimal / lower-letter / lower-roman the way Word's own
       // default multilevel list does.
+      //
+      // All nine are defined even though one list only ever uses the level it
+      // sits at, because a NESTED ordered list registers its OWN config (this
+      // method is called once per `list` node, at whatever depth) and then
+      // writes items at `ilvl` = its depth -- so a config whose levels stopped
+      // at 0 would leave a level-2 item with no format to render. Verified in
+      // the produced numbering.xml, not assumed: a list nested one deep emits
+      // `ilvl=1` against its own numId and picks up the lowerLetter level here.
       levels: Array.from({ length: 9 }, (_, level) => ({
         level,
         format: [LevelFormat.DECIMAL, LevelFormat.LOWER_LETTER, LevelFormat.LOWER_ROMAN][level % 3],
