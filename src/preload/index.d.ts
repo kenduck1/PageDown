@@ -1,16 +1,18 @@
 import { ElectronAPI } from '@electron-toolkit/preload'
-// The ONE cross-directory import in this file, and the exception proves the
-// rule the local copies below are justified by: every other shared shape here
-// (RecentFileEntry, Preferences, SplitPreviewResult, PageNavState) is
-// re-declared locally because its real definition lives in `src/main/**`,
-// which is outside tsconfig.web.json's program and transitively imports
-// Electron. `src/menu/*` is neither -- it is a deliberately dependency-free
-// contract module shared by main, preload and renderer alike (same shape as
+// Cross-directory imports in this file, and the exception they carve out
+// proves the rule the local copies below are justified by: every other
+// shared shape here (RecentFileEntry, Preferences, SplitPreviewResult,
+// PageNavState) is re-declared locally because its real definition lives in
+// `src/main/**`, which is outside tsconfig.web.json's program and
+// transitively imports Electron. `src/menu/*` and `src/markdown/document-
+// warnings.ts` are neither -- both are deliberately dependency-free contract
+// modules shared by main, preload and renderer alike (same shape as
 // `src/typography/*`, which the renderer already imports directly), so
-// duplicating it here would create exactly the silent-drift risk those local
-// copies otherwise accept as a cost.
+// duplicating either here would create exactly the silent-drift risk those
+// local copies otherwise accept as a cost.
 import type { MenuCommand } from '../menu/commands'
 import type { WindowUiState } from '../menu/window-state'
+import type { DocumentWarning } from '../markdown/document-warnings'
 
 export interface RecentFileEntry {
   filePath: string
@@ -134,11 +136,26 @@ export interface FileApi {
   // allowRemoteImages mirrors the active tab's own remote-image consent
   // decision (documentStore's remoteImagesAllowed) -- see
   // src/markdown/pipeline.ts's stripRemoteImageSrcs for the real enforcement.
+  // `warnings` (2026-08-09 design-doc gap audit's A5) rides this SAME round
+  // trip -- non-blocking, informational notices about the document's own
+  // Markdown source (malformed frontmatter, an inline pagebreak marker, an
+  // alternate pagebreak syntax kept as written), computed by main's own
+  // already-running markdownToHtml/resolvePageConfigWithWarnings pass rather
+  // than a new parse or a new IPC channel. See usePageCount.ts /
+  // DocumentWarningsBanner.tsx for the renderer side. OPTIONAL on this wire
+  // type, deliberately -- the real main-process handler always includes it,
+  // but this codebase's own test suite has many pre-existing
+  // `{ pageCount: N }`-only `getPageCount` mocks that predate this field,
+  // and `usePageCount`'s own `result.warnings ?? []` already treats a
+  // missing value as "no warnings" rather than trusting the wire type alone.
+  // Making this required would force updating every one of those
+  // unrelated fixtures just to keep `vi.mocked(...).mockResolvedValue(...)`
+  // type-checking, for a field most of them have nothing to say about.
   getPageCount: (
     content: string,
     filePath?: string | null,
     allowRemoteImages?: boolean
-  ) => Promise<{ pageCount: number }>
+  ) => Promise<{ pageCount: number; warnings?: DocumentWarning[] }>
   // `documentName` is a display-only label naming WHICH document the dialog is
   // about -- required once several tabs can be prompted about in a row (the
   // window-close guard). Omitted keeps the original document-agnostic wording.

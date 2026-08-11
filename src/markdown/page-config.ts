@@ -163,8 +163,24 @@
 //   this module fully rewrites -- meaningful complexity for a shape no
 //   real PageDown document is expected to contain.
 
-import { load } from 'js-yaml'
+import { load, YAMLException } from 'js-yaml'
 import { extractRawFrontmatter } from './frontmatter-splice'
+import type { DocumentWarning } from './document-warnings'
+
+// js-yaml (pinned at 5.2.2 -- verified directly against the installed
+// package, not assumed) THROWS for input with no real document content --
+// an empty string, whitespace only, or a block made of nothing but
+// comments -- rather than returning `undefined`, which an earlier draft of
+// `parseOwnedKeys` below assumed and which a real, mutation-caught test
+// failure disproved: `load('')` raises a `YAMLException` whose OWN
+// `.reason` field is this exact string, distinguishable from every other
+// parse failure's own `.reason` (e.g. `load('page: [unclosed')`'s is
+// "unexpected end of the stream within a flow collection"). Relying on
+// this structured field -- part of `YAMLException`'s own public shape,
+// confirmed by inspecting a caught instance directly -- rather than
+// re-implementing YAML comment/whitespace stripping ourselves to detect
+// "genuinely empty" up front.
+const EMPTY_DOCUMENT_REASON = 'expected a document, but the input is empty'
 
 export type PageSize = 'Letter' | 'A4' | 'Legal' | 'Custom'
 export type Orientation = 'portrait' | 'landscape'
@@ -304,25 +320,52 @@ function parseMargins(raw: unknown): PageMargins | undefined {
   return undefined
 }
 
-/**
- * Parses only the YAML frontmatter keys PageDown owns out of a raw YAML
- * string (the opaque block `remark-frontmatter`/`frontmatterNode` already
- * isolate). Tolerates and ignores any other keys (other tools' `tags:`,
- * `draft:`, etc.) and never throws: malformed YAML, or a malformed/missing
- * value for any individual owned key, simply omits that key (or all keys,
- * if the whole block fails to parse) from the returned object rather than
- * throwing -- callers should merge the result over `DEFAULT_PAGE_CONFIG`
- * (`{ ...DEFAULT_PAGE_CONFIG, ...extractPageConfig(raw) }`) to get a
- * complete `PageConfig`.
- */
-export function extractPageConfig(rawFrontmatterYaml: string): Partial<PageConfig> {
+interface ParsedOwnedKeys {
+  config: Partial<PageConfig>
+  // True only when the raw YAML text itself couldn't be read as a usable
+  // mapping at all -- a real parse failure, or valid YAML that resolves to
+  // something other than a mapping (a bare scalar, a list, an explicit
+  // `null`). Deliberately narrower than "some owned key held an unexpected
+  // value": every branch below already tolerates a malformed/missing
+  // INDIVIDUAL key's value silently (see this file's own header comment,
+  // "Known limitations of the surgical write path" and the per-key checks
+  // throughout) -- that is normal, expected, and not warning-worthy,
+  // matching every other value this module already degrades gracefully on.
+  // design:208's "Malformed YAML frontmatter -> ... non-blocking warning"
+  // is about the whole-block case: nothing could be extracted at all, and
+  // every owned key fell back to its default. See
+  // `resolvePageConfigWithWarnings` below, the one consumer of this flag.
+  malformed: boolean
+}
+
+// The shared core `extractPageConfig` (kept, unchanged in signature/
+// behaviour, for its many existing Partial<PageConfig>-only callers) and
+// `resolvePageConfigWithWarnings` (the one caller that also needs to know
+// WHETHER the block was malformed) both delegate to -- one `load()` call,
+// not two, so surfacing the warning costs nothing extra parse-wise.
+function parseOwnedKeys(rawFrontmatterYaml: string): ParsedOwnedKeys {
   let parsed: unknown
   try {
     parsed = load(rawFrontmatterYaml)
-  } catch {
-    return {}
+  } catch (error) {
+    // See EMPTY_DOCUMENT_REASON's own comment above: a document with no
+    // frontmatter block at all (`extractRawFrontmatter`'s own `''`
+    // fallback) -- by far the most common case of every document this
+    // function ever sees -- reaches this catch too, and must NOT be
+    // reported as malformed. Every OTHER parse failure (a real syntax
+    // error) still is.
+    if (error instanceof YAMLException && error.reason === EMPTY_DOCUMENT_REASON) {
+      return { config: {}, malformed: false }
+    }
+    return { config: {}, malformed: true }
   }
-  if (!isPlainObject(parsed)) return {}
+  if (!isPlainObject(parsed)) {
+    // Valid YAML that parsed to something other than a mapping (a bare
+    // scalar, a list, an explicit `null`) -- PageDown's owned keys can only
+    // ever live in a mapping, so this block is just as unusable as a
+    // syntax error, for a different reason. Treated the same way.
+    return { config: {}, malformed: true }
+  }
 
   const result: Partial<PageConfig> = {}
 
@@ -404,7 +447,28 @@ export function extractPageConfig(rawFrontmatterYaml: string): Partial<PageConfi
     result.direction = parsed.direction as TextDirection
   }
 
-  return result
+  return { config: result, malformed: false }
+}
+
+/**
+ * Parses only the YAML frontmatter keys PageDown owns out of a raw YAML
+ * string (the opaque block `remark-frontmatter`/`frontmatterNode` already
+ * isolate). Tolerates and ignores any other keys (other tools' `tags:`,
+ * `draft:`, etc.) and never throws: malformed YAML, or a malformed/missing
+ * value for any individual owned key, simply omits that key (or all keys,
+ * if the whole block fails to parse) from the returned object rather than
+ * throwing -- callers should merge the result over `DEFAULT_PAGE_CONFIG`
+ * (`{ ...DEFAULT_PAGE_CONFIG, ...extractPageConfig(raw) }`) to get a
+ * complete `PageConfig`.
+ *
+ * A thin wrapper over `parseOwnedKeys` that drops its `malformed` flag --
+ * this function's own signature predates that flag and every one of its
+ * existing callers (Page Setup's read/write round trip, most of this file's
+ * own test suite) only ever wanted the config, never a warning. See
+ * `resolvePageConfigWithWarnings` below for the one caller that wants both.
+ */
+export function extractPageConfig(rawFrontmatterYaml: string): Partial<PageConfig> {
+  return parseOwnedKeys(rawFrontmatterYaml).config
 }
 
 /**
@@ -454,7 +518,44 @@ export function extractPageConfig(rawFrontmatterYaml: string): Partial<PageConfi
  * `undefined` members at runtime).
  */
 export function resolvePageConfig(source: string): PageConfig {
-  return { ...DEFAULT_PAGE_CONFIG, ...extractPageConfig(extractRawFrontmatter(source)) }
+  return resolvePageConfigWithWarnings(source).config
+}
+
+/**
+ * Same result as `resolvePageConfig`, plus design:208's own "non-blocking
+ * warning" for malformed frontmatter -- the ONE difference between the two.
+ * `getPageCount` (src/main/page-count-generator.ts) is this function's one
+ * caller: it already calls `resolvePageConfig`-equivalent logic on every
+ * debounced edit to compute page geometry, so surfacing the warning here
+ * costs no additional parse of anything -- it rides the `js-yaml.load()`
+ * call `parseOwnedKeys` already makes. Every OTHER `resolvePageConfig`
+ * caller (the Milkdown page card, the sandboxed preview, Home-screen
+ * thumbnails, PDF export) has no user-facing surface to show a warning on in
+ * the first place and is left on the plain, warning-free wrapper above.
+ *
+ * Reuses `extractRawFrontmatter`'s own `''` result for "no frontmatter block
+ * at all" -- deliberately does NOT re-derive "malformed" from
+ * `rawFrontmatterYaml`'s own emptiness here; `parseOwnedKeys` already makes
+ * that exact distinction (an empty/comment-only block parses to `undefined`,
+ * never `malformed: true` -- see its own comment) so there is nothing left
+ * for this function to re-check.
+ */
+export function resolvePageConfigWithWarnings(source: string): {
+  config: PageConfig
+  warnings: DocumentWarning[]
+} {
+  const { config: partial, malformed } = parseOwnedKeys(extractRawFrontmatter(source))
+  const config = { ...DEFAULT_PAGE_CONFIG, ...partial }
+  const warnings: DocumentWarning[] = malformed
+    ? [
+        {
+          id: 'malformed-frontmatter',
+          message:
+            "This document's frontmatter isn't valid YAML, so default page settings are being used."
+        }
+      ]
+    : []
+  return { config, warnings }
 }
 
 // Up to 3 decimal places, no trailing zeros (1 -> "1", 1.5 -> "1.5",

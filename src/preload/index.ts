@@ -40,7 +40,10 @@ const api = {
   // for an unsaved document is correct and denies all local assets.
   // `allowRemoteImages` mirrors the active tab's own remote-image consent
   // decision (documentStore's remoteImagesAllowed) -- defaults to false
-  // (blocked), matching pipeline.ts's own default-closed posture.
+  // (blocked), matching pipeline.ts's own default-closed posture. The
+  // resolved value's `warnings` array is a plain passthrough of whatever
+  // `file:getPageCount` (src/main/index.ts -> page-count-generator.ts)
+  // returns -- see index.d.ts's own comment for what populates it.
   getPageCount: (content: string, filePath: string | null = null, allowRemoteImages = false) =>
     ipcRenderer.invoke('file:getPageCount', content, filePath, allowRemoteImages),
   // `documentName` is a display-only label for the dialog (which document is

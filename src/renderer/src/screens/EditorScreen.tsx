@@ -14,6 +14,7 @@ import FindBar from '../components/FindBar'
 import CommentComposer from '../components/CommentComposer'
 import LinkComposer from '../components/LinkComposer'
 import RemoteImageBanner from '../components/RemoteImageBanner'
+import DocumentWarningsBanner from '../components/DocumentWarningsBanner'
 import SelectionBubble from '../components/SelectionBubble'
 import SlashMenu from '../components/SlashMenu'
 import Toast from '../components/Toast'
@@ -297,12 +298,11 @@ function EditorScreen(): React.JSX.Element {
   // design:189). It was computed and thrown away here for as long as this
   // hook has existed, which is why the "never blank or flickering"
   // requirement had only its blank half solved.
-  const { pageCount, loading: pageCountPending } = usePageCount(
-    content,
-    filePath,
-    undefined,
-    remoteImagesAllowed === true
-  )
+  const {
+    pageCount,
+    loading: pageCountPending,
+    warnings: documentWarnings
+  } = usePageCount(content, filePath, undefined, remoteImagesAllowed === true)
   // undefined (not preferences?.autosaveIntervalMs ?? somethingElse) when
   // preferences haven't loaded yet -- useAutosave's own default parameter
   // already falls back to the pre-existing 45s constant in that case, so
@@ -1740,6 +1740,13 @@ function EditorScreen(): React.JSX.Element {
       {/* Same layout-row placement/reasoning as FindBar/CommentComposer above
       -- see RemoteImageBanner.tsx's own module comment. */}
       <RemoteImageBanner />
+      {/* Same layout-row family, one row below RemoteImageBanner -- order
+      between the two has no functional weight (each independently gates its
+      own visibility), kept adjacent since both are dismissible, non-blocking
+      document-level notices. See DocumentWarningsBanner.tsx's own module
+      comment for why `warnings` is passed as a prop here rather than
+      re-derived locally the way RemoteImageBanner derives its own. */}
+      <DocumentWarningsBanner warnings={documentWarnings} />
       <div className="flex flex-1 overflow-hidden">
         {/* Genuinely unmounted, not merely hidden, when View > Toggle Sidebar
         turns it off -- which is also what makes it compose with Split mode for
