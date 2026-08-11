@@ -159,6 +159,52 @@ describe('EditorStatusBar', () => {
     )
     expect(screen.getByLabelText('Zoom level')).toHaveValue('0.75')
   })
+
+  it('disables the zoom dropdown, still showing the level, when zoom cannot apply', () => {
+    // Split mode. The control used to stay live there and LIE: it accepted
+    // 150%, reported 150%, and changed nothing on screen (Split's two-pane row
+    // renders outside the zoom wrapper on purpose), then the document jumped
+    // to 150% on switching back to Format.
+    render(
+      <EditorStatusBar
+        content="Hi"
+        isDirty={false}
+        zoom={1.5}
+        onZoomChange={vi.fn()}
+        zoomEnabled={false}
+        pageCount={3}
+        pageCountPending={false}
+        currentPage={1}
+        onNavigateToPage={vi.fn()}
+      />
+    )
+
+    const select = screen.getByLabelText('Zoom level')
+    expect(select).toBeDisabled()
+    // Disabled, not hidden or blanked -- the current level stays readable.
+    expect(select).toHaveValue('1.5')
+    // And it says why, rather than being an unexplained greyed control.
+    expect(select).toHaveAttribute(
+      'title',
+      'Zoom applies to Format and Source view, not Split view'
+    )
+  })
+
+  it('leaves the zoom dropdown enabled by default', () => {
+    render(
+      <EditorStatusBar
+        content="Hi"
+        isDirty={false}
+        zoom={1}
+        onZoomChange={vi.fn()}
+        pageCount={3}
+        pageCountPending={false}
+        currentPage={1}
+        onNavigateToPage={vi.fn()}
+      />
+    )
+    expect(screen.getByLabelText('Zoom level')).toBeEnabled()
+  })
 })
 
 function renderBar(overrides: Partial<React.ComponentProps<typeof EditorStatusBar>> = {}): {

@@ -96,6 +96,10 @@ interface DocumentStateValues {
 }
 
 interface DocumentState extends DocumentStateValues {
+  // Opens a new, untitled document. REUSES a pristine blank tab (empty, never
+  // saved, never touched) when one exists rather than appending beside it --
+  // see openDocumentState/isPristineBlankTab for why, and for what "pristine"
+  // deliberately excludes.
   newDocument: (initialContent?: string) => void
   // startDirty defaults to false so every existing call site (newDocument,
   // and any future plain load) is unchanged; openFile/openPath pass through
@@ -285,6 +289,113 @@ function createBlankTab(): DocumentTab {
     isDirty: false,
     mtimeMs: null,
     remoteImagesAllowed: null
+  }
+}
+
+/**
+ * A tab holding nothing anybody would miss: never saved to a path, never
+ * typed into, byte-empty. Opening a document REPLACES one of these instead of
+ * appending beside it (see openDocumentState) -- without that, every single
+ * entry into the editor left a stray "Untitled" behind, because this store
+ * always seeds one blank tab at construction and every open path appended.
+ * Measured on a fresh launch before this fix: one click on "New document"
+ * produced TWO identical Untitled tabs, and opening a file or picking a
+ * template from Home produced the leftover blank plus the real document.
+ *
+ * All three conditions are load-bearing, and the second and third are what
+ * make this safe rather than merely tidy:
+ *   - `filePath === null`: a tab pointing at a real file is a real document
+ *     even if its content happens to match what is being opened.
+ *   - `content === ''`: an untitled tab that has anything in it -- typed
+ *     prose, a template's body, or the frontmatter useCreateDocument applies
+ *     from the user's default page config -- is work in progress, not a
+ *     placeholder. This is deliberately byte-exact rather than "looks empty"
+ *     (trimmed, or frontmatter-only): a whitespace-only or frontmatter-only
+ *     document is still something the user or a template produced on purpose,
+ *     and the price of getting this predicate WRONG is silently destroying it.
+ *   - `!isDirty`: catches the case `content === ''` alone cannot -- typing a
+ *     character into an Untitled tab and then deleting it again leaves the
+ *     content empty but the document genuinely touched (and it may carry
+ *     undo history and an autosave snapshot).
+ *
+ * `mtimeMs`/`remoteImagesAllowed` are deliberately not checked: neither can
+ * be anything but null on a tab satisfying the three conditions above (mtime
+ * only ever arrives alongside a real path, and the remote-image banner can
+ * only appear for a document that contains remote images, i.e. not an empty
+ * one). Checking them would imply they are independent signals, which they
+ * are not.
+ */
+export function isPristineBlankTab(tab: DocumentTab): boolean {
+  return tab.filePath === null && tab.content === '' && !tab.isDirty
+}
+
+/**
+ * The one reducer behind opening a document -- shared by openTab (the tab
+ * bar's own "+", which always wants a genuinely new tab) and by
+ * newDocument/loadDocument (which reuse a pristine blank one).
+ *
+ * `reusePristine` is a parameter rather than universal behaviour precisely
+ * because those two intents differ: "open this document" should not stack up
+ * empty placeholders, while "+" is an explicit request for another blank tab
+ * and must never appear to do nothing. That distinction is why this is a
+ * shared reducer instead of the reuse being folded into openTab itself.
+ *
+ * Preference order when reusing: the ACTIVE tab first, then the first
+ * pristine tab in document order. Active-first matters -- reusing a pristine
+ * background tab while the active one is also pristine would move the user to
+ * a different position in the tab bar for no reason.
+ */
+function openDocumentState(
+  state: DocumentStateValues,
+  next: {
+    filePath: string | null
+    content: string
+    startDirty: boolean
+    mtimeMs: number | null
+    reusePristine: boolean
+  }
+): Partial<DocumentStateValues> {
+  if (next.filePath !== null) {
+    const existing = state.tabs.find((tab) => tab.filePath === next.filePath)
+    if (existing) {
+      if (existing.id === state.activeTabId) return {}
+      return {
+        activeTabId: existing.id,
+        ...activeMirror(existing),
+        error: null,
+        revision: state.revision + 1
+      }
+    }
+  }
+
+  const reusable = next.reusePristine
+    ? (state.tabs.find((tab) => tab.id === state.activeTabId && isPristineBlankTab(tab)) ??
+      state.tabs.find(isPristineBlankTab))
+    : undefined
+
+  const tab: DocumentTab = {
+    // Keeps the reused tab's OWN id, rather than minting a fresh one: the id
+    // is this tab's React key and its position identity in EditorTabBar, so
+    // reusing it makes the document appear in place instead of the tab
+    // visibly disappearing and a new one arriving.
+    id: reusable?.id ?? generateTabId(),
+    filePath: next.filePath,
+    content: next.content,
+    isDirty: next.startDirty,
+    mtimeMs: next.mtimeMs,
+    remoteImagesAllowed: null
+  }
+  return {
+    tabs: reusable
+      ? state.tabs.map((existing) => (existing.id === reusable.id ? tab : existing))
+      : [...state.tabs, tab],
+    activeTabId: tab.id,
+    ...activeMirror(tab),
+    error: null,
+    // Bumped even when reusing an already-active tab: MilkdownEditor is
+    // uncontrolled after mount, so the freshly-opened content only reaches
+    // the canvas through EditorScreen's `key={revision}` remount.
+    revision: state.revision + 1
   }
 }
 
@@ -544,36 +655,16 @@ export const useDocumentStore = create<DocumentState>()((set, get) => ({
   // names as the intended job of the mtime-on-save conflict check, not
   // something a tab-list dedup could reach across a process boundary to
   // fix even if it tried.
+  //
+  // Deliberately does NOT reuse a pristine blank tab, unlike
+  // newDocument/loadDocument below: its one caller is EditorTabBar's own "+"
+  // button, an explicit "give me another blank tab" request, and reuse there
+  // would make the button visibly do nothing whenever the current tab happens
+  // to be an untouched Untitled -- which is most of the time it gets pressed.
   openTab: (filePath, content, startDirty = false, mtimeMs = null) =>
-    set((state) => {
-      if (filePath !== null) {
-        const existing = state.tabs.find((tab) => tab.filePath === filePath)
-        if (existing) {
-          if (existing.id === state.activeTabId) return {}
-          return {
-            activeTabId: existing.id,
-            ...activeMirror(existing),
-            error: null,
-            revision: state.revision + 1
-          }
-        }
-      }
-      const tab: DocumentTab = {
-        id: generateTabId(),
-        filePath,
-        content,
-        isDirty: startDirty,
-        mtimeMs,
-        remoteImagesAllowed: null
-      }
-      return {
-        tabs: [...state.tabs, tab],
-        activeTabId: tab.id,
-        ...activeMirror(tab),
-        error: null,
-        revision: state.revision + 1
-      }
-    }),
+    set((state) =>
+      openDocumentState(state, { filePath, content, startDirty, mtimeMs, reusePristine: false })
+    ),
   closeTab: (tabId) =>
     set((state) => {
       const closingIndex = state.tabs.findIndex((tab) => tab.id === tabId)
@@ -624,18 +715,36 @@ export const useDocumentStore = create<DocumentState>()((set, get) => ({
         revision: state.revision + 1
       }
     }),
-  // newDocument/loadDocument now open a NEW tab rather than replacing the
-  // active tab's content in place, matching real multi-document-app
-  // behavior -- both are thin wrappers around openTab so there is exactly
+  // newDocument/loadDocument open a NEW tab rather than replacing the active
+  // tab's content in place, matching real multi-document-app behavior -- both
+  // run the same openDocumentState reducer openTab does, so there is exactly
   // one place ("what does opening a document do") to reason about.
-  // newDocument passes filePath: null through unchanged -- openTab's own
-  // dedup guard (below) only ever applies to a non-null filePath, so
-  // "New document" (and EditorTabBar's own "+" button, which also calls
-  // openTab(null, '')) keeps allowing any number of blank Untitled tabs,
-  // matching the pre-existing, still-correct behavior.
-  newDocument: (initialContent = '') => get().openTab(null, initialContent),
+  //
+  // They differ from openTab in ONE flag: they REUSE a pristine blank tab
+  // (empty, never saved, never touched -- see isPristineBlankTab) instead of
+  // appending beside it. Without that, every route into the editor left a
+  // stray Untitled behind, because this store seeds one blank tab at
+  // construction and nothing ever consumed it: a single "New document" click
+  // on a fresh launch produced two identical Untitled tabs, and opening a
+  // file or a template produced the leftover blank plus the real document.
+  // Multiple blank tabs are still perfectly allowed -- newDocument on a tab
+  // that has ANY content (including a template's body, or the frontmatter
+  // useCreateDocument applies from the user's default page config) appends,
+  // and so does the tab bar's own "+" unconditionally.
+  newDocument: (initialContent = '') =>
+    set((state) =>
+      openDocumentState(state, {
+        filePath: null,
+        content: initialContent,
+        startDirty: false,
+        mtimeMs: null,
+        reusePristine: true
+      })
+    ),
   loadDocument: (filePath, content, startDirty = false, mtimeMs = null) =>
-    get().openTab(filePath, content, startDirty, mtimeMs),
+    set((state) =>
+      openDocumentState(state, { filePath, content, startDirty, mtimeMs, reusePristine: true })
+    ),
   openFile: async () => {
     try {
       const result = await window.api.openFile()

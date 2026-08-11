@@ -101,6 +101,9 @@ export function buildAppMenuTemplate(params: AppMenuTemplateParams): MenuItemCon
   // Settings screen, where there is no editor mounted to act on and (for
   // Save) the only "document" is documentStore's always-present blank tab.
   const { documentOpen } = state
+  // The one per-mode exception to the coarse rule above -- see the View menu's
+  // zoom items for the full reasoning.
+  const zoomApplies = documentOpen && state.viewMode !== 'split'
 
   const clickCommand = (command: MenuCommand) => (): void => send(command)
 
@@ -248,22 +251,34 @@ export function buildAppMenuTemplate(params: AppMenuTemplateParams): MenuItemCon
         click: clickCommand('view:source')
       },
       { type: 'separator' },
+      // The three zoom items are the ONE place this menu's deliberately-coarse
+      // "gated on documentOpen, not per-item state" rule is not enough, and
+      // the exception is about capability rather than taste: zoom has no
+      // effect at all in Split mode. Split's two-pane row renders outside
+      // EditorScreen's zoom wrapper on purpose, because its right pane is a
+      // native WebContentsView positioned from a DOM rect that a CSS scale
+      // would silently desync -- so a live Zoom In there changed the status
+      // bar's readout, changed nothing on screen, and then made the document
+      // jump on the next switch back to Format. `viewMode` is already part of
+      // WindowUiState (it drives the radio checkmarks above) and
+      // menuRelevantStateChanged already rebuilds the menu when it changes, so
+      // this costs no new IPC and no new state.
       {
         label: 'Zoom In',
         accelerator: 'CmdOrCtrl+Plus',
-        enabled: documentOpen,
+        enabled: zoomApplies,
         click: clickCommand('view:zoomIn')
       },
       {
         label: 'Zoom Out',
         accelerator: 'CmdOrCtrl+-',
-        enabled: documentOpen,
+        enabled: zoomApplies,
         click: clickCommand('view:zoomOut')
       },
       {
         label: 'Actual Size',
         accelerator: 'CmdOrCtrl+0',
-        enabled: documentOpen,
+        enabled: zoomApplies,
         click: clickCommand('view:zoomReset')
       },
       { type: 'separator' },

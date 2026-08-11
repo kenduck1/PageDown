@@ -3,6 +3,7 @@ import { useAppStore, type ViewMode } from '../store/appStore'
 import { useDocumentStore } from '../store/documentStore'
 import { useFindStore } from '../store/findStore'
 import { isSourceEditing } from '../lib/editing-surface'
+import { shouldPinToolbarGroup } from '../lib/toolbar-layout'
 import Toast from './Toast'
 import {
   PAGE_FONT_SIZES,
@@ -320,6 +321,13 @@ function EditorToolbar({
     }
   }, [])
 
+  // Whether the leading group may stay pinned at all -- see
+  // lib/toolbar-layout.ts for the measured bug this guards against (a 420.5px
+  // pinned group inside a 407px visible region occluded eleven controls at
+  // every scroll position). Unmeasured (0/0, i.e. first render and every jsdom
+  // test) keeps the pinned default.
+  const stickyPinned = shouldPinToolbarGroup(stickyWidth, containerWidth)
+
   // The fade distance (in px) each edge ramps from fully transparent to
   // fully opaque over. Shared by both edges so the two fades feel like the
   // same effect rather than two coincidentally similar ones.
@@ -351,7 +359,10 @@ function EditorToolbar({
   // producing an inverted/broken gradient.
   const toolbarMaskImage = (() => {
     if (!hasScrolledUnderSticky && !canScrollRight) return undefined
-    const leftFadeStart = stickyWidth
+    // 0 when the group is NOT pinned: it then scrolls away with everything
+    // else, so there is no permanently-opaque region to protect and the left
+    // fade belongs at the region's own edge, exactly like the right one.
+    const leftFadeStart = stickyPinned ? stickyWidth : 0
     const leftFadeEnd = Math.max(leftFadeStart, stickyWidth + TOOLBAR_FADE_PX)
     const rightFadeStart = Math.max(leftFadeEnd, containerWidth - TOOLBAR_FADE_PX)
     const rightFadeEnd = Math.max(rightFadeStart, containerWidth)
@@ -429,8 +440,50 @@ function EditorToolbar({
 
   return (
     <>
+      {/* flex-WRAP, not flex-nowrap -- the single most important line in this
+        file, and a fix for a measured defect rather than a style preference.
+        Measured in the real built app at the shipped default 1000x840 window
+        (src/main/window-bounds.ts): the right-hand cluster is 551px wide in
+        Format mode and 769px in Split, which left the formatting region 407px
+        / 189px of visible width for 843px of content -- and since the pinned
+        leading group alone is 420.5px, it covered that region completely at
+        every scroll position. Eleven controls (Bold, Italic, all three lists,
+        link, image, table, page break, Add comment, Find) were unreachable by
+        any means, confirmed by real hit-testing, not by eye.
+        CLAUDE.md had already recorded the symptom from the other side: Gate 27
+        could not click its own "Add comment" button and used a keyboard
+        shortcut instead.
+
+        With wrapping, the right-hand cluster drops to a second line whenever
+        it cannot coexist with the formatting region's full natural width, so
+        the formatting row gets the whole toolbar width (972px at the default
+        size) and NOTHING is hidden or scrolled. The toolbar is 45px tall on
+        one line and ~86px on two, and only pays that when it must.
+
+        What was ruled out, and why:
+          - Widening the default window. Explicitly not available: Gate 28/29
+            assert their floating-surface clamps are BINDING, and those
+            assertions go vacuous above ~1050px (window-bounds.ts records the
+            measured crossover). A wider default trades a visible bug for two
+            silently-vacuous gates.
+          - An overflow "..." popup menu. A WebContentsView composites above
+            ALL DOM unconditionally, and in Split mode the preview occupies
+            exactly the region a menu anchored under this cluster would drop
+            into -- so it would need PageSetupModal's zero-rect blanking trick
+            or the bubble menu's clamp, i.e. real new occlusion machinery, to
+            hide controls the user could otherwise just see. This codebase's
+            own precedent (FindBar/CommentComposer/LinkComposer) is a LAYOUT
+            ROW rather than a floating surface for exactly this reason.
+          - Dropping controls into the application menu only. Print/Export/
+            Page Setup are already there, but a formatting toolbar whose Bold
+            button lives in a menu is not a formatting toolbar.
+          - Making the leading group narrow enough to fit. It would have meant
+            relocating the paragraph-style/font-family/font-size selects, and
+            407px of visible region cannot hold the remaining 422px of
+            formatting controls anyway -- it moves the threshold instead of
+            removing it, which is what the audit explicitly asked not to do. */}
       <div
-        className="flex flex-none flex-nowrap items-center gap-x-3.5 border-b border-border-subtle bg-page px-3.5 py-1.5"
+        className="flex flex-none flex-wrap items-center gap-x-3.5 gap-y-1.5 border-b border-border-subtle bg-page px-3.5 py-1.5"
         role="toolbar"
         aria-label="Formatting toolbar"
       >
@@ -455,6 +508,18 @@ function EditorToolbar({
           min-w-0 is load-bearing on a flex child -- without it this div
           refuses to shrink below its content's natural width and
           overflow-x-auto never actually engages.
+
+          Correction to the paragraph above, from the reachability fix: the
+          `sticky` group did NOT "compose correctly" the way it claims. It
+          composes correctly on the assumption that the group is narrower than
+          the region it is pinned inside, and at the shipped default window
+          size it was not (420.5px pinned inside 407px visible), which made it
+          an opaque cover over the entire scrollable region rather than a
+          convenience. Two things now hold that assumption up: the toolbar
+          wraps before squeezing this region that far (see the block comment on
+          the toolbar element above), and pinning is skipped outright when the
+          group would not leave a usable strip beside it
+          (shouldPinToolbarGroup, lib/toolbar-layout.ts).
 
           The native scrollbar is hidden (scrollbar-hide, base.css) in favor
           of a mask-image fade on the scrollable element itself: a visible
@@ -486,7 +551,24 @@ function EditorToolbar({
           per feedback) compresses the same transparent-to-opaque range
           into less horizontal space, so it reads as a bit more present
           without turning into a hard edge. */}
-        <div className="relative min-w-0 flex-1">
+        {/* `basis-[content]` (flex-basis: content), NOT `flex-1`'s implicit
+          `flex-basis: 0%`, and that one property is what makes the wrap above
+          work at all. CSS Flexbox collects items onto a line by their
+          HYPOTHETICAL main size (flex base size, clamped by min/max) -- with
+          basis 0% this region's hypothetical size is 0, so the right-hand
+          cluster would always "fit" beside it and never wrap, leaving the
+          region squeezed to whatever was left over. With basis: content the
+          hypothetical size is the formatting controls' real natural width
+          (843px measured), so the cluster wraps exactly when the two genuinely
+          cannot coexist. `grow` still lets this region fill the line it lands
+          on, and `min-w-0` + `shrink` still let it shrink BELOW that natural
+          width once it is alone on a line (the app's 760px minimum window),
+          where overflow-x-auto and the pin guard take over. A hardcoded
+          `min-w-[843px]` was the alternative and is strictly worse: it is a
+          measurement frozen into a class, wrong the moment a label, locale or
+          font changes, and at narrow widths it would push content past the
+          window edge with no way to scroll to it. */}
+        <div className="relative min-w-0 shrink grow basis-[content]">
           <div
             ref={scrollRef}
             className="scrollbar-hide flex items-center gap-x-2.5 overflow-x-auto"
@@ -496,19 +578,29 @@ function EditorToolbar({
                 : undefined
             }
           >
-            {/* Sticky left group: undo/redo + paragraph-style/font/size. z-10
+            {/* Leading group: undo/redo + paragraph-style/font/size. z-10
               so it paints above the content scrolling underneath it; bg-page
               (opaque, matching the toolbar's own background) so that
               underlying content is genuinely occluded rather than showing
               through. flex-none so this group itself is never the thing
               that shrinks -- if anything has to give at extreme widths, it's
-              the plain formatting controls after it, not this. Always fully
-              opaque -- toolbarMaskImage's gradient stays black (unmasked)
-              across this group's own width (tracked via stickyRef), so it
-              never fades regardless of scroll position. */}
+              the plain formatting controls after it, not this. While pinned it
+              is always fully opaque -- toolbarMaskImage's gradient stays black
+              (unmasked) across this group's own width (tracked via stickyRef),
+              so it never fades regardless of scroll position.
+
+              PINNING IS NOW CONDITIONAL (shouldPinToolbarGroup): an opaque
+              group pinned at `left-0` that is WIDER than the visible region
+              occludes that region completely, which is exactly the shipped
+              bug the wrap above fixes at the default window size. This guard
+              covers the widths that still scroll -- below ~870px of window --
+              by letting the group scroll away with the content instead. See
+              lib/toolbar-layout.ts for the measured numbers. */}
             <div
               ref={stickyRef}
-              className="sticky left-0 z-10 flex flex-none items-center gap-x-2.5 bg-page"
+              className={`z-10 flex flex-none items-center gap-x-2.5 bg-page ${
+                stickyPinned ? 'sticky left-0' : ''
+              }`}
             >
               {/* Undo / redo */}
               <div className="flex items-center gap-0.5">
@@ -880,8 +972,16 @@ function EditorToolbar({
         {/* Right-aligned cluster: view-mode segmented control, page setup,
           Export PDF. flex-none (not just the implicit default) so it never
           shrinks or scrolls, regardless of how narrow the window gets --
-          the scrollable region above absorbs all the squeeze instead. */}
-        <div className="flex flex-none items-center gap-3.5">
+          the scrollable region above absorbs all the squeeze instead.
+
+          `ml-auto` keeps it in the same right-hand corner whether it shares a
+          line with the formatting region or has wrapped onto its own: on a
+          shared line the formatting region's `grow` has already consumed the
+          free space so the auto margin resolves to 0 (auto margins are
+          distributed only from space left AFTER flexing), and on its own line
+          there is nothing growing, so the margin takes all of it and the
+          cluster stays right-aligned rather than jumping to the left edge. */}
+        <div className="ml-auto flex flex-none items-center gap-3.5">
           <div className="flex items-center gap-0.5 rounded-md bg-chrome-dark p-0.5">
             {(
               [

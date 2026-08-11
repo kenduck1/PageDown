@@ -117,6 +117,17 @@ function EditorScreen(): React.JSX.Element {
   const editorPaneRef = useRef<HTMLDivElement>(null)
   const splitRowRef = useRef<HTMLDivElement>(null)
   const [zoom, setZoom] = useState(1)
+  // Whether the zoom control can actually do anything right now. False in
+  // Split mode, whose two-pane row deliberately renders OUTSIDE the zoom
+  // wrapper (its right pane is a native WebContentsView positioned from a DOM
+  // rect that a CSS scale would silently desync -- see that branch's own
+  // comment). Read by the status bar's select, by the three View > Zoom menu
+  // commands, and nowhere else. The zoom VALUE is deliberately left alone
+  // across the transition rather than reset: a user who chose 150% in Format,
+  // glanced at Split and came back should find their document still at 150%.
+  // What was wrong was only ever being able to CHANGE it where it has no
+  // effect.
+  const zoomApplies = viewMode !== 'split'
   const [activeSourceOffset, setActiveSourceOffset] = useState<number | undefined>(undefined)
   // Product-completeness audit Tier 3, B.3: SplitPreview's own onRenderError
   // reports the most recent Split-mode render failure (or null once the next
@@ -703,9 +714,32 @@ function EditorScreen(): React.JSX.Element {
     // Stepped through the SAME level list the status bar's zoom <select>
     // renders -- an off-list value would blank that control (see
     // lib/zoom-levels.ts).
-    'view:zoomIn': () => setZoom((current) => nextZoomLevel(current)),
-    'view:zoomOut': () => setZoom((current) => previousZoomLevel(current)),
-    'view:zoomReset': () => setZoom(DEFAULT_ZOOM),
+    //
+    // All three no-op in Split mode, matching the status bar's own disabled
+    // select and app-menu-template.ts's own `enabled` gate on these same three
+    // items. Zoom genuinely CANNOT apply there -- Split's two-pane row is
+    // deliberately outside the zoom wrapper, because the right pane is a
+    // native WebContentsView positioned from a DOM rect that a scale would
+    // silently desync (see that branch's own comment). Before this guard the
+    // control stayed live and lied: setting 150% in Split left the pane
+    // transform at "none" and the card rect unchanged while the readout said
+    // 150%, and the document then JUMPED to 150% on switching back to Format.
+    // Guarded here as well as in the menu because menu enablement is reported
+    // asynchronously (the renderer pushes window UI state, main rebuilds the
+    // menu), so a command dispatched from a momentarily-stale menu must still
+    // do nothing rather than something invisible.
+    'view:zoomIn': () => {
+      if (!zoomApplies) return
+      setZoom((current) => nextZoomLevel(current))
+    },
+    'view:zoomOut': () => {
+      if (!zoomApplies) return
+      setZoom((current) => previousZoomLevel(current))
+    },
+    'view:zoomReset': () => {
+      if (!zoomApplies) return
+      setZoom(DEFAULT_ZOOM)
+    },
     'view:toggleSidebar': () => toggleSidebar(),
     'app:shortcuts': () => {
       // Same closeSlashMenu() call the Mod-/ keydown listener below makes,
@@ -1589,12 +1623,57 @@ function EditorScreen(): React.JSX.Element {
               </div>
             </div>
           ) : (
-            <div
-              ref={editorPaneRef}
-              className="h-full overflow-auto"
-              style={{ transform: `scale(${zoom})`, transformOrigin: 'top center' }}
-            >
-              {viewMode === 'source' ? renderSourceEditor() : renderPageCard()}
+            // The scroll container is NOT the scaled element -- that was a
+            // measured, highly visible bug. `transform: scale()` on the
+            // scroller itself scaled the scroller's own painted box while
+            // leaving its LAYOUT box (and therefore scrollWidth/scrollHeight)
+            // completely unchanged, so above 100% the content simply grew past
+            // the clipping `overflow-hidden` parent with no scrollable extent
+            // to reach it: measured at 150% in the real built app, the canvas
+            // box was 216->1000 while the pane painted 20->1196, i.e. 196px
+            // clipped off the left and 244px off the right, with
+            // maxScrollLeft stuck at 32px and maxScrollTop at 0. Below 100% it
+            // failed the opposite way -- the whole scroller shrank (392x327
+            // inside a 784x653 box), leaving dead grey where the pane should
+            // still have been.
+            //
+            // The fix is the standard one: keep the scroller unscaled and at
+            // full size, and scale an INNER wrapper, so the scroller sizes
+            // itself to the scaled content and scrolls normally in both axes.
+            // `zoom` rather than `transform: scale()` on that wrapper is
+            // deliberate, and is what makes this a two-line change instead of
+            // a measurement layer: `zoom` participates in LAYOUT (Chromium has
+            // implemented the standardized, layout-affecting `zoom` since 128;
+            // this app ships Chromium via Electron 39), so the scroll
+            // container's own scrollWidth/scrollHeight already account for it.
+            // A transform does not, so keeping it would have required a
+            // ResizeObserver on the content plus a spacer element sized to
+            // naturalSize * zoom -- with a real feedback loop between the
+            // spacer's size and scrollbar-driven client-width changes on
+            // platforms with non-overlay scrollbars.
+            //
+            // The two `transform`-specific facts recorded elsewhere survive
+            // this change unharmed, both re-checked rather than assumed:
+            // coordsAtPos still reports post-zoom viewport coordinates (it
+            // bottoms out in Range.getClientRects, which is zoom-adjusted the
+            // same way it is transform-adjusted), so SelectionBubble must
+            // still NOT divide by zoom; and the bubble/slash palette still
+            // render at EditorScreen's own root rather than inside this
+            // wrapper. That second one is now belt-and-braces rather than
+            // load-bearing -- a `transform` establishes a containing block for
+            // fixed-position descendants and `zoom` does not -- but the
+            // placement is also what keeps those surfaces from being SCALED,
+            // which is still exactly as true here.
+            //
+            // The wrapper takes `h-full` only in Source mode: SourceEditor is
+            // a `h-full w-full` textarea, which needs a definite height to
+            // resolve against, while the page card must stay natural-height so
+            // the scrollable extent matches the document rather than adding
+            // empty space below it.
+            <div ref={editorPaneRef} className="h-full overflow-auto">
+              <div className={viewMode === 'source' ? 'h-full' : undefined} style={{ zoom }}>
+                {viewMode === 'source' ? renderSourceEditor() : renderPageCard()}
+              </div>
             </div>
           )}
         </div>
@@ -1608,6 +1687,11 @@ function EditorScreen(): React.JSX.Element {
         onNavigateToPage={handleNavigateToPage}
         zoom={zoom}
         onZoomChange={setZoom}
+        // See zoomApplies' own comment above: the control is disabled rather
+        // than hidden, so the current level stays readable in Split mode
+        // instead of the readout vanishing and reappearing on every mode
+        // switch.
+        zoomEnabled={zoomApplies}
         splitPreviewError={viewMode === 'split' ? splitPreviewError : null}
       />
       <PageSetupModal

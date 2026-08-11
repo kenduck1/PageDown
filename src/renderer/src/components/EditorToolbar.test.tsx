@@ -115,6 +115,30 @@ afterEach(() => {
 })
 
 describe('EditorToolbar', () => {
+  // jsdom has no layout engine -- every width here is 0 -- so it structurally
+  // cannot verify that the formatting controls are REACHABLE, which is the
+  // property that actually matters and the one that was measurably broken (at
+  // the shipped 1000x840 default, eleven controls were unreachable at every
+  // scroll position). phase0/gate32-toolbar-reachability.spec.ts proves that
+  // in the real app. What this test can do is pin the two declarations that
+  // whole fix consists of, both of which look like incidental styling and are
+  // not: a `flex-nowrap` toolbar cannot wrap the right-hand cluster away, and
+  // a `flex-basis: 0%` (i.e. Tailwind's `flex-1`) formatting region reports a
+  // hypothetical main size of 0 to flex line-breaking, so the cluster always
+  // "fits" beside it and the wrap never happens.
+  it('lays the toolbar out so the right-hand cluster can wrap instead of squeezing formatting', () => {
+    const ref = createRef<MilkdownEditorHandle>()
+    render(<EditorToolbar editorRef={ref} />)
+
+    const toolbar = screen.getByRole('toolbar', { name: 'Formatting toolbar' })
+    expect(toolbar.className).toContain('flex-wrap')
+    expect(toolbar.className).not.toContain('flex-nowrap')
+
+    const formattingRegion = toolbar.firstElementChild as HTMLElement
+    expect(formattingRegion.className).toContain('basis-[content]')
+    expect(formattingRegion.className).toContain('min-w-0')
+  })
+
   it('Bold calls editorRef.current.toggleBold()', async () => {
     const handle = createFakeEditorHandle()
     const ref = createRef<MilkdownEditorHandle>()

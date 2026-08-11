@@ -539,14 +539,161 @@ describe('useDocumentStore tabs', () => {
   })
 
   it('newDocument and loadDocument open a NEW tab rather than replacing the active one in place', () => {
+    // The store seeds one blank tab, which newDocument below now REUSES (see
+    // the pristine-blank-tab suite further down) -- so this test asserts what
+    // it was always really about, directly rather than by counting: opening a
+    // document never overwrites the document the user is currently looking at.
     useDocumentStore.getState().openTab('/a.md', '# A')
-    const countAfterFirstOpen = useDocumentStore.getState().tabs.length
+    const tabA = useDocumentStore.getState().activeTabId
 
     useDocumentStore.getState().newDocument('# B')
-    expect(useDocumentStore.getState().tabs).toHaveLength(countAfterFirstOpen + 1)
+    expect(useDocumentStore.getState().activeTabId).not.toBe(tabA)
+    expect(useDocumentStore.getState().tabs.find((tab) => tab.id === tabA)).toMatchObject({
+      filePath: '/a.md',
+      content: '# A'
+    })
 
+    const tabB = useDocumentStore.getState().activeTabId
     useDocumentStore.getState().loadDocument('/c.md', '# C')
-    expect(useDocumentStore.getState().tabs).toHaveLength(countAfterFirstOpen + 2)
+    const state = useDocumentStore.getState()
+    expect(state.activeTabId).not.toBe(tabB)
+    expect(state.tabs.find((tab) => tab.id === tabA)).toMatchObject({ content: '# A' })
+    expect(state.tabs.find((tab) => tab.id === tabB)).toMatchObject({ content: '# B' })
+    expect(state).toMatchObject({ filePath: '/c.md', content: '# C' })
+  })
+
+  describe('pristine blank tab reuse', () => {
+    // Every entry into the editor used to leave a stray empty "Untitled"
+    // behind: this store seeds one blank tab at construction and every open
+    // path appended beside it, so a single "New document" click on a fresh
+    // launch produced TWO identical Untitled tabs, and opening a file or a
+    // template produced the leftover blank plus the real document.
+    it('newDocument reuses the seeded blank tab instead of appending beside it', () => {
+      const seededTabId = useDocumentStore.getState().activeTabId
+      expect(useDocumentStore.getState().tabs).toHaveLength(1)
+
+      useDocumentStore.getState().newDocument('# Fresh')
+
+      const state = useDocumentStore.getState()
+      expect(state.tabs).toHaveLength(1)
+      // Same tab id: the document appears in place rather than the tab
+      // vanishing and a new one arriving somewhere else in the bar.
+      expect(state.activeTabId).toBe(seededTabId)
+      expect(state.content).toBe('# Fresh')
+    })
+
+    it('loadDocument reuses the seeded blank tab too (opening a file from Home)', () => {
+      const seededTabId = useDocumentStore.getState().activeTabId
+
+      useDocumentStore.getState().loadDocument('/opened.md', '# Opened', false, 1234)
+
+      const state = useDocumentStore.getState()
+      expect(state.tabs).toHaveLength(1)
+      expect(state.activeTabId).toBe(seededTabId)
+      expect(state).toMatchObject({ filePath: '/opened.md', content: '# Opened', mtimeMs: 1234 })
+    })
+
+    it('bumps revision when reusing, so the uncontrolled editor remounts on the new content', () => {
+      const before = useDocumentStore.getState().revision
+
+      useDocumentStore.getState().newDocument('# Fresh')
+
+      expect(useDocumentStore.getState().revision).toBe(before + 1)
+    })
+
+    it('NEVER reuses an untitled tab the user has typed into', () => {
+      // The exact case this predicate exists to protect: content that was
+      // typed and then deleted again leaves the tab byte-empty but genuinely
+      // touched, so `content === ''` alone would happily destroy it.
+      useDocumentStore.getState().updateContent('typed then deleted')
+      useDocumentStore.getState().updateContent('')
+      const typedTabId = useDocumentStore.getState().activeTabId
+      expect(useDocumentStore.getState().isDirty).toBe(true)
+
+      useDocumentStore.getState().newDocument('# Fresh')
+
+      const state = useDocumentStore.getState()
+      expect(state.tabs).toHaveLength(2)
+      expect(state.activeTabId).not.toBe(typedTabId)
+      expect(state.tabs.find((tab) => tab.id === typedTabId)).toMatchObject({
+        content: '',
+        isDirty: true
+      })
+    })
+
+    it('NEVER reuses an untitled tab that holds a template or default frontmatter', () => {
+      // A template's body (and the frontmatter useCreateDocument applies from
+      // the user's default page config) is content somebody produced on
+      // purpose, even though the tab was never saved and is not dirty.
+      useDocumentStore.getState().newDocument('---\npage: A4\n---\n')
+      const templateTabId = useDocumentStore.getState().activeTabId
+      expect(useDocumentStore.getState().isDirty).toBe(false)
+
+      useDocumentStore.getState().newDocument('# Second')
+
+      const state = useDocumentStore.getState()
+      expect(state.tabs).toHaveLength(2)
+      expect(state.tabs.find((tab) => tab.id === templateTabId)).toMatchObject({
+        content: '---\npage: A4\n---\n'
+      })
+    })
+
+    it('NEVER reuses a tab with a real file path, even when its content is empty', () => {
+      useDocumentStore.getState().loadDocument('/empty.md', '')
+      const savedTabId = useDocumentStore.getState().activeTabId
+
+      useDocumentStore.getState().newDocument('# Fresh')
+
+      const state = useDocumentStore.getState()
+      expect(state.activeTabId).not.toBe(savedTabId)
+      expect(state.tabs.find((tab) => tab.id === savedTabId)).toMatchObject({
+        filePath: '/empty.md'
+      })
+    })
+
+    it('prefers the ACTIVE pristine tab over an older one further left', () => {
+      // Two pristine blanks at once (via the tab bar's "+", which always
+      // appends): reusing the background one would silently move the user to a
+      // different position in the tab bar.
+      const firstBlankId = useDocumentStore.getState().activeTabId
+      useDocumentStore.getState().openTab(null, '')
+      const activeBlankId = useDocumentStore.getState().activeTabId
+      expect(activeBlankId).not.toBe(firstBlankId)
+
+      useDocumentStore.getState().newDocument('# Fresh')
+
+      const state = useDocumentStore.getState()
+      expect(state.tabs).toHaveLength(2)
+      expect(state.activeTabId).toBe(activeBlankId)
+      expect(state.tabs.find((tab) => tab.id === firstBlankId)).toMatchObject({ content: '' })
+    })
+
+    it("EditorTabBar's own '+' (openTab) still always appends, even onto a pristine blank", () => {
+      // "+" is an explicit request for another blank tab; reuse there would
+      // make the button visibly do nothing in its most common situation.
+      const seededTabId = useDocumentStore.getState().activeTabId
+
+      useDocumentStore.getState().openTab(null, '')
+
+      const state = useDocumentStore.getState()
+      expect(state.tabs).toHaveLength(2)
+      expect(state.activeTabId).not.toBe(seededTabId)
+    })
+
+    it('still dedups an already-open file path ahead of any reuse', () => {
+      // Ordering matters: a document already open in a tab must focus that
+      // tab, not be re-opened into a pristine blank sitting beside it.
+      useDocumentStore.getState().loadDocument('/dedup.md', '# Original')
+      const openTabId = useDocumentStore.getState().activeTabId
+      useDocumentStore.getState().openTab(null, '')
+
+      useDocumentStore.getState().loadDocument('/dedup.md', '# From disk again')
+
+      const state = useDocumentStore.getState()
+      expect(state.tabs).toHaveLength(2)
+      expect(state.activeTabId).toBe(openTabId)
+      expect(state.content).toBe('# Original')
+    })
   })
 
   it('switchTab makes the given tab active and mirrors its fields to the top level', () => {
