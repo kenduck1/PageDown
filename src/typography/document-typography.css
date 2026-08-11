@@ -1087,7 +1087,28 @@
    The visible dashed divider a user sees there comes from the Tailwind classes
    the node's own `toDOM` carries, NOT from here -- so this rule cannot disturb
    Gate 10's 0.000px parity, and the marker keeps looking like a marker in the
-   editor while doing its real work only where pages exist. */
-.pagedown-document .pagedown-pagebreak {
+   editor while doing its real work only where pages exist.
+
+   THE SELECTOR IS DELIBERATELY UNSCOPED -- the ONE rule in this file that is
+   not under `.pagedown-document`, and it has to be. Every other rule here is
+   applied by the browser at paint time against the real DOM, where both
+   surfaces genuinely carry that class on an ancestor. `break-after` is not:
+   Paged.js's own Breaks handler (node_modules/pagedjs/src/modules/paged-media/
+   breaks.js) INTERCEPTS the declaration while parsing the stylesheet, DELETES
+   it from the CSS entirely, and re-applies it in `processBreaks` via
+   `parsed.querySelectorAll(selector)` -- where `parsed` is the content
+   FRAGMENT being chunked, which has no `<body>` and therefore no
+   `.pagedown-document` ancestor at all. A scoped selector matches zero
+   elements there and the break silently never happens, with no error and no
+   warning. That is exactly what the first attempt at this fix did: the rule
+   was correct CSS, landed in the right stylesheet, and did nothing.
+   Confirmed by reading that handler's source, not inferred from the failure.
+
+   Leaving it unscoped is safe in a way an unscoped TAG selector would not be
+   (this file's own `.pagedown-document` scoping exists because bare `h1`/`p`
+   rules bled into the Home screen and the Page Setup modal): a class selector
+   is self-scoping, `pagedown-pagebreak` appears on exactly one kind of node,
+   and `break-after` has no effect outside a fragmentation context. */
+.pagedown-pagebreak {
   break-after: page;
 }
