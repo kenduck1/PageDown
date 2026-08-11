@@ -114,7 +114,29 @@ export function useFindShortcuts(params: FindShortcutsParams): void {
     const handleKeyDown = (event: KeyboardEvent): void => {
       const { closeFind, isOpen } = useFindStore.getState()
 
-      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'f') {
+      // Matches on `event.code` (the PHYSICAL key) as well as `event.key`, and
+      // that is a real fix rather than belt-and-braces. `event.key` is the
+      // CHARACTER PRODUCED, and on macOS Option+F produces `ƒ` -- so the
+      // advertised `⌥⌘F` (Find and Replace, listed in ShortcutsHelpModal) was
+      // dead by construction: `'ƒ'.toLowerCase() !== 'f'`, the branch never
+      // ran, and `event.altKey` below -- read only INSIDE this branch -- was
+      // therefore unreachable. `event.code` is unaffected by modifiers and by
+      // the keyboard layout's character mapping, so it survives Option.
+      //
+      // Both are checked rather than replacing one with the other: `code` is
+      // physical position, so on a non-QWERTY layout (Dvorak) it would put
+      // Find on whatever key sits where QWERTY's F does, while `key` follows
+      // the letter the user actually sees. Accepting either means the shortcut
+      // works under both mental models; the only cost is that a Dvorak user
+      // has two keys that open Find, which is harmless.
+      //
+      // Shift is excluded deliberately. Under the old `key`-only test, Shift+F
+      // produced `'F'` and lowercased straight back to `'f'`, so `⇧⌘F` quietly
+      // opened plain Find -- undocumented, unintended, and easy to hit reaching
+      // for a find-in-files binding this app does not have. Doing nothing is
+      // more honest than silently doing something else.
+      const isFindKey = event.code === 'KeyF' || event.key.toLowerCase() === 'f'
+      if ((event.metaKey || event.ctrlKey) && !event.shiftKey && isFindKey) {
         event.preventDefault()
         openFindFromShortcut({ getSelectedText, queryInputRef }, event.altKey)
         return

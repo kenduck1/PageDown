@@ -4,16 +4,27 @@ import { createRef } from 'react'
 import { useFindShortcuts } from './useFindShortcuts'
 import { initialFindState, useFindStore } from '../store/findStore'
 
+// `code` defaults to the physical key that normally produces `key`, but every
+// caller can override it -- which matters, because the whole point of the
+// macOS test below is that `key` and `code` DISAGREE there.
 function press(
   key: string,
-  modifiers: { meta?: boolean; ctrl?: boolean; alt?: boolean } = {}
+  modifiers: {
+    meta?: boolean
+    ctrl?: boolean
+    alt?: boolean
+    shift?: boolean
+    code?: string
+  } = {}
 ): void {
   window.dispatchEvent(
     new KeyboardEvent('keydown', {
       key,
+      code: modifiers.code ?? (key.length === 1 ? `Key${key.toUpperCase()}` : key),
       metaKey: modifiers.meta ?? false,
       ctrlKey: modifiers.ctrl ?? false,
       altKey: modifiers.alt ?? false,
+      shiftKey: modifiers.shift ?? false,
       bubbles: true,
       cancelable: true
     })
@@ -118,6 +129,36 @@ describe('useFindShortcuts', () => {
     renderHook(() => useFindShortcuts({ getSelectedText: () => '', queryInputRef: createRef() }))
     press('Escape')
     expect(closeFind).not.toHaveBeenCalled()
+  })
+
+  // The regression test that matters, and the one the original Cmd+Alt+F test
+  // could never have caught: it passed `key: 'f'` with `alt: true`, which is
+  // not what a real macOS keyboard produces. Option+F emits the CHARACTER `ƒ`,
+  // so a handler testing `event.key.toLowerCase() === 'f'` never fired and the
+  // advertised ⌥⌘F was dead by construction -- while the synthetic test stayed
+  // green, because it set `key` directly and bypassed the layout translation.
+  it('opens with replace expanded on the REAL macOS Option+F, where key is "ƒ" and only code says KeyF', () => {
+    renderHook(() => useFindShortcuts({ getSelectedText: () => '', queryInputRef: createRef() }))
+    press('ƒ', { meta: true, alt: true, code: 'KeyF' })
+    expect(useFindStore.getState().isOpen).toBe(true)
+    expect(useFindStore.getState().replaceExpanded).toBe(true)
+  })
+
+  it('still opens plain Find on the real macOS Cmd+F, where key and code agree', () => {
+    renderHook(() => useFindShortcuts({ getSelectedText: () => '', queryInputRef: createRef() }))
+    press('f', { meta: true, code: 'KeyF' })
+    expect(useFindStore.getState().isOpen).toBe(true)
+    expect(useFindStore.getState().replaceExpanded).toBe(false)
+  })
+
+  // Shift is excluded deliberately. Under the old `key`-only test, Shift+F
+  // produced 'F' and lowercased straight back to 'f', so ⇧⌘F quietly opened
+  // plain Find -- undocumented, and easy to hit reaching for a find-in-files
+  // binding this app does not have. Doing nothing is more honest.
+  it('does NOT open on Cmd+Shift+F, which used to quietly open plain Find', () => {
+    renderHook(() => useFindShortcuts({ getSelectedText: () => '', queryInputRef: createRef() }))
+    press('F', { meta: true, shift: true, code: 'KeyF' })
+    expect(useFindStore.getState().isOpen).toBe(false)
   })
 
   it('ignores a bare f', () => {
