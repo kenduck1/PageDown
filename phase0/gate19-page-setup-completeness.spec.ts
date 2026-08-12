@@ -3,6 +3,7 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { launchIsolatedApp } from './electron-launch'
+import { PREVIEW_DOCUMENT_SCALE_JS } from './gate-geometry'
 import { mergeRecentFiles, readRecentFiles, writeRecentFiles } from '../src/main/recent-files'
 
 // Gate 19 -- the Page Setup Completeness sub-project's real end-to-end proof.
@@ -106,10 +107,16 @@ async function probePreview(app: ElectronApplication): Promise<PreviewProbe | nu
 
     const raw = (await splitView.webContents.executeJavaScript(`
       (function () {
+        // Divided back out of the split preview's fit-to-width CSS \`zoom\` --
+        // this gate asks whether a Custom 5x7in page is really 480x672 CSS
+        // px, which is a document-space question, not a "how big is it on
+        // screen at the current divider position" one. See
+        // gate-geometry.ts's PREVIEW_DOCUMENT_SCALE_JS.
+        var scale = ${PREVIEW_DOCUMENT_SCALE_JS}
         function box(el) {
           if (!el) return null
           var r = el.getBoundingClientRect()
-          return { width: r.width, height: r.height }
+          return { width: r.width / scale, height: r.height / scale }
         }
         // Paged.js renders margin-box text as CSS generated content on
         // .pagedjs_margin-content::after -- textContent is ALWAYS empty

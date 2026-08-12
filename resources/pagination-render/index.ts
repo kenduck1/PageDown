@@ -862,23 +862,44 @@ window.__pagedownPageNav = {
 // pane had made the other one relatively worse.
 //
 // MECHANISM: CSS `zoom` on #content-root, applied AFTER pagination, driven by
-// this context's own viewport width. Three alternatives were considered and
+// this context's own content-box width. Three alternatives were considered and
 // each is rejected for a concrete reason, recorded here because every one of
 // them looks more natural than what is actually correct:
 //
 //  1. `webContents.setZoomFactor()` on the preview's own view, from main. The
-//     obvious candidate, and genuinely available -- but Chromium's zoom policy
-//     is SAME-ORIGIN, propagating "across all instances of windows with the
-//     same domain" (Electron's own `setZoomLevel` documentation says exactly
-//     this, node_modules/electron/electron.d.ts). Every pagination harness in
-//     this app loads the identical `pagedown-render://render/index.html` in
-//     the identical session (ensureRenderInfraRegistered), so a zoom set for
-//     the live preview would land on the PDF-export and thumbnail harnesses
-//     too, and persist in that session's zoom map for the rest of the app's
-//     life -- silently breaking "the preview and the exported PDF are
-//     pixel-identical by construction". It would also feed back on itself
-//     here: zooming a webContents changes its own `innerWidth`, which is the
-//     input this scale is computed from.
+//     obvious candidate, genuinely available, and with a real advantage over
+//     what is built here: browser zoom changes the CSS-px -> device-px
+//     mapping WITHOUT changing what the page's own layout reports, so
+//     measurements and pagination would stay in the one coordinate space
+//     every other surface already speaks. It is rejected anyway, on a
+//     MEASURED fact rather than on the documentation alone.
+//
+//     Chromium's zoom policy is SAME-ORIGIN -- Electron's own `setZoomLevel`
+//     docs say it "propagates across all instances of windows with the same
+//     domain" (node_modules/electron/electron.d.ts) -- and every pagination
+//     harness in this app loads the identical
+//     `pagedown-render://render/index.html` in the identical session
+//     (ensureRenderInfraRegistered). Confirmed against this app's own real
+//     harnesses rather than inferred: `setZoomFactor(0.7)` on one harness
+//     read back 0.7 on a SECOND, already-live, independent harness AND on a
+//     THIRD created afterwards --
+//
+//       { sameSession: true, sameOrigin: true, zoomA: 1, zoomC: 1 }
+//       -> setZoomFactor(0.7) on A ->
+//       { zoomA: 0.7, zoomC_existingOtherHarness: 0.7,
+//         zoomD_freshHarnessCreatedAfter: 0.7 }
+//
+//     That third value is the one that settles it: PDF export builds a FRESH
+//     harness per call (pdf-exporter.ts's withFreshHarness), so a user who
+//     had merely OPENED Split mode would export every subsequent PDF, and
+//     render every subsequent thumbnail, at the preview pane's scale --
+//     silently breaking "the preview and the exported PDF are pixel-identical
+//     by construction", for the rest of the session. A preview that is
+//     cropped is an annoyance; a PDF whose geometry silently follows a
+//     divider position is a correctness bug.
+//
+//     It would also feed back on itself here: zooming a webContents changes
+//     its own `innerWidth`, which is the input this scale is computed from.
 //  2. Sending a smaller `geometry`. That is not scaling, it is re-paginating
 //     at a different page size: page counts would move as the user dragged
 //     the divider.
@@ -899,6 +920,17 @@ window.__pagedownPageNav = {
 // dragged to give the preview about three quarters of the canvas. Fitting
 // exactly at 389px would mean 6.6px body text, which is not a preview of
 // anything.
+//
+// CONSEQUENCE FOR ANYTHING THAT MEASURES THIS CONTEXT FROM OUTSIDE, and it is
+// not obvious enough to leave unwritten: `zoom` participates in layout, so
+// `getBoundingClientRect()` in here comes back ALREADY multiplied by the
+// scale (a 794px box under 0.7 reports 555.80), while `offsetWidth` and
+// `getComputedStyle().width` still report the document-space value. Several
+// gates probe this DOM through `executeJavaScript` asking document-space
+// questions ("is an A4 page 794px wide?"); they divide by the live scale via
+// phase0/gate-geometry.ts's PREVIEW_DOCUMENT_SCALE_JS. A new probe that
+// forgets to will silently measure the divider position instead of the
+// document.
 let previewFitStyle: HTMLStyleElement | undefined
 
 // The page width the CURRENT render is being fitted to, or 0 for "this

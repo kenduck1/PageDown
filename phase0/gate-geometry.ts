@@ -45,3 +45,39 @@ export const LETTER_GEOMETRY = computePageGeometry(DEFAULT_PAGE_CONFIG)
 // shared module rather than six copy-pasted `computePageGeometry(...)`
 // calls (see the module comment above).
 export const DEFAULT_STYLE = DEFAULT_DOCUMENT_STYLE
+
+/**
+ * A JavaScript SOURCE EXPRESSION (not a value) evaluating, inside the
+ * sandboxed render context, to the presentation scale that context is
+ * currently showing its pages at -- 1 unless Split-mode fit-to-width is
+ * active for that harness.
+ *
+ * WHY THIS EXISTS. Split mode's preview pane is fitted to width by a CSS
+ * `zoom` on #content-root (resources/pagination-render/index.ts's
+ * applyPreviewFitScale). `zoom` participates in layout, which is exactly why
+ * it was chosen -- and it means `getBoundingClientRect()` inside that context
+ * comes back already multiplied by it. Measured against this app's own
+ * Chromium: a 794px-wide box inside `zoom: 0.7` reports `rect.width` 555.80
+ * while `offsetWidth` still reports 794 and `getComputedStyle().width` still
+ * reports 793.996px.
+ *
+ * Several gates ask a DOCUMENT-SPACE question of that context -- "is an A4
+ * page really 794 CSS px wide?", "is the ruler the full 624px content width?"
+ * -- which is a different question from "how big is it on screen right now".
+ * Dividing a measured rect by this recovers the former from the latter, and
+ * makes those gates independent of any presentation scaling rather than
+ * silently coupled to the window size the divider happens to produce.
+ *
+ * Deliberately NOT solved by switching those probes to `offsetWidth`: that is
+ * integer-rounded, and the assertions it would feed are `toBeCloseTo(x, 0)`,
+ * i.e. tolerant to well under a pixel. It also would not fix the ones that
+ * measure an OFFSET between two rects (gate16's `@page` margin-order pin).
+ *
+ * The presentation scale ITSELF is not this constant's business to check --
+ * phase0/gate35-split-fit-to-width.spec.ts is where that is pinned, in both
+ * panes, with its own would-have-failed-without-it half.
+ */
+export const PREVIEW_DOCUMENT_SCALE_JS =
+  "(function () { var r = document.getElementById('content-root'); " +
+  'var z = r ? parseFloat(window.getComputedStyle(r).zoom) : 1; ' +
+  'return z > 0 ? z : 1 })()'

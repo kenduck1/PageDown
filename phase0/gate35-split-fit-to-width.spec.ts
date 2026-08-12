@@ -427,7 +427,11 @@ test('Gate 35: at the widest divider setting the page genuinely fits, with no ho
 test('Gate 35: the sandboxed PREVIEW pane is fitted too, and genuinely fits when widened', async () => {
   test.setTimeout(120_000)
 
-  const { app, close, win, fixtureDir, restoreRecents } = await openFixtureDocument(SHORT_FIXTURE)
+  // A MULTI-PAGE fixture, not the short one, purely so the page-count
+  // invariance assertion at the end of this test has something to say. See
+  // there for why that assertion is the important one.
+  const { app, close, win, fixtureDir, restoreRecents } =
+    await openFixtureDocument(buildMultiPageFixture())
 
   try {
     await win.getByRole('button', { name: 'Split', exact: true }).click()
@@ -517,6 +521,35 @@ test('Gate 35: the sandboxed PREVIEW pane is fitted too, and genuinely fits when
     // user dragged the divider.
     expect(wide.pageRenderedWidth).toBeLessThan(PAGE_WIDTH_PX)
     expect(wide.pageRenderedWidth).toBeGreaterThan(MIN_FIT_SCALE * PAGE_WIDTH_PX)
+
+    // THE ASSERTION THAT MATTERS MOST IN THIS FILE, and the reason this test
+    // uses a multi-page fixture: THE SCALE MUST NOT REACH PAGINATION.
+    //
+    // Everything else here is a presentation question -- get it wrong and the
+    // preview looks bad. This one is a correctness question: the split
+    // preview reports a page count that page navigation clamps against, while
+    // the status bar, PDF export and thumbnails all paginate through their
+    // OWN, unscaled harnesses. If the fit scale reached the `@page` box or
+    // the content box, those two families would silently disagree, and the
+    // disagreement would move as the user dragged the divider.
+    //
+    // Two genuinely different scales were applied to the SAME document in
+    // this run (the floor at the default divider, and a real fit after the
+    // drag -- both asserted above, so this cannot go vacuous by both being
+    // 1). The page count has to be identical across them. The mechanism that
+    // makes it so is in resources/pagination-render/index.ts: the scale is
+    // reset before `previewer.preview()` and re-applied only after the result
+    // -- including `pageCount` -- has been measured. This is the direct
+    // analogue of Gate 19's "enabling running content does not change the
+    // page count", and it is asserted rather than trusted for the same reason.
+    expect(
+      wide.pageCount,
+      'the fit-to-width scale must never reach pagination -- the same document must produce the same page count at every scale'
+    ).toBe(atDefault.pageCount)
+    expect(
+      atDefault.pageCount,
+      'a single-page count would make the check above weak'
+    ).toBeGreaterThan(1)
   } finally {
     await restoreRecents()
     await rm(fixtureDir, { recursive: true, force: true })
