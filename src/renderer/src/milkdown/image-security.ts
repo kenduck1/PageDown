@@ -178,6 +178,12 @@ type ImageState = 'ok' | 'pending' | 'missing' | 'blocked'
 // user is editing.
 const MAX_SHOWN_SRC_CHARS = 60
 
+// Must equal the grip's own width/height in base.css. Two copies of a number
+// that has to agree is the usual smell, but the alternative -- reading it back
+// out of getComputedStyle on a display:none element -- returns the used value
+// only once the element is laid out, which it never is while hidden.
+const HANDLE_SIZE_PX = 12
+
 function shortenSrc(src: string): string {
   return src.length <= MAX_SHOWN_SRC_CHARS ? src : `${src.slice(0, MAX_SHOWN_SRC_CHARS - 1)}…`
 }
@@ -260,6 +266,14 @@ class SafeImageView implements NodeView {
     // would be worse than announcing nothing.
     this.handle.setAttribute('aria-hidden', 'true')
     this.handle.addEventListener('pointerdown', this.onHandlePointerDown)
+    // Re-measured on entry rather than watched with a ResizeObserver: the grip
+    // is only ever VISIBLE while the pointer is over the image (see base.css),
+    // so pointer entry is both the moment its position starts mattering and
+    // the moment every input to that position is settled -- the image has
+    // loaded, the window is whatever size it is, the zoom is whatever it is.
+    // An observer would recompute continuously to keep a hidden element in the
+    // right place.
+    this.dom.addEventListener('pointerenter', this.positionHandle)
     this.dom.append(this.img, this.note, this.handle)
     this.syncFrom(node)
   }
@@ -288,6 +302,25 @@ class SafeImageView implements NodeView {
   private containerWidth(): number {
     const block = this.dom.parentElement
     return block ? block.getBoundingClientRect().width : 0
+  }
+
+  // Slides the grip along to the image's own right edge. `offsetWidth` rather
+  // than a rect: this is feeding a `margin-left` in CSS pixels, which is the
+  // pre-zoom layout space offsetWidth reports, whereas a rect would be in
+  // post-zoom viewport space and would drift by the zoom factor. (Note this is
+  // the opposite choice from the drag arithmetic, which wants viewport space
+  // on purpose -- see image-resize.ts.)
+  private positionHandle = (): void => {
+    // offsetLeft/offsetTop are relative to the offsetParent, which is
+    // .pagedown-image itself because base.css makes it `position: relative`
+    // -- the same declaration that makes the grip's own `position: absolute`
+    // resolve against this wrapper. offsets rather than rects because these
+    // feed CSS pixel lengths, i.e. the pre-zoom layout space offsetWidth
+    // reports; a rect would be in post-zoom viewport space and would drift by
+    // the zoom factor. (The opposite choice from the drag arithmetic, which
+    // wants viewport space on purpose -- see image-resize.ts.)
+    this.handle.style.left = `${this.img.offsetLeft + this.img.offsetWidth - HANDLE_SIZE_PX}px`
+    this.handle.style.top = `${this.img.offsetTop + this.img.offsetHeight - HANDLE_SIZE_PX}px`
   }
 
   private onHandlePointerDown = (event: PointerEvent): void => {
@@ -320,6 +353,9 @@ class SafeImageView implements NodeView {
       if (next === null || next === width) return
       width = next
       this.img.setAttribute('width', width)
+      // The grip has to travel with the edge it is attached to, or it detaches
+      // from the picture the moment the drag starts.
+      this.positionHandle()
     }
 
     const finish = (): void => {
@@ -378,6 +414,7 @@ class SafeImageView implements NodeView {
     const width = typeof node.attrs.width === 'string' ? node.attrs.width : ''
     if (width) this.img.setAttribute('width', width)
     else this.img.removeAttribute('width')
+    this.positionHandle()
   }
 
   private syncFrom(node: ProseMirrorNode): void {
@@ -465,6 +502,7 @@ class SafeImageView implements NodeView {
   destroy(): void {
     this.destroyed = true
     this.handle.removeEventListener('pointerdown', this.onHandlePointerDown)
+    this.dom.removeEventListener('pointerenter', this.positionHandle)
     // A drag can still be in flight: ProseMirror destroys node views eagerly,
     // and the pointer listeners live on `window`, so without this they would
     // outlive the element they were opened for.

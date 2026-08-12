@@ -392,35 +392,47 @@
      this block. */
   .pagedown-image {
     display: inline;
+    /* Containing block for the resize grip below. Relative positioning with no
+       offsets is paint-time only -- it moves nothing and changes no box -- so
+       this is purely about giving the grip something to be absolute against. */
+    position: relative;
   }
 
   /* Drag-to-resize grip, drawn inside the image's own bottom-right corner.
      EDITOR-ONLY for the same reason the note above is.
 
-     THE POSITIONING IS NOT `position: absolute`, and that is the whole design
-     of this rule. An absolutely positioned grip would need `.pagedown-image`
-     to become a containing block -- and a relatively positioned INLINE
-     element's containing block is its own inline box, whose height comes from
-     font metrics rather than from the image, so `bottom: 0` would land the
-     grip near the text baseline instead of the picture's corner. Making the
-     wrapper `inline-block` to fix that would change the box the <img> sits
-     in, which is exactly the editor/paginator divergence Gate 10's 0.000px
-     parity exists to prevent.
+     THE GRIP IS A BLOCK PULLED BACK BY NEGATIVE MARGINS, not an absolutely
+     positioned box, and the reason is a measured fact about this surface:
+     TAILWIND PREFLIGHT SETS `img { display: block }`. So the <img> inside
+     .pagedown-image is a BLOCK, the inline wrapper is already split into
+     anonymous block boxes around it, and two otherwise-obvious schemes are
+     both wrong here. An inline-block grip on the baseline (what this rule
+     tried first) lands on the NEXT LINE after the block image -- measured by
+     Gate 41 at x=300 against an image whose right edge is 811. And
+     `position: absolute` would need `.pagedown-image` to be a containing
+     block, which for a relatively positioned inline wrapping a block is a
+     murky corner of the spec; changing the wrapper to inline-block or
+     block+fit-content to avoid that is worse still, because a `fit-content`
+     parent makes the image's own `width: 80%` circular and collapses it to
+     its natural size.
 
-     Instead: an EMPTY inline-block pulled back over the image by a negative
-     margin exactly equal to its own width, so it consumes zero horizontal
-     space. Per CSS 2.1 10.8.1 an inline-block with no in-flow line boxes
-     takes its bottom margin edge as its baseline, and a replaced inline
-     element does the same -- so `vertical-align: baseline` puts the grip's
-     bottom edge exactly on the image's bottom edge with no arithmetic. It is
-     shorter than any image worth resizing, so it cannot grow the line box
-     either. */
+     So the grip is taken OUT OF FLOW instead. That is not merely convenient:
+     an in-flow grip measurably grew the paragraph by one 23.8px line box (the
+     14px/1.7 baseline), because an inline wrapper holding block-level children
+     is split into anonymous blocks and the extra block earns its own line --
+     i.e. hovering an image would have SHIFTED THE DOCUMENT under the pointer.
+     An absolutely positioned box contributes nothing to any ancestor's height,
+     so that is impossible by construction rather than by tuning margins.
+
+     `left`/`top` are set per element by the node view from the image's own
+     measured offsets: there is no CSS expression for "the size of my previous
+     sibling", and a percentage would be wrong for an unsized image and for a
+     pixel width that `max-width: 100%` has capped. */
   .pagedown-image-resize-handle {
     display: none;
+    position: absolute;
     width: 12px;
     height: 12px;
-    margin-left: -12px;
-    vertical-align: baseline;
     box-sizing: border-box;
     /* Hardcoded literals, not app-shell tokens -- the same exemption the note
        above takes. This is drawn on the document canvas, which is pinned to
@@ -444,7 +456,7 @@
   .pagedown-image[data-state='ok']:hover .pagedown-image-resize-handle,
   .pagedown-image[data-state='ok'].ProseMirror-selectednode .pagedown-image-resize-handle,
   .pagedown-image[data-resizing='true'] .pagedown-image-resize-handle {
-    display: inline-block;
+    display: block;
   }
 
   /* Colours are hardcoded literals, NOT app-shell tokens, and that is the
