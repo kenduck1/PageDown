@@ -10,6 +10,7 @@ import type { Root, Text } from 'mdast'
 import { decodeNamedCharacterReference } from 'decode-named-character-reference'
 import { decodeNumericCharacterReference } from 'micromark-util-decode-numeric-character-reference'
 import { markdownToHtml, type SourceMap } from '../src/markdown/pipeline'
+import { remarkImageAttrs } from '../src/markdown/image-size'
 import { buildRunOffsetTables } from '../src/markdown/source-map'
 
 // The brief's sample uses `new URL(..., import.meta.url)` to resolve corpus
@@ -401,11 +402,28 @@ test('Gate 1 (independent oracle): the offset-correction table decodes every rea
 
   for (const file of corpusFiles) {
     const source = readFileSync(join(__dirname, 'corpus', file), 'utf8')
-    const tree = unified()
+    // This oracle's whole premise is that it is an INDEPENDENT parse of the
+    // same document markdownToHtml sees -- so its plugin stack has to match
+    // markdownToHtml's, and `remarkImageAttrs` is a mdast TRANSFORM rather
+    // than a syntax extension, which is why it needs runSync() here where
+    // the three above need only parse().
+    //
+    // It drifted once and the failure was genuinely confusing: image sizing
+    // CONSUMES a trailing `{width=40%}` into an attribute, so those source
+    // bytes have no rendered run at all. Without the plugin this oracle still
+    // saw them as an ordinary `text` node and reported
+    // `mixed.md@[333,344): srcToRun(srcStart) unexpectedly returned null`,
+    // which reads exactly like a source-map bug and is instead two parses
+    // disagreeing about what the document contains. Same keep-in-sync
+    // obligation CLAUDE.md records for extractOutline.ts and
+    // detectRemoteImages.ts: a second PROCESSOR CONSTRUCTION is fine, a
+    // second set of plugins is not.
+    const processor = unified()
       .use(remarkParse)
       .use(remarkGfm)
       .use(remarkFrontmatter, ['yaml'])
-      .parse(source) as Root
+      .use(remarkImageAttrs)
+    const tree = processor.runSync(processor.parse(source)) as Root
     const { sourceMap } = markdownToHtml(source)
 
     visit(tree, 'text', (node: Text) => {
@@ -481,7 +499,19 @@ test('Gate 1 (independent oracle): the offset-correction table decodes every rea
   // entities-and-escapes.md, which Task 6 did not touch), and the
   // exhaustive per-byte/per-offset mismatch check just above still reports
   // zero mismatches across all 5,325 runs.
-  expect(totalRuns).toBe(5325)
+  // 5324, was 5325 before image sizing shipped. Exactly one text node
+  // disappeared from the corpus and the cause is known rather than absorbed:
+  // `remarkImageAttrs` CONSUMES a trailing `{width=...}` block into an
+  // attribute, and in phase0/corpus/mixed.md that block was the entire
+  // trailing text node of its paragraph, so the node ceased to exist. (The
+  // other corpus file carrying the syntax keeps its node, with shorter
+  // content, because more text follows on the same line.)
+  //
+  // Re-baselined deliberately, with the number re-derived from a real run
+  // rather than nudged until green -- and note this pin is exact on purpose:
+  // its own comment below records that a `> 0` bound would stay satisfied at
+  // some other, wrong number.
+  expect(totalRuns).toBe(5324)
   expect(totalMatches).toBe(16)
   // Every run that reached the exhaustive check genuinely was not degraded
   // (checked via `isDegraded` above, not merely implied).
