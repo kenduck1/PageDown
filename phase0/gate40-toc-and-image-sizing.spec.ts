@@ -3,6 +3,7 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { launchIsolatedApp } from './electron-launch'
+import { PREVIEW_DOCUMENT_SCALE_JS } from './gate-geometry'
 import { mergeRecentFiles, readRecentFiles, writeRecentFiles } from '../src/main/recent-files'
 
 // Gate 40 -- the table-of-contents and image-sizing features' real end-to-end
@@ -166,9 +167,17 @@ async function probePreview(application: ElectronApplication): Promise<Probe | n
 
     const raw = (await splitView.webContents.executeJavaScript(`
       (function () {
+        // Divided back out of the split preview's fit-to-width CSS \`zoom\`.
+        // The assertions below compare against CONTENT_WIDTH_PX and half of
+        // it -- document-space constants -- so a measurement carrying the
+        // pane's current presentation scale would be comparing two different
+        // things. Same treatment, and same reason, as the Format-mode note
+        // further down this file. See gate-geometry.ts's
+        // PREVIEW_DOCUMENT_SCALE_JS.
+        var scale = ${PREVIEW_DOCUMENT_SCALE_JS}
         function widthOf(sel) {
           var el = document.querySelector(sel)
-          return el ? el.getBoundingClientRect().width : null
+          return el ? el.getBoundingClientRect().width / scale : null
         }
         var anchors = Array.prototype.slice.call(
           document.querySelectorAll('.pagedown-toc a')

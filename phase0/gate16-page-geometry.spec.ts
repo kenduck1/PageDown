@@ -3,6 +3,7 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { launchIsolatedApp } from './electron-launch'
+import { PREVIEW_DOCUMENT_SCALE_JS } from './gate-geometry'
 import { mergeRecentFiles, readRecentFiles, writeRecentFiles } from '../src/main/recent-files'
 
 // Gate 16 -- the Page Geometry Wiring sub-project's real end-to-end proof.
@@ -219,16 +220,25 @@ async function probePreviewGeometry(
 
     const raw = (await splitView.webContents.executeJavaScript(`
       (function () {
+        // Split mode's preview is fitted to width by a CSS \`zoom\` on
+        // #content-root, and \`zoom\` participates in layout -- so every rect
+        // below comes back already multiplied by it. This gate's question is
+        // a DOCUMENT-SPACE one ("is an A4 page 794 CSS px wide?"), not a
+        // "how big is it on screen right now" one, so each measurement is
+        // divided back out. See gate-geometry.ts's PREVIEW_DOCUMENT_SCALE_JS
+        // for the measurement behind this and for why offsetWidth is not the
+        // answer. The scale itself is gate35's to pin, not this gate's.
+        var scale = ${PREVIEW_DOCUMENT_SCALE_JS}
         function box(el) {
           if (!el) return null
           var r = el.getBoundingClientRect()
-          return { width: r.width, height: r.height }
+          return { width: r.width / scale, height: r.height / scale }
         }
         function offset(el, ref) {
           if (!el || !ref) return null
           var a = el.getBoundingClientRect()
           var b = ref.getBoundingClientRect()
-          return { top: a.top - b.top, left: a.left - b.left }
+          return { top: (a.top - b.top) / scale, left: (a.left - b.left) / scale }
         }
         var root = document.getElementById('content-root')
         var sheetEl = document.querySelector('.pagedjs_sheet')
