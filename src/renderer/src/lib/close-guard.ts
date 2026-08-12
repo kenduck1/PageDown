@@ -129,7 +129,28 @@ export async function confirmWindowClose(): Promise<boolean> {
     if (!state.tabs.some((tab) => tab.id === tabId)) continue
     if (tabId !== state.activeTabId) state.switchTab(tabId)
 
-    await useDocumentStore.getState().save()
+    const outcome = await useDocumentStore.getState().save()
+    // "Reload" at the external-change dialog is NOT a save, and cannot be
+    // detected from store state: it leaves the tab clean with a fresh mtime,
+    // exactly like a successful write. It writes nothing, replaces the tab's
+    // content with what is on disk, and deliberately records no
+    // version-history snapshot -- so the edit the user was about to save is
+    // gone, with no copy left anywhere.
+    //
+    // WHAT IT MEANS HERE: abandon the close. Reload is a request to SEE the
+    // file as it now is, not an answer to "save before closing?" -- closing
+    // the window on the strength of it would deny the user the one thing they
+    // asked for, having just thrown away their work to get it. The window
+    // stays open showing what was loaded.
+    //
+    // Ruled out, because both are worse: snapshotting the discarded edit here
+    // so the close could proceed (the next open would then silently "recover"
+    // the edit the user chose to discard -- the exact failure the
+    // clearPendingAutosave machinery exists to prevent, and why that branch
+    // records nothing in the first place); and treating it as a failed save
+    // and re-prompting (the tab is clean now, so there is nothing coherent
+    // left to ask about).
+    if (outcome === 'reloaded') return false
     // Re-read THIS tab by id, never the top-level isDirty mirror -- the same
     // race EditorScreen's own dirty-tab close documents at length: save() is
     // a plain IPC round trip with no modal dialog for an already-known path,

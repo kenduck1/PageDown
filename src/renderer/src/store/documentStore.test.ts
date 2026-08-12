@@ -254,6 +254,54 @@ describe('useDocumentStore', () => {
     })
   })
 
+  it('save reports its outcome so a caller can tell a Reload from a real save', async () => {
+    // BUG 2. The Reload branch leaves the tab CLEAN (its content now matches
+    // disk) while writing nothing and -- correctly -- recording no snapshot.
+    // That makes it indistinguishable from a successful save to anything that
+    // infers the outcome from isDirty alone, which is what let the close guard
+    // close a window whose edits had just been discarded. The outcome has to
+    // be reported explicitly; it cannot be re-derived from store state.
+    useDocumentStore.setState({
+      content: '# My unsaved edit',
+      filePath: '/a.md',
+      isDirty: true,
+      mtimeMs: 1000
+    })
+    vi.mocked(window.api.saveFile).mockResolvedValue({
+      filePath: '/a.md',
+      mtimeMs: 7000,
+      reloadedContent: '# What is actually on disk now'
+    })
+
+    await expect(useDocumentStore.getState().save()).resolves.toBe('reloaded')
+  })
+
+  it('save reports "saved" on an ordinary successful write', async () => {
+    useDocumentStore.setState({ content: '# A', filePath: '/a.md', isDirty: true })
+    vi.mocked(window.api.saveFile).mockResolvedValue({ filePath: '/a.md', mtimeMs: 1 })
+
+    await expect(useDocumentStore.getState().save()).resolves.toBe('saved')
+  })
+
+  it('save reports "cancelled" when the write did not happen', async () => {
+    // saveFile resolving null is this codebase's own "no write happened" --
+    // a cancelled Save-As dialog, or Cancel at the external-change dialog.
+    useDocumentStore.setState({ content: '# A', filePath: null, isDirty: true })
+    vi.mocked(window.api.saveFile).mockResolvedValue(null)
+
+    await expect(useDocumentStore.getState().save()).resolves.toBe('cancelled')
+    expect(useDocumentStore.getState().isDirty).toBe(true)
+  })
+
+  it('save reports "error" and records the message when the write throws', async () => {
+    useDocumentStore.setState({ content: '# A', filePath: '/a.md', isDirty: true })
+    vi.mocked(window.api.saveFile).mockRejectedValue(new Error('disk on fire'))
+
+    await expect(useDocumentStore.getState().save()).resolves.toBe('error')
+    expect(useDocumentStore.getState().error).toBe('disk on fire')
+    expect(useDocumentStore.getState().isDirty).toBe(true)
+  })
+
   it("saveDroppedImage reads the file as base64 and calls window.api.saveDroppedImage with the active tab's filePath", async () => {
     useDocumentStore.setState({ filePath: '/doc.md' })
     vi.mocked(window.api.saveDroppedImage).mockResolvedValue({ relativePath: 'photo.png' })

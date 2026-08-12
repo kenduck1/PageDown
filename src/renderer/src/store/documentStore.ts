@@ -73,6 +73,34 @@ export interface DocumentTab {
   draftId: string | null
 }
 
+/**
+ * What a save attempt actually did.
+ *
+ * Reported EXPLICITLY rather than left to be re-derived from store state,
+ * because it genuinely cannot be: `'reloaded'` and `'saved'` both leave the
+ * tab clean with a fresh mtimeMs, and are indistinguishable afterwards. A
+ * caller that inferred success from `isDirty` alone therefore treated a
+ * Reload -- which writes nothing and DISCARDS the user's pending edit -- as a
+ * completed save. That is precisely how the window-close guard came to close
+ * a window whose unsaved work had just been thrown away, with no snapshot
+ * anywhere to recover it from.
+ *
+ * - `saved`     the write happened; the file on disk now holds this content.
+ * - `reloaded`  the file had changed on disk and the user chose "Reload" at
+ *               the external-change dialog. NOTHING was written, and the
+ *               tab's content was replaced with what is on disk -- so the
+ *               edit that was about to be saved is gone, deliberately, and
+ *               deliberately without a version-history snapshot (see the
+ *               reload branch in runSave for why recording one would be
+ *               worse). Callers doing something IRREVERSIBLE on the strength
+ *               of a save -- closing a window, navigating away, discarding a
+ *               tab -- must treat this as "stop", not as success.
+ * - `cancelled` no write happened and nothing changed: a cancelled Save-As
+ *               dialog, or Cancel at the external-change dialog.
+ * - `error`     the attempt threw; the message is in `error`.
+ */
+export type SaveOutcome = 'saved' | 'reloaded' | 'cancelled' | 'error'
+
 interface DocumentStateValues {
   // content/filePath/isDirty always mirror the active tab (tabs.find(t =>
   // t.id === activeTabId)) -- kept in sync on every action that can change
@@ -169,14 +197,17 @@ interface DocumentState extends DocumentStateValues {
   ) => void
   openFile: () => Promise<boolean>
   openPath: (filePath: string) => Promise<boolean>
-  save: () => Promise<void>
+  // Resolves with what the attempt actually DID -- see SaveOutcome, and note
+  // in particular that a clean tab afterwards does not imply a successful
+  // write. Never rejects.
+  save: () => Promise<SaveOutcome>
   // Save As: writes the active tab to a path the user picks in a real native
   // dialog, regardless of whether it already has one. Shares runSave's whole
   // body with save() -- the only differences are that it passes a null target
   // path (which is what makes file-io.ts's saveFile open its Save dialog) and
   // a null mtime baseline. See runSave's own comment for why null is right
   // for the baseline too, rather than merely convenient.
-  saveAs: () => Promise<void>
+  saveAs: () => Promise<SaveOutcome>
   // Export/Print, moved here from EditorToolbar's local handlers so the
   // toolbar button and the File menu item run ONE implementation behind ONE
   // in-flight guard. Neither ever rejects: a failure lands in `error` as a
@@ -663,7 +694,7 @@ function readFileAsBase64(file: File): Promise<string> {
 //     baseline for one file against the mtime of a different one. This
 //     mirrors saveFileToKnownOrChosenPath's own existing Save-As fallback,
 //     which already passes null for the same reason.
-async function runSave(forceSaveAs: boolean): Promise<void> {
+async function runSave(forceSaveAs: boolean): Promise<SaveOutcome> {
   // Capture WHICH tab is being saved synchronously, before the `await`
   // below -- window.api.saveFile is a real IPC round trip, and the user
   // can switch tabs via the always-visible EditorTabBar during that gap.
@@ -716,7 +747,13 @@ async function runSave(forceSaveAs: boolean): Promise<void> {
             revision: state.revision + 1
           }
         })
-        return
+        // NOT a save. The user's pending edit has just been discarded in
+        // favour of what is on disk, with nothing written and -- per the
+        // branch above -- no snapshot recorded either, so there is no copy of
+        // it left anywhere. Any caller about to do something irreversible on
+        // the strength of "the document is clean now" has to be able to tell
+        // this apart from a real write; see SaveOutcome.
+        return 'reloaded'
       }
       useDocumentStore.setState((state) => {
         const tabs = state.tabs.map((tab) =>
@@ -774,9 +811,15 @@ async function runSave(forceSaveAs: boolean): Promise<void> {
       // best-effort contract (and same ordering) as the snapshot call it
       // follows: a failed discard costs one orphaned row, never the save.
       if (draftIdAtSave !== null) void window.api.discardUnsavedDraft(draftIdAtSave)
+      return 'saved'
     }
+    // A null result is saveFile's own "no write happened" -- a cancelled
+    // Save-As dialog, or Cancel at the external-change dialog. Nothing
+    // changed, and the tab is deliberately still dirty.
+    return 'cancelled'
   } catch (err) {
     useDocumentStore.setState({ error: errorMessage(err) })
+    return 'error'
   }
 }
 
