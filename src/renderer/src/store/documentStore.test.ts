@@ -254,6 +254,127 @@ describe('useDocumentStore', () => {
     })
   })
 
+  it('a FIRST save, which gives the document a directory, remounts the editor', async () => {
+    // BUG 3. Local image references resolve against the DOCUMENT'S OWN
+    // directory (documentStore.resolveLocalImage returns null outright while
+    // filePath is null), and the image node view resolves once when it is
+    // constructed. Nothing reconstructs a node view except the key={revision}
+    // remount -- so `![x](photo.png)` typed before the first Save stayed
+    // blocked forever, even though a directory to resolve it against now
+    // existed. The reload branch has always bumped revision for exactly this
+    // "content the live editor cannot know about changed" reason; the success
+    // branch omitted it.
+    useDocumentStore.setState({
+      content: '![x](photo.png)',
+      filePath: null,
+      isDirty: true
+    })
+    const revisionBefore = useDocumentStore.getState().revision
+    vi.mocked(window.api.saveFile).mockResolvedValue({ filePath: '/docs/a.md', mtimeMs: 1 })
+
+    await useDocumentStore.getState().save()
+
+    expect(useDocumentStore.getState().filePath).toBe('/docs/a.md')
+    expect(useDocumentStore.getState().revision).toBe(revisionBefore + 1)
+  })
+
+  it('a Save-As into a DIFFERENT directory remounts the editor', async () => {
+    // Same root cause, opposite direction: every already-resolved image is now
+    // a stale data URI read out of the OLD directory, and the cache is keyed on
+    // document path so the new directory is a genuine cache miss nothing would
+    // ever go and fetch.
+    const existing = useDocumentStore.getState().tabs[0]
+    useDocumentStore.setState({
+      tabs: [{ ...existing, filePath: '/one/a.md', content: '![x](photo.png)', isDirty: true }],
+      content: '![x](photo.png)',
+      filePath: '/one/a.md',
+      isDirty: true
+    })
+    const revisionBefore = useDocumentStore.getState().revision
+    vi.mocked(window.api.saveFile).mockResolvedValue({ filePath: '/two/b.md', mtimeMs: 1 })
+
+    await useDocumentStore.getState().saveAs()
+
+    expect(useDocumentStore.getState().revision).toBe(revisionBefore + 1)
+  })
+
+  it('an ordinary re-save to the SAME path does NOT remount the editor', async () => {
+    // The other half, and the reason the bump is conditional rather than
+    // unconditional: a remount destroys prosemirror-history, so an
+    // unconditional bump would throw away the user's undo stack on every
+    // Cmd+S. The document's directory has not moved, so no image reference
+    // resolves any differently and there is nothing to re-resolve.
+    //
+    // The TAB's own filePath has to be set here, not just the top-level
+    // mirror: the tab is the source of truth the comparison reads, and a
+    // fixture that set only the mirror would leave the tab still at null and
+    // so describe a first save rather than the re-save this is about.
+    const existing = useDocumentStore.getState().tabs[0]
+    useDocumentStore.setState({
+      tabs: [{ ...existing, filePath: '/docs/a.md', content: '![x](photo.png)', isDirty: true }],
+      content: '![x](photo.png)',
+      filePath: '/docs/a.md',
+      isDirty: true
+    })
+    const revisionBefore = useDocumentStore.getState().revision
+    vi.mocked(window.api.saveFile).mockResolvedValue({ filePath: '/docs/a.md', mtimeMs: 2 })
+
+    await useDocumentStore.getState().save()
+
+    expect(useDocumentStore.getState().isDirty).toBe(false)
+    expect(useDocumentStore.getState().revision).toBe(revisionBefore)
+  })
+
+  it('a BACKGROUND tab gaining a path does not remount the tab on screen', async () => {
+    // revision is a per-window remount signal, not a per-tab one: bumping it
+    // for a save that resolved after the user switched away would destroy the
+    // undo history of whatever document is actually on screen, to re-resolve
+    // images in one that is not being displayed. The background tab gets its
+    // fresh mount from switchTab's own bump when the user returns to it.
+    const [bg, front] = ['bg', 'front']
+    useDocumentStore.setState({
+      tabs: [
+        {
+          id: bg,
+          filePath: null,
+          content: '![x](photo.png)',
+          isDirty: true,
+          mtimeMs: null,
+          remoteImagesAllowed: null,
+          currentPage: 1,
+          draftId: null
+        },
+        {
+          id: front,
+          filePath: '/docs/front.md',
+          content: '# Front',
+          isDirty: false,
+          mtimeMs: null,
+          remoteImagesAllowed: null,
+          currentPage: 1,
+          draftId: null
+        }
+      ],
+      activeTabId: bg,
+      content: '![x](photo.png)',
+      filePath: null,
+      isDirty: true
+    })
+    // The save captures `bg` synchronously, then the user switches away while
+    // the IPC round trip is in flight.
+    vi.mocked(window.api.saveFile).mockImplementation(async () => {
+      useDocumentStore.getState().switchTab(front)
+      return { filePath: '/docs/bg.md', mtimeMs: 1 }
+    })
+    const revisionBefore = useDocumentStore.getState().revision
+
+    await useDocumentStore.getState().save()
+
+    // One bump, from switchTab -- none from the save itself.
+    expect(useDocumentStore.getState().revision).toBe(revisionBefore + 1)
+    expect(useDocumentStore.getState().tabs.find((t) => t.id === bg)?.filePath).toBe('/docs/bg.md')
+  })
+
   it('save reports its outcome so a caller can tell a Reload from a real save', async () => {
     // BUG 2. The Reload branch leaves the tab CLEAN (its content now matches
     // disk) while writing nothing and -- correctly -- recording no snapshot.
