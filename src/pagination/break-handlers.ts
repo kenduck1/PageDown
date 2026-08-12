@@ -387,10 +387,19 @@ export class TableContinuationHandler extends Handler {
 // leave the same bug live for any future element that grows a bottom border
 // or padding (blockquote, a callout, a themed table).
 //
-// It only ever acts on a TEXT-node break, which also keeps it away from
-// `mermaid-diagrams.md`'s own (separate, still-open, deliberately pinned in
-// gate4) oversized-SVG content loss: that page overflows by ~1092px from an
-// element-node break, which stepping back text lines could not fix anyway.
+// It only ever acts on a TEXT-node break, which also kept it away from
+// `mermaid-diagrams.md`'s own, separate oversized-SVG content loss: that page
+// overflowed by ~1092px from an ELEMENT-node break, which stepping back text
+// lines could not have fixed anyway.
+//
+// CORRECTION: that second bug is no longer open. It used to be described here
+// as "still-open, deliberately pinned in gate4", and it was — Gate 4 asserted
+// the ABSENCE of the diagram's own node labels from the exported PDF. It is
+// now fixed at its own layer, by resources/pagination-render/index.ts's
+// fitSvgToPageBox scaling a too-tall diagram into the page content box so the
+// split never happens, and Gate 4's assertions are inverted accordingly. The
+// scoping statement above still holds and is still the reason this handler is
+// safe; only its example is now historical.
 const MAX_LINE_STEPS = 12
 
 // Upper bound on how many text nodes a single retreat may walk backwards
