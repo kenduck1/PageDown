@@ -10,7 +10,7 @@
       "textMatch": true,
       "firstMismatchDetail": null,
       "textDeltaSample": "",
-      "exportMs": 85,
+      "exportMs": 106,
       "imgInfo": []
     },
     {
@@ -23,7 +23,7 @@
       "textMatch": true,
       "firstMismatchDetail": null,
       "textDeltaSample": "1.1.2.1.",
-      "exportMs": 59,
+      "exportMs": 63,
       "imgInfo": []
     },
     {
@@ -36,7 +36,7 @@
       "textMatch": true,
       "firstMismatchDetail": null,
       "textDeltaSample": "",
-      "exportMs": 65,
+      "exportMs": 68,
       "imgInfo": []
     },
     {
@@ -49,7 +49,7 @@
       "textMatch": true,
       "firstMismatchDetail": null,
       "textDeltaSample": "",
-      "exportMs": 57,
+      "exportMs": 59,
       "imgInfo": []
     },
     {
@@ -62,7 +62,7 @@
       "textMatch": true,
       "firstMismatchDetail": null,
       "textDeltaSample": "",
-      "exportMs": 58,
+      "exportMs": 57,
       "imgInfo": []
     },
     {
@@ -75,7 +75,7 @@
       "textMatch": true,
       "firstMismatchDetail": null,
       "textDeltaSample": "Diagramoftheproposedsitelayout,showingthemainentranceonthenorthsideandparkingtotheeast.",
-      "exportMs": 57,
+      "exportMs": 60,
       "imgInfo": [
         {
           "src": "pagedown-render://render/assets/diagram-placeholder.png",
@@ -96,20 +96,20 @@
       "textMatch": true,
       "firstMismatchDetail": null,
       "textDeltaSample": "",
-      "exportMs": 249,
+      "exportMs": 251,
       "imgInfo": []
     },
     {
       "file": "mermaid-diagrams.md",
-      "onscreenPageCount": 6,
-      "pdfLibPageCount": 6,
-      "pdfjsPageCount": 6,
+      "onscreenPageCount": 3,
+      "pdfLibPageCount": 3,
+      "pdfjsPageCount": 3,
       "pageCountMatch": true,
       "textCategory": "exact",
       "textMatch": true,
       "firstMismatchDetail": null,
       "textDeltaSample": "",
-      "exportMs": 66,
+      "exportMs": 79,
       "imgInfo": []
     },
     {
@@ -122,7 +122,7 @@
       "textMatch": true,
       "firstMismatchDetail": null,
       "textDeltaSample": "Siteplan1.2.",
-      "exportMs": 60,
+      "exportMs": 63,
       "imgInfo": [
         {
           "src": "pagedown-render://render/assets/diagram-placeholder.png",
@@ -143,20 +143,20 @@
       "textMatch": true,
       "firstMismatchDetail": null,
       "textDeltaSample": "1.1.2.2.1.2.3.1.2.",
-      "exportMs": 62,
+      "exportMs": 59,
       "imgInfo": []
     },
     {
       "file": "raw-html.md",
-      "onscreenPageCount": 1,
-      "pdfLibPageCount": 1,
-      "pdfjsPageCount": 1,
+      "onscreenPageCount": 3,
+      "pdfLibPageCount": 3,
+      "pdfjsPageCount": 3,
       "pageCountMatch": true,
       "textCategory": "exact",
       "textMatch": true,
       "firstMismatchDetail": null,
       "textDeltaSample": "",
-      "exportMs": 61,
+      "exportMs": 60,
       "imgInfo": []
     },
     {
@@ -169,7 +169,7 @@
       "textMatch": true,
       "firstMismatchDetail": null,
       "textDeltaSample": "1.",
-      "exportMs": 58,
+      "exportMs": 62,
       "imgInfo": []
     },
     {
@@ -208,35 +208,17 @@
       "textMatch": true,
       "firstMismatchDetail": null,
       "textDeltaSample": "",
-      "exportMs": 693,
+      "exportMs": 694,
       "imgInfo": []
     }
   ],
-  "mermaidDiagramContentLossConfirmed": true,
+  "mermaidDiagramContentLossConfirmed": false,
   "mermaidDiagramDomEvidence": [
     {
       "instance": 0,
-      "rects": 0,
-      "texts": 0,
-      "paths": 0
-    },
-    {
-      "instance": 1,
-      "rects": 0,
-      "texts": 0,
-      "paths": 13
-    },
-    {
-      "instance": 2,
-      "rects": 0,
-      "texts": 0,
-      "paths": 0
-    },
-    {
-      "instance": 3,
-      "rects": 0,
-      "texts": 0,
-      "paths": 9
+      "rects": 60,
+      "texts": 20,
+      "paths": 23
     }
   ],
   "codeBlockDomEvidence": {

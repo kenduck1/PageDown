@@ -38,7 +38,7 @@
     "diagramBoxes": []
   },
   "mermaid-diagrams.md": {
-    "pageCount": 6,
+    "pageCount": 3,
     "perPageHeadings": [
       [
         {
@@ -60,10 +60,7 @@
           "text": "Oversized Diagram",
           "breakAfterAvoid": true
         }
-      ],
-      [],
-      [],
-      []
+      ]
     ],
     "tableCount": 0,
     "splitTableCount": 0,
@@ -81,23 +78,8 @@
       },
       {
         "id": "pagedown-mermaid-2",
-        "width": 144.0546875,
-        "height": 1955.9921875
-      },
-      {
-        "id": "pagedown-mermaid-2",
-        "width": 144.0546875,
-        "height": 1955.9921875
-      },
-      {
-        "id": "pagedown-mermaid-2",
-        "width": 144.0546875,
-        "height": 1955.9921875
-      },
-      {
-        "id": "pagedown-mermaid-2",
-        "width": 144.0546875,
-        "height": 1955.9921875
+        "width": 55.9375,
+        "height": 759.5234375
       }
     ]
   },
