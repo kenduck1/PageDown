@@ -30,14 +30,28 @@ async function open(source: string, plugins = FULL): Promise<EditorView> {
   return editor.action((ctx) => ctx.get(editorViewCtx)) as EditorView
 }
 
-function imageAttrs(view: EditorView): Record<string, unknown> {
+function attrsOf(view: EditorView, typeName: string): Record<string, unknown> {
   let attrs: Record<string, unknown> | undefined
   view.state.doc.descendants((node) => {
-    if (node.type.name === 'image') attrs = node.attrs
+    if (node.type.name === typeName) attrs = node.attrs
     return true
   })
-  if (!attrs) throw new Error('no image node')
+  if (!attrs) throw new Error(`no ${typeName} node`)
   return attrs
+}
+
+function imageAttrs(view: EditorView): Record<string, unknown> {
+  return attrsOf(view, 'image')
+}
+
+// The flat sequence of inline node type names in the document's FIRST block.
+// A width that came back as inert trailing text rather than as a node attr
+// shows up here as an extra 'text' the correct shape does not have -- which is
+// the only way to tell the two apart, since both produce identical bytes.
+function firstBlockShape(view: EditorView): string[] {
+  const shape: string[] = []
+  view.state.doc.firstChild?.forEach((child) => shape.push(child.type.name))
+  return shape
 }
 
 describe('Milkdown image width: round trip', () => {
@@ -87,6 +101,81 @@ describe('Milkdown image width: round trip', () => {
     expect(imageAttrs(view).width).toBe('')
     expect(view.state.doc.textContent).toContain('{height=200px}')
     expect(await roundTrip(source)).toBe(source)
+  })
+})
+
+// A reference-style image (`![alt][ref]`) is a DIFFERENT ProseMirror node from
+// an inline one -- `imageReferenceNode` in nodes/reference.ts, an inline atom
+// -- so the width attr added to the stock `image` node did nothing for it.
+// remarkImageAttrs already recognized the block on BOTH mdast node types (it
+// is one matcher, shared with markdownToHtml), so the size rendered correctly
+// on the paginated surface, in the PDF and in the HTML export the whole time;
+// the editor simply had nowhere to keep it and dropped it on the first save.
+//
+// That made it silent data loss in the user's own file: set a width, edit an
+// unrelated paragraph, save, and the width is gone with no error and nothing
+// to undo.
+describe('Milkdown image width: reference-style images', () => {
+  const DEFINITION = '\n\n[logo]: ./logo.png\n'
+
+  it('survives a Format-mode edit byte-for-byte', async () => {
+    const source = `![Logo][logo]{width=50%}${DEFINITION}`
+    expect(await roundTrip(source)).toBe(source)
+  })
+
+  it('stores the width as a real node attr, not as inert trailing text', async () => {
+    // The load-bearing half. CLAUDE.md records that Milkdown round-tripped the
+    // `<!-- pagebreak -->` marker perfectly as INERT TEXT with zero custom
+    // plugins -- so a byte-identity test alone cannot tell "the node carries
+    // the width" from "the braces came back as text that happens to match".
+    // Asserting on node types AND attrs is what discriminates.
+    const view = await open(`![Logo][logo]{width=50%}${DEFINITION}`, SCHEMA_ONLY)
+    expect(attrsOf(view, 'imageReference').width).toBe('50%')
+    expect(firstBlockShape(view)).toEqual(['imageReference'])
+  })
+
+  it('normalizes an absolute unit once, then stays stable', async () => {
+    const once = await roundTrip(`![Logo][logo]{width=3in}${DEFINITION}`)
+    expect(once).toBe(`![Logo][logo]{width=288px}${DEFINITION}`)
+    expect(await roundTrip(once)).toBe(once)
+  })
+
+  it('leaves a reference image with no block completely untouched', async () => {
+    const source = `![Logo][logo]${DEFINITION}`
+    expect(await roundTrip(source)).toBe(source)
+    const view = await open(source, SCHEMA_ONLY)
+    expect(attrsOf(view, 'imageReference').width).toBe('')
+    expect(firstBlockShape(view)).toEqual(['imageReference'])
+  })
+
+  it('keeps the collapsed and shortcut reference forms intact alongside a width', async () => {
+    // referenceType is what decides whether the trailing `[...]` is emitted at
+    // all, so a width must not disturb it -- otherwise `![logo][]` silently
+    // becomes `![logo][logo]`.
+    const collapsed = `![logo][]{width=50%}${DEFINITION}`
+    expect(await roundTrip(collapsed)).toBe(collapsed)
+    const shortcut = `![logo]{width=50%}${DEFINITION}`
+    expect(await roundTrip(shortcut)).toBe(shortcut)
+  })
+
+  it('leaves an unrecognized block as literal text, same as an inline image', async () => {
+    const source = `![Logo][logo]{height=200px}${DEFINITION}`
+    const view = await open(source, SCHEMA_ONLY)
+    expect(attrsOf(view, 'imageReference').width).toBe('')
+    expect(view.state.doc.textContent).toContain('{height=200px}')
+    expect(await roundTrip(source)).toBe(source)
+  })
+
+  it('resolves to the same width attribute the paginated surface emits', async () => {
+    // The parity question, asked the same way the inline-image block below
+    // asks it: markdownToHtml resolves the reference against its definition
+    // into a real <img>, and the width has to land on it identically.
+    const source = `![Logo][logo]{width=50%}${DEFINITION}`
+    const paginated = /<img[^>]*\swidth="([^"]*)"/.exec(markdownToHtml(source).html)?.[1]
+    expect(paginated).toBe('50%')
+
+    const view = await open(source, SCHEMA_ONLY)
+    expect(attrsOf(view, 'imageReference').width).toBe(paginated)
   })
 })
 
