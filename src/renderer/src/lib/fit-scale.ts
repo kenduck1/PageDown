@@ -1,6 +1,6 @@
-// Fit-to-width scaling for Split mode's editor pane: how much to shrink a
-// fixed-width page card so it fits the pane it is sitting in, and where to
-// stop shrinking.
+// Fit-to-width scaling for BOTH of Split mode's panes: how much to shrink a
+// fixed-width page so it fits the pane it is sitting in, and where to stop
+// shrinking.
 //
 // Pure arithmetic, in its own module for the same reason floating-position.ts
 // is: the interesting decision here is the FLOOR, and a floor that only exists
@@ -8,6 +8,24 @@
 // unit-tested. fit-scale.test.ts exercises every branch below, including the
 // two the real app reaches least often (a pane wider than the page, and a pane
 // so narrow the floor binds).
+//
+// TWO CONSUMERS, and the second one constrains this file. The editor pane
+// (EditorScreen.tsx) was first; the paginated PREVIEW pane calls this too,
+// from inside the sandboxed render context
+// (resources/pagination-render/index.ts's applyPreviewFitScale). That means
+// THIS MODULE IS BUNDLED INTO THE SANDBOX and must stay dependency-free --
+// the same contract src/pagination/page-nav.ts and src/typography/
+// page-geometry.ts already carry, and for the same reason: a runtime import
+// here would drag its dependencies into the one context that deliberately
+// runs untrusted document HTML. Keep this file pure arithmetic. (Its home
+// under src/renderer/src/lib is now arguably wrong -- src/typography/, beside
+// page-geometry.ts and split-preview-bounds.ts, is where the other shared
+// pure layout helpers live -- but a move would buy tidiness, not behaviour.)
+//
+// Sharing it is not merely convenient. The two panes sit side by side at the
+// same divider position, showing the same document at the same 14px baseline;
+// a second copy of the floor would mean one pane staying legible while the
+// other went small, at a boundary neither of them could explain.
 //
 // WHY THIS EXISTS AT ALL. EditorScreen's page card is a FIXED `width`, never a
 // `max-width` -- see that file's own long comment for why (a max-width silently
@@ -58,6 +76,14 @@
  * i.e. the page genuinely stops overflowing once the editor pane is given
  * roughly three quarters of the canvas, and everywhere narrower it renders
  * 30% smaller than before with correspondingly less horizontal scrolling.
+ *
+ * The PREVIEW pane's numbers are the mirror image, since the divider splits
+ * one row: it fits once the divider gives the PREVIEW about three quarters,
+ * and at the default 50/50 it is at the floor showing ~68% of the page rather
+ * than the ~48% it showed before being fitted at all. That is the honest cost
+ * of the floor on this side, and it is the right trade for the same reason:
+ * an exact fit at 389px would render body text at 14 x 0.47 = 6.6px, a page
+ * you can see the shape of and cannot read.
  */
 export const MIN_FIT_SCALE = 0.7
 

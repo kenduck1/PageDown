@@ -89,6 +89,60 @@ async function getMainWindow(app: ElectronApplication): Promise<Page> {
   throw new Error('Timed out locating the main app-shell window (only found the sandboxed one)')
 }
 
+interface PreviewFitProbe {
+  /** The sandboxed context's own content box -- what a page has to fit into. */
+  bodyClientWidth: number
+  /** Real laid-out width of the first `.pagedjs_page`, i.e. post-`zoom`. */
+  pageRenderedWidth: number
+  /** Horizontal overflow of the whole preview document; 0 means it fits. */
+  overflowPx: number
+  pageCount: number
+}
+
+// Reads the REAL laid-out geometry of the real sandboxed split-preview
+// context. Same mechanism as gate18's probePageScroll and gate15's
+// probeSplitPreviewView -- app.evaluate() + mainWindow.contentView.children +
+// executeJavaScript -- because the paginated DOM lives only inside a
+// WebContentsView with no preload and no contextBridge, and gate15 separately
+// proved contextBridge deep-freezes window.api so renderer-side spying is
+// impossible anyway.
+//
+// Filtering to a genuinely on-screen rectangle is what isolates the split
+// preview's view from the Phase 0 spike harness's own pagedown-render:// view,
+// which is parked permanently off-screen at {x:-9999,y:-9999}.
+async function probePreviewFit(app: ElectronApplication): Promise<PreviewFitProbe | null> {
+  return app.evaluate(async ({ BrowserWindow, WebContentsView }) => {
+    const mainWindow = BrowserWindow.getAllWindows().find(
+      (w) => !w.isDestroyed() && w.webContents.getURL().startsWith('file://')
+    )
+    if (!mainWindow) return null
+
+    const splitView = mainWindow.contentView.children.find(
+      (child): child is InstanceType<typeof WebContentsView> => {
+        if (!(child instanceof WebContentsView)) return false
+        if (child.webContents.isDestroyed()) return false
+        if (!child.webContents.getURL().startsWith('pagedown-render://')) return false
+        const bounds = child.getBounds()
+        return bounds.x >= 0 && bounds.y >= 0 && bounds.width > 0 && bounds.height > 0
+      }
+    )
+    if (!splitView) return null
+
+    return (await splitView.webContents.executeJavaScript(
+      `(() => {
+         const pages = Array.from(document.querySelectorAll('.pagedjs_page'))
+         const doc = document.documentElement
+         return {
+           bodyClientWidth: document.body.clientWidth,
+           pageRenderedWidth: pages.length ? pages[0].getBoundingClientRect().width : 0,
+           overflowPx: Math.max(0, doc.scrollWidth - doc.clientWidth),
+           pageCount: pages.length
+         }
+       })()`
+    )) as PreviewFitProbe
+  })
+}
+
 interface OpenedFixture {
   app: ElectronApplication
   close: () => Promise<void>
@@ -363,6 +417,106 @@ test('Gate 35: at the widest divider setting the page genuinely fits, with no ho
     expect(Number(wide.appliedZoom)).toBeGreaterThan(0)
     expect(Number(wide.appliedZoom)).toBeLessThan(1)
     expect(wide.cardRenderedWidth).toBeCloseTo(Number(wide.appliedZoom) * PAGE_WIDTH_PX, 0)
+  } finally {
+    await restoreRecents()
+    await rm(fixtureDir, { recursive: true, force: true })
+    await close()
+  }
+})
+
+test('Gate 35: the sandboxed PREVIEW pane is fitted too, and genuinely fits when widened', async () => {
+  test.setTimeout(120_000)
+
+  const { app, close, win, fixtureDir, restoreRecents } = await openFixtureDocument(SHORT_FIXTURE)
+
+  try {
+    await win.getByRole('button', { name: 'Split', exact: true }).click()
+    await win.waitForSelector('.milkdown-mount .ProseMirror')
+
+    // The preview is a real cross-process render: the harness has to spin up,
+    // the debounced sendDocument has to land, and Paged.js has to finish.
+    await expect
+      .poll(async () => (await probePreviewFit(app))?.pageCount ?? 0, {
+        message: 'expected the sandboxed split preview to render at least one real page',
+        timeout: 30_000
+      })
+      .toBeGreaterThan(0)
+
+    const atDefault = (await probePreviewFit(app))!
+    console.log('Gate 35 preview at default divider:', JSON.stringify(atDefault))
+
+    // (a) THE NON-VACUOUS HALF, exactly as tests 1 and 2 do it for the editor
+    // pane. If the preview pane is ever wide enough that an unscaled page fits
+    // it outright, this fails LOUDLY rather than letting the assertions below
+    // pass for free. Widening the app's default window past ~1050px is the
+    // change that would trip it -- the same coupling window-bounds.ts already
+    // records for Gates 28/29.
+    expect(
+      PAGE_WIDTH_PX,
+      'the unscaled page must genuinely not fit the preview pane, or nothing below means anything'
+    ).toBeGreaterThan(atDefault.bodyClientWidth)
+
+    // (b) It really is scaled, in real laid-out pixels inside the sandbox --
+    // this is the whole defect: fit-to-width shipped for the editor pane only,
+    // leaving the preview beside it showing ~24% of a page at the divider
+    // position that feature calls its success case.
+    expect(atDefault.pageRenderedWidth).toBeLessThan(PAGE_WIDTH_PX)
+    // At the default divider the exact fit falls below the floor, so the floor
+    // is what lands. Pinned against the shared constant (never a literal) so
+    // the editor and preview panes cannot drift onto two different floors.
+    expect(atDefault.pageRenderedWidth).toBeCloseTo(MIN_FIT_SCALE * PAGE_WIDTH_PX, 0)
+
+    // --- Widen the PREVIEW, by dragging the divider the other way ----------
+    // The mirror image of test 2: there the editor pane was given ~75% of the
+    // row, here the preview is. A real mouse drag on the real divider, past
+    // MIN_SPLIT_RATIO so it lands on the clamp rather than on pixel-accurate
+    // mouse placement.
+    const divider = win.getByTestId('split-divider')
+    const dividerBox = await divider.boundingBox()
+    expect(dividerBox).not.toBeNull()
+    const row = await win.evaluate(() => {
+      const el = document.querySelector('[data-testid="split-divider"]')?.parentElement
+      if (!el) throw new Error('no split row')
+      const r = el.getBoundingClientRect()
+      return { left: r.left, width: r.width }
+    })
+    await win.mouse.move(dividerBox!.x + dividerBox!.width / 2, dividerBox!.y + 40)
+    await win.mouse.down()
+    await win.mouse.move(row.left + row.width * 0.1, dividerBox!.y + 40, { steps: 12 })
+    await win.mouse.up()
+
+    // The bounds report, the native setBounds, the sandbox's own `resize`
+    // handler and the relayout all have to land, so poll rather than sample.
+    await expect
+      .poll(async () => (await probePreviewFit(app))?.bodyClientWidth ?? 0, {
+        message: 'expected the drag to widen the preview pane',
+        timeout: 15_000
+      })
+      .toBeGreaterThan(500)
+
+    await expect
+      .poll(async () => (await probePreviewFit(app))?.overflowPx ?? -1, {
+        message: 'expected the widened preview to stop overflowing horizontally',
+        timeout: 15_000
+      })
+      .toBe(0)
+
+    const wide = (await probePreviewFit(app))!
+    console.log('Gate 35 preview at widest divider:', JSON.stringify(wide))
+
+    // TWO PARTS AGAIN: "it fits" is only interesting if the unscaled page
+    // would NOT have fitted this same, widened pane.
+    expect(
+      PAGE_WIDTH_PX,
+      'the unscaled page must still overflow even the widest preview pane, or "it fits" is free'
+    ).toBeGreaterThan(wide.bodyClientWidth)
+    expect(wide.pageRenderedWidth).toBeLessThanOrEqual(wide.bodyClientWidth)
+
+    // And it got there by SCALING, not by re-paginating at a narrower page --
+    // which would be the wrong fix, and would make page counts move as the
+    // user dragged the divider.
+    expect(wide.pageRenderedWidth).toBeLessThan(PAGE_WIDTH_PX)
+    expect(wide.pageRenderedWidth).toBeGreaterThan(MIN_FIT_SCALE * PAGE_WIDTH_PX)
   } finally {
     await restoreRecents()
     await rm(fixtureDir, { recursive: true, force: true })
