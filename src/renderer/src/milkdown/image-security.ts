@@ -1,8 +1,10 @@
 import { $prose } from '@milkdown/utils'
 import { Plugin, PluginKey } from '@milkdown/prose/state'
+import { closeHistory } from '@milkdown/prose/history'
 import type { Node as ProseMirrorNode } from '@milkdown/prose/model'
 import type { EditorView, NodeView } from '@milkdown/prose/view'
 import { isRelativeLocalPath, isRemoteImageSrc } from '../../../markdown/local-image-src'
+import { resizeWidthPercent } from '../lib/image-resize'
 
 // Confirmed live, real vulnerability (not theoretical): @milkdown/preset-commonmark's
 // stock `imageSchema` (node/image.ts) has `toDOM: (node) => ['img', {
@@ -203,7 +205,25 @@ class SafeImageView implements NodeView {
   dom: HTMLSpanElement
   private img: HTMLImageElement
   private note: HTMLSpanElement
+  // The drag-to-resize grip, drawn INSIDE the image's own bottom-right corner.
+  // Deliberately not a floating overlay: a WebContentsView (Split mode's live
+  // preview) composites above ALL DOM unconditionally, so anything floating
+  // over the canvas needs the clamp treatment floating-position.ts exists for
+  // (the bubble menu) or PageSetupModal's zero-rect workaround. A grip that
+  // lives inside the element it resizes cannot reach the preview's column by
+  // construction, so it needs neither.
+  private handle: HTMLSpanElement
   private view: EditorView
+  private getPos: () => number | undefined
+  // Set for the duration of a drag so the pointer listeners can be torn down
+  // from destroy() as well as from pointerup -- ProseMirror destroys node
+  // views eagerly (every key={revision} remount destroys all of them), and a
+  // drag in flight at that moment must not leave listeners on window.
+  private endDrag: (() => void) | null = null
+  // What syncFrom last rendered from. Compared in update() so a width-only
+  // change -- which is every drag commit -- does not re-run the whole resolve
+  // path and tear a local image's src off for a visible flash.
+  private synced = { src: '', alt: '', title: '' }
   // Bumped on every syncFrom. An async resolution that completes after its
   // generation has been superseded (the node's src changed, or this view was
   // reused for a different node) is discarded rather than applied -- without
@@ -215,8 +235,9 @@ class SafeImageView implements NodeView {
   // touch detached DOM.
   private destroyed = false
 
-  constructor(node: ProseMirrorNode, view: EditorView) {
+  constructor(node: ProseMirrorNode, view: EditorView, getPos: () => number | undefined) {
     this.view = view
+    this.getPos = getPos
     this.dom = document.createElement('span')
     this.dom.className = 'pagedown-image'
     this.img = document.createElement('img')
@@ -227,7 +248,19 @@ class SafeImageView implements NodeView {
     // target, and it must never be picked up as text if the user selects
     // across the image.
     this.note.contentEditable = 'false'
-    this.dom.append(this.img, this.note)
+    this.handle = document.createElement('span')
+    this.handle.className = 'pagedown-image-resize-handle'
+    this.handle.contentEditable = 'false'
+    this.handle.draggable = false
+    this.handle.title = 'Drag to resize'
+    // aria-hidden because there is no keyboard equivalent to offer: this is a
+    // pointer affordance for discoverability, and the syntax it writes
+    // (`{width=50%}`) stays typeable in Source mode, which is the accessible
+    // path. Announcing a control no assistive-technology user can operate
+    // would be worse than announcing nothing.
+    this.handle.setAttribute('aria-hidden', 'true')
+    this.handle.addEventListener('pointerdown', this.onHandlePointerDown)
+    this.dom.append(this.img, this.note, this.handle)
     this.syncFrom(node)
   }
 
@@ -238,6 +271,97 @@ class SafeImageView implements NodeView {
     this.note.hidden = note.length === 0
     this.img.alt = alt
     this.img.title = note ? [note, title].filter(Boolean).join(' — ') : title
+    // Only a really-rendering image can be resized. For 'blocked'/'missing'
+    // there is no picture on screen to grab a corner of, and for 'pending' the
+    // width the drag would start from is not known yet.
+    this.handle.hidden = state !== 'ok'
+  }
+
+  // The box a `%` width actually resolves against: the <img>'s containing
+  // block, i.e. the nearest block container -- normally the paragraph holding
+  // it. Measured off the live DOM rather than derived from
+  // computePageGeometry, because the canvas sits inside a CSS `zoom` wrapper
+  // and, in Split mode, a fit-to-width scale, so the geometry constants are
+  // not what is on screen. Reading a rect keeps this in the same post-zoom
+  // viewport space as the pointer coordinates -- see image-resize.ts on why
+  // that is what makes the result zoom-invariant with nothing to divide by.
+  private containerWidth(): number {
+    const block = this.dom.parentElement
+    return block ? block.getBoundingClientRect().width : 0
+  }
+
+  private onHandlePointerDown = (event: PointerEvent): void => {
+    if (event.button !== 0) return
+    const startWidthPx = this.img.getBoundingClientRect().width
+    const containerWidthPx = this.containerWidth()
+    if (startWidthPx <= 0 || containerWidthPx <= 0) return
+
+    // preventDefault BEFORE anything else: it is what stops the pointerdown
+    // from moving DOM focus and from starting a text selection across the
+    // image. This node view never calls view.focus() either -- the same rule
+    // applyFindState and the selection bubble already follow.
+    event.preventDefault()
+    event.stopPropagation()
+
+    const startX = event.clientX
+    // The drag mutates only the DOM, never the document, so there is exactly
+    // ONE transaction for the whole gesture and it is one undo step BY
+    // CONSTRUCTION rather than by coalescing after the fact. A transaction per
+    // pointermove would also be re-serialized through the debounced onChange
+    // path on every frame. ignoreMutation() already returns true for this node
+    // view, so ProseMirror will not try to reconcile these writes away.
+    let width = ''
+    const onMove = (move: PointerEvent): void => {
+      const next = resizeWidthPercent({
+        startWidthPx,
+        containerWidthPx,
+        deltaPx: move.clientX - startX
+      })
+      if (next === null || next === width) return
+      width = next
+      this.img.setAttribute('width', width)
+    }
+
+    const finish = (): void => {
+      window.removeEventListener('pointermove', onMove)
+      window.removeEventListener('pointerup', finish)
+      window.removeEventListener('pointercancel', finish)
+      this.endDrag = null
+      delete this.dom.dataset.resizing
+      if (width) this.commitWidth(width)
+    }
+
+    this.endDrag = finish
+    this.dom.dataset.resizing = 'true'
+    // Listeners on window, not on the handle: the pointer routinely leaves the
+    // 12px grip within the first few pixels of a drag, and a pointerup
+    // released anywhere on screen still has to end the gesture.
+    window.addEventListener('pointermove', onMove)
+    window.addEventListener('pointerup', finish)
+    window.addEventListener('pointercancel', finish)
+  }
+
+  private commitWidth(width: string): void {
+    const pos = this.getPos()
+    if (typeof pos !== 'number') return
+    const node = this.view.state.doc.nodeAt(pos)
+    // Re-read from the CURRENT document rather than trusting the node this
+    // view was constructed with: a drag is a real interval of time, and the
+    // document can have moved underneath it.
+    if (!node || node.type.name !== 'image') return
+    if (node.attrs.width === width) return
+
+    const tr = this.view.state.tr.setNodeMarkup(pos, undefined, { ...node.attrs, width })
+    // Forces prosemirror-history to open a new group, so a resize is its own
+    // undo step instead of being merged into whatever typing happened within
+    // newGroupDelay before it -- the same primitive and the same reason the
+    // slash menu uses it for its own delete+insert. closeHistory can only
+    // force a SPLIT, never a merge, so this pins the boundary before the
+    // resize; two consecutive drags are therefore two undo steps, which is the
+    // property that matters for a gesture the user repeats to converge on a
+    // size.
+    closeHistory(tr)
+    this.view.dispatch(tr)
   }
 
   // The `{width=...}` size the document asked for (nodes/image-size.ts), put
@@ -261,6 +385,7 @@ class SafeImageView implements NodeView {
     const alt = typeof node.attrs.alt === 'string' ? node.attrs.alt : ''
     const title = typeof node.attrs.title === 'string' ? node.attrs.title : ''
     const generation = ++this.generation
+    this.synced = { src, alt, title }
 
     this.applyWidth(node)
 
@@ -311,6 +436,21 @@ class SafeImageView implements NodeView {
 
   update(node: ProseMirrorNode): boolean {
     if (node.type.name !== 'image') return false
+    const src = typeof node.attrs.src === 'string' ? node.attrs.src : ''
+    const alt = typeof node.attrs.alt === 'string' ? node.attrs.alt : ''
+    const title = typeof node.attrs.title === 'string' ? node.attrs.title : ''
+
+    // A width-only change -- which is every single drag commit -- must NOT go
+    // through syncFrom. That path unconditionally removes `src` and starts a
+    // fresh resolve, which for a document-local image means the picture
+    // disappears and reappears on the release of every drag. Short-circuiting
+    // on the three attrs syncFrom actually reads is what makes the resize
+    // visually continuous; `width` is applied either way.
+    if (src === this.synced.src && alt === this.synced.alt && title === this.synced.title) {
+      this.applyWidth(node)
+      return true
+    }
+
     this.syncFrom(node)
     return true
   }
@@ -324,6 +464,11 @@ class SafeImageView implements NodeView {
 
   destroy(): void {
     this.destroyed = true
+    this.handle.removeEventListener('pointerdown', this.onHandlePointerDown)
+    // A drag can still be in flight: ProseMirror destroys node views eagerly,
+    // and the pointer listeners live on `window`, so without this they would
+    // outlive the element they were opened for.
+    this.endDrag?.()
   }
 }
 
@@ -332,7 +477,7 @@ export const safeImageViewProse = $prose(
     new Plugin({
       props: {
         nodeViews: {
-          image: (node, view) => new SafeImageView(node, view)
+          image: (node, view, getPos) => new SafeImageView(node, view, getPos)
         }
       }
     })
