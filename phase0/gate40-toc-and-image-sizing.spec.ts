@@ -148,7 +148,16 @@ async function getMainWindow(application: ElectronApplication): Promise<Page> {
 // disambiguates the split-preview view from the Phase 0 spike's own harness,
 // which is parked off-screen.
 async function probePreview(application: ElectronApplication): Promise<Probe | null> {
-  return application.evaluate(async ({ BrowserWindow, WebContentsView }) => {
+  return application.evaluate(async ({ BrowserWindow, WebContentsView }, scaleJs) => {
+    // PREVIEW_DOCUMENT_SCALE_JS is threaded in as evaluate()'s ARGUMENT, not
+    // referenced directly inside this callback. An app.evaluate() callback runs
+    // in a bare V8 context with no module resolution, so a transpiled import
+    // binding is not reachable from inside one -- referencing it directly
+    // fails at runtime with `ReferenceError: _gateGeometry is not defined`,
+    // which is exactly how this shipped and how all three of these gates
+    // failed. gate-geometry.ts's own module comment states this rule for
+    // LETTER_GEOMETRY; it applies identically here.
+
     const mainWindow = BrowserWindow.getAllWindows().find(
       (w) => !w.isDestroyed() && w.webContents.getURL().startsWith('file://')
     )
@@ -174,7 +183,7 @@ async function probePreview(application: ElectronApplication): Promise<Probe | n
         // things. Same treatment, and same reason, as the Format-mode note
         // further down this file. See gate-geometry.ts's
         // PREVIEW_DOCUMENT_SCALE_JS.
-        var scale = ${PREVIEW_DOCUMENT_SCALE_JS}
+        var scale = ${scaleJs}
         function widthOf(sel) {
           var el = document.querySelector(sel)
           return el ? el.getBoundingClientRect().width / scale : null
@@ -204,7 +213,7 @@ async function probePreview(application: ElectronApplication): Promise<Probe | n
       })()
     `)) as string
     return JSON.parse(raw) as Probe
-  })
+  }, PREVIEW_DOCUMENT_SCALE_JS)
 }
 
 /**
