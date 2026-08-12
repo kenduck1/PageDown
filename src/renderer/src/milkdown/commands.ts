@@ -404,7 +404,37 @@ export const addCommentCommand = $command(
       text: payload.text,
       createdAt: new Date().toISOString()
     })
-    const tr = state.tr.addMark(from, to, mark)
+    // Applied per non-hardbreak RUN rather than as one `addMark(from, to)`,
+    // and that is load-bearing for a hand-wrapped paragraph rather than a
+    // micro-optimisation. @milkdown/preset-commonmark's own
+    // hardbreakClearMarkPlugin (read from the installed lib/index.js) has an
+    // appendTransaction that, for any AddMarkStep, calls
+    // `setNodeMarkup(pos, hardbreakSchema.type(ctx), undefined, [])` on every
+    // hardbreak in that step's range. Passing `undefined` for attrs makes
+    // ProseMirror rebuild the node from schema DEFAULTS, so it does not only
+    // strip the marks it means to strip -- it also resets `isInline` from
+    // true to false, silently converting the author's SOFT wrap into a real
+    // hard break (`\` + newline on save, a visible <br> on the printed page).
+    // Marking only the runs BETWEEN hardbreaks means no emitted step's range
+    // ever contains one, so that scan finds nothing and the attr survives.
+    // Note this does not depend on that plugin only inspecting `steps[0]`:
+    // every step this builds excludes hardbreaks, so the guarantee holds
+    // even if it later inspected all of them.
+    //
+    // Leaving the hardbreak itself unmarked costs nothing, because the mark
+    // could never have stayed on it anyway (that is precisely what the
+    // preset plugin exists to prevent) and because the two marked runs are
+    // rejoined into ONE marker pair at the mdast layer -- see
+    // commentRunPosition in src/markdown/comment-plugin.ts.
+    const tr = state.tr
+    let runStart = from
+    state.doc.nodesBetween(from, to, (node, pos) => {
+      if (node.type.name !== 'hardbreak') return
+      const breakStart = Math.max(pos, from)
+      if (breakStart > runStart) tr.addMark(runStart, breakStart, mark)
+      runStart = Math.min(pos + node.nodeSize, to)
+    })
+    if (to > runStart) tr.addMark(runStart, to, mark)
     dispatch?.(tr)
     return true
   }

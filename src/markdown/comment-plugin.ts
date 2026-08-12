@@ -1,5 +1,5 @@
 import { visit } from 'unist-util-visit'
-import type { Root, Html, Parent, PhrasingContent } from 'mdast'
+import type { Root, Html, Parent, PhrasingContent, Text } from 'mdast'
 import type { Node } from 'unist'
 import type { Processor } from 'unified'
 import type { Handle } from 'mdast-util-to-markdown'
@@ -295,23 +295,188 @@ const BLOCK_LEVEL_CONTAINER_TYPES = new Set([
 // that the narrowness of this edge case -- commenting on text that ALSO
 // needs its own bold/italic emphasis, where the comment ALSO happens to
 // open its own paragraph -- doesn't currently justify.
-function unmergeContainer(container: Parent): void {
-  const isBlockContainer = BLOCK_LEVEL_CONTAINER_TYPES.has(container.type)
-  const children = container.children as Node[]
+//
+// SECOND HALF of the same HTML-block problem, and the reason a synthetic
+// paragraph alone is not enough: CommonMark's HTML block type 2 ends at the
+// first line CONTAINING `-->`, and a start marker carries its own `-->`, so
+// the block is exactly ONE LINE. For a single-line source paragraph that is
+// the whole paragraph and unmergeHtmlNode above finishes the job. For a
+// HAND-WRAPPED paragraph it is not: every remaining line of what the author
+// wrote as ONE paragraph is left behind as SEPARATE sibling block(s), and
+// wrapping only the first line in a paragraph of its own permanently SPLITS
+// the user's paragraph in two -- visible in the paginated preview, the
+// exported PDF and HTML export, and compounding on every save/reload cycle.
+//
+// This cannot be avoided by emitting different bytes, which was checked
+// before building the recovery rather than assumed. The marked span begins
+// at the paragraph's first character (the ordinary triple-click-then-comment
+// gesture), so the start marker necessarily begins the line; a line
+// beginning with `<!--` is an HTML block whatever follows it, and any line
+// break inside the marked span therefore always lands outside that block.
+// Ruled out for the same reason: emitting the break as two trailing spaces
+// rather than `\` (still a newline), and prefixing the marker with an
+// invisible character to defeat the start condition (silently injects a real
+// character into the user's document).
+//
+// The ANCHOR SET is what keeps this NARROW. Absorption can only ever begin
+// at a paragraph whose own content was genuinely un-collapsed by
+// unmergeHtmlNode -- which by construction means an html blob holding one of
+// OUR markers PLUS other content, i.e. a real collapsed line. An ordinary
+// `<!-- note -->` html block never unmerges (one significant part), so it
+// never becomes an anchor and a hand-authored html block followed by a
+// paragraph is untouched. A plain inline marker inside an ordinary
+// paragraph (`Before <!--comment-->x<!--/comment-->`) does not unmerge
+// either, and correctly never anchors: its start marker is not line-leading,
+// so nothing was fragmented in the first place.
+
+// Was the candidate on the line IMMEDIATELY after the accumulated run, i.e.
+// with no blank line between them? That is exactly the CommonMark condition
+// for "these lines were one paragraph": remark-stringify always separates
+// two genuine sibling blocks with a blank line, so contiguity is not a
+// heuristic for the bytes this app itself writes. Only `paragraph` is
+// absorbed -- a heading/list/fence on the next line genuinely interrupts a
+// paragraph in CommonMark too, so it was a separate block in the source.
+function continuesSplitParagraph(accumulated: Parent, candidate: Node): boolean {
+  if (candidate.type !== 'paragraph') return false
+  const accumulatedEnd = accumulated.position?.end
+  const candidateStart = candidate.position?.start
+  if (!accumulatedEnd || !candidateStart) return false
+  return candidateStart.line === accumulatedEnd.line + 1
+}
+
+// Re-inserts the line break CommonMark consumed when it cut the paragraph at
+// the block boundary, then splices the continuation's own children in.
+//
+// The continuation's children are REAL parsed inline content (it was parsed
+// as an ordinary paragraph), so unmergeHtmlNode's documented "the between
+// piece is always plain text" limitation applies only to the first line, not
+// to anything absorbed here.
+//
+// Which break to re-insert is read off the source, not guessed. A hard break
+// reaches the html blob as a literal trailing `\` (mdast-util-to-markdown's
+// own break handler emits `\` + newline -- read from its lib/handle/break.js
+// -- never two spaces), which would otherwise render as a stray visible
+// backslash. Trailing backslashes are counted for PARITY rather than tested
+// for presence, because `\\` at end of line is an ESCAPED literal backslash
+// followed by a soft break, not a hard break.
+function appendContinuationLine(accumulated: Parent, continuation: Parent): void {
+  const children = accumulated.children as Node[]
+  const last = children[children.length - 1]
+  let isHardBreak = false
+  if (last && last.type === 'text') {
+    const value = (last as Text).value
+    const trailingBackslashes = /\\+$/.exec(value)?.[0].length ?? 0
+    if (trailingBackslashes % 2 === 1) {
+      isHardBreak = true
+      const trimmed = value.slice(0, -1)
+      if (trimmed === '') children.pop()
+      else (last as Text).value = trimmed
+    }
+  }
+  // A soft wrap becomes a bare `\n` inside phrasing content -- the exact
+  // shape remark itself produces for one -- NOT a `break` node, which
+  // mdast-util-to-hast would render as a real <br> and turn the author's
+  // invisible hand-wrap into a visible line break on the printed page.
+  children.push(isHardBreak ? ({ type: 'break' } as Node) : ({ type: 'text', value: '\n' } as Node))
+  children.push(...(continuation.children as Node[]))
+  if (accumulated.position && continuation.position) {
+    accumulated.position = {
+      start: accumulated.position.start,
+      end: continuation.position.end
+    }
+  }
+}
+
+function absorbSplitParagraphs(children: Node[], anchors: Set<Node>): Node[] {
   const result: Node[] = []
+  let index = 0
+  while (index < children.length) {
+    const child = children[index]
+    if (!anchors.has(child)) {
+      result.push(child)
+      index++
+      continue
+    }
+    const accumulated = child as Parent
+    let next = index + 1
+    while (next < children.length && continuesSplitParagraph(accumulated, children[next])) {
+      appendContinuationLine(accumulated, children[next] as Parent)
+      next++
+    }
+    result.push(accumulated)
+    index = next
+  }
+  return result
+}
+
+// Splices every unmergeable html child apart in place. Returns whether
+// anything actually changed, which is the anchor discriminator described
+// above -- not merely a convenience return.
+function unmergeChildren(children: Node[]): { children: Node[]; changed: boolean } {
+  const result: Node[] = []
+  let changed = false
   for (const child of children) {
     const unmerged = child.type === 'html' ? unmergeHtmlNode(child as Html) : null
     if (!unmerged) {
       result.push(child)
       continue
     }
-    if (isBlockContainer) {
-      result.push({ type: 'paragraph', children: unmerged, position: child.position } as Node)
-    } else {
-      result.push(...unmerged)
-    }
+    changed = true
+    result.push(...unmerged)
   }
-  container.children = result as typeof container.children
+  return { children: result, changed }
+}
+
+function unmergeContainer(container: Parent): void {
+  if (!BLOCK_LEVEL_CONTAINER_TYPES.has(container.type)) {
+    // A PHRASING container's unmerged pieces splice in directly -- already
+    // valid at that level, no wrapping needed.
+    const { children } = unmergeChildren(container.children as Node[])
+    container.children = children as typeof container.children
+    return
+  }
+
+  const result: Node[] = []
+  const anchors = new Set<Node>()
+  for (const child of container.children as Node[]) {
+    if (child.type === 'html') {
+      const unmerged = unmergeHtmlNode(child as Html)
+      if (!unmerged) {
+        result.push(child)
+        continue
+      }
+      const paragraph = { type: 'paragraph', children: unmerged, position: child.position } as Node
+      anchors.add(paragraph)
+      result.push(paragraph)
+      continue
+    }
+    if (child.type === 'paragraph') {
+      // The SAME collapsed line, reached by the other of this plugin's two
+      // consumers. Inside Milkdown's own remark chain,
+      // @milkdown/preset-commonmark's remarkHtmlTransformer has ALREADY
+      // rewritten every block-level html node into a `paragraph` wrapping it
+      // (read from the installed lib/index.js) before this plugin runs, so
+      // the `child.type === 'html'` branch above never fires there and the
+      // collapsed blob arrives one level deeper. Handling it here rather
+      // than relying on the later per-paragraph visit is what makes
+      // absorption possible at all: `visit` is PREORDER, so this block
+      // container is processed before its own children, and an anchor
+      // discovered later could no longer reach its sibling continuation
+      // lines. The later visit re-runs unmergeChildren on these same
+      // children and is a no-op by construction -- an already-split single
+      // marker has one significant part, which unmergeHtmlNode declines.
+      const paragraph = child as Parent
+      const { children, changed } = unmergeChildren(paragraph.children as Node[])
+      if (changed) {
+        paragraph.children = children as typeof paragraph.children
+        anchors.add(child)
+      }
+      result.push(child)
+      continue
+    }
+    result.push(child)
+  }
+  container.children = absorbSplitParagraphs(result, anchors) as typeof container.children
 }
 
 function matchStart(node: Node): { id: string; meta: CommentMeta } | null {
@@ -407,6 +572,66 @@ export function remarkComment() {
   }
 }
 
+// A line break is the ONLY thing that may sit between two fragments of one
+// logical comment. Both spellings have to be recognised: a hard break is a
+// `break` node, while a SOFT wrap round-trips through Milkdown's own
+// hardbreak schema as a `text` node whose entire value is a newline
+// (@milkdown/preset-commonmark's hardbreakSchema.toMarkdown emits
+// `state.addNode('text', undefined, '\n')` when its `isInline` attr is set --
+// read from the installed package, not assumed).
+function isLineBreakSeparator(node: Node): boolean {
+  if (node.type === 'break') return true
+  if (node.type !== 'text') return false
+  return /^[ \t]*\n[ \t]*$/.test((node as Text).value)
+}
+
+function hasRunNeighbour(siblings: Node[], index: number, step: 1 | -1, id: string): boolean {
+  for (let i = index + step; i >= 0 && i < siblings.length; i += step) {
+    const sibling = siblings[i]
+    if (isLineBreakSeparator(sibling)) continue
+    return sibling.type === 'comment' && (sibling as unknown as Comment).id === id
+  }
+  return false
+}
+
+// WHERE THE SPLIT COMES FROM, and why the fix belongs here rather than at
+// the ProseMirror layer: @milkdown/preset-commonmark's own
+// hardbreakClearMarkPlugin has an appendTransaction that strips EVERY mark
+// off EVERY hardbreak inside any AddMarkStep's range (read from the
+// installed lib/index.js). So immediately after addCommentCommand's
+// `tr.addMark(from, to, mark)`, the hardbreak between two commented lines
+// carries no comment mark -- by that preset's deliberate design, not by
+// accident. Milkdown's SerializerState then closes an open mark as soon as
+// the NEXT inline node does not carry it (`#closeEndedMarks`), so the mark
+// is closed before the break and reopened after it: TWO mdast `comment`
+// nodes sharing one id, which this handler used to serialize faithfully as
+// two marker pairs.
+//
+// Rejoining them here, at the mdast layer, is the layer that can actually
+// see the run: the ProseMirror document genuinely has two marked runs and
+// fighting the preset to make the mark span a hardbreak would mean
+// overriding a schema plugin this app deliberately mounts wholesale. It is
+// also the layer both consumers share, so Milkdown's serializer and any
+// future mdast producer get the same guarantee.
+//
+// Deliberately NOT done by refusing the gesture: a hardbreak lives inside
+// one block, so addCommentCommand's `$from.sameParent($to)` guard is
+// correctly satisfied and the design's single-block scope boundary is not
+// what is at stake here.
+function commentRunPosition(
+  node: Comment,
+  parent: Parent | undefined
+): { isFirst: boolean; isLast: boolean } {
+  if (!parent) return { isFirst: true, isLast: true }
+  const siblings = parent.children as Node[]
+  const index = siblings.indexOf(node as unknown as Node)
+  if (index === -1) return { isFirst: true, isLast: true }
+  return {
+    isFirst: !hasRunNeighbour(siblings, index, -1, node.id),
+    isLast: !hasRunNeighbour(siblings, index, 1, node.id)
+  }
+}
+
 // Teaches mdast-util-to-markdown how to print a `comment` node -- needed
 // only by Milkdown's internal remark pipeline, which serializes ProseMirror
 // content back to Markdown text (markdownToHtml never serializes back to
@@ -429,22 +654,34 @@ export function remarkCommentToMarkdown(this: Processor): void {
   // markers can be misparsed depending on adjacent characters; a literal
   // HTML comment has no such ambiguity), so this is simpler than strong.js's
   // own handler despite following the same shape.
-  const commentHandler: Handle = (node, _parent, state, info) => {
+  const commentHandler: Handle = (node, parent, state, info) => {
     const typedNode = node as unknown as Comment
+    // One marker pair per LOGICAL comment, not per marked run: a fragment
+    // that merely continues an earlier same-id fragment emits its content
+    // and no markers at all, so the pair ends up spanning the line break
+    // between them (which the `break`/`text` separator serializes itself,
+    // in between, exactly as it would outside a comment). See
+    // commentRunPosition above for where the fragmentation comes from.
+    const { isFirst, isLast } = commentRunPosition(typedNode, parent as Parent | undefined)
     const exit = state.enter('comment')
     const tracker = state.createTracker(info)
-    const dataAttr = encodeCommentMeta({
-      author: typedNode.author,
-      text: typedNode.text,
-      createdAt: typedNode.createdAt
-    })
-    const startText = `<!--comment id="${typedNode.id}" data="${dataAttr}"-->`
-    const endText = `<!--/comment id="${typedNode.id}"-->`
-    let value = tracker.move(startText)
+    const startText = isFirst
+      ? `<!--comment id="${typedNode.id}" data="${encodeCommentMeta({
+          author: typedNode.author,
+          text: typedNode.text,
+          createdAt: typedNode.createdAt
+        })}"-->`
+      : ''
+    const endText = isLast ? `<!--/comment id="${typedNode.id}"-->` : ''
+    let value = startText ? tracker.move(startText) : ''
     value += tracker.move(
-      state.containerPhrasing(typedNode, { before: value, after: endText, ...tracker.current() })
+      state.containerPhrasing(typedNode, {
+        before: value || info.before,
+        after: endText || info.after,
+        ...tracker.current()
+      })
     )
-    value += tracker.move(endText)
+    if (endText) value += tracker.move(endText)
     exit()
     return value
   }
