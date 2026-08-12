@@ -10,10 +10,15 @@ import type { SlashItem, SlashItemGroup } from '../milkdown/slash-items'
 // comment before touching this one, since every hard-won lesson it records
 // (why measure via a callback ref rather than useLayoutEffect, why hide
 // pre-measurement with `opacity: 0` rather than `visibility: hidden`, why
-// render at EditorScreen root outside the `transform: scale(zoom)` wrapper,
-// why NEVER divide a coordinate by zoom -- coordsAtPos already returns
-// post-transform viewport coordinates) applies here VERBATIM and is not
-// re-derived below.
+// render at EditorScreen root outside the scaled wrapper, why NEVER divide a
+// coordinate by zoom -- coordsAtPos already returns post-scale viewport
+// coordinates) applies here VERBATIM and is not re-derived below.
+//
+// That wrapper is CSS `zoom`, not `transform: scale(zoom)` as this comment
+// used to say -- the single-pane zoom fix and Split's fit-to-width both moved
+// to `zoom` because it participates in layout. Both lessons survive the change
+// unaltered, but for measured reasons rather than the transform-specific ones
+// originally given; SelectionBubble.tsx's header carries the measurements.
 //
 // Positioning reuses lib/floating-position.ts's computeFloatingPosition,
 // same as SelectionBubble -- the SAME occlusion guarantee (Split mode's live

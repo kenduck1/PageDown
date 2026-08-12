@@ -30,14 +30,36 @@ import type { TableAlignment } from '../milkdown/table-context'
 // native queue that carries real renders).
 //
 // Rendered by EditorScreen at ITS ROOT, as a sibling of PageSetupModal /
-// ShortcutsHelpModal / Toast -- never inside the zoom wrapper. Per CSS
-// Transforms Level 1 §3 any `transform` other than `none` establishes a
-// containing block for FIXED-position descendants, so a `position: fixed`
-// bubble nested inside `transform: scale(0.6)` would be positioned relative to
-// that wrapper AND rendered at 60% size, giving 60%-size hit targets. There is
-// no createPortal anywhere in src/renderer/src; "render fixed overlays at
+// ShortcutsHelpModal / Toast -- never inside the zoom wrapper. There is no
+// createPortal anywhere in src/renderer/src; "render fixed overlays at
 // EditorScreen root" is this app's established pattern and Toast already
 // proves it works.
+//
+// THIS CONSTRAINT SURVIVED THE MECHANISM CHANGE, BUT ITS REASON DID NOT.
+// This comment used to cite CSS Transforms Level 1 §3: a `transform` other
+// than `none` establishes a containing block for FIXED-position descendants,
+// so a nested bubble would be positioned relative to the scaled wrapper. That
+// wrapper is now CSS `zoom`, and `zoom` establishes no such containing block --
+// so the stated reason stopped applying while the conclusion stayed correct,
+// which is the more dangerous shape of stale comment (it invites deleting the
+// rule along with its dead justification).
+//
+// MEASURED in the real shipped Chromium rather than re-reasoned. A
+// `position: fixed` box at left:400px top:300px, 100x20, font-size 20px:
+//
+//   no wrapper                x 400  y 300  100 x 20
+//   inside zoom: 0.6          x 240  y 180   60 x 12
+//   inside transform: 0.6     x 440  y 988   60 x 12
+//
+// So under `zoom` the containing block really is the viewport (240 is measured
+// from the viewport origin, not from the wrapper) -- but the OFFSETS are
+// multiplied by the zoom too, so 400px lands at 240px, and the box is still
+// rendered at 60% size. Nesting this bubble in the wrapper would therefore
+// still give both a wrong anchor and 60%-size hit targets, by a different
+// mechanism than before. Note also that `getComputedStyle().fontSize` reports
+// 20px under both wrappers: zoom moves the USED value, not the computed one,
+// so a probe reading computed style would report no problem at all -- the same
+// computed-vs-used trap Gate 19 hit reading `content: counter(page)`.
 //
 // ACCESSIBILITY, stated honestly rather than cleverly: this is a POINTER-FIRST
 // CONVENIENCE, not the only path to any action it offers. It is never focused

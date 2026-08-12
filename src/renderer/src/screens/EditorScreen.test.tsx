@@ -1755,6 +1755,27 @@ describe('EditorScreen', () => {
       }
       expect(el).not.toBeNull()
     })
+
+    it('reports 100% in Split(source), not the user zoom that is not being applied', async () => {
+      // The readout used to key on "does fit-to-width apply", falling back to
+      // the user's own `zoom` when it did not -- so Split(SOURCE), which the
+      // test above proves is not scaled by anything at all, kept reporting
+      // whatever level the user had last picked in Format. Someone who set
+      // 150% and switched to Split(source) read 150% over a pane rendering at
+      // 100%: the same "the readout names a scale the pane is not rendering
+      // at" defect this control has now been fixed for twice, in both
+      // directions.
+      installControllableResizeObserver(389)
+      useDocumentStore.setState({ filePath: '/tmp/report.md', content: '# Report' })
+      useAppStore.setState({ viewMode: 'split', splitLeftMode: 'source', zoom: 1.5 })
+      render(<EditorScreen />)
+
+      act(() => triggerResize?.())
+      await waitFor(() => {
+        expect(screen.getByLabelText('Zoom level')).toHaveValue('1')
+      })
+      expect(screen.getByLabelText('Zoom level')).toBeDisabled()
+    })
   })
 
   describe('page-card blank-space click behavior (focusEnd)', () => {

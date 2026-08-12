@@ -107,7 +107,20 @@ const CATEGORIES: ShortcutCategory[] = [
       // kind of stale-but-confident claim this file's own header warns
       // against shipping.
       { keys: `${MOD}W`, description: 'Close tab' },
-      { keys: `${MOD}${SHIFT}W`, description: 'Close window' }
+      { keys: `${MOD}${SHIFT}W`, description: 'Close window' },
+      // The tab bar's own keyboard reordering (EditorTabBar.tsx's per-tab
+      // onKeyDown). It was missing here, which matters more than a missing
+      // entry usually would: this modal claims to be a COMPLETE reference,
+      // and reordering by keyboard exists precisely so the feature is not
+      // drag-only -- i.e. its whole audience is people who will never
+      // discover it by trying the mouse. It is scoped to a focused tab
+      // rather than global (that is why it can safely reuse a chord that
+      // means extend-selection inside a text field), so the description
+      // has to say where it applies.
+      {
+        keys: `${MOD}${SHIFT}← / →`,
+        description: 'Move the focused tab left or right (with a tab focused)'
+      }
     ]
   },
   {

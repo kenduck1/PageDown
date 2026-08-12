@@ -26,6 +26,19 @@ describe('ShortcutsHelpModal', () => {
     expect(screen.getByText('Bold')).toBeInTheDocument()
   })
 
+  it('lists the tab-reorder chord, which is otherwise unreachable without a pointer', () => {
+    // Deliberately NOT a general "the list is complete" assertion (there is
+    // no way to write one, and the spot-check above says why). This entry gets
+    // its own test because of what it is: EditorTabBar's keyboard reordering
+    // exists precisely so the feature is not drag-only, so its whole audience
+    // is people who will never discover it by trying the mouse -- and it was
+    // missing from the app's only in-product reference.
+    render(<ShortcutsHelpModal open={true} onClose={vi.fn()} />)
+    expect(
+      screen.getByText('Move the focused tab left or right (with a tab focused)')
+    ).toBeInTheDocument()
+  })
+
   it('clicking the close button calls onClose', async () => {
     const onClose = vi.fn()
     const user = userEvent.setup()

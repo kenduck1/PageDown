@@ -89,7 +89,9 @@ import { launchIsolatedApp } from './electron-launch'
 //
 // MEASURED VALUES, recorded for the same reason gate28's own header does:
 //
-//   Format mode, default 900x670 window --
+//   Format mode, at the THEN-default 900x670 window (now 1000x840 -- see
+//   window-bounds.ts; these numbers were taken before that change and are
+//   left as recorded rather than relabelled) --
 //     palette after "/list" query: {x:224, y:310.7, w:260, h:180.5}, 3
 //     options (Bullet list, Numbered list, Task list -- matching
 //     slash-filter.ts's own substring-bucket order, none of the three is a

@@ -112,6 +112,13 @@ export interface EditorStatusBarProps {
    * instead would restate the very defect this control was already fixed for
    * once (see `zoomEnabled` below).
    *
+   * "In Split mode" covers Split(SOURCE) too, where the answer is a plain 1.
+   * That sub-mode has no fixed page width to fit, so there is no fit scale --
+   * but there is no applied zoom either (Split's two-pane row renders outside
+   * the zoom wrapper), and 1 is what the pane is genuinely rendering at. This
+   * used to fall back to the user's `zoom` there, so someone who had picked
+   * 150% in Format kept reading 150% over a pane at 100%.
+   *
    * EditorScreen applies it: CSS `zoom` on an inner wrapper inside the
    * scrolling pane, in both the single-pane and Split branches. This component
    * never applies it itself.
