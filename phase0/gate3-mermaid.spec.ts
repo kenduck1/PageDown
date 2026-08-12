@@ -207,6 +207,38 @@ test('Gate 3: oversized-diagram page-break behavior is deterministic, and CSP st
         })()
       `)
 
+        const fitProbe = await harness.view.webContents.executeJavaScript(`
+        (() => {
+          const wrappers = Array.from(document.querySelectorAll('[data-mermaid-diagram-id="pagedown-mermaid-2"]'))
+          const area = document.querySelector('.pagedjs_area')
+          return {
+            areaHeight: area ? area.getBoundingClientRect().height : null,
+            wrappers: wrappers.map((w) => {
+              const svg = w.querySelector('svg')
+              const wr = w.getBoundingClientRect()
+              const page = w.closest('.pagedjs_page')
+              const pa = page ? page.querySelector('.pagedjs_area') : null
+              const par = pa ? pa.getBoundingClientRect() : null
+              const cs = getComputedStyle(w)
+              return {
+                fittedScaleAttr: w.getAttribute('data-mermaid-fitted-scale'),
+                dataBreakInside: w.getAttribute('data-break-inside'),
+                computedBreakInside: cs.breakInside,
+                wrapperH: wr.height,
+                topWithinArea: par ? wr.top - par.top : null,
+                svgHeightAttr: svg ? svg.getAttribute('height') : null,
+                svgBoxH: svg ? svg.getBoundingClientRect().height : null,
+                note: (w.querySelector('.pagedown-mermaid-scaled-note') || {}).textContent || null,
+                rects: w.querySelectorAll('rect').length,
+                texts: w.querySelectorAll('text').length,
+                pageIndex: page ? Array.from(document.querySelectorAll('.pagedjs_page')).indexOf(page) : null,
+                pageText: pa ? (pa.textContent || '').replace(/\\s+/g, ' ').trim().slice(0, 120) : null
+              }
+            })
+          }
+        })()
+      `)
+
         // Direct proof the CSP-nonce reattachment fix actually took effect —
         // not just "no violation was logged" (checked below via console
         // messages) but that every Mermaid-generated <style> element inside a
@@ -288,6 +320,7 @@ test('Gate 3: oversized-diagram page-break behavior is deterministic, and CSP st
           consoleMessages,
           oversizedWrapperCount,
           pageMetrics,
+          fitProbe,
           nonceCheck,
           pwned,
           injectionViolationCount
@@ -297,43 +330,65 @@ test('Gate 3: oversized-diagram page-break behavior is deterministic, and CSP st
     )
 
     console.log('Gate 3 page metrics:', JSON.stringify(result.pageMetrics))
+    console.log('Gate 3 FIT PROBE:', JSON.stringify(result.fitProbe, null, 2))
     console.log('Gate 3 mermaid style nonce check:', JSON.stringify(result.nonceCheck))
 
-    // Measured (across repeated runs — see this task's report) at exactly 3
-    // page-clone instances for this fixture's oversized diagram at the time
-    // this gate was written, every time — i.e. the split itself IS
-    // deterministic, even though it is a split (break-inside: avoid-page does
-    // not prevent it). Pinned to the actual observed value, not a loose
-    // `> 1`, so a change in this number (e.g. from a future page-size/margin
-    // change) is visible here rather than silently drifting.
+    // OVERSIZED-DIAGRAM POLICY. This block used to pin the SPLIT: 3
+    // page-clone instances, then 4 after Task 10's KeepWithNextHandler moved
+    // the boundaries. Both numbers were real, and pinning them was right at
+    // the time — but what they pinned was a BUG, and the design doc says so
+    // in terms: "the split diagram loses its own rendered content ... an
+    // oversized Mermaid diagram is currently unusable if it's allowed to
+    // split", filed as "a required V1 fix, not a documented-and-deferred edge
+    // case".
     //
-    // Updated to 4 by Task 10 (Gate 6) — a real, expected, and correctly
-    // understood shift, not a silent drift papered over: Task 10's
-    // `KeepWithNextHandler` (src/pagination/break-handlers.ts) fixes this
-    // exact fixture's "# Oversized Diagram" H1 being stranded alone at the
-    // bottom of a page (measured directly, both before and after: without
-    // the handler, the heading sat at the end of one page while the diagram
-    // itself started fresh on the next; with it, the heading now correctly
-    // starts the SAME page as the diagram's first page-clone). Pulling the
-    // heading down by one page's worth of a few lines shifts where the
-    // diagram's own overflow-based page-splitting boundaries land for the
-    // rest of its (independently oversized, break-inside-avoid-page-not-
-    // withstanding) content — one more page-clone instance is needed to fit
-    // the same diagram content once the heading occupies space at the top of
-    // its starting page. This is the expected, correct cost of not stranding
-    // the heading, not a regression in this gate's own diagram-splitting
-    // finding above, which is otherwise unchanged (still a real split, still
-    // not honoring break-inside: avoid-page for oversized content).
-    expect(result.oversizedWrapperCount).toBe(4)
+    // Measured directly here before changing anything, by counting what
+    // actually survived in each of the 4 clones:
+    //
+    //     clone 0: 0 <rect>, 0 <text>, 0 <path>
+    //     clone 1: 0 <rect>, 0 <text>, 13 <path>
+    //     clone 2: 0 <rect>, 0 <text>, 0 <path>
+    //     clone 3: 0 <rect>, 0 <text>, 9 <path>
+    //
+    // Every node box and every label of a 20-node flowchart was gone: four
+    // pages of near-blank paper carrying 22 stray edges. `break-inside:
+    // avoid-page` cannot save it, because Paged.js only honours that for
+    // content that COULD fit a page and falls back to ordinary
+    // overflow-splitting otherwise.
+    //
+    // resources/pagination-render/index.ts's fitSvgToPageBox now scales a
+    // too-tall diagram to the page content box (design:97's own prescribed
+    // mechanism), so the split path never runs. ONE wrapper, not four, and it
+    // holds the whole diagram — asserted structurally below rather than taken
+    // on trust, since a correctly-sized box that is visually empty is exactly
+    // the failure this gate previously could not see.
+    expect(result.oversizedWrapperCount).toBe(1)
+
+    const fitted = result.fitProbe.wrappers[0]
+    console.log('Gate 3 fitted oversized diagram:', JSON.stringify(fitted))
+
+    // The content is really there. 60 <rect> and 20 <text> for a 20-stage
+    // chain; the old split produced 0 and 0. This is the assertion the whole
+    // policy exists for, and it is deliberately a structural census rather
+    // than a bounding box.
+    expect(fitted.rects).toBeGreaterThan(0)
+    expect(fitted.texts).toBeGreaterThan(0)
+
+    // ...and it genuinely fits its page, rather than being clipped by the
+    // page container's overflow while reporting a healthy box.
+    expect(fitted.wrapperH).toBeLessThanOrEqual(result.fitProbe.areaHeight)
+
+    // design:97's legibility floor fired for this fixture (0.39 < 0.5), so
+    // the affordance must be present and must name the real scale rather
+    // than silently rendering a diagram nobody can read.
+    expect(fitted.fittedScaleAttr).toBeTruthy()
+    expect(Number(fitted.fittedScaleAttr)).toBeLessThan(0.5)
+    expect(fitted.note).toContain('scaled to')
+    expect(fitted.note).toContain('%')
 
     const oversizedBoxes = result.sendResult.diagramBoxes.filter(
       (b: DiagramBox) => b.id === 'pagedown-mermaid-2'
     )
-    // Every clone instance reports the SAME real, un-clipped height (see the
-    // comment above oversizedWrapperCount) — confirmed here rather than
-    // assumed, and compared against a real measured page height so the
-    // "genuinely taller than one page" claim is grounded in an actual number
-    // from this run, not the corpus fixture's own stated intent.
     const oversizedHeights = [...new Set(oversizedBoxes.map((b: DiagramBox) => b.height))]
     console.log(
       'Gate 3 oversized diagram vs. one page height:',
@@ -342,8 +397,12 @@ test('Gate 3: oversized-diagram page-break behavior is deterministic, and CSP st
         pageHeight: result.pageMetrics.pageHeight
       })
     )
-    expect(oversizedHeights.length).toBe(1) // all clones agree on the diagram's own real size
-    expect(oversizedHeights[0]).toBeGreaterThan(result.pageMetrics.pageHeight) // genuinely taller than one page, not an artifact
+    expect(oversizedHeights.length).toBe(1)
+    // Inverted on purpose, and this is the single clearest statement of what
+    // changed: this diagram used to measure TALLER than a whole page (1956px
+    // against an 864px content box) and be sliced apart for it. It is now
+    // shorter than the content box it had to fit into.
+    expect(oversizedHeights[0]).toBeLessThan(result.fitProbe.areaHeight)
 
     // CSP-positive case, part 1 (the <style> BLOCK): Mermaid's own internal
     // <style> block (created via document.createElement inside mermaid.render,
@@ -352,25 +411,17 @@ test('Gate 3: oversized-diagram page-break behavior is deterministic, and CSP st
     // see resources/pagination-render/index.ts) must carry a real, matching
     // nonce.
     expect(result.nonceCheck.nonce).toBeTruthy()
-    // Not literally "one <style> per diagram, per mermaid.render()" despite
-    // the comment this replaced — only ONE of the oversized diagram's 3 (now
-    // 4, see the oversizedWrapperCount comment above) page-clone instances
-    // happens to retain its own <style> block across Paged.js's
-    // overflow-splitting (Range.extractContents()); the other clones lose it
-    // the same way Task 9/Gate 4 found they lose <rect>/<text> content on
-    // split. Measured at 3 (small=1 + sequence=1 + oversized=1-of-3) before
-    // Task 10's KeepWithNextHandler shifted the oversized diagram's own split
-    // boundaries (see oversizedWrapperCount above): with the heading now
-    // pulled onto the diagram's starting page, a SECOND of the oversized
-    // diagram's 4 clones also happens to retain its <style> block post-split
-    // (small=1 + sequence=1 + oversized=2-of-4 = 4) — visible directly in
-    // `hoistedRuleCounts` below, which now has two `46`s instead of one.
-    // This is the same content-loss-on-split behavior Gate 4 already
-    // documents, landing on a different clone once the split boundary moved;
-    // not a new bug, and not something this gate's own CSP/nonce assertions
-    // depend on being any particular count beyond "every retained <style>
-    // carries a real, matching nonce" (checked below, unconditionally).
-    expect(result.nonceCheck.styleCount).toBe(4)
+    // Now literally one <style> per diagram — small + sequence + oversized —
+    // and that is a direct consequence of the oversized-diagram fit above.
+    // This used to be 4, with a long comment explaining that the number was
+    // an accident of WHERE the split landed: only some of the oversized
+    // diagram's page-clones happened to retain their own <style> block across
+    // Paged.js's `Range.extractContents()`, the same mechanism that was
+    // losing the <rect>/<text> content. It was 3 before Task 10 moved the
+    // split boundary and 4 after. With the diagram no longer split at all,
+    // the count is 3 BY CONSTRUCTION rather than by coincidence — a strictly
+    // better assertion than either previous value.
+    expect(result.nonceCheck.styleCount).toBe(3)
     for (const styleNonce of result.nonceCheck.styleNonces) {
       expect(styleNonce).toBe(result.nonceCheck.nonce)
     }

@@ -716,34 +716,40 @@ test('Gate 4: exported PDF page count and per-page text match the on-screen Page
 
     console.log('Gate 4 per-file parity results:', JSON.stringify(perFileResults, null, 2))
 
-    // Dedicated, named assertion for the real content-loss bug this task
-    // found (not just left implicit inside the aggregate "exact match" pass
-    // above): the oversized diagram in mermaid-diagrams.md (Task 8/Gate 3's
-    // own fixture, confirmed there to split into exactly 3 page-clone
-    // instances) has its "Stage 1".."Stage 20" node labels COMPLETELY absent
-    // from BOTH the on-screen render and the exported PDF — confirmed
-    // directly (not inferred from the text check above alone) by re-reading
-    // the full per-page text for this file from the SAME evaluate() call
-    // already run above, and separately by direct DOM inspection during this
-    // task's own investigation: every page-clone instance of
-    // `[data-mermaid-diagram-id="pagedown-mermaid-2"]`'s `<svg>` reports
-    // `querySelectorAll('rect').length === 0` and `querySelectorAll('text')
-    // .length === 0` (only some `<path>` edge-line elements survive,
-    // inconsistently, across the 3 clones) — a real, reproducible, BOTH-
-    // on-screen-AND-export content-loss bug, not an export-specific
-    // divergence (see this task's report for the fuller investigation,
-    // including a source-grounded hypothesis: Paged.js's overflow-splitting
-    // mechanism (layout.js's `removeOverflow` calls `Range.extractContents()`
-    // — a native DOM API designed for splitting ordinary text-flow HTML, not
-    // an SVG's internal, def/marker/id-referencing shape tree) is applied to
-    // this SVG the same way it would be to a long paragraph, since Paged.js's
-    // generic splitting logic has no special case for "this is a single
-    // indivisible vector diagram" once `break-inside: avoid-page` has already
-    // failed to prevent a split (see Gate 3's own finding that it does fail
-    // to for content taller than one page)). This means Gate 3's own
-    // bounding-box-only check (`getBoundingClientRect().width/height > 0`)
-    // could not, and did not, catch this — a real gap in that gate's own
-    // verification, found here.
+    // Dedicated, named assertion for the real content-loss bug this gate
+    // found — now inverted, because the bug is FIXED. Both halves below used
+    // to assert the ABSENCE of the oversized diagram's content, and both
+    // carried their own instruction to update them if that ever changed
+    // ("if this now includes \"Stage\", either the bug was fixed (update this
+    // assertion) or something else changed"). This is that update.
+    //
+    // What was pinned, and it was real: the oversized diagram in
+    // mermaid-diagrams.md had its "Stage 1".."Stage 20" node labels COMPLETELY
+    // absent from BOTH the on-screen render and the exported PDF. Every
+    // page-clone instance reported `querySelectorAll('rect').length === 0` and
+    // `querySelectorAll('text').length === 0`, with only some <path> edge
+    // lines surviving inconsistently across the clones. The source-grounded
+    // cause recorded here still stands: Paged.js's overflow-splitting calls
+    // `Range.extractContents()` — a DOM API for splitting ordinary text flow
+    // — on an SVG's internal, def/marker/id-referencing shape tree, because
+    // its generic splitting logic has no special case for a single
+    // indivisible vector diagram once `break-inside: avoid-page` has failed
+    // to prevent a split (and Gate 3 measured that it does fail, for content
+    // taller than one page).
+    //
+    // The fix does not repair that splitting path; it removes the need for it.
+    // resources/pagination-render/index.ts's fitSvgToPageBox scales a
+    // too-tall diagram into the page content box, so it is never split in the
+    // first place — which is also the design doc's own pragmatic V1 answer
+    // ("treat 'diagram taller than one page' as a hard product constraint ...
+    // rather than let Paged.js's split path run at all") to what it filed as
+    // "a required V1 fix, not a documented-and-deferred edge case".
+    //
+    // The two halves are kept as two halves deliberately: the DOM check alone
+    // would not prove the labels survive EXPORT (this whole gate exists
+    // because on-screen and PDF can diverge), and the PDF check alone would
+    // not prove they are real vector <text> rather than something else that
+    // happens to extract as "Stage".
     const mermaidResult = perFileResults.find((r) => r.file === 'mermaid-diagrams.md')
     expect(
       mermaidResult,
@@ -762,40 +768,35 @@ test('Gate 4: exported PDF page count and per-page text match the on-screen Page
       return all
     })()
     console.log(
-      'Gate 4 mermaid-diagrams.md oversized-diagram content-loss check — "Stage" appears in exported PDF text:',
+      'Gate 4 mermaid-diagrams.md oversized-diagram content check — "Stage" appears in exported PDF text:',
       mermaidFullText.includes('Stage')
     )
     expect(
       mermaidFullText.includes('Stage'),
-      'the oversized diagram\'s "Stage N" node labels are expected to be ENTIRELY absent from the exported PDF (a real, both-sides content-loss bug found by this task — see the comment above) — if this now includes "Stage", either the bug was fixed (update this assertion) or something else changed'
-    ).toBe(false)
+      'the oversized diagram\'s "Stage N" node labels must now survive into the exported PDF — this asserted their ABSENCE until the oversized-diagram fit policy removed the split that was destroying them'
+    ).toBe(true)
 
-    // The DOM-side half of the same finding, made durable rather than left as
-    // a one-time manual observation: every page-clone instance of the
-    // oversized diagram's `<svg>` is asserted here to have ZERO `<rect>` and
-    // ZERO `<text>` elements (only `<path>` edge lines survive, inconsistently
-    // — logged, not asserted on an exact count, since the exact per-clone
-    // split of which paths survive was observed to vary run-to-run in a way
-    // the rect/text absence did not). Captured during the loop above, at the
-    // one point `mermaid-diagrams.md`'s own DOM is still live (see
-    // `mermaidDiagramDomEvidence`'s own comment).
+    // The DOM-side half of the same finding. This asserted ZERO <rect> and
+    // ZERO <text> per page-clone; it now asserts real content, and asserts it
+    // on the fitted single instance rather than across clones — there are no
+    // clones any more, which is the point.
     console.log(
-      'Gate 4 mermaid-diagrams.md oversized-diagram DOM evidence (rect/text/path counts per page-clone instance):',
+      'Gate 4 mermaid-diagrams.md oversized-diagram DOM evidence (rect/text/path counts per instance):',
       JSON.stringify(mermaidDiagramDomEvidence)
     )
     expect(
       mermaidDiagramDomEvidence.length,
-      'expected at least one page-clone instance of the oversized diagram — an empty array would make the assertions below vacuous'
+      'expected at least one instance of the oversized diagram — an empty array would make the assertions below vacuous'
     ).toBeGreaterThan(0)
     for (const instance of mermaidDiagramDomEvidence) {
       expect(
         instance.rects,
-        `mermaid-diagrams.md oversized-diagram page-clone instance ${instance.instance}: expected ZERO <rect> elements (the real, both-sides content-loss bug this task found) — if this is now > 0, the bug may have been fixed`
-      ).toBe(0)
+        `mermaid-diagrams.md oversized-diagram instance ${instance.instance}: expected real <rect> node boxes — this asserted ZERO until the fit policy stopped Paged.js splitting the diagram apart`
+      ).toBeGreaterThan(0)
       expect(
         instance.texts,
-        `mermaid-diagrams.md oversized-diagram page-clone instance ${instance.instance}: expected ZERO <text> elements (the real, both-sides content-loss bug this task found) — if this is now > 0, the bug may have been fixed`
-      ).toBe(0)
+        `mermaid-diagrams.md oversized-diagram instance ${instance.instance}: expected real <text> node labels — this asserted ZERO until the fit policy stopped Paged.js splitting the diagram apart`
+      ).toBeGreaterThan(0)
     }
 
     // Read back from the artifact this run just wrote, exactly like
