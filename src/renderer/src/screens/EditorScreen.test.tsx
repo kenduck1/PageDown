@@ -332,6 +332,67 @@ describe('EditorScreen', () => {
     expect(useAppStore.getState().screen).toBe('editor')
   })
 
+  // The three tests below all cover the SAME defect in three call sites, and
+  // it is worth stating once: "Reload" at an mtime conflict writes NOTHING
+  // (file-io.ts's saveFile returns reloadedContent instead of completing the
+  // save) and leaves the tab CLEAN. Every one of these call sites used to
+  // decide "did the save work?" by re-reading isDirty -- which reads clean
+  // after a Reload, so each fell straight through and destroyed the user's
+  // edit while ALSO denying them the reloaded file they had just asked for.
+  //
+  // 'saved' and 'reloaded' are indistinguishable from store state alone
+  // (both clean, both with a fresh mtimeMs), which is exactly why save()
+  // resolves an explicit SaveOutcome and why these guards check it rather
+  // than isDirty. Mutation-check: delete the `outcome === 'reloaded'` line
+  // in the matching handler and the corresponding test below fails.
+  it('stays put when the Home-navigation Save is answered "Reload"', async () => {
+    useAppStore.setState({ screen: 'editor' })
+    useDocumentStore.setState({ content: '# Edited', filePath: '/tmp/report.md', isDirty: true })
+    vi.mocked(window.api.confirmDiscardChanges).mockResolvedValue('save')
+    vi.mocked(window.api.saveFile).mockResolvedValue({
+      filePath: '/tmp/report.md',
+      mtimeMs: 2000,
+      reloadedContent: '# From disk'
+    })
+    const user = userEvent.setup()
+    render(<EditorScreen />)
+
+    await user.click(screen.getByRole('button', { name: '← Home' }))
+
+    expect(useAppStore.getState().screen).toBe('editor')
+    expect(useDocumentStore.getState().content).toBe('# From disk')
+  })
+
+  it('keeps the tab open when a close-tab Save is answered "Reload"', async () => {
+    useAppStore.setState({ screen: 'editor' })
+    useDocumentStore.setState({ content: '# Edited', filePath: '/tmp/report.md', isDirty: true })
+    const tabId = useDocumentStore.getState().activeTabId
+    useDocumentStore.setState({
+      tabs: useDocumentStore
+        .getState()
+        .tabs.map((tab) =>
+          tab.id === tabId
+            ? { ...tab, content: '# Edited', filePath: '/tmp/report.md', isDirty: true }
+            : tab
+        )
+    })
+    vi.mocked(window.api.confirmDiscardChanges).mockResolvedValue('save')
+    vi.mocked(window.api.saveFile).mockResolvedValue({
+      filePath: '/tmp/report.md',
+      mtimeMs: 2000,
+      reloadedContent: '# From disk'
+    })
+    const user = userEvent.setup()
+    render(<EditorScreen />)
+
+    await user.click(screen.getByRole('button', { name: /Close .*report\.md/i }))
+
+    // The tab survives, showing what was loaded. Closing here would have
+    // discarded BOTH the edit and the disk content that replaced it.
+    expect(useDocumentStore.getState().tabs.some((tab) => tab.id === tabId)).toBe(true)
+    expect(useDocumentStore.getState().content).toBe('# From disk')
+  })
+
   it('navigates Home without prompting when the document is not dirty', async () => {
     useAppStore.setState({ screen: 'editor' })
     useDocumentStore.setState({ content: '# Report', isDirty: false })
