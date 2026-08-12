@@ -908,6 +908,58 @@ const MERMAID_DIAGRAM_CLASS = 'pagedown-mermaid-diagram'
 // try/catch for why this exists at all.
 const MERMAID_ERROR_CLASS = 'pagedown-mermaid-error'
 
+// Carried by the caption fitSvgToPageBox's affordance appends beneath a
+// diagram that only fits the page by being scaled below the legibility floor.
+const MERMAID_SCALED_NOTE_CLASS = 'pagedown-mermaid-scaled-note'
+
+// design:97: "Define that floor — a diagram whose computed fitted size falls
+// under some minimum readable scale shows a 'diagram too large for one page'
+// affordance rather than silently rendering illegibly small."
+//
+// 0.5. Mermaid measures and paints every label at 16px (see
+// renderMermaidDiagrams's own `document.fonts.load` spec), so the floor is
+// 8px of real label text — genuinely small, but still the point below which
+// this app should stop quietly pretending the diagram is fine.
+//
+// Deliberately LESS conservative than Split mode's own fit-to-width floor
+// (0.7), and the difference is not an inconsistency. Below its floor Split
+// mode SCROLLS: it has an escape hatch, so refusing to shrink further costs
+// the user nothing but a drag. A printed page has no escape hatch, and the
+// alternative to scaling here is the measured content-loss split above — so
+// this floor cannot be a refusal to scale, only a decision about when to say
+// so. Scaling below it and captioning is strictly better than either
+// rendering blank pages or clipping the diagram.
+const MERMAID_LEGIBILITY_FLOOR_SCALE = 0.5
+
+// The caption's own line box, in px, pinned as a constant BECAUSE THE FIT HAS
+// TO SUBTRACT IT. A caption appended under a diagram already scaled to exactly
+// the full content height would push the figure back over one page and
+// reintroduce the very split this policy exists to prevent — so the note's
+// height is reserved from the budget before the final scale is computed, and
+// the CSS `line-height` below is driven from this same constant so the two
+// cannot drift.
+const MERMAID_SCALED_NOTE_HEIGHT_PX = 18
+
+// Fraction of the page content box deliberately left FREE around a
+// page-fitted figure. Required, not padding, and the number was measured
+// rather than picked:
+//
+//   - fitting to exactly `contentHeightPx` still split the corpus diagram,
+//     into 2 page-clones (down from 4) — the first of them a fully EMPTY
+//     838px shell on the heading's page, with all 60 <rect>/20 <text> on the
+//     next. A figure that exactly equals the content box cannot share its
+//     page with anything, and this app pins a heading to the figure below it
+//     on purpose (KeepWithNextHandler, src/pagination/break-handlers.ts), so
+//     "exactly one page tall" is precisely one heading too tall.
+//   - leaving ~10% free produced ONE wrapper containing the whole diagram, on
+//     the same page as its own heading: no split, no empty shell, no stranded
+//     heading.
+//
+// Expressed as a fraction of the real content box rather than a pixel
+// constant so it stays correct for A4, Legal, custom sizes and non-default
+// margins — all of which this app supports and none of which are 864px tall.
+const MERMAID_FIT_HEADROOM_FRACTION = 0.1
+
 let mermaidStylesInjected = false
 
 // Injected exactly once per render-context lifetime (not once per
@@ -946,6 +998,11 @@ function ensureMermaidStylesInjected(): void {
       color: #5f6368;
       max-height: 6em;
       overflow: hidden;
+    }
+    .${MERMAID_SCALED_NOTE_CLASS} {
+      font-size: 12px;
+      line-height: ${MERMAID_SCALED_NOTE_HEIGHT_PX}px;
+      color: #5f6368;
     }
   `
   document.head.appendChild(style)
@@ -1247,16 +1304,112 @@ function ensureMermaidLabelFontRegistered(): void {
 // correctness — but the actual CSP-relevant removal, on EVERY path through
 // this function including the early returns below, already happened
 // upstream.
-function fitSvgToNaturalSize(svgElement: SVGElement): void {
+//
+// OVERSIZED-DIAGRAM POLICY (design:97's legibility floor, and the content-loss
+// bug the design doc's own Phase 0 correction calls "a required V1 fix, not a
+// documented-and-deferred edge case").
+//
+// What this used to do: set width/height from the viewBox and stop, leaving a
+// diagram taller than the page to Paged.js. MEASURED, in the real app, before
+// changing anything — phase0/corpus/mermaid-diagrams.md's 20-stage chain
+// (144.05 x 1956px natural, against a 624 x 864px content box) split into
+// FOUR page-clones, and a per-clone structural census of what survived reads:
+//
+//     clone 0: 0 <rect>, 0 <text>, 0 <path>
+//     clone 1: 0 <rect>, 0 <text>, 13 <path>
+//     clone 2: 0 <rect>, 0 <text>, 0 <path>
+//     clone 3: 0 <rect>, 0 <text>, 9 <path>
+//
+// Every node box and every label of a 20-node flowchart is GONE — four pages
+// of near-blank paper carrying 22 stray edges between them, on screen and in
+// exported PDF identically. Paged.js's `removeOverflow` moves an overflowing
+// tail with `Range.extractContents()`, which has no special case for one
+// indivisible SVG shape tree sharing <defs>/marker/id references, and
+// `break-inside: avoid-page` does not save it: Paged.js only honours that for
+// content that COULD fit on a page, falling back to ordinary
+// overflow-splitting for content that simply cannot.
+//
+// So the fix is to make it fit, which is also the design doc's own pragmatic
+// V1 answer ("treat 'diagram taller than one page' as a hard product
+// constraint ... rather than let Paged.js's split path run at all") and its
+// prescribed mechanism ("compute the fitted width/height in JS (preserving
+// aspect ratio, clamped to the page content box) and emit them as explicit
+// absolute-unit attributes on the SVG root"). Once the diagram fits within one
+// page, `break-inside: avoid-page` becomes honourable again and Paged.js moves
+// the whole figure to a fresh page instead of slicing it.
+//
+// DELIBERATELY SURGICAL: the width-only case is left exactly as it was. A
+// diagram that is merely wider than the content box has always been handled
+// correctly by the `max-width: 100%; height: auto` CSS clamp — that is what
+// makes the corpus's sequence diagram measure exactly 624px wide, an
+// assertion Gate 3 has carried untouched since Task 8. Recomputing that in JS
+// would risk sub-pixel drift against a proven number for no benefit, so this
+// only intervenes when the diagram is genuinely TALLER than the page after
+// that clamp has already been accounted for. The small flowchart and the
+// sequence diagram therefore keep byte-identical geometry.
+//
+// Reports whether the page-HEIGHT fit fired and at what scale, so the caller
+// can decide whether the result is still legible — see
+// MERMAID_LEGIBILITY_FLOOR_SCALE.
+//
+// `fittedToPageHeight` deliberately distinguishes this from the pre-existing
+// width clamp, and the caller only ever offers the affordance for the former.
+// A diagram that is merely wide has been clamped by CSS since Task 8, loses no
+// content, and is a shape authors already understand; captioning every one of
+// them now would be an unrelated, much wider behaviour change on documents
+// that are not broken. Whether a severely width-clamped diagram deserves the
+// same affordance is a real question, deliberately left open rather than
+// silently answered here.
+interface DiagramFit {
+  scale: number
+  fittedToPageHeight: boolean
+}
+
+function fitSvgToPageBox(svgElement: SVGElement, geometry: PageGeometry): DiagramFit {
+  const unfitted: DiagramFit = { scale: 1, fittedToPageHeight: false }
   const viewBoxAttr = svgElement.getAttribute('viewBox')
-  if (!viewBoxAttr) return
+  if (!viewBoxAttr) return unfitted
   const parts = viewBoxAttr.trim().split(/\s+/).map(Number)
-  if (parts.length !== 4 || !parts.every((n) => Number.isFinite(n))) return
+  if (parts.length !== 4 || !parts.every((n) => Number.isFinite(n))) return unfitted
   const [, , naturalWidth, naturalHeight] = parts
-  if (naturalWidth <= 0 || naturalHeight <= 0) return
-  svgElement.setAttribute('width', String(naturalWidth))
-  svgElement.setAttribute('height', String(naturalHeight))
+  if (naturalWidth <= 0 || naturalHeight <= 0) return unfitted
+
+  // What the existing CSS clamp alone would already do to this diagram.
+  const cssWidthScale = Math.min(1, geometry.contentWidthPx / naturalWidth)
+  const heightAfterCssClamp = naturalHeight * cssWidthScale
+  const availablePx = geometry.contentHeightPx * (1 - MERMAID_FIT_HEADROOM_FRACTION)
+
+  if (heightAfterCssClamp <= availablePx) {
+    // Unchanged legacy path: emit the diagram's true natural size and let the
+    // CSS clamp do the width-only work it has always done correctly.
+    svgElement.setAttribute('width', String(naturalWidth))
+    svgElement.setAttribute('height', String(naturalHeight))
+    svgElement.removeAttribute('style')
+    return unfitted
+  }
+
+  // Genuinely taller than one page even after width clamping: this is the case
+  // that used to split and lose its content. Scale on the binding axis
+  // (height), preserving aspect ratio. The result is <= cssWidthScale by
+  // construction, so the CSS width clamp can never fire on top of this and
+  // shrink the diagram a second time.
+  //
+  // Computed in two steps so the caption can be paid for out of the same page
+  // budget: the provisional scale decides WHETHER a caption appears, and only
+  // then is its reserved height subtracted. That ordering terminates because
+  // the second scale is strictly smaller than the first, so a diagram that
+  // qualified for a caption still qualifies after the subtraction — there is
+  // no oscillation between the two branches.
+  const provisionalScale = availablePx / naturalHeight
+  const budgetPx =
+    provisionalScale < MERMAID_LEGIBILITY_FLOOR_SCALE
+      ? availablePx - MERMAID_SCALED_NOTE_HEIGHT_PX
+      : availablePx
+  const scale = budgetPx / naturalHeight
+  svgElement.setAttribute('width', String(naturalWidth * scale))
+  svgElement.setAttribute('height', String(naturalHeight * scale))
   svgElement.removeAttribute('style')
+  return { scale, fittedToPageHeight: true }
 }
 
 // The ONE <head> <style> element carrying this pass's retained-size rules for
@@ -1405,7 +1558,11 @@ function buildMermaidErrorPlaceholder(
 // separate Document has no CSP of its own. The stored markup is already
 // style-attribute-free, so this is belt-and-braces rather than load-bearing
 // here, but it keeps the two paths byte-identical.
-function instantiateDiagram(entry: MermaidCacheEntry, elementId: string): SVGElement {
+function instantiateDiagram(
+  entry: MermaidCacheEntry,
+  elementId: string,
+  geometry: PageGeometry
+): { svgElement: SVGElement; fit: DiagramFit } {
   const scratchDoc = new DOMParser().parseFromString(entry.svgHtml, 'text/html')
   const scratchSvgElement = scratchDoc.body.firstElementChild as SVGElement | null
   if (!scratchSvgElement) {
@@ -1419,8 +1576,8 @@ function instantiateDiagram(entry: MermaidCacheEntry, elementId: string): SVGEle
   // `scratchDoc.createElement` would carry no nonce at all, since the shim
   // never touches the scratch document.
   reattachNoncedStyles(svgElement, entry.hoistedCss)
-  fitSvgToNaturalSize(svgElement)
-  return svgElement
+  const fit = fitSvgToPageBox(svgElement, geometry)
+  return { svgElement, fit }
 }
 
 // hoistInlineStyleAttributes/reattachNoncedStyles used to live here as
@@ -1648,12 +1805,36 @@ async function renderMermaidDiagrams(
       // pixels, and a second, subtly different code path is exactly how a
       // cache starts returning something that is nearly, but not quite, what
       // the uncached render would have.
-      const svgElement = instantiateDiagram(entry, elementId)
+      const { svgElement, fit } = instantiateDiagram(entry, elementId, geometry)
 
       const wrapper = document.createElement('div')
       wrapper.className = MERMAID_DIAGRAM_CLASS
       wrapper.setAttribute('data-mermaid-diagram-id', elementId)
       wrapper.appendChild(svgElement)
+
+      if (fit.fittedToPageHeight) {
+        // Recorded on the wrapper whether or not a caption is shown: it is the
+        // one machine-readable signal that this diagram was scaled to fit
+        // rather than rendered at its natural size, and Gate 3 asserts on it.
+        wrapper.setAttribute('data-mermaid-fitted-scale', fit.scale.toFixed(4))
+      }
+      if (fit.fittedToPageHeight && fit.scale < MERMAID_LEGIBILITY_FLOOR_SCALE) {
+        // design:97's "diagram too large for one page" affordance. This is the
+        // ONLY channel available: the sandbox has no IPC and no contextBridge,
+        // so a warning that does not appear in the document appears nowhere at
+        // all — the same reasoning that makes the broken-diagram placeholder a
+        // real, printed figure. Deliberately names the actual scale and the
+        // action that fixes it, rather than a bare "too large".
+        //
+        // textContent, never innerHTML, and the percentage is derived from a
+        // number this code computed — nothing document-supplied reaches it.
+        const note = document.createElement('div')
+        note.className = MERMAID_SCALED_NOTE_CLASS
+        note.textContent =
+          `Diagram scaled to ${Math.round(fit.scale * 100)}% to fit one page — ` +
+          'split it into smaller diagrams to keep it readable.'
+        wrapper.appendChild(note)
+      }
 
       pre.replaceWith(wrapper)
       currentPassEntryByElementId.set(elementId, entry)

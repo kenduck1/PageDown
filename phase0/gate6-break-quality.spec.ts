@@ -194,13 +194,15 @@ test('Gate 6: render every break-quality fixture and capture per-page structure 
     // count actually moved, from 1 page to 2 (updated below, per this
     // comment's own instructions). headings-near-page-bottom.md and
     // nested-lists.md still measure to exactly 1 page — their assertions are
-    // unchanged. mermaid-diagrams.md's pinned count also did NOT move
-    // (still 6 pages, unchanged from Task 10's KeepWithNextHandler
-    // baseline) — worth calling out
-    // explicitly because that fixture has a documented relationship to Gate
-    // 3's own `oversizedWrapperCount` comment (phase0/gate3-mermaid.spec.ts)
-    // and to Task 10's KeepWithNextHandler; if its count HAD moved, both of
-    // those would need a fresh look, but since it didn't, neither does.
+    // unchanged. mermaid-diagrams.md's pinned count did NOT move for THAT
+    // sub-project either (it was still 6 pages afterwards, unchanged from
+    // Task 10's KeepWithNextHandler baseline) — worth calling out explicitly
+    // because that fixture has a documented relationship to Gate 3's own
+    // oversized-diagram comment (phase0/gate3-mermaid.spec.ts) and to Task
+    // 10's KeepWithNextHandler, so a move there would need both re-examined.
+    // It HAS since moved, to 3, for a completely unrelated reason — the
+    // oversized-diagram fit policy — and both of those were re-examined
+    // accordingly; see that fixture's own assertion below.
     //
     // ATTRIBUTION CORRECTED by the final whole-branch review: this used to
     // credit the sub-project's explicit `@page` rule (8.5in x 11in, 1in
@@ -225,10 +227,35 @@ test('Gate 6: render every break-quality fixture and capture per-page structure 
       observations['nested-lists.md'].pageCount,
       "nested-lists.md does not naturally split at this harness's current (post-Document-Typography) page box — numbering continuity is verified separately below via a synthetic long nested list"
     ).toBe(1)
+    // MOVED, 6 -> 3, by the oversized-diagram fit policy — the only pinned
+    // page count in this suite that this change touches, and it is reported
+    // rather than quietly re-baselined.
+    //
+    // Three of those six pages were the corpus's 20-stage flowchart being
+    // sliced across page-clones by Paged.js's overflow splitting, and the
+    // design doc's own Phase 0 correction records what that split cost:
+    // "the split diagram loses its own rendered content", filed as "a
+    // required V1 fix". Measured directly in phase0/gate3-mermaid.spec.ts
+    // before changing anything — all four clones carried 0 <rect> and 0
+    // <text> between them, i.e. every node box and every label of a 20-node
+    // flowchart was absent. Those pages were not carrying content; they were
+    // carrying the absence of it.
+    //
+    // resources/pagination-render/index.ts's fitSvgToPageBox now scales such
+    // a diagram into the page content box, so it renders once, whole, on one
+    // page (Gate 3 asserts 60 <rect> / 20 <text> in a single wrapper), and
+    // the three blank pages simply stop existing. A LOWER page count here is
+    // the correct direction: the document is strictly more complete than it
+    // was at 6.
+    //
+    // This fixture keeps its role as the one corpus file that spans multiple
+    // pages, so this gate's own keep-with-next test below still has something
+    // to measure — and that test passes unchanged, confirming the heading is
+    // still pulled onto the diagram's page rather than stranded.
     expect(
       observations['mermaid-diagrams.md'].pageCount,
-      "mermaid-diagrams.md is the one fixture that DOES span multiple pages (see Task 8/Gate 3 and this gate's own keep-with-next test below) — still 6 pages after the Document Typography sub-project's shared typography, unchanged from Task 10's KeepWithNextHandler baseline (was 5 before THAT; see phase0/gate3-mermaid.spec.ts's updated oversizedWrapperCount comment for why)"
-    ).toBe(6)
+      "mermaid-diagrams.md is the one fixture that DOES span multiple pages (see Task 8/Gate 3 and this gate's own keep-with-next test below) — 3 pages since the oversized-diagram fit policy, down from 6 because three of those pages were a split diagram that rendered structurally EMPTY (see the comment above)"
+    ).toBe(3)
     // Added by the code-block corpus-coverage task, measured directly (not
     // guessed): `code-blocks-spanning-pages.md`'s one long `<pre>` block
     // spans multiple internal page splits at this harness's Letter/1in-
