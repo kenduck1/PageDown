@@ -103,3 +103,44 @@ describe('extractComments', () => {
     expect(extractComments(source)).toEqual([])
   })
 })
+
+// Files saved by an earlier build genuinely contain TWO marker pairs sharing
+// one id whenever a comment covered a hand-wrapped paragraph -- each line was
+// serialized as its own pair. Those files still exist on disk, so the read
+// side has to collapse them rather than render two rows under duplicate React
+// keys. (A file like this re-serializes to a single pair on its next save.)
+describe('extractComments with a legacy split same-id comment', () => {
+  const DATA = encodeCommentMeta({
+    author: 'Kai',
+    text: 'a note',
+    createdAt: '2026-08-11T09:00:00.000Z'
+  })
+  const pair = (body: string): string =>
+    `<!--comment id="dup" data="${DATA}"-->${body}<!--/comment id="dup"-->`
+
+  it('collapses same-id occurrences into one entry with one id', () => {
+    const source = `Intro.\n\n${pair('first line')}\\\n${pair('second line tail.')}\n`
+
+    const comments = extractComments(source)
+
+    expect(comments).toHaveLength(1)
+    expect(comments[0].id).toBe('dup')
+    // Both fragments of the one marked span, in document order.
+    expect(comments[0].matchedText).toBe('first line second line tail.')
+  })
+
+  it('points sourceOffset at the FIRST fragment, where the span begins', () => {
+    const source = `Intro.\n\n${pair('first line')}\\\n${pair('second line tail.')}\n`
+
+    const [comment] = extractComments(source)
+
+    expect(source.slice(comment.sourceOffset)).toMatch(/^<!--comment id="dup"/)
+  })
+
+  it('still returns one entry per genuinely distinct id', () => {
+    const other = `<!--comment id="two" data="${DATA}"-->x<!--/comment id="two"-->`
+    const source = `Intro ${pair('a')} and ${other} here.\n`
+
+    expect(extractComments(source).map((comment) => comment.id)).toEqual(['dup', 'two'])
+  })
+})

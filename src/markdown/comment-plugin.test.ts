@@ -2,8 +2,14 @@ import { describe, it, expect } from 'vitest'
 import { unified } from 'unified'
 import remarkParse from 'remark-parse'
 import remarkStringify from 'remark-stringify'
-import { encodeCommentMeta, decodeCommentMeta, remarkComment } from './comment-plugin'
+import {
+  encodeCommentMeta,
+  decodeCommentMeta,
+  remarkComment,
+  remarkCommentToMarkdown
+} from './comment-plugin'
 import type { CommentMeta } from './comment-plugin'
+import type { Root } from 'mdast'
 
 // A comment BODY can be multi-line -- that is the whole reason the payload is
 // base64 of a JSON object rather than literal text inside the HTML comment
@@ -107,5 +113,140 @@ describe('remarkComment with a multi-line body', () => {
 
     expect(found).toHaveLength(1)
     expect(found[0].text).toBe('First paragraph.\n\nSecond paragraph.')
+  })
+})
+
+// The mdast half of the hand-wrapped-paragraph fix. Deliberately asserts on
+// the parsed NODE STRUCTURE as well as on the emitted bytes: CLAUDE.md
+// records that Milkdown round-tripped the pagebreak marker perfectly as
+// inert TEXT with zero custom plugins, so byte-level agreement alone proves
+// nothing about whether a real `comment` node exists.
+describe('remarkComment across a line break inside one paragraph', () => {
+  const META = { author: 'Kai', text: 'a note', createdAt: '2026-08-11T09:00:00.000Z' }
+  const DATA = encodeCommentMeta(META)
+  const START = `<!--comment id="c1" data="${DATA}"-->`
+  const END = '<!--/comment id="c1"-->'
+
+  function parse(source: string): Root {
+    const processor = unified().use(remarkParse).use(remarkComment)
+    return processor.runSync(processor.parse(source)) as Root
+  }
+
+  function shape(node: { type: string; children?: unknown[] }): unknown {
+    const children = (node.children ?? []) as { type: string; children?: unknown[] }[]
+    if (children.length === 0) return node.type
+    return { [node.type]: children.map(shape) }
+  }
+
+  it('reunites a comment CommonMark split across the HTML-block boundary', () => {
+    // The start marker begins the line (the comment covers the paragraph from
+    // its first character), so CommonMark's HTML block type 2 swallows line 1
+    // and orphans line 2 -- the whole reason the recovery exists.
+    const tree = parse(`Intro.\n\n${START}first line\nsecond line tail.${END}\n`)
+
+    expect(tree.children).toHaveLength(2)
+    expect(shape(tree.children[1] as never)).toEqual({
+      paragraph: [{ comment: ['text', 'text', 'text'] }]
+    })
+  })
+
+  it('restores a HARD break as a real break node, never a stray backslash', () => {
+    const tree = parse(`Intro.\n\n${START}first line\\\nsecond line tail.${END}\n`)
+
+    expect(shape(tree.children[1] as never)).toEqual({
+      paragraph: [{ comment: ['text', 'break', 'text'] }]
+    })
+  })
+
+  it('keeps an escaped trailing backslash as content rather than eating it', () => {
+    // `\\` at end of line is an ESCAPED literal backslash plus a soft break,
+    // not a hard break -- which is why the recovery counts trailing
+    // backslashes for PARITY instead of testing for presence.
+    const tree = parse(`Intro.\n\n${START}first line\\\\\nsecond line tail.${END}\n`)
+
+    expect(shape(tree.children[1] as never)).toEqual({
+      paragraph: [{ comment: ['text', 'text', 'text'] }]
+    })
+  })
+
+  it('absorbs the continuation even when both markers matched on line 1', () => {
+    // Commenting only the FIRST WORDS of a hand-wrapped paragraph: the pair
+    // matches inside the html block, but the paragraph would still be split
+    // in two without absorption.
+    const tree = parse(`Intro.\n\n${START}first${END} line\nsecond line tail.\n`)
+
+    // Three trailing text nodes rather than one: the piece unmerged out of
+    // the html block, the re-inserted soft break, and the absorbed
+    // continuation. mdast does not merge adjacent text nodes, and neither
+    // rendering nor serialization needs it to.
+    expect(tree.children).toHaveLength(2)
+    expect(shape(tree.children[1] as never)).toEqual({
+      paragraph: [{ comment: ['text'] }, 'text', 'text', 'text']
+    })
+  })
+
+  it('does NOT absorb a genuinely separate block across a blank line', () => {
+    const tree = parse(`Intro.\n\n${START}marked${END}\n\nA separate paragraph.\n`)
+
+    expect(tree.children).toHaveLength(3)
+    expect(shape(tree.children[2] as never)).toEqual({ paragraph: ['text'] })
+  })
+
+  it('leaves a hand-authored html block followed by a paragraph alone', () => {
+    // The anchor is only ever a paragraph genuinely un-collapsed by
+    // unmergeHtmlNode, so an ordinary html comment never starts an
+    // absorption -- the narrowness this whole recovery depends on.
+    const tree = parse('Intro.\n\n<!-- just a note -->\nA following paragraph.\n')
+
+    expect(tree.children.map((child) => child.type)).toEqual(['paragraph', 'html', 'paragraph'])
+  })
+
+  it('serializes a split same-id run as exactly ONE marker pair', () => {
+    // The exact mdast shape Milkdown's SerializerState produces once
+    // preset-commonmark's hardbreakClearMarkPlugin has stripped the mark off
+    // the hardbreak: two `comment` nodes, one id, a `break` between them.
+    const fragment = (): unknown => ({
+      type: 'comment',
+      id: 'c1',
+      ...META,
+      children: [{ type: 'text', value: 'x' }]
+    })
+    const tree = {
+      type: 'root',
+      children: [{ type: 'paragraph', children: [fragment(), { type: 'break' }, fragment()] }]
+    }
+
+    const out = unified()
+      .use(remarkCommentToMarkdown)
+      .use(remarkStringify)
+      .stringify(tree as never)
+
+    expect((out.match(/<!--comment id=/g) ?? []).length).toBe(1)
+    expect((out.match(/<!--\/comment id=/g) ?? []).length).toBe(1)
+    // ...and the break still separates the two fragments inside the pair.
+    expect(out).toContain('x\\\nx')
+  })
+
+  it('still emits a pair each for two genuinely DIFFERENT comments', () => {
+    const fragment = (id: string): unknown => ({
+      type: 'comment',
+      id,
+      ...META,
+      children: [{ type: 'text', value: 'x' }]
+    })
+    const tree = {
+      type: 'root',
+      children: [
+        { type: 'paragraph', children: [fragment('c1'), { type: 'break' }, fragment('c2')] }
+      ]
+    }
+
+    const out = unified()
+      .use(remarkCommentToMarkdown)
+      .use(remarkStringify)
+      .stringify(tree as never)
+
+    expect((out.match(/<!--comment id=/g) ?? []).length).toBe(2)
+    expect((out.match(/<!--\/comment id=/g) ?? []).length).toBe(2)
   })
 })
