@@ -4,6 +4,7 @@ import { getMarkdown } from '@milkdown/utils'
 import { createImageResolverPlugin, isSafeImageSrc, safeImageViewProse } from './image-security'
 import MilkdownEditor from './MilkdownEditor'
 import { createTestEditor } from './test-editor'
+import { historyGroupingProse, historyProse } from './commands'
 import { $prose } from '@milkdown/utils'
 import { editorViewCtx } from '@milkdown/core'
 import { EDITOR_SCHEMA_PLUGINS } from './plugins'
@@ -379,5 +380,209 @@ describe('local image resolution — real editor mount', () => {
     } finally {
       await editor.destroy()
     }
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Drag-to-resize
+// ---------------------------------------------------------------------------
+// jsdom has no layout engine, so every rect here is stubbed and every number
+// is one this file supplies. That is a real limit and is why
+// phase0/gate41-image-resize.spec.ts exists: only real Chromium can say
+// whether a real pointer drag lands on a real grip at a real corner. What IS
+// provable here is the wiring the gate cannot isolate -- how many transactions
+// a whole gesture produces, what ends up in the SAVED MARKDOWN, and that one
+// undo reverts the whole drag rather than one frame of it.
+const A_PNG = 'data:image/png;base64,iVBORw0KGgo='
+
+function stubRect(element: Element, width: number): void {
+  element.getBoundingClientRect = (() => ({ width, height: 10, top: 0, left: 0 })) as never
+}
+
+function drag(handle: Element, xs: number[]): void {
+  handle.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true, button: 0, clientX: xs[0] }))
+  for (const x of xs.slice(1)) {
+    window.dispatchEvent(new MouseEvent('pointermove', { bubbles: true, clientX: x }))
+  }
+  window.dispatchEvent(new MouseEvent('pointerup', { bubbles: true, clientX: xs[xs.length - 1] }))
+}
+
+describe('image drag-to-resize wiring', () => {
+  it('offers a grip on a rendering image and withholds it from one that is not', async () => {
+    const editor = await createTestEditor(
+      `![ok](${A_PNG})\n\n![blocked](https://example.invalid/x.png)\n`,
+      [...EDITOR_SCHEMA_PLUGINS.flat(), safeImageViewProse]
+    )
+    try {
+      const view = editor.ctx.get(editorViewCtx)
+      const wrappers = Array.from(view.dom.querySelectorAll('.pagedown-image'))
+      const handles = wrappers.map((w) => w.querySelector('.pagedown-image-resize-handle'))
+
+      expect(handles.every(Boolean)).toBe(true)
+      // There is no corner to grab on an image that is not on screen, and the
+      // width a drag would start from is not knowable for one.
+      expect(wrappers.map((w) => w.getAttribute('data-state'))).toEqual(['ok', 'blocked'])
+      expect(handles.map((h) => (h as HTMLElement).hidden)).toEqual([false, true])
+    } finally {
+      await editor.destroy()
+    }
+  })
+
+  it('writes the dragged size as real {width=...} Markdown, in ONE transaction', async () => {
+    const editor = await createTestEditor(`![ok](${A_PNG})\n`, [
+      ...EDITOR_SCHEMA_PLUGINS.flat(),
+      safeImageViewProse
+    ])
+    try {
+      const view = editor.ctx.get(editorViewCtx)
+      const wrapper = view.dom.querySelector('.pagedown-image') as HTMLElement
+      const img = wrapper.querySelector('img') as HTMLImageElement
+      const handle = wrapper.querySelector('.pagedown-image-resize-handle') as HTMLElement
+
+      // 600px container, image starting at 300px (= 50%), dragged +120px.
+      stubRect(wrapper.parentElement!, 600)
+      stubRect(img, 300)
+
+      const dispatched: unknown[] = []
+      const original = view.dispatch.bind(view)
+      view.dispatch = (tr): void => {
+        dispatched.push(tr)
+        original(tr)
+      }
+
+      drag(handle, [0, 40, 80, 120])
+
+      // THE assertion this feature exists for, and the one that separates it
+      // from the mistake columnResizingPlugin was not built to repeat: the
+      // resize has to survive as portable Markdown, not as a ProseMirror-only
+      // attribute the paginator, the PDF and the thumbnails all know nothing
+      // about.
+      expect(editor.action(getMarkdown())).toBe(`![ok](${A_PNG}){width=70%}\n`)
+
+      // Exactly one transaction for the whole gesture -- the live feedback
+      // during the drag is DOM-only. Three pointermoves producing three
+      // transactions would be three undo steps and three debounced
+      // re-serializations of the document.
+      expect(dispatched).toHaveLength(1)
+    } finally {
+      await editor.destroy()
+    }
+  })
+
+  it('is one undo step for the whole gesture, not one per frame', async () => {
+    const { undo } = await import('@milkdown/prose/history')
+    const editor = await createTestEditor(`![ok](${A_PNG})\n`, [
+      ...EDITOR_SCHEMA_PLUGINS.flat(),
+      safeImageViewProse,
+      historyProse,
+      historyGroupingProse
+    ])
+    try {
+      const view = editor.ctx.get(editorViewCtx)
+      const wrapper = view.dom.querySelector('.pagedown-image') as HTMLElement
+      stubRect(wrapper.parentElement!, 600)
+      stubRect(wrapper.querySelector('img')!, 300)
+
+      drag(wrapper.querySelector('.pagedown-image-resize-handle') as HTMLElement, [0, 40, 80, 120])
+      expect(editor.action(getMarkdown())).toContain('{width=70%}')
+
+      undo(view.state, view.dispatch)
+      // Back to the original size in ONE undo. Under a transaction-per-frame
+      // implementation this would land on an intermediate width instead.
+      expect(editor.action(getMarkdown())).toBe(`![ok](${A_PNG})\n`)
+    } finally {
+      await editor.destroy()
+    }
+  })
+
+  it('writes nothing at all for a click that never becomes a drag', async () => {
+    const editor = await createTestEditor(`![ok](${A_PNG})\n`, [
+      ...EDITOR_SCHEMA_PLUGINS.flat(),
+      safeImageViewProse
+    ])
+    try {
+      const view = editor.ctx.get(editorViewCtx)
+      const wrapper = view.dom.querySelector('.pagedown-image') as HTMLElement
+      stubRect(wrapper.parentElement!, 600)
+      stubRect(wrapper.querySelector('img')!, 300)
+
+      const dispatched: unknown[] = []
+      const original = view.dispatch.bind(view)
+      view.dispatch = (tr): void => {
+        dispatched.push(tr)
+        original(tr)
+      }
+
+      // pointerdown then straight to pointerup, no movement between: a stray
+      // click on the grip must not mark a clean document dirty.
+      drag(wrapper.querySelector('.pagedown-image-resize-handle') as HTMLElement, [0])
+
+      expect(dispatched).toHaveLength(0)
+      expect(editor.action(getMarkdown())).toBe(`![ok](${A_PNG})\n`)
+    } finally {
+      await editor.destroy()
+    }
+  })
+
+  it('keeps a resolved local image on screen across a resize instead of re-resolving it', async () => {
+    // update() short-circuits a width-only change rather than re-running
+    // syncFrom, which unconditionally removes `src` and starts a fresh
+    // resolve. Without this the picture blinks out on the release of every
+    // single drag. Asserted through the resolver's own call count, since that
+    // is what the flash is made of.
+    let resolveCalls = 0
+    const editor = await createTestEditor('![chart](chart.png)\n', [
+      ...EDITOR_SCHEMA_PLUGINS.flat(),
+      safeImageViewProse,
+      $prose(() =>
+        createImageResolverPlugin({
+          resolveLocalImage: async () => {
+            resolveCalls += 1
+            return A_PNG
+          }
+        })
+      )
+    ])
+    try {
+      const view = editor.ctx.get(editorViewCtx)
+      const wrapper = view.dom.querySelector('.pagedown-image') as HTMLElement
+      const img = wrapper.querySelector('img') as HTMLImageElement
+      await waitFor(() => expect(img.getAttribute('src')).toBe(A_PNG))
+      expect(resolveCalls).toBe(1)
+
+      stubRect(wrapper.parentElement!, 600)
+      stubRect(img, 300)
+      drag(wrapper.querySelector('.pagedown-image-resize-handle') as HTMLElement, [0, 120])
+
+      expect(editor.action(getMarkdown())).toContain('{width=70%}')
+      expect(img.getAttribute('width')).toBe('70%')
+      // Still showing the same resolved bytes, never torn off and re-fetched.
+      expect(img.getAttribute('src')).toBe(A_PNG)
+      expect(resolveCalls).toBe(1)
+    } finally {
+      await editor.destroy()
+    }
+  })
+
+  it('tears its pointer listeners down when the node view is destroyed mid-drag', async () => {
+    const editor = await createTestEditor(`![ok](${A_PNG})\n`, [
+      ...EDITOR_SCHEMA_PLUGINS.flat(),
+      safeImageViewProse
+    ])
+    const view = editor.ctx.get(editorViewCtx)
+    const wrapper = view.dom.querySelector('.pagedown-image') as HTMLElement
+    const img = wrapper.querySelector('img') as HTMLImageElement
+    stubRect(wrapper.parentElement!, 600)
+    stubRect(img, 300)
+    const handle = wrapper.querySelector('.pagedown-image-resize-handle') as HTMLElement
+
+    handle.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true, button: 0, clientX: 0 }))
+    await editor.destroy()
+
+    // The listeners live on `window`, so without destroy() ending the drag
+    // they would outlive the element they were opened for -- one leaked
+    // listener per image per key={revision} remount.
+    window.dispatchEvent(new MouseEvent('pointermove', { bubbles: true, clientX: 400 }))
+    expect(img.getAttribute('width')).toBeNull()
   })
 })
