@@ -275,7 +275,10 @@ test('Gate 27: commenting a hand-wrapped paragraph writes ONE marker pair and do
     // One logical comment, so exactly one sidebar row.
     await win.getByRole('button', { name: 'Comments' }).click()
     await expect(win.getByText('spans a wrap')).toHaveCount(1)
-    await expect(win.getByText(/"first line second line tail\."/)).toBeVisible()
+    // `\s+`, not a literal space: the reunited comment's matched text holds
+    // the real soft break, and Playwright normalises whitespace only for
+    // STRING matchers, never for a regex.
+    await expect(win.getByText(/"first line\s+second line tail\."/)).toBeVisible()
   } finally {
     await restoreRecents()
     await rm(fixtureDir, { recursive: true, force: true })
