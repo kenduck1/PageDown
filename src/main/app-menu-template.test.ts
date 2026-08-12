@@ -32,6 +32,104 @@ const EDITING: WindowUiState = {
   fileName: 'report.md'
 }
 
+// Electron's OWN default accelerator for each role this template uses, for
+// the collision sweep below.
+//
+// TRANSCRIBED FROM THE SHIPPED BINARY, NOT FROM MEMORY OR DOCS. Electron's
+// `lib/browser/api/menu-item-roles.ts` is compiled into the framework rather
+// than readable from node_modules, so these were read out of
+// `node_modules/electron/dist/Electron.app/.../Electron Framework` with
+// `strings`, e.g. `close:{label:...,accelerator:"CommandOrControl+W",...}`.
+// That is what makes this a check and not a second guess.
+//
+// Only the roles buildAppMenuTemplate actually emits are listed; roles that
+// genuinely carry no default (`about`, `front`, `zoom`, `unhide`, `services`,
+// `help`) are recorded as `undefined` rather than omitted, so a reader can
+// tell "no accelerator" from "nobody looked".
+//
+// The two platform-conditional entries are conditional in Electron's own
+// table too: `redo` is Control+Y on win32 only, `quit` has NO accelerator on
+// win32 (Alt+F4 is the platform gesture) and CommandOrControl+Q elsewhere.
+//
+// KEEP THIS IN STEP WITH `pnpm why electron`. A role default changing under
+// an Electron upgrade is exactly the kind of thing that would reintroduce a
+// silent double-bind, and this table is the only place that would notice.
+const ROLE_DEFAULT_ACCELERATORS: Record<string, (platform: NodeJS.Platform) => string | undefined> =
+  {
+    undo: () => 'CommandOrControl+Z',
+    redo: (p) => (p === 'win32' ? 'Control+Y' : 'Shift+CommandOrControl+Z'),
+    cut: () => 'CommandOrControl+X',
+    copy: () => 'CommandOrControl+C',
+    paste: () => 'CommandOrControl+V',
+    pasteAndMatchStyle: (p) => (p === 'darwin' ? 'Cmd+Option+Shift+V' : 'Shift+CommandOrControl+V'),
+    selectAll: () => 'CommandOrControl+A',
+    minimize: () => 'CommandOrControl+M',
+    close: () => 'CommandOrControl+W',
+    quit: (p) => (p === 'win32' ? undefined : 'CommandOrControl+Q'),
+    hide: () => 'Command+H',
+    hideOthers: () => 'Command+Alt+H',
+    reload: () => 'CmdOrCtrl+R',
+    forceReload: () => 'Shift+CmdOrCtrl+R',
+    toggleDevTools: (p) => (p === 'darwin' ? 'Alt+Command+I' : 'Ctrl+Shift+I'),
+    about: () => undefined,
+    front: () => undefined,
+    zoom: () => undefined,
+    unhide: () => undefined,
+    services: () => undefined,
+    help: () => undefined
+  }
+
+// What keystroke this item really claims: its explicit accelerator if it has
+// one (an explicit value OVERRIDES a role's default), otherwise whatever its
+// role supplies for this platform.
+function resolveAccelerator(
+  item: MenuItemConstructorOptions,
+  platform: NodeJS.Platform
+): string | undefined {
+  if (item.accelerator) return item.accelerator
+  if (!item.role) return undefined
+  const lookup = ROLE_DEFAULT_ACCELERATORS[item.role]
+  if (!lookup) throw new Error(`No recorded default accelerator for role "${item.role}"`)
+  return lookup(platform)
+}
+
+// Reduces an Electron accelerator string to the actual KEYSTROKE it binds, so
+// two spellings of one chord compare equal.
+//
+// Found the hard way, and worth stating plainly: comparing the raw strings is
+// NOT ENOUGH, and a sweep that does so gives false confidence. Re-introducing
+// the exact bug this test exists to catch -- a bare `role: 'close'` in the
+// Window menu, alongside File > Close Tab -- left this test GREEN, because the
+// role's default is spelled `CommandOrControl+W` while the template writes
+// `CmdOrCtrl+W`. Same key, same platform, two strings, no collision detected.
+// (The two structure tests above did catch that mutation, which is how this
+// gap surfaced at all.)
+//
+// Three normalisations, each from Electron's own accelerator documentation:
+// the alias pairs (Command/Cmd, Control/Ctrl, CommandOrControl/CmdOrCtrl,
+// Option/Alt, Super/Meta); `CmdOrCtrl` resolved to the modifier it actually
+// becomes ON THIS PLATFORM, so `Cmd+Alt+F` and `CmdOrCtrl+Alt+F` collide on
+// darwin as they really would; and modifier ORDER, which Electron does not
+// care about (`Alt+Command+I` and `Command+Alt+I` are one chord).
+function normalizeAccelerator(accelerator: string, platform: NodeJS.Platform): string {
+  const parts = accelerator.split('+').map((part) => part.trim())
+  // The final segment is the key; everything before it is a modifier. Split
+  // on '+' is safe because Electron spells a literal plus key as `Plus`.
+  const key = (parts.pop() ?? '').toLowerCase()
+  const modifiers = parts.map((modifier) => {
+    const lower = modifier.toLowerCase()
+    if (lower === 'commandorcontrol' || lower === 'cmdorctrl') {
+      return platform === 'darwin' ? 'cmd' : 'ctrl'
+    }
+    if (lower === 'command' || lower === 'cmd') return 'cmd'
+    if (lower === 'control' || lower === 'ctrl') return 'ctrl'
+    if (lower === 'option' || lower === 'alt') return 'alt'
+    if (lower === 'super' || lower === 'meta') return 'super'
+    return lower
+  })
+  return `${[...new Set(modifiers)].sort().join('+')}|${key}`
+}
+
 function submenuOf(
   template: MenuItemConstructorOptions[],
   label: string
@@ -109,16 +207,32 @@ describe('buildAppMenuTemplate: structure', () => {
     ])
     // `zoom`/`front` are macOS-only roles and would render dead items
     // elsewhere.
+    //
+    // This assertion USED TO EXPECT `['minimize', 'close']`, i.e. it pinned
+    // the bug rather than the behaviour: a bare `role: 'close'` here carries
+    // Electron's own `CommandOrControl+W` default, which File > Close Tab
+    // already claims, so on every Windows/Linux build one of the two silently
+    // never fired. Changed deliberately -- see app-menu-template.ts's own
+    // windowMenu comment.
     const linuxWindow = submenuOf(build({ platform: 'linux' }).template, 'Window')
-    expect(linuxWindow.map((item) => item.role).filter(Boolean)).toEqual(['minimize', 'close'])
+    expect(linuxWindow.map((item) => item.role).filter(Boolean)).toEqual(['minimize'])
   })
 
-  it('shows Close Window in File and NOT also in the Window menu', () => {
+  it('shows Close Window in File and NOT also in the Window menu, on EVERY platform', () => {
     // Both would register the same accelerator, with only one able to
     // fire -- and File is where macOS's own HIG puts Close.
-    const template = build({ platform: 'darwin' }).template
-    expect(submenuOf(template, 'File').some((item) => item.role === 'close')).toBe(true)
-    expect(submenuOf(template, 'Window').some((item) => item.role === 'close')).toBe(false)
+    //
+    // Swept across all three platforms rather than darwin only. The darwin-only
+    // version of this test passed happily while the non-macOS branch of the
+    // Window menu carried exactly the duplicate it claims to forbid.
+    for (const platform of ['darwin', 'win32', 'linux'] as const) {
+      const template = build({ platform }).template
+      expect(submenuOf(template, 'File').some((item) => item.role === 'close')).toBe(true)
+      expect(
+        submenuOf(template, 'Window').some((item) => item.role === 'close'),
+        `Window menu on ${platform} must not carry a second close item`
+      ).toBe(false)
+    }
   })
 
   // Second-pass product-completeness audit: "There is no Close Tab; Cmd+W
@@ -141,6 +255,30 @@ describe('buildAppMenuTemplate: structure', () => {
     expect(itemIn(closedFile, 'Close Tab').enabled).toBe(false)
     const openFile = submenuOf(build({ state: EDITING }).template, 'File')
     expect(itemIn(openFile, 'Close Tab').enabled).toBe(true)
+  })
+
+  it('hands Cmd+W to Close Window when no document is open, so it is never inert', () => {
+    // The defect: Close Tab was gated `enabled: documentOpen` while still
+    // CLAIMING Cmd+W, and it had also pushed the window-close role off that
+    // key -- so on Home and Settings, the screen this app OPENS TO, the very
+    // first Cmd+W a new user presses reached a disabled item and did nothing
+    // at all. A disabled item still consumes its accelerator; enablement and
+    // accelerator have to be gated together.
+    const closedFile = submenuOf(build({ state: DEFAULT_WINDOW_UI_STATE }).template, 'File')
+    expect(itemIn(closedFile, 'Close Tab').accelerator).toBeUndefined()
+    expect(itemIn(closedFile, 'Close Window').accelerator).toBe('CmdOrCtrl+W')
+
+    // ...and hands it straight back the moment there is a tab to close, so
+    // the editor keeps the browser-standard pair.
+    const openFile = submenuOf(build({ state: EDITING }).template, 'File')
+    expect(itemIn(openFile, 'Close Tab').accelerator).toBe('CmdOrCtrl+W')
+    expect(itemIn(openFile, 'Close Window').accelerator).toBe('CmdOrCtrl+Shift+W')
+
+    // Still the real role in both states -- an explicit accelerator overrides
+    // a role's default without replacing the role, and this guards against a
+    // future edit that swaps it for a hand-rolled click handler.
+    expect(itemIn(closedFile, 'Close Window').role).toBe('close')
+    expect(itemIn(openFile, 'Close Window').role).toBe('close')
   })
 
   it('hides Reload/DevTools outside development', () => {
@@ -252,19 +390,48 @@ describe('buildAppMenuTemplate: accelerators', () => {
 
   it('never reuses one accelerator on two different items', () => {
     // Two items sharing an accelerator means one of them silently never
-    // fires from the keyboard. Checked across the WHOLE menu, including
+    // fires from the keyboard.
+    //
+    // THIS TEST USED TO CLAIM MORE THAN IT CHECKED, and the gap shipped a real
+    // bug. Its own comment said it covered "the WHOLE menu, including
     // role-supplied items, since role accelerators are platform defaults this
-    // file does not see.
-    const template = build({ platform: 'darwin', state: EDITING, isDev: true }).template
-    const accelerators: string[] = []
-    const walk = (items: MenuItemConstructorOptions[]): void => {
-      for (const item of items) {
-        if (item.accelerator) accelerators.push(item.accelerator)
-        if (Array.isArray(item.submenu)) walk(item.submenu as MenuItemConstructorOptions[])
+    // file does not see" -- but the body only ever collected `item.accelerator`,
+    // which is exactly the field a bare `{ role: 'close' }` does NOT have. It
+    // therefore saw none of the platform defaults it named, and it built the
+    // darwin template only, while the collision it missed (File > Close Tab's
+    // CmdOrCtrl+W against a bare `role: 'close'` in the Window menu) existed
+    // only on Windows/Linux. Both halves are fixed below: role defaults are
+    // resolved through ROLE_DEFAULT_ACCELERATORS, and every platform is swept,
+    // in both documentOpen states.
+    for (const platform of ['darwin', 'win32', 'linux'] as const) {
+      for (const state of [DEFAULT_WINDOW_UI_STATE, EDITING]) {
+        const template = build({ platform, state, isDev: true }).template
+        const claims: { label: string; chord: string }[] = []
+        const walk = (items: MenuItemConstructorOptions[]): void => {
+          for (const item of items) {
+            const accelerator = resolveAccelerator(item, platform)
+            // A DISABLED item still consumes its accelerator, so it counts as
+            // a claim -- which is the other half of the same bug (Close Tab
+            // holding Cmd+W while greyed out on Home).
+            if (accelerator) {
+              claims.push({
+                label: `${String(item.label ?? item.role)} (${accelerator})`,
+                chord: normalizeAccelerator(accelerator, platform)
+              })
+            }
+            if (Array.isArray(item.submenu)) walk(item.submenu as MenuItemConstructorOptions[])
+          }
+        }
+        walk(template)
+
+        const byAccelerator = new Map<string, string[]>()
+        for (const claim of claims) {
+          byAccelerator.set(claim.chord, [...(byAccelerator.get(claim.chord) ?? []), claim.label])
+        }
+        const collisions = [...byAccelerator.entries()].filter(([, labels]) => labels.length > 1)
+        expect(collisions, `${platform}, documentOpen=${state.documentOpen}`).toEqual([])
       }
     }
-    walk(template)
-    expect(new Set(accelerators).size).toBe(accelerators.length)
   })
 })
 

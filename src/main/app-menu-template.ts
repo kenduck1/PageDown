@@ -244,6 +244,30 @@ export function buildAppMenuTemplate(params: AppMenuTemplateParams): MenuItemCon
       // no tab bar at all on Home, so an enabled-but-silent item there would
       // violate this menu's own "disabled, never enabled-and-inert" rule.
       //
+      // THE ACCELERATOR IS ALSO GATED, not just the enablement, and that is a
+      // fix rather than symmetry. Gating enablement alone meant Cmd+W was
+      // claimed by a disabled item on Home and Settings and therefore did
+      // NOTHING AT ALL -- and because Close Tab had also displaced the
+      // window-close role off its own default (below), the very first Cmd+W a
+      // new user presses, on the screen the app opens to, was inert. Handing
+      // the keystroke back to Close Window there follows this menu's own
+      // precedent for Help > Keyboard Shortcuts: an item's gate has to be
+      // judged against what the gate makes UNREACHABLE, not only against
+      // whether the gate is locally consistent.
+      //
+      // "Close the frontmost thing" is what Cmd+W means, and what the
+      // frontmost thing IS depends on the screen: a tab in the editor, the
+      // window on Home. That is the same reading this app already applies one
+      // level down -- documentStore.closeTab never leaves zero tabs, so Cmd+W
+      // on a single-tab window clears the tab rather than closing the window,
+      // matching a browser's "last tab left standing" behaviour.
+      //
+      // DISCLOSED COST: with no document open, Cmd+Shift+W then does nothing,
+      // because Close Window is holding Cmd+W instead. One accelerator per
+      // item is the whole constraint -- there is no way to give an item two.
+      // Cmd+W is overwhelmingly the reflex being served, and it is the one
+      // that was previously dead.
+      //
       // Routes to `handleRequestCloseTab` (EditorScreen.tsx) -- the EXACT
       // function the tab bar's own "x" button already calls, not a second
       // closing path -- so a dirty active tab gets the identical
@@ -257,7 +281,9 @@ export function buildAppMenuTemplate(params: AppMenuTemplateParams): MenuItemCon
       // default.
       {
         label: 'Close Tab',
-        accelerator: 'CmdOrCtrl+W',
+        // Dropped entirely rather than left claiming a key it cannot use --
+        // an accelerator on a DISABLED item still consumes the keystroke.
+        accelerator: documentOpen ? 'CmdOrCtrl+W' : undefined,
         enabled: documentOpen,
         click: clickCommand('file:closeTab')
       },
@@ -280,12 +306,35 @@ export function buildAppMenuTemplate(params: AppMenuTemplateParams): MenuItemCon
       // fire.
       //
       // Accelerator moved to CmdOrCtrl+Shift+W (from the role's own default
-      // CmdOrCtrl+W, which Close Tab above now claims) by the same
-      // second-pass audit fix -- an explicit `accelerator` on a role item
-      // overrides the role's platform default, same mechanism `role: 'close'`
-      // on non-mac's Window menu below already doesn't need because it's
-      // never listed alongside a competing claim on the same key.
-      { role: 'close', label: 'Close Window', accelerator: 'CmdOrCtrl+Shift+W' },
+      // CmdOrCtrl+W, which Close Tab above claims whenever a document is
+      // open) -- an explicit `accelerator` on a role item overrides the
+      // role's platform default.
+      //
+      // It moves BACK to CmdOrCtrl+W with no document open, so that reflex
+      // keeps working on Home and Settings where there is no tab to close.
+      // See Close Tab's own comment above for the full argument and for the
+      // disclosed cost.
+      //
+      // CORRECTION. The clause that used to end this comment claimed the
+      // override "is a mechanism `role: 'close'` on non-mac's Window menu
+      // below already doesn't need, because it's never listed alongside a
+      // competing claim on the same key". That was FALSE, and it was false
+      // from the moment Close Tab was added: the Window menu really did carry
+      // a bare `{ role: 'close' }` on Windows/Linux, and that role's default
+      // accelerator really is `CommandOrControl+W` -- read out of the shipped
+      // Electron 39.8.10 binary rather than assumed, where the roles table
+      // reads `close:{label:...,accelerator:"CommandOrControl+W",...}`. So on
+      // every non-macOS build, Cmd/Ctrl+W was claimed twice and one of the two
+      // silently never fired. The Window menu's copy is now gone (see
+      // windowMenu below), which restores the policy this comment always
+      // described, and app-menu-template.test.ts's accelerator sweep was
+      // extended to resolve role defaults so a bare role can never smuggle in
+      // a third claim unseen.
+      {
+        role: 'close',
+        label: 'Close Window',
+        accelerator: documentOpen ? 'CmdOrCtrl+Shift+W' : 'CmdOrCtrl+W'
+      },
       ...(isMac ? [] : ([{ role: 'quit' }] as MenuItemConstructorOptions[]))
     ]
   }
@@ -476,13 +525,28 @@ export function buildAppMenuTemplate(params: AppMenuTemplateParams): MenuItemCon
       // `zoom` and `front` are macOS-only roles (the window-server "zoom"
       // green-button behaviour, and "Bring All to Front"). Including them on
       // Windows/Linux would render dead items.
+      //
+      // The non-macOS branch used to be `[{ role: 'close' }]`, and that was a
+      // REAL, shipped accelerator collision rather than a redundant menu
+      // entry: a bare `role: 'close'` carries the role's own default
+      // `CommandOrControl+W` (verified against the shipped Electron 39.8.10
+      // binary, not assumed -- see the Close Window item in the File menu
+      // above for the exact roles-table line), which is precisely what File >
+      // Close Tab claims. Two items on one accelerator means one of them
+      // silently never fires from the keyboard. Removed rather than given an
+      // explicit accelerator of its own, because File already carries Close
+      // Window on every platform and this menu's own stated policy is that
+      // Close lives in File and NOT also here -- the non-macOS branch was
+      // contradicting that policy, not extending it. Windows/Linux therefore
+      // get a Window menu of just Minimize, which is more than many apps on
+      // those platforms offer at all.
       ...(isMac
         ? ([
             { role: 'zoom' },
             { type: 'separator' },
             { role: 'front' }
           ] as MenuItemConstructorOptions[])
-        : ([{ role: 'close' }] as MenuItemConstructorOptions[]))
+        : [])
     ]
   }
 
