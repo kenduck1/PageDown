@@ -756,6 +756,19 @@ async function runSave(forceSaveAs: boolean): Promise<SaveOutcome> {
         return 'reloaded'
       }
       useDocumentStore.setState((state) => {
+        // Did this save give the document a DIFFERENT directory to resolve its
+        // own relative references against? True for a first save (null -> a
+        // real path) and for any Save-As that lands somewhere else.
+        //
+        // This is what the revision bump below keys on. Comparing the whole
+        // path rather than just its directory is deliberate: `dirname` on a
+        // renderer-side string would have to re-implement path parsing for two
+        // platforms' separators to save a remount in the one case where a
+        // Save-As stays in the same folder, and getting that subtly wrong
+        // would silently reinstate the bug it was meant to narrow.
+        const pathChanged = state.tabs.some(
+          (tab) => tab.id === tabId && tab.filePath !== result.filePath
+        )
         const tabs = state.tabs.map((tab) =>
           tab.id === tabId
             ? {
@@ -791,7 +804,41 @@ async function runSave(forceSaveAs: boolean): Promise<SaveOutcome> {
           filePath: result.filePath,
           isDirty: false,
           mtimeMs: result.mtimeMs,
-          error: null
+          error: null,
+          // REMOUNT WHEN, AND ONLY WHEN, THE DOCUMENT'S DIRECTORY MOVED.
+          //
+          // A local image reference (`![x](photo.png)`) resolves against the
+          // document's OWN directory -- resolveLocalImage below returns null
+          // outright while filePath is null -- and image-security.ts's node
+          // view resolves once, when it is constructed. Nothing reconstructs a
+          // node view except this key={revision} remount. So an image typed
+          // into a never-saved document stayed blocked forever after the first
+          // Save, and a Save-As into a different folder left every already-
+          // resolved image showing bytes read out of the OLD one (the cache is
+          // keyed on document path, so the new folder is a miss nothing goes
+          // and fetches). The reload branch above has always bumped revision
+          // for the same underlying reason -- the live editor cannot know
+          // about a change that did not come through its own onChange -- and
+          // this branch simply omitted it.
+          //
+          // CONDITIONAL, not unconditional, because a remount destroys
+          // prosemirror-history: bumping on every save would throw away the
+          // undo stack on every Cmd+S, and an ordinary re-save moves no
+          // directory and re-resolves nothing. Inside the still-active guard
+          // for a second, independent reason -- revision is a per-WINDOW
+          // remount signal, so bumping it for a save that resolved after the
+          // user switched tabs would destroy the undo history of whichever
+          // document is actually on screen in order to re-resolve images in
+          // one that is not. The saved tab gets its fresh mount from
+          // switchTab's own bump whenever the user comes back to it.
+          //
+          // Fixing this in the node view instead was ruled out: it would mean
+          // subscribing every live image to the store's filePath, which is
+          // exactly the window.api/store dependency image-security.ts and
+          // MilkdownEditor deliberately do not take -- the resolver is
+          // injected by the host for that reason. The remount signal already
+          // exists and already means this.
+          ...(pathChanged ? { revision: state.revision + 1 } : {})
         }
       })
       // Best-effort -- see version-history's own "never blocks a real
