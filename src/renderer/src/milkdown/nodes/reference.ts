@@ -1,4 +1,5 @@
 import { $markSchema, $nodeSchema } from '@milkdown/utils'
+import { formatAttributeBlock } from '../../../../markdown/image-size'
 
 // Real Milkdown schema support for the three mdast node types that make up
 // Markdown's REFERENCE-STYLE link machinery -- `definition` (`[1]: https://…
@@ -136,6 +137,21 @@ export const linkReferenceSchema = $markSchema('linkReference', () => ({
 }))
 
 /// `![alt][1]`. An inline atom node, mirroring imageSchema.
+//
+// CARRIES A `width`, for the same reason the stock `image` node does and via
+// the same mechanism -- see nodes/image-size.ts and src/markdown/image-size.ts.
+// `remarkImageAttrs` matches a trailing `{width=...}` block on BOTH mdast
+// `image` and `imageReference` (one matcher, shared with markdownToHtml), so a
+// sized reference image already rendered correctly on the paginated surface,
+// in the PDF and in the HTML export. The editor was the only surface that
+// dropped it, because this node had nowhere to keep it -- which made it SILENT
+// DATA LOSS in the user's own file rather than a rendering gap: set a width,
+// edit an unrelated paragraph, save, and the width is gone with no error.
+//
+// The attr lives HERE rather than as an `extendSchema` override in
+// nodes/image-size.ts (where the stock `image` node's own width lives) because
+// this node is declared by this repo, not by a preset -- there is nothing to
+// override, and an override layer would only add indirection.
 export const imageReferenceNode = $nodeSchema('imageReference', () => ({
   inline: true,
   group: 'inline',
@@ -146,7 +162,12 @@ export const imageReferenceNode = $nodeSchema('imageReference', () => ({
     identifier: { default: '', validate: 'string' },
     label: { default: '', validate: 'string' },
     alt: { default: '', validate: 'string' },
-    referenceType: { default: 'full', validate: 'string' }
+    referenceType: { default: 'full', validate: 'string' },
+    // Default '' rather than undefined, matching imageSchemaWithWidth and
+    // pagebreakNode's `raw`: ProseMirror attrs must be JSON-serializable, and
+    // a missing attr is indistinguishable from an explicit undefined in
+    // toDOM/parseDOM.
+    width: { default: '', validate: 'string' }
   },
   parseDOM: [
     {
@@ -157,7 +178,8 @@ export const imageReferenceNode = $nodeSchema('imageReference', () => ({
           identifier: el.getAttribute('data-identifier') ?? '',
           label: el.getAttribute('data-label') ?? '',
           alt: el.getAttribute('data-alt') ?? '',
-          referenceType: el.getAttribute('data-reference-type') || 'full'
+          referenceType: el.getAttribute('data-reference-type') || 'full',
+          width: el.getAttribute('data-width') ?? ''
         }
       }
     }
@@ -170,9 +192,19 @@ export const imageReferenceNode = $nodeSchema('imageReference', () => ({
       'data-label': node.attrs.label,
       'data-alt': node.attrs.alt,
       'data-reference-type': node.attrs.referenceType,
+      'data-width': node.attrs.width,
       class: 'rounded bg-chrome-light px-1 text-12 text-text-secondary'
     },
-    `![${String(node.attrs.alt)}][${String(node.attrs.label || node.attrs.identifier)}]`
+    // The width is shown in the chip's own label, unlike an inline image
+    // (which the node view renders as a real, really-sized <img>). There is no
+    // image to size here -- the destination lives in a definition elsewhere --
+    // so without this the canvas would give the user no indication a size is
+    // set at all. This is DOM rendering only: an atom node with no content
+    // contributes nothing to `doc.textContent`, so it reaches neither Find nor
+    // any serialized output.
+    `![${String(node.attrs.alt)}][${String(node.attrs.label || node.attrs.identifier)}]${
+      node.attrs.width ? formatAttributeBlock(String(node.attrs.width)) : ''
+    }`
   ],
   parseMarkdown: {
     match: ({ type }) => type === 'imageReference',
@@ -181,7 +213,8 @@ export const imageReferenceNode = $nodeSchema('imageReference', () => ({
         identifier: typeof node.identifier === 'string' ? node.identifier : '',
         label: typeof node.label === 'string' ? node.label : '',
         alt: typeof node.alt === 'string' ? node.alt : '',
-        referenceType: typeof node.referenceType === 'string' ? node.referenceType : 'full'
+        referenceType: typeof node.referenceType === 'string' ? node.referenceType : 'full',
+        width: typeof node.width === 'string' ? node.width : ''
       })
     }
   },
@@ -194,6 +227,12 @@ export const imageReferenceNode = $nodeSchema('imageReference', () => ({
         alt: node.attrs.alt,
         referenceType: node.attrs.referenceType
       })
+      // A plain TEXT sibling, exactly as the sized `image` node does -- see the
+      // closing note in src/markdown/image-size.ts for why there is no
+      // `remarkImageAttrsToMarkdown` counterpart and why `{`/`}`/`%`/`=` are
+      // verified to serialize unescaped here.
+      const width = typeof node.attrs.width === 'string' ? node.attrs.width : ''
+      if (width) state.addNode('text', undefined, formatAttributeBlock(width))
     }
   }
 }))
