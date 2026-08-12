@@ -25,11 +25,14 @@ import type { WindowUiState } from '../menu/window-state'
 //  - View > Zoom In/Out/Actual Size are custom commands, NOT Electron's
 //    `zoomIn`/`zoomOut`/`resetZoom` roles. Those roles change Chromium's own
 //    webContents zoom factor, which scales the entire app shell (toolbar,
-//    sidebar, status bar) -- while this app's zoom control is a
-//    `transform: scale()` on the page canvas alone, which is what "zoom" means
-//    in a document editor. Worse, webContents zoom is exactly the factor
-//    src/main/index.ts's split-preview:setBounds handler multiplies its
-//    reported CSS rectangle by, so the two would compound.
+//    sidebar, status bar) -- while this app's zoom control is a CSS `zoom` on
+//    the page canvas alone, which is what "zoom" means in a document editor.
+//    (Written here as `transform: scale()` until the canvas moved to CSS
+//    `zoom`, which participates in layout; the argument is unaffected, since
+//    what matters is that it scales the page and not the chrome.) Worse,
+//    webContents zoom is exactly the factor src/main/index.ts's
+//    split-preview:setBounds handler multiplies its reported CSS rectangle
+//    by, so the two would compound.
 //
 //  - There is no Find role at all in Electron; Find/Find Next/Find Previous
 //    are commands routed into the renderer's own findStore.

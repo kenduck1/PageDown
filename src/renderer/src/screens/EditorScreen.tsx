@@ -1988,11 +1988,18 @@ function EditorScreen(): React.JSX.Element {
             // same way it is transform-adjusted), so SelectionBubble must
             // still NOT divide by zoom; and the bubble/slash palette still
             // render at EditorScreen's own root rather than inside this
-            // wrapper. That second one is now belt-and-braces rather than
-            // load-bearing -- a `transform` establishes a containing block for
-            // fixed-position descendants and `zoom` does not -- but the
-            // placement is also what keeps those surfaces from being SCALED,
-            // which is still exactly as true here.
+            // wrapper.
+            //
+            // That second one used to be described here as "now
+            // belt-and-braces rather than load-bearing", on the grounds that a
+            // `transform` establishes a containing block for fixed-position
+            // descendants and `zoom` does not. The premise is right and the
+            // conclusion drawn from it was wrong, so it is corrected rather
+            // than softened: measuring the real app shows `zoom` multiplies a
+            // fixed descendant's OFFSETS as well as its size (left:400 top:300
+            // renders at x=240 y=180 under `zoom: 0.6`), so nesting either
+            // surface here would still mis-anchor it. The placement stays
+            // fully load-bearing; only the mechanism changed.
             //
             // The wrapper takes `h-full` only in Source mode: SourceEditor is
             // a `h-full w-full` textarea, which needs a definite height to
@@ -2019,11 +2026,19 @@ function EditorScreen(): React.JSX.Element {
         // Reporting `zoom` here regardless would restate the exact defect this
         // control was already fixed for once -- a readout naming a scale the
         // pane is not rendering at -- only pointing the other way (it would now
-        // say 100% while the page renders at 71%). Split(source) has no fixed
-        // page width to fit, so `splitFitScale` is 1 there and this falls back
-        // to the user's zoom, which is also inapplicable but at least is not a
-        // number this screen invented.
-        zoom={splitFitApplies ? splitFitScale : zoom}
+        // say 100% while the page renders at 71%).
+        //
+        // KEYED ON `viewMode === 'split'`, NOT on `splitFitApplies`, and that
+        // is a fix rather than a tidy-up. Split(SOURCE) has no fixed page width
+        // to fit, so `splitFitScale` is 1 there -- but the old condition fell
+        // back to the user's `zoom` in exactly that case, which is the ONE
+        // number guaranteed not to be what the pane is rendering at: Split's
+        // two-pane row lives outside the zoom wrapper entirely, so a user who
+        // had picked 150% in Format saw the status bar keep saying 150% over a
+        // Split(source) pane rendering at 100%. `splitFitScale` is the honest
+        // answer in BOTH Split sub-modes, because "no fit applied" and "no zoom
+        // applied" are the same 1.
+        zoom={viewMode === 'split' ? splitFitScale : zoom}
         onZoomChange={setZoom}
         // See zoomApplies' own comment above: the control is disabled rather
         // than hidden, so the current level stays readable in Split mode
@@ -2046,11 +2061,16 @@ function EditorScreen(): React.JSX.Element {
       suppressed list, which need to know the modal is open regardless of
       which component renders it. */}
       {/* Rendered HERE, at this screen's root alongside the modals and Toast,
-      and deliberately NOT inside `document-content` -- the single-pane branch
-      wraps its pane in `transform: scale(zoom)`, and a transform establishes a
-      containing block for fixed-position descendants, so a bubble nested in
-      there would be positioned relative to the scaled wrapper and rendered at
-      the zoom factor's own size. See SelectionBubble.tsx's module comment.
+      and deliberately NOT inside `document-content` -- both the single-pane
+      branch and Split's left pane wrap their content in CSS `zoom`, which
+      multiplies a fixed-position descendant's OFFSETS as well as its size
+      (measured: a fixed box at left:400 top:300 lands at x=240 y=180 at 60%
+      size inside `zoom: 0.6`). A bubble nested in there would be both
+      mis-anchored and rendered at the zoom factor's own size. This used to
+      say "a transform establishes a containing block for fixed-position
+      descendants" -- true of the `transform: scale()` these wrappers once
+      used, and NOT true of `zoom`; the conclusion is unchanged, the mechanism
+      is not. See SelectionBubble.tsx's module comment for the measurement.
 
       `suppressed` is every overlay/composer that can be open at the same time:
       the two full-screen modals (which the bubble would otherwise sit on top

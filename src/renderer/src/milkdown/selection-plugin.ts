@@ -246,16 +246,24 @@ export function sameSnapshot(a: SelectionSnapshot | null, b: SelectionSnapshot |
  * The selection's on-screen box: the union of the coordinates of its two ends.
  *
  * NO ZOOM CORRECTION, and that is a real decision rather than an omission.
- * EditorScreen's single-pane branch wraps the canvas in `transform:
- * scale(zoom)`, but `coordsAtPos` bottoms out in `getClientRects()` /
- * `getBoundingClientRect()`, which per CSSOM-View already report POST-transform
- * viewport coordinates -- prosemirror-view's own `clientRect()` helper
- * corroborates this, carrying the comment "Adjust for elements with style
- * `transform: scale()`" and dividing by offsetWidth, i.e. treating that output
- * as already scaled. Dividing by `zoom` here is the exact mirror image of the
- * SplitPreview DIP trap (there: multiplying by an already-applied factor).
- * The overlay itself must then render OUTSIDE that transformed wrapper, since
- * a transform establishes a containing block for fixed-position descendants.
+ * EditorScreen's single-pane branch wraps the canvas in CSS `zoom` (and
+ * Split's left pane in the fit-to-width scale, the same way), but
+ * `coordsAtPos` bottoms out in `getClientRects()` / `getBoundingClientRect()`,
+ * which per CSSOM-View already report POST-scale viewport coordinates --
+ * prosemirror-view's own `clientRect()` helper corroborates this, carrying the
+ * comment "Adjust for elements with style `transform: scale()`" and dividing
+ * by offsetWidth, i.e. treating that output as already scaled. Dividing by
+ * `zoom` here is the exact mirror image of the SplitPreview DIP trap (there:
+ * multiplying by an already-applied factor).
+ *
+ * The overlay itself must still render OUTSIDE that wrapper -- but NOT for the
+ * reason this comment used to give. It said "a transform establishes a
+ * containing block for fixed-position descendants", which was true of the
+ * `transform: scale()` this wrapper used to be and is NOT true of `zoom`.
+ * Measured in the real app: a fixed box at left:400 top:300 lands at x=240
+ * y=180 at 60% size inside `zoom: 0.6` -- viewport-relative, but with its
+ * offsets AND its size multiplied. Same conclusion, different mechanism; see
+ * SelectionBubble.tsx's header for the full measurement.
  *
  * !!! JSDOM HAZARD, MEASURED, AND WORSE THAN IT LOOKS !!!
  * `view.coordsAtPos()` does NOT throw under jsdom -- it silently returns

@@ -58,7 +58,9 @@ import { launchIsolatedApp } from './electron-launch'
 // much slack each bound really has (this gate's own equivalent of the
 // findings-doc entry every other gate carries):
 //
-//   Format mode, default 900x670 window, zoom 1.0 --
+//   Format mode, at the THEN-default 900x670 window, zoom 1.0 (the default is
+//   now 1000x840 -- see window-bounds.ts; these numbers were taken before that
+//   change and are left as recorded rather than relabelled) --
 //     bubble {x: 317.47, y: 301.29, w: 285.91, h: 36}
 //     selection {x: 276, y: 345.29, w: 368.86, h: 19}
 //     gap below the bubble = EXACTLY 8.00px, i.e. FLOATING_ANCHOR_GAP.
