@@ -45,6 +45,21 @@ function matchedText(node: Comment): string {
  * "fails closed" comment -- an unpaired marker, or a marker spanning more
  * than one block) never becomes a `comment` mdast node at all, so it's
  * simply absent from this list -- not a special case here.
+ *
+ * SAME-ID OCCURRENCES COLLAPSE INTO ONE ENTRY, matching how
+ * resolveCommentCommand already sweeps the whole document by id rather than
+ * by mark instance -- one logical comment, one sidebar row, one React key.
+ * This is not defensive padding: files saved by an earlier build genuinely
+ * contain two marker pairs sharing one id for a comment spanning a
+ * hand-wrapped paragraph (each line was serialized as its own pair), and
+ * without this they rendered two identical rows under DUPLICATE React keys.
+ * Such a file re-serializes to a single pair on its next save, so this is
+ * the read side of that repair, not a permanent second representation.
+ *
+ * The FIRST occurrence wins for every scalar field, so `sourceOffset` -- the
+ * value the sidebar scrolls to -- points at where the marked span actually
+ * begins. `matchedText` concatenates the fragments in document order,
+ * because they are literally the pieces of one marked span.
  */
 export function extractComments(source: string): ExtractedComment[] {
   const parseProcessor = unified()
@@ -55,11 +70,22 @@ export function extractComments(source: string): ExtractedComment[] {
   const parsedTree = parseProcessor.parse(source) as Root
   const tree = parseProcessor.runSync(parsedTree) as Root
 
-  const comments: ExtractedComment[] = []
+  // A Map preserves first-insertion order, so the returned list stays in
+  // document order without a second sort.
+  const comments = new Map<string, ExtractedComment>()
   visit(tree, 'comment', (node: Comment) => {
     const sourceOffset = node.position?.start.offset
     if (sourceOffset == null) return
-    comments.push({
+    const existing = comments.get(node.id)
+    if (existing) {
+      const fragment = matchedText(node)
+      if (fragment !== '') {
+        existing.matchedText =
+          existing.matchedText === '' ? fragment : `${existing.matchedText} ${fragment}`
+      }
+      return
+    }
+    comments.set(node.id, {
       id: node.id,
       author: node.author,
       text: node.text,
@@ -69,5 +95,5 @@ export function extractComments(source: string): ExtractedComment[] {
     })
   })
 
-  return comments
+  return [...comments.values()]
 }

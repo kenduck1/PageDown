@@ -120,11 +120,25 @@ test('Gate 27: adding and resolving a comment through the real UI persists and u
     await paragraph.click({ clickCount: 3 })
 
     // Mod-Shift-M (the keyboard shortcut), NOT a click on the toolbar's own
-    // "Add comment" button -- a real, deterministic finding from building
-    // this gate, not a style choice: at the app's own default 900x670
-    // window (src/main/index.ts's createWindow), that button sits far
+    // "Add comment" button.
+    //
+    // HISTORICAL NOTE, KEPT BECAUSE IT NAMES A REAL BUG THAT WAS LATER FIXED
+    // ELSEWHERE. This was originally a deterministic finding from building
+    // this gate rather than a style choice -- but it described the app as it
+    // was, and both halves of that description have since moved: the default
+    // window is 1000x840 (window-bounds.ts's DEFAULT_WINDOW_WIDTH/HEIGHT, not
+    // the 900x670 named below), and the toolbar-reachability pass made every
+    // control reachable at that size and pinned it with
+    // gate33-toolbar-reachability.spec.ts. The workaround below is retained
+    // anyway: driving a shortcut is strictly more robust than driving a
+    // toolbar whose layout is not this gate's subject, and it matches
+    // gate17-find-replace.spec.ts's own precedent. What follows is the
+    // original finding, at the THEN-default 900x670 window.
+    //
+    // At the app's own then-default 900x670 window
+    // (src/main/index.ts's createWindow), that button sat far
     // enough right in the toolbar's scrollable region that scrolling it
-    // into view still leaves it UNDER the sticky left group (undo/redo +
+    // into view still left it UNDER the sticky left group (undo/redo +
     // paragraph-style/font/size, `sticky left-0 z-10`) -- confirmed
     // directly: Playwright's own actionability check reported the Font Size
     // <select> intercepting the click at the SAME coordinates on every
@@ -189,6 +203,79 @@ test('Gate 27: adding and resolving a comment through the real UI persists and u
     expect(savedResolved).not.toContain('<!--comment')
     expect(savedResolved).not.toContain('<!--/comment')
     expect(savedResolved).toContain('Original marked sentence.')
+  } finally {
+    await restoreRecents()
+    await rm(fixtureDir, { recursive: true, force: true })
+    await close()
+  }
+})
+
+// The SAME real-app flow as Test 1, but on a HAND-WRAPPED paragraph -- the
+// gesture that used to corrupt the document. Test 1's fixture is deliberately
+// left exactly as it was rather than replaced: with no line break in the
+// marked span, correct and incorrect behaviour coincide on that input, so it
+// structurally cannot discriminate here (the same anti-pattern CLAUDE.md
+// records for Gate 29's empty-paragraph fixture). Keeping both means the
+// single-line path stays covered and the wrapped path is covered too.
+//
+// What used to happen, measured end to end before the fix: TWO marker pairs
+// sharing one id, the user's paragraph permanently split in two, and a stray
+// visible backslash in the rendered output -- compounding on every
+// save/reload cycle.
+test('Gate 27: commenting a hand-wrapped paragraph writes ONE marker pair and does not split the paragraph', async () => {
+  test.setTimeout(90_000)
+
+  const body = '# Gate 27 Wrapped\n\nfirst line\nsecond line tail.\n'
+  const fixture = await openFixtureDocument(body)
+  const { close, win, fixtureDir, fixturePath, restoreRecents } = fixture
+
+  try {
+    const paragraph = win.locator('.milkdown-mount .ProseMirror p')
+    await expect(paragraph).toHaveText(/first line\s*second line tail\./)
+
+    await paragraph.click({ clickCount: 3 })
+    await win.keyboard.press(`${MOD}+Shift+m`)
+    await expect(win.getByRole('group', { name: 'Add comment' })).toBeVisible()
+    await win.getByRole('textbox', { name: 'Comment text' }).fill('spans a wrap')
+    await win.getByRole('button', { name: 'Add', exact: true }).click()
+
+    // TWO marked runs in the DOM, because @milkdown/preset-commonmark's
+    // hardbreakClearMarkPlugin refuses to let any mark sit on a hardbreak --
+    // that is expected and fine. What must NOT happen is those two runs
+    // reaching DISK as two marker pairs.
+    const marks = win.locator('.pagedown-comment-mark')
+    await expect(marks).toHaveCount(2)
+    const commentId = await marks.first().getAttribute('data-comment-id')
+    expect(commentId).toBeTruthy()
+    expect(await marks.nth(1).getAttribute('data-comment-id')).toBe(commentId)
+
+    await win.getByRole('button', { name: 'Save' }).click()
+    await expect
+      .poll(async () => (await readFile(fixturePath, 'utf8')).includes('<!--comment'), {
+        timeout: 10_000
+      })
+      .toBe(true)
+
+    const saved = await readFile(fixturePath, 'utf8')
+    expect(saved.match(/<!--comment id=/g) ?? []).toHaveLength(1)
+    expect(saved.match(/<!--\/comment id=/g) ?? []).toHaveLength(1)
+
+    // The rendered document -- what the paginated preview, the exported PDF
+    // and HTML export all show -- must be structurally identical to the
+    // uncommented original: same paragraph count, no stray backslash, and a
+    // soft wrap still a soft wrap rather than a hard <br>.
+    const renderedBefore = markdownToHtml(body).html
+    const renderedAfter = markdownToHtml(saved).html
+    const paragraphCount = (html: string): number => (html.match(/<p[\s>]/g) ?? []).length
+    expect(paragraphCount(renderedBefore)).toBe(1)
+    expect(paragraphCount(renderedAfter)).toBe(paragraphCount(renderedBefore))
+    expect(renderedAfter).not.toContain('\\')
+    expect(renderedAfter).not.toContain('<br')
+
+    // One logical comment, so exactly one sidebar row.
+    await win.getByRole('button', { name: 'Comments' }).click()
+    await expect(win.getByText('spans a wrap')).toHaveCount(1)
+    await expect(win.getByText(/"first line second line tail\."/)).toBeVisible()
   } finally {
     await restoreRecents()
     await rm(fixtureDir, { recursive: true, force: true })
