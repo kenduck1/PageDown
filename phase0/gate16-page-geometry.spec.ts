@@ -201,7 +201,16 @@ interface PreviewGeometryProbe {
 async function probePreviewGeometry(
   app: ElectronApplication
 ): Promise<PreviewGeometryProbe | null> {
-  return app.evaluate(async ({ BrowserWindow, WebContentsView }) => {
+  return app.evaluate(async ({ BrowserWindow, WebContentsView }, scaleJs) => {
+    // PREVIEW_DOCUMENT_SCALE_JS is threaded in as evaluate()'s ARGUMENT, not
+    // referenced directly inside this callback. An app.evaluate() callback runs
+    // in a bare V8 context with no module resolution, so a transpiled import
+    // binding is not reachable from inside one -- referencing it directly
+    // fails at runtime with `ReferenceError: _gateGeometry is not defined`,
+    // which is exactly how this shipped and how all three of these gates
+    // failed. gate-geometry.ts's own module comment states this rule for
+    // LETTER_GEOMETRY; it applies identically here.
+
     const mainWindow = BrowserWindow.getAllWindows().find(
       (w) => !w.isDestroyed() && w.webContents.getURL().startsWith('file://')
     )
@@ -228,7 +237,7 @@ async function probePreviewGeometry(
         // divided back out. See gate-geometry.ts's PREVIEW_DOCUMENT_SCALE_JS
         // for the measurement behind this and for why offsetWidth is not the
         // answer. The scale itself is gate35's to pin, not this gate's.
-        var scale = ${PREVIEW_DOCUMENT_SCALE_JS}
+        var scale = ${scaleJs}
         function box(el) {
           if (!el) return null
           var r = el.getBoundingClientRect()
@@ -253,7 +262,7 @@ async function probePreviewGeometry(
       })()
     `)) as string
     return JSON.parse(raw) as PreviewGeometryProbe
-  })
+  }, PREVIEW_DOCUMENT_SCALE_JS)
 }
 
 interface EditorGeometryMeasurement {

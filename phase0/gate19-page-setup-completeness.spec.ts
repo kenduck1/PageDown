@@ -88,7 +88,16 @@ interface PreviewProbe {
 // harness), parked off-screen at {x:-9999,y:-9999}; filtering to a genuinely
 // on-screen rectangle isolates the split-preview harness's view from it.
 async function probePreview(app: ElectronApplication): Promise<PreviewProbe | null> {
-  return app.evaluate(async ({ BrowserWindow, WebContentsView }) => {
+  return app.evaluate(async ({ BrowserWindow, WebContentsView }, scaleJs) => {
+    // PREVIEW_DOCUMENT_SCALE_JS is threaded in as evaluate()'s ARGUMENT, not
+    // referenced directly inside this callback. An app.evaluate() callback runs
+    // in a bare V8 context with no module resolution, so a transpiled import
+    // binding is not reachable from inside one -- referencing it directly
+    // fails at runtime with `ReferenceError: _gateGeometry is not defined`,
+    // which is exactly how this shipped and how all three of these gates
+    // failed. gate-geometry.ts's own module comment states this rule for
+    // LETTER_GEOMETRY; it applies identically here.
+
     const mainWindow = BrowserWindow.getAllWindows().find(
       (w) => !w.isDestroyed() && w.webContents.getURL().startsWith('file://')
     )
@@ -112,7 +121,7 @@ async function probePreview(app: ElectronApplication): Promise<PreviewProbe | nu
         // px, which is a document-space question, not a "how big is it on
         // screen at the current divider position" one. See
         // gate-geometry.ts's PREVIEW_DOCUMENT_SCALE_JS.
-        var scale = ${PREVIEW_DOCUMENT_SCALE_JS}
+        var scale = ${scaleJs}
         function box(el) {
           if (!el) return null
           var r = el.getBoundingClientRect()
@@ -149,7 +158,7 @@ async function probePreview(app: ElectronApplication): Promise<PreviewProbe | nu
       })()
     `)) as string
     return JSON.parse(raw) as PreviewProbe
-  })
+  }, PREVIEW_DOCUMENT_SCALE_JS)
 }
 
 // Body text long enough to force more than one page at every page size this
