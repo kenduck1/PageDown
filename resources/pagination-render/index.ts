@@ -88,6 +88,16 @@ import {
 } from '../../src/typography/document-style'
 import type { RenderRequestMessage } from '../../src/pagination/render-message'
 import { clampPageIndex, pickCurrentPage, type PageNavState } from '../../src/pagination/page-nav'
+// The SAME fit arithmetic and the SAME argued floor Split mode's editor pane
+// uses, deliberately shared rather than re-derived -- the two panes sit side
+// by side at the same divider position showing the same document at the same
+// 14px baseline, so a second floor here would mean one pane going legible
+// while the other went small, at a boundary neither of them explains. Its home
+// under src/renderer/src/lib is historical (it was written for the editor pane
+// first); it is pure, dependency-free arithmetic, and importing it here is the
+// same cross-tree reach this file already makes for the bundled font assets
+// above. See that module's own header for the sandbox-bundling contract.
+import { computeFitScale } from '../../src/renderer/src/lib/fit-scale'
 import {
   readPageBlockIndices,
   recoverPageBreaks,
@@ -841,6 +851,134 @@ window.__pagedownPageNav = {
     return currentPageState(readPageElements())
   }
 }
+
+// --- Split-mode fit-to-width for the PREVIEW pane -------------------------
+//
+// Split mode's editor pane already scales its fixed-width page card down to
+// fit (src/renderer/src/lib/fit-scale.ts). The preview pane beside it did not,
+// and that asymmetry was measured rather than assumed: at the divider position
+// the editor's own fit-to-width documents as its success case, this context
+// showed roughly 193px of an 816px page -- about 24% -- i.e. the fix for one
+// pane had made the other one relatively worse.
+//
+// MECHANISM: CSS `zoom` on #content-root, applied AFTER pagination, driven by
+// this context's own viewport width. Three alternatives were considered and
+// each is rejected for a concrete reason, recorded here because every one of
+// them looks more natural than what is actually correct:
+//
+//  1. `webContents.setZoomFactor()` on the preview's own view, from main. The
+//     obvious candidate, and genuinely available -- but Chromium's zoom policy
+//     is SAME-ORIGIN, propagating "across all instances of windows with the
+//     same domain" (Electron's own `setZoomLevel` documentation says exactly
+//     this, node_modules/electron/electron.d.ts). Every pagination harness in
+//     this app loads the identical `pagedown-render://render/index.html` in
+//     the identical session (ensureRenderInfraRegistered), so a zoom set for
+//     the live preview would land on the PDF-export and thumbnail harnesses
+//     too, and persist in that session's zoom map for the rest of the app's
+//     life -- silently breaking "the preview and the exported PDF are
+//     pixel-identical by construction". It would also feed back on itself
+//     here: zooming a webContents changes its own `innerWidth`, which is the
+//     input this scale is computed from.
+//  2. Sending a smaller `geometry`. That is not scaling, it is re-paginating
+//     at a different page size: page counts would move as the user dragged
+//     the divider.
+//  3. `transform: scale()`. Same reason the editor pane rejected it: a
+//     transform does not participate in layout, so this context's own scroll
+//     extents (and therefore `scrollIntoView`, and `pickCurrentPage`'s
+//     viewport-relative page tops) would still describe the unscaled page.
+//     `zoom` participates, so page navigation above needs no change at all.
+//
+// The floor is MIN_FIT_SCALE, unchanged and shared. Its argument transfers
+// verbatim: below the floor the pane scrolls anyway, so shrinking further buys
+// less scrolling while still scrolling, at the cost of the only thing left
+// worth optimising -- whether the text can be read. It binds harder here than
+// on the editor side, because at the default 50/50 divider the preview pane is
+// the same ~389px and a page needs ~0.47 to fit it: the cost is that the
+// preview still scrolls horizontally at the default divider, showing ~68% of
+// the page instead of ~48%, and only genuinely fits once the divider is
+// dragged to give the preview about three quarters of the canvas. Fitting
+// exactly at 389px would mean 6.6px body text, which is not a preview of
+// anything.
+let previewFitStyle: HTMLStyleElement | undefined
+
+// The page width the CURRENT render is being fitted to, or 0 for "this
+// caller did not ask to be fitted" -- which is every harness except Split
+// mode's live preview. Module state rather than a parameter because the input
+// that changes most often (the viewport, via a divider drag) arrives as a
+// `resize` event with no render attached to it.
+let previewFitPageWidthPx = 0
+
+// The two rules that make the pane's width a MEASURABLE, STABLE number, as
+// opposed to the scale itself. Both exist only in a fitting harness, and both
+// are load-bearing:
+//
+//   `scrollbar-gutter: stable` closes a real feedback loop -- a document short
+//   enough to lose its vertical scrollbar widens the content box, which raises
+//   the scale, which makes the content taller, which brings the scrollbar
+//   back. The editor pane pins its own copy of this loop with the same
+//   declaration.
+//
+//   `body { margin: 0 }` reclaims the UA's default 8px-a-side body margin.
+//   Invisible here (this context paints white on white, so that margin is not
+//   a visible gutter), and worth 16px of a pane where 16px decides the
+//   outcome: at the widest divider setting the pane is 585px, a fitted Letter
+//   page at the 0.71 the arithmetic wants is 579.4px, and the same page at the
+//   0.70 the margin forces it down to is 571.2px inside a 569px box -- i.e.
+//   keeping the margin turns "it fits" into "it overflows by 2px", which is
+//   the whole user-visible point of the widest setting.
+//
+// Deliberately NOT emitted for a non-fitting harness. A thumbnail captures a
+// view sized to exactly one page, so changing its body margin would move what
+// that capture frames.
+const PREVIEW_FIT_CHROME_CSS = 'html { scrollbar-gutter: stable; }\nbody { margin: 0; }'
+
+function applyPreviewFitScale(): void {
+  const fitting = previewFitPageWidthPx > 0
+  // Nothing to say and nothing said before: stay out of <head> entirely, so a
+  // headless harness never grows an element it has no use for.
+  if (!fitting && !previewFitStyle) return
+  if (!previewFitStyle) {
+    // `document.createElement`, so the nonce shim at the top of this file
+    // stamps it -- an inline `style` attribute would be blocked outright by
+    // this context's style-src. Created once and rewritten thereafter, the
+    // same shape as applyMermaidErrorSizes, so a long-lived harness cannot
+    // accumulate one of these per render.
+    previewFitStyle = document.createElement('style')
+    document.head.appendChild(previewFitStyle)
+  }
+
+  // TWO WRITES, AND THE ORDER IS THE POINT. The chrome rules above change the
+  // very box this function then measures, so writing them together with the
+  // scale would compute the first fitting render's scale against the
+  // pre-reset, 16px-narrower body -- and then never revisit it until the next
+  // resize, since nothing else invalidates it. Writing the chrome first and
+  // reading `clientWidth` second is what makes the measurement see the reset:
+  // `clientWidth` is a forced-layout property, so the read flushes the style
+  // change rather than observing a stale box.
+  previewFitStyle.textContent = PREVIEW_FIT_CHROME_CSS
+
+  // `document.body.clientWidth`, and BOTH of the things it is not are
+  // deliberate. Not `window.innerWidth`: that is a border-box measurement
+  // still containing a classic vertical scrollbar's track, so fitting against
+  // it would overflow by the scrollbar's width on Windows/Linux while being
+  // silently correct on macOS's overlay scrollbars -- exactly the
+  // platform-split bug computeFitScale's own doc comment warns its callers
+  // about. And not `documentElement.clientWidth` either: that is the viewport,
+  // whereas #content-root is a child of <body> and gets whatever <body>'s own
+  // content box is -- reading the body keeps this correct if <body> ever gains
+  // padding or a border, without another round of this same lesson. It cannot
+  // become self-referential: the `zoom` below is on #content-root, a
+  // DESCENDANT, so it never moves the box being measured.
+  const scale = fitting ? computeFitScale(document.body.clientWidth, previewFitPageWidthPx) : 1
+  previewFitStyle.textContent = `${PREVIEW_FIT_CHROME_CSS}\n#content-root { zoom: ${scale}; }`
+}
+
+// A divider drag resizes this view through WebContentsView.setBounds() and
+// nothing re-renders, so `resize` is the only signal that the fit needs
+// recomputing. Pure CSS from here: no re-pagination, no IPC, and no round
+// trip through the harness's serialized work queue -- which is what makes
+// this cheap enough to run on every frame of a drag.
+window.addEventListener('resize', applyPreviewFitScale)
 
 // Tracks the most recently created Previewer so its Polisher's injected
 // <style> elements can be torn down before the next run starts. Neither
@@ -2002,8 +2140,20 @@ window.addEventListener('message', async (event: MessageEvent<IncomingMessage>) 
   // result against and no caller waiting on one.
   if (event.data?.type !== 'render') return
 
-  const { requestId, html, geometry, documentStyle } = event.data
+  const { requestId, html, geometry, documentStyle, fitToWidth } = event.data
   currentRequestId = requestId
+
+  // Fit-to-width OFF for the whole of this render, restored only once the
+  // result below has been measured. Not housekeeping: Paged.js lays out
+  // against real computed lengths, and every post-pagination measurement this
+  // handler takes (measureDiagramBoxes, measureImageBoxes, and Gate 3's
+  // fractional-pixel diagram pins behind them) reads
+  // getBoundingClientRect(), which comes back already scaled under an
+  // ancestor `zoom`. On a long-lived harness -- which is exactly the harness
+  // that asks for fitting -- leaving the previous render's scale in place
+  // would silently multiply this render's numbers by it.
+  previewFitPageWidthPx = 0
+  applyPreviewFitScale()
 
   // The sandbox's <body> carries `.pagedown-document` statically
   // (index.html); theme and font are per-document, so they're set per
@@ -2265,6 +2415,15 @@ window.addEventListener('message', async (event: MessageEvent<IncomingMessage>) 
       imageBoxes: measureImageBoxes(root),
       pageBreaks: recoverPageBreaks(readPageBlockIndices(root.querySelectorAll(PAGE_SELECTOR)))
     }
+
+    // Strictly AFTER `result` is built -- every measurement inside that object
+    // literal has already been taken, in the unscaled document coordinate
+    // space they are pinned in. Before publishing, so a caller that probes the
+    // DOM the moment its result arrives sees the finished state rather than a
+    // frame of unscaled page.
+    previewFitPageWidthPx = fitToWidth === true ? geometry.pageWidthPx : 0
+    applyPreviewFitScale()
+
     window.__pagedownResult = result
   } catch (err) {
     // Without this, a rejected/thrown previewer.preview() (which Tasks 7-10

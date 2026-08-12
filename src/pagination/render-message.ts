@@ -31,4 +31,28 @@ export interface RenderRequestMessage {
   requestId: string
   geometry: PageGeometry
   documentStyle: DocumentStyle
+  /**
+   * Whether this render's output should be scaled down (visually only, after
+   * pagination) so a full page fits the render context's own viewport width.
+   *
+   * OPTIONAL, defaulting to "no", and that is a deliberate inversion of this
+   * module's usual make-it-required discipline. `geometry`/`documentStyle` are
+   * required because a sender that forgets one produces a silently WRONG
+   * render (a `@page { size: NaNin }` rule, a missing theme class). This field
+   * fails the other way round: forgetting it costs a preview that is not
+   * fitted -- visible, cosmetic, recoverable -- while a sender that set it by
+   * accident would scale a PDF export or a Home-screen thumbnail. Defaulting
+   * to `false` means every existing sender, and every future one that does not
+   * think about this, keeps producing true-to-size output.
+   *
+   * Only `src/main/split-preview-window.ts` sets it: Split mode's preview is
+   * the one surface whose viewport is an arbitrary, user-draggable fraction of
+   * the window rather than exactly one page wide. It CANNOT be inferred inside
+   * the render context from the viewport alone -- every headless harness
+   * (thumbnails, page count, PDF export) sizes its view to exactly
+   * `PAGE_WIDTH_PX`, so "is my viewport narrower than a page?" answers yes for
+   * them too once the fit gutter is subtracted, and they would quietly render
+   * at 0.99.
+   */
+  fitToWidth?: boolean
 }

@@ -227,7 +227,18 @@ export async function createSplitPreviewHarness(
         html,
         requestId,
         geometry,
-        documentStyle
+        documentStyle,
+        // The ONE harness that asks for fit-to-width, and the only one that
+        // may. Every other consumer of the render context (thumbnails, page
+        // count, PDF export, print, the Phase 0 spike harness) sizes its view
+        // to exactly one page and needs true-to-size output; this one sits in
+        // a pane whose width is a user-draggable fraction of the window, so
+        // an unscaled 816px Letter page showed roughly 193px of itself at the
+        // divider position the editor pane's own fit-to-width calls its
+        // success case. See the render context's own applyPreviewFitScale for
+        // the mechanism and for why this is a per-request flag rather than
+        // something the sandbox works out from its own viewport.
+        fitToWidth: true
       }
       await view.webContents.executeJavaScript(
         `window.postMessage(${JSON.stringify(message)}, '*')`
