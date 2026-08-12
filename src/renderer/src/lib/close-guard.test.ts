@@ -180,6 +180,89 @@ describe('confirmWindowClose', () => {
     expect(window.api.confirmDiscardChanges).toHaveBeenCalledTimes(1)
   })
 
+  it('destroys NOTHING when a later tab is cancelled, after an earlier one was discarded', async () => {
+    // BUG 1. The guard used to clear the autosave and close each tab AS IT WAS
+    // ANSWERED, then return false on a later Cancel -- so "Cancel" did not
+    // cancel: tab `a` was already gone, and its version-history snapshots
+    // already cleared, by the time tab `b`'s prompt was even shown. This is
+    // the document-level twin of the window-level bug main/index.ts's
+    // `before-quit` handler already fixed, and states the principle for:
+    // nothing may be destroyed until the whole decision is known.
+    setTabs([
+      tab({ id: 'a', filePath: '/tmp/a.md', isDirty: true }),
+      tab({ id: 'b', filePath: '/tmp/b.md', isDirty: true })
+    ])
+    vi.mocked(window.api.confirmDiscardChanges).mockImplementation(async (label) =>
+      label === 'a.md' ? 'discard' : 'cancel'
+    )
+
+    await expect(confirmWindowClose()).resolves.toBe(false)
+    expect(window.api.clearPendingAutosave).not.toHaveBeenCalled()
+    expect(useDocumentStore.getState().tabs.map((t) => t.id)).toEqual(['a', 'b'])
+    expect(useDocumentStore.getState().tabs.every((t) => t.isDirty)).toBe(true)
+  })
+
+  it('writes NOTHING when a later tab is cancelled, after an earlier one chose Save', async () => {
+    // The same two-phase property from the write side. Saving is not
+    // destructive, but deferring every action until the whole sequence has
+    // been answered is what makes "Cancel" mean "put everything back" rather
+    // than "stop here, keep whatever already happened".
+    setTabs([
+      tab({ id: 'a', filePath: '/tmp/a.md', content: '# A', isDirty: true }),
+      tab({ id: 'b', filePath: '/tmp/b.md', isDirty: true })
+    ])
+    vi.mocked(window.api.confirmDiscardChanges).mockImplementation(async (label) =>
+      label === 'a.md' ? 'save' : 'cancel'
+    )
+
+    await expect(confirmWindowClose()).resolves.toBe(false)
+    expect(window.api.saveFile).not.toHaveBeenCalled()
+    expect(useDocumentStore.getState().tabs.every((t) => t.isDirty)).toBe(true)
+  })
+
+  it('applies every decision once the whole sequence is answered', async () => {
+    // The other half of the two-phase split: a run that reaches the end must
+    // still genuinely save what was answered "Save" and discard what was
+    // answered "Don't Save".
+    setTabs([
+      tab({ id: 'a', filePath: '/tmp/a.md', content: '# A', isDirty: true }),
+      tab({ id: 'b', filePath: '/tmp/b.md', isDirty: true })
+    ])
+    vi.mocked(window.api.confirmDiscardChanges).mockImplementation(async (label) =>
+      label === 'a.md' ? 'save' : 'discard'
+    )
+    vi.mocked(window.api.saveFile).mockResolvedValue({ filePath: '/tmp/a.md', mtimeMs: 1 })
+
+    await expect(confirmWindowClose()).resolves.toBe(true)
+    expect(window.api.saveFile).toHaveBeenCalledWith('/tmp/a.md', '# A', null)
+    expect(window.api.clearPendingAutosave).toHaveBeenCalledWith('/tmp/b.md')
+    expect(useDocumentStore.getState().tabs.map((t) => t.id)).toEqual(['a'])
+  })
+
+  it('discards nothing when a deferred Save fails', async () => {
+    // Every save runs before any discard, so a save that turns out to have
+    // failed -- which is only discoverable in phase two, after every prompt
+    // has been answered -- still leaves the other tab's work intact.
+    //
+    // The DISCARDED tab is deliberately first in the list: that is the order
+    // in which the old close-as-you-go loop reached it before ever attempting
+    // the save that fails, so this reproduces a real discard-then-fail rather
+    // than passing on the strength of the failing save simply coming first.
+    setTabs([
+      tab({ id: 'b', filePath: '/tmp/b.md', isDirty: true }),
+      tab({ id: 'a', filePath: null, content: '# Untitled work', isDirty: true })
+    ])
+    vi.mocked(window.api.confirmDiscardChanges).mockImplementation(async (label) =>
+      label === 'Untitled' ? 'save' : 'discard'
+    )
+    // A cancelled Save-As dialog: this codebase's own "the write didn't happen".
+    vi.mocked(window.api.saveFile).mockResolvedValue(null)
+
+    await expect(confirmWindowClose()).resolves.toBe(false)
+    expect(window.api.clearPendingAutosave).not.toHaveBeenCalled()
+    expect(useDocumentStore.getState().tabs.map((t) => t.id)).toEqual(['b', 'a'])
+  })
+
   it('terminates rather than looping when the last dirty tab is discarded', async () => {
     // closeTab never leaves zero tabs -- it replaces a discarded last tab with
     // a fresh blank one. That replacement is CLEAN, which is what stops the

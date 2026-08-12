@@ -32,6 +32,14 @@ export function setCloseGuardFlush(flush: (() => void) | null): void {
   flushEditor = flush
 }
 
+// One answered prompt, held until the WHOLE sequence has been answered. See
+// confirmWindowClose's two-phase comment for why nothing is acted on as it is
+// answered.
+interface CloseDecision {
+  tabId: string
+  action: 'save' | 'discard'
+}
+
 /**
  * Resolves true when every dirty document has been dealt with and the window
  * may close, false when the user cancelled.
@@ -57,12 +65,35 @@ export async function confirmWindowClose(): Promise<boolean> {
   // otherwise land AFTER we had already decided a tab was clean.
   flushEditor?.()
 
+  // TWO PHASES, and the split is the whole point -- the document-level twin of
+  // the window-level sequence main/index.ts's `before-quit` handler already
+  // runs, and the same bug it already fixed.
+  //
+  // This used to be ONE loop that cleared the pending autosave and closed each
+  // tab AS IT WAS ANSWERED, then returned false on a later Cancel. So "Cancel"
+  // did not cancel: with two dirty tabs, answering "Don't Save" for the first
+  // and then Cancel for the second left the first ALREADY closed and its
+  // version-history snapshots ALREADY cleared -- unrecoverably, with no way
+  // back for a user who had been intending to reconsider by the end of the
+  // sequence. Nothing may be destroyed until the whole decision is known.
+  //
+  // Phase 1 therefore only ASKS, recording each answer and touching nothing.
+  // Phase 2 applies the recorded answers, and only runs at all once every
+  // prompt has been answered without a Cancel.
+  const decisions: CloseDecision[] = []
+  // Tabs already answered for. Phase 1 changes nothing about a tab's own
+  // dirtiness, so -- unlike the old loop, where saving/closing removed each
+  // tab from consideration on its own -- this set is what makes the pass
+  // terminate: every iteration adds exactly one id and `tabs` is finite.
+  const answered = new Set<string>()
+
   for (;;) {
     const state = useDocumentStore.getState()
     // Re-read from the store on every pass, never from a list captured before
-    // the first await: saving, discarding and switching all mutate `tabs`.
-    const dirtyTab = state.tabs.find((tab) => tab.isDirty)
-    if (!dirtyTab) return true
+    // the first await: switching tabs mutates `tabs`, and a late flush from a
+    // remounting editor can still dirty one during this phase.
+    const dirtyTab = state.tabs.find((tab) => tab.isDirty && !answered.has(tab.id))
+    if (!dirtyTab) break
 
     // Show the document being asked about. Two independent reasons, and the
     // second is a correctness requirement rather than a nicety: a native
@@ -76,33 +107,58 @@ export async function confirmWindowClose(): Promise<boolean> {
     if (dirtyTab.id !== state.activeTabId) state.switchTab(dirtyTab.id)
 
     const choice = await window.api.confirmDiscardChanges(tabLabel(dirtyTab.filePath))
+    // Nothing has been applied yet, so there is nothing to undo -- which is
+    // exactly what makes this return honest.
     if (choice === 'cancel') return false
 
-    if (choice === 'save') {
-      await useDocumentStore.getState().save()
-      // Re-read THIS tab by id, never the top-level isDirty mirror -- the same
-      // race EditorScreen's own dirty-tab close documents at length: save() is
-      // a plain IPC round trip with no modal dialog for an already-known path,
-      // and a tab switch during it would make the mirror describe a different
-      // document. A still-dirty tab means the write genuinely did not happen
-      // (an error, or a cancelled Save-As for a never-saved document), and a
-      // failed save must never fall through into closing the window.
-      const saved = useDocumentStore.getState().tabs.find((tab) => tab.id === dirtyTab.id)
-      if (saved?.isDirty) return false
-      continue
-    }
-
-    // "Don't Save": clear any pending autosave snapshot first, so the discarded
-    // edit cannot silently reappear as a "recovered" document on the next open
-    // (the exact failure EditorScreen's own discard path documents), then close
-    // the tab so a later switch back cannot resurrect it either. Guarded on
-    // filePath because version-history storage is keyed by path -- an unsaved
-    // document has no snapshots to clear. Fire-and-forget: the discard decision
-    // is already final, and clearPendingAutosave's own IPC handler validates
-    // the path and never rejects.
-    if (dirtyTab.filePath) void window.api.clearPendingAutosave(dirtyTab.filePath)
-    // Terminates: closeTab removes this tab, and its "never leave zero tabs"
-    // replacement is a fresh CLEAN blank tab, so the loop cannot cycle on it.
-    useDocumentStore.getState().closeTab(dirtyTab.id)
+    answered.add(dirtyTab.id)
+    decisions.push({ tabId: dirtyTab.id, action: choice === 'save' ? 'save' : 'discard' })
   }
+
+  // PHASE 2a -- every save, BEFORE any discard. That ordering is load-bearing
+  // rather than tidy: a save can still fail (a cancelled Save-As, a disk
+  // error) or be answered "Reload" at the external-change dialog, and both are
+  // only discoverable here, after every prompt has been answered. Running the
+  // discards first would mean a save failing at that point had already
+  // destroyed an unrelated tab's work.
+  for (const { tabId, action } of decisions) {
+    if (action !== 'save') continue
+    const state = useDocumentStore.getState()
+    // A tab can genuinely vanish between the two phases (an ErrorBoundary
+    // "Save my work" pass, another window's IPC). Nothing left to save.
+    if (!state.tabs.some((tab) => tab.id === tabId)) continue
+    if (tabId !== state.activeTabId) state.switchTab(tabId)
+
+    await useDocumentStore.getState().save()
+    // Re-read THIS tab by id, never the top-level isDirty mirror -- the same
+    // race EditorScreen's own dirty-tab close documents at length: save() is
+    // a plain IPC round trip with no modal dialog for an already-known path,
+    // and a tab switch during it would make the mirror describe a different
+    // document. A still-dirty tab means the write genuinely did not happen
+    // (an error, or a cancelled Save-As for a never-saved document), and a
+    // failed save must never fall through into closing the window.
+    const saved = useDocumentStore.getState().tabs.find((tab) => tab.id === tabId)
+    if (saved?.isDirty) return false
+  }
+
+  // PHASE 2b -- the discards, now that every save has genuinely landed.
+  for (const { tabId, action } of decisions) {
+    if (action !== 'discard') continue
+    const discarding = useDocumentStore.getState().tabs.find((tab) => tab.id === tabId)
+    if (!discarding) continue
+    // Clear any pending autosave snapshot first, so the discarded edit cannot
+    // silently reappear as a "recovered" document on the next open (the exact
+    // failure EditorScreen's own discard path documents), then close the tab
+    // so a later switch back cannot resurrect it either. Guarded on filePath
+    // because version-history storage is keyed by path -- an unsaved document
+    // has no snapshots to clear. Fire-and-forget: the discard decision is
+    // final by now, and clearPendingAutosave's own IPC handler validates the
+    // path and never rejects.
+    if (discarding.filePath) void window.api.clearPendingAutosave(discarding.filePath)
+    // closeTab additionally discards the tab's unsaved DRAFT if it has one --
+    // see its own comment for why that lives there rather than here.
+    useDocumentStore.getState().closeTab(tabId)
+  }
+
+  return true
 }
