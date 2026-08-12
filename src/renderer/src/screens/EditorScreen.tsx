@@ -942,7 +942,18 @@ function EditorScreen(): React.JSX.Element {
     if (choice === 'cancel') return
     if (choice === 'save') {
       editorRef.current?.flush()
-      await save()
+      const outcome = await save()
+      // "Reload" at an mtime conflict is NOT an answer to "save before
+      // leaving?" -- it is a request to SEE the file as it now is, and it
+      // deliberately writes nothing (see file-io.ts's saveFile). Navigating
+      // Home on the strength of it would discard the edit AND deny the user
+      // the one thing they just asked for. So abandon the navigation and
+      // leave them on the reloaded document.
+      //
+      // This needs the explicit outcome rather than the isDirty check below:
+      // 'reloaded' and 'saved' BOTH leave the tab clean with a fresh
+      // mtimeMs, so they are indistinguishable from store state alone.
+      if (outcome === 'reloaded') return
       // documentStore.save() only ever clears isDirty on a genuine
       // successful save -- checking isDirty (not error) here also catches
       // the case a thrown error wouldn't: the user cancelling the native
@@ -1066,7 +1077,12 @@ function EditorScreen(): React.JSX.Element {
     const choice = await window.api.confirmDiscardChanges(tabLabel(target.filePath))
     if (choice === 'cancel') return
     if (choice === 'save') {
-      await save()
+      const outcome = await save()
+      // Same reasoning as handleGoHome's own 'reloaded' guard, and the
+      // consequence here is strictly worse: closing the tab would discard
+      // BOTH the user's edit and the disk content that was just loaded to
+      // replace it, leaving nothing on screen and nothing recoverable.
+      if (outcome === 'reloaded') return
       const targetTab = useDocumentStore.getState().tabs.find((tab) => tab.id === tabId)
       if (targetTab?.isDirty) return
     }
@@ -1452,7 +1468,17 @@ function EditorScreen(): React.JSX.Element {
         .getState()
         .tabs.find((tab) => tab.id === targetTabId)?.isDirty
       if (dirtyBeforeRestore) {
-        await save()
+        const outcome = await save()
+        // A 'reloaded' outcome defeats the very guard this block exists to
+        // provide, which is why it is checked FIRST and separately. Reload
+        // writes nothing and leaves the tab clean, so the isDirty re-read
+        // below would read "the save succeeded" and fall through to
+        // replaceContentForTab -- overwriting the disk content that was
+        // just loaded, on top of the edit already discarded to load it.
+        // Abandon the restore instead; the document now shows what is on
+        // disk, and the user can restore again from there if they still
+        // want to.
+        if (outcome === 'reloaded') return
         // documentStore.save() never throws -- a failure (disk error, or
         // the user cancelling a Save-As dialog for a never-saved document)
         // is caught into `error` and leaves the target tab's OWN isDirty
