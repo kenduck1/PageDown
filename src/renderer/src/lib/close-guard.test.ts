@@ -263,6 +263,56 @@ describe('confirmWindowClose', () => {
     expect(useDocumentStore.getState().tabs.map((t) => t.id)).toEqual(['b', 'a'])
   })
 
+  it('refuses to close when Save was answered "Reload" at the external-change dialog', async () => {
+    // BUG 2. Reload writes nothing and deliberately records no version-history
+    // snapshot (the content captured before the await is the user's now-
+    // DISCARDED edit -- snapshotting it would make the very next open silently
+    // "recover" the edit the user just chose to throw away). Correct for a
+    // save; catastrophic during a close, because the guard then saw a clean
+    // tab and closed the window: the edits were gone with no recovery path,
+    // and the user never even got to look at the disk content they had just
+    // asked to load.
+    //
+    // So Reload aborts the close. It is a request to SEE something, not an
+    // answer to "save before closing?", and honouring it means leaving the
+    // window open on what was loaded.
+    setTabs([tab({ id: 'a', filePath: '/tmp/a.md', content: '# my edit', isDirty: true })])
+    vi.mocked(window.api.confirmDiscardChanges).mockResolvedValue('save')
+    vi.mocked(window.api.saveFile).mockResolvedValue({
+      filePath: '/tmp/a.md',
+      mtimeMs: 7000,
+      reloadedContent: '# what is on disk now'
+    })
+
+    await expect(confirmWindowClose()).resolves.toBe(false)
+    // The tab survives, showing what was loaded rather than what was lost.
+    const tabs = useDocumentStore.getState().tabs
+    expect(tabs).toHaveLength(1)
+    expect(tabs[0].content).toBe('# what is on disk now')
+  })
+
+  it('discards nothing when a deferred Save is answered "Reload"', async () => {
+    // The Reload abort has to land in the same place a failed save does --
+    // before ANY discard runs -- or the two-phase guarantee holds for one kind
+    // of unsuccessful save and not the other.
+    setTabs([
+      tab({ id: 'b', filePath: '/tmp/b.md', isDirty: true }),
+      tab({ id: 'a', filePath: '/tmp/a.md', content: '# my edit', isDirty: true })
+    ])
+    vi.mocked(window.api.confirmDiscardChanges).mockImplementation(async (label) =>
+      label === 'a.md' ? 'save' : 'discard'
+    )
+    vi.mocked(window.api.saveFile).mockResolvedValue({
+      filePath: '/tmp/a.md',
+      mtimeMs: 7000,
+      reloadedContent: '# what is on disk now'
+    })
+
+    await expect(confirmWindowClose()).resolves.toBe(false)
+    expect(window.api.clearPendingAutosave).not.toHaveBeenCalled()
+    expect(useDocumentStore.getState().tabs.map((t) => t.id)).toEqual(['b', 'a'])
+  })
+
   it('terminates rather than looping when the last dirty tab is discarded', async () => {
     // closeTab never leaves zero tabs -- it replaces a discarded last tab with
     // a fresh blank one. That replacement is CLEAN, which is what stops the
