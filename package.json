@@ -1,10 +1,18 @@
 {
   "name": "pagedown",
-  "version": "1.0.0",
+  "version": "0.1.0",
   "description": "A page-first Markdown editor for long-form documents that need exact page layout and print fidelity.",
   "main": "./out/main/index.js",
   "author": "Kai Ko",
+  "license": "MIT",
   "homepage": "https://github.com/kenduck1/PageDown",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/kenduck1/PageDown.git"
+  },
+  "bugs": {
+    "url": "https://github.com/kenduck1/PageDown/issues"
+  },
   "packageManager": "pnpm@10.30.3",
   "pnpm": {
     "onlyBuiltDependencies": [

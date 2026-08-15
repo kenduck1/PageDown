@@ -1,0 +1,89 @@
+# Continuous integration.
+#
+# Two jobs, with deliberately different scopes:
+#
+#   check  -- typecheck, lint and the fast Vitest suite, once, on Linux.
+#   build  -- `pnpm build` on all three target platforms.
+#
+# The `build` job is NOT redundant with `check`. This project has a documented
+# failure class that only appears in the COMPILED main-process bundle: an
+# ESM-only dependency left in electron-vite's `externalizeDeps` list compiles
+# to a raw `require(...)`, which Node's require(esm) interop resolves to a
+# namespace object rather than the default export. Vitest's own TS transform
+# resolves those imports correctly regardless, so such a bug passes every unit
+# test and only surfaces when out/main/index.js actually runs. Compiling on
+# each platform is the cheapest check that catches it.
+#
+# The phase0 Playwright gates are deliberately absent from this workflow --
+# see .github/workflows/gates.yml for why.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# Only the newest run per ref matters; cancel superseded ones so a busy
+# queue doesn't hide the result a contributor is actually waiting on.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: Typecheck, lint, unit tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      # Reads the pinned pnpm version from package.json's `packageManager`
+      # field, so this workflow never drifts from what contributors run.
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Typecheck (main process + renderer)
+        run: pnpm typecheck
+
+      - name: Lint
+        run: pnpm lint
+
+      - name: Unit tests
+        run: pnpm test:unit
+
+  build:
+    name: Build (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      # One platform failing should not hide whether the other two compile.
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      # typecheck -> electron-vite build -> the separate esbuild step that
+      # bundles the sandboxed pagination render context.
+      - name: Build
+        run: pnpm build

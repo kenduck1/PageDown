@@ -12,6 +12,35 @@ out
 # for isolated worktrees — never intended for source control)
 .claude
 
+# Working engineering notes for AI coding agents. Deliberately untracked: this
+# is a candid internal log (shipped-defect post-mortems, measured flake rates,
+# "this assertion pinned the bug as expected behaviour"), written for
+# maintainers and agents rather than for readers of a public repo. The
+# contributor-facing distillation is ARCHITECTURE.md, which IS tracked.
+#
+# This file lives on disk but is not tracked here, and has been removed from
+# this repository's history entirely (git-filter-repo, 2026-08-15). Its full
+# 74-commit history is preserved in the private companion repository
+# kenduck1/PageDown-internal.
+CLAUDE.md
+
+# Internal working documents, untracked for the same reason as CLAUDE.md.
+#
+#   docs/superpowers/  -- per-sub-project design specs and implementation
+#                         plans, written as a working record (rejected
+#                         approaches, measured dead ends, disclosed gaps).
+#   docs/design-handoff/ -- the original UI design brief and its clickable
+#                         HTML prototype.
+#
+# Ignored by subtree rather than as a blanket `docs/` so the directory stays
+# available for genuinely public documentation later. ARCHITECTURE.md is the
+# tracked, contributor-facing distillation of the material here.
+#
+# As with CLAUDE.md above, these are gone from this repository's history
+# entirely and preserved in kenduck1/PageDown-internal.
+docs/superpowers/
+docs/design-handoff/
+
 # Vitest
 coverage
 

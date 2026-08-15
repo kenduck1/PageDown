@@ -1,0 +1,186 @@
+# Packaged release builds.
+#
+# Push a tag like `v0.1.0` and this builds installers on all three native
+# runners, then opens a DRAFT GitHub Release with them attached. Nothing
+# becomes public until you review the draft and click publish.
+#
+# Deliberate choices worth knowing before editing:
+#
+#   * No third-party action touches the release or the token. Assets are
+#     uploaded with the `gh` CLI, which is preinstalled on every runner, so
+#     the entire publish path is code you can audit in this file.
+#   * Builds are UNSIGNED. There is no Apple Developer ID or Windows
+#     Authenticode certificate wired up, and `notarize: false` in
+#     electron-builder.yml is itself already a blocker for macOS updates.
+#     README.md documents the Gatekeeper and SmartScreen prompts users will
+#     hit as a result. When certificates do exist, add them as secrets and
+#     drop the CSC_IDENTITY_AUTO_DISCOVERY override in the macOS job.
+#   * Linux targets are overridden to AppImage + deb on the command line.
+#     electron-builder.yml also lists `snap`, which is right for a local
+#     `pnpm build:linux` but needs snapcraft/LXD in CI and is a reliable way
+#     to get red builds for no user-visible benefit.
+#   * Tag-controlled values are passed through `env:` rather than
+#     interpolated straight into `run:` bodies, so a tag name can never be
+#     treated as shell syntax.
+
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Verify tag matches package.json
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      # Catches the easy, expensive mistake: tagging v0.2.0 without bumping
+      # package.json, which electron-builder would happily package as 0.1.0
+      # and produce a release whose assets contradict its own name.
+      - name: Compare tag against package.json version
+        env:
+          TAG_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          tag_version="${TAG_NAME#v}"
+          pkg_version="$(node -p "require('./package.json').version")"
+          if [ "$tag_version" != "$pkg_version" ]; then
+            echo "::error::Tag '${TAG_NAME}' implies version '${tag_version}' but package.json says '${pkg_version}'. Bump package.json, or retag."
+            exit 1
+          fi
+          echo "Tag and package.json agree on ${pkg_version}."
+
+  build:
+    name: Build ${{ matrix.name }}
+    needs: verify
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      # Never let one platform's failure cancel installers that already built
+      # successfully -- a partial draft you can inspect beats no draft.
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            name: macOS
+            artifact: macos
+            # Both architectures in one invocation. electron-builder just
+            # repackages the matching prebuilt Electron binary, so an arm64
+            # runner cross-builds the x64 dmg fine.
+            builder_args: --mac --arm64 --x64
+          - os: windows-latest
+            name: Windows
+            artifact: windows
+            builder_args: --win
+          - os: ubuntu-latest
+            name: Linux
+            artifact: linux
+            builder_args: --linux AppImage deb
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      # typecheck -> electron-vite build -> pagination-render esbuild bundle.
+      - name: Build application
+        run: pnpm build
+
+      - name: Package installers
+        env:
+          # No signing identity exists on the runner. Without this,
+          # electron-builder searches the keychain and can fail confusingly
+          # rather than just producing an unsigned build.
+          CSC_IDENTITY_AUTO_DISCOVERY: false
+          # electron-builder.yml sets `publish: null`; this makes the intent
+          # explicit at the call site too. Assets are uploaded by the
+          # `release` job below, never by electron-builder itself.
+          BUILDER_ARGS: ${{ matrix.builder_args }}
+        run: pnpm exec electron-builder $BUILDER_ARGS --publish never
+
+      - name: Collect installers
+        uses: actions/upload-artifact@v4
+        with:
+          name: installers-${{ matrix.artifact }}
+          # Installers only. The .blockmap files electron-builder emits
+          # alongside them exist for auto-update, which this project does not
+          # ship, and the unpacked app directories are build intermediates.
+          path: |
+            dist/*.dmg
+            dist/*.exe
+            dist/*.AppImage
+            dist/*.deb
+          # A build that silently produced nothing must fail here rather than
+          # yield an empty release.
+          if-no-files-found: error
+          retention-days: 7
+
+  release:
+    name: Open draft release
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      # The only job in this workflow that can write to the repository.
+      contents: write
+    steps:
+      - name: Download all installers
+        uses: actions/download-artifact@v4
+        with:
+          path: installers
+          merge-multiple: true
+
+      # Built with plain `echo` redirection rather than a heredoc on purpose:
+      # a heredoc terminator has to sit at a fixed column, which fights YAML
+      # block-scalar indentation and breaks in ways that only show up at run
+      # time.
+      - name: Compose release notes
+        run: |
+          set -euo pipefail
+          {
+            echo "> [!WARNING]"
+            echo "> These builds are **unsigned** -- PageDown has no code-signing"
+            echo "> certificate yet. macOS Gatekeeper and Windows SmartScreen will"
+            echo "> warn on first launch. The README's *Installing* section has the"
+            echo "> exact steps to get past each."
+            echo ""
+            echo "### Downloads"
+            echo ""
+            echo "| Platform | File |"
+            echo "| --- | --- |"
+            echo "| macOS (Apple Silicon) | \`*-arm64.dmg\` |"
+            echo "| macOS (Intel) | \`*-x64.dmg\` |"
+            echo "| Windows | \`*-setup.exe\` |"
+            echo "| Linux | \`*.AppImage\` or \`*.deb\` |"
+          } > release-notes.md
+          cat release-notes.md
+
+      - name: Create draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG_NAME: ${{ github.ref_name }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          echo "Assets to attach:"
+          ls -lh installers/
+          gh release create "$TAG_NAME" \
+            --repo "$REPO" \
+            --title "$TAG_NAME" \
+            --draft \
+            --notes-file release-notes.md \
+            installers/*
+          echo "Draft created. Review it under Releases, optionally hit"
+          echo "'Generate release notes' to append the commit log, then publish."

@@ -44,7 +44,12 @@ mac:
     - NSDownloadsFolderUsageDescription: Application requests access to the user's Downloads folder.
   notarize: false
 dmg:
-  artifactName: ${name}-${version}.${ext}
+  # ${arch} is REQUIRED here, not cosmetic: the release workflow builds macOS
+  # for arm64 and x64 in one electron-builder invocation, and without an arch
+  # component both write to the same `pagedown-<version>.dmg` -- the second
+  # silently overwrites the first, so the release would ship two assets'
+  # worth of build time and one architecture's worth of installer.
+  artifactName: ${name}-${version}-${arch}.${ext}
 linux:
   target:
     - AppImage
@@ -53,7 +58,10 @@ linux:
   maintainer: Kai Ko
   category: Utility
 appImage:
-  artifactName: ${name}-${version}.${ext}
+  # Same collision risk as dmg above -- see that comment. The deb target
+  # needs no equivalent: electron-builder's default deb artifact name
+  # already carries the architecture.
+  artifactName: ${name}-${version}-${arch}.${ext}
 npmRebuild: false
 # Product-completeness audit Tier 3: auto-update. `electron-updater` is not a
 # dependency (checked package.json and the lockfile directly) and no real
