@@ -51,10 +51,14 @@ import { launchIsolatedApp } from './electron-launch'
 // slack each bound has:
 //
 //   divider 50% (default) -- pane clientWidth 389, unscaled card 816 (47.7%
-//     visible, horizontal scroll extent 427px). Fit needs 0.472, below the
-//     0.70 floor, so the floor binds: card 571.2px, scroll extent 182px.
-//   divider 75% -- pane clientWidth 585. Fit needs 0.712 -> 0.71 applied,
-//     card 579.4px, scrollWidth == clientWidth, no horizontal scroll at all.
+//     visible, horizontal scroll extent 427px). 389 - 24 gutter = 365;
+//     365/816 = 0.447 -> 0.44 applied, card 359px, and it FITS. This row used
+//     to read "below the 0.70 floor, so the floor binds" -- the floor was
+//     lowered to 0.4 and the gutter raised to 24 on user feedback, which moved
+//     the app's own default configuration from clamped-and-scrolling to
+//     genuinely fitting.
+//   divider 75% -- pane clientWidth 585. 561/816 = 0.687 -> 0.68 applied,
+//     card 555px, scrollWidth == clientWidth, no horizontal scroll at all.
 //   Format mode, same run -- card 816px, untouched.
 //
 // FLAKE OBSERVED, and it is the already-documented environmental one rather
@@ -97,6 +101,13 @@ interface PreviewFitProbe {
   /** Horizontal overflow of the whole preview document; 0 means it fits. */
   overflowPx: number
   pageCount: number
+  /**
+   * `flow.total` off the sandbox's OWN published result, or 0 if it has not
+   * published a successful one yet. This is a completion signal, not a
+   * measurement: the render context assigns `window.__pagedownResult` only
+   * after `previewer.preview()` has resolved. See the settle poll below.
+   */
+  publishedPageCount: number
 }
 
 // Reads the REAL laid-out geometry of the real sandboxed split-preview
@@ -136,7 +147,11 @@ async function probePreviewFit(app: ElectronApplication): Promise<PreviewFitProb
            bodyClientWidth: document.body.clientWidth,
            pageRenderedWidth: pages.length ? pages[0].getBoundingClientRect().width : 0,
            overflowPx: Math.max(0, doc.scrollWidth - doc.clientWidth),
-           pageCount: pages.length
+           pageCount: pages.length,
+           publishedPageCount:
+             window.__pagedownResult && window.__pagedownResult.type === 'result'
+               ? window.__pagedownResult.pageCount
+               : 0
          }
        })()`
     )) as PreviewFitProbe
@@ -330,11 +345,20 @@ test('Gate 35: Split mode scales the page card down to fit its pane, and Format 
 
     // (1d) The status bar reports the scale the pane is ACTUALLY rendered at,
     // not the user's own (inapplicable, disabled) zoom. A readout saying 100%
-    // over a pane rendering at 70% is the same defect this control was already
+    // over a pane rendering at 44% is the same defect this control was already
     // fixed for once, pointing the other way.
+    //
+    // Derived from the card's own measured width rather than pinned to
+    // MIN_FIT_SCALE, which is what this used to do. That was only ever correct
+    // while the default divider happened to fall BELOW the floor; once the
+    // floor moved to 0.4 the applied scale became 0.44 and the assertion
+    // pinned a number the pane no longer renders at. Reading it back from the
+    // measurement keeps this checking the PROPERTY it names -- readout matches
+    // reality -- rather than a constant that only coincided with it.
+    const appliedScale = split.cardRenderedWidth / PAGE_WIDTH_PX
     const zoomSelect = win.getByLabel('Zoom level')
     await expect(zoomSelect).toBeDisabled()
-    await expect(zoomSelect).toHaveValue(String(MIN_FIT_SCALE))
+    await expect(Number(await zoomSelect.inputValue())).toBeCloseTo(appliedScale, 2)
 
     // --- Back to Format: still untouched, in the same run ------------------
     await win.getByRole('button', { name: 'Format', exact: true }).click()
@@ -447,13 +471,47 @@ test('Gate 35: the sandboxed PREVIEW pane is fitted too, and genuinely fits when
     await win.waitForSelector('.milkdown-mount .ProseMirror')
 
     // The preview is a real cross-process render: the harness has to spin up,
-    // the debounced sendDocument has to land, and Paged.js has to finish.
+    // the debounced sendDocument has to land, and Paged.js has to FINISH.
+    //
+    // WAIT FOR COMPLETION, NOT MERELY FOR A PAGE TO EXIST -- the difference is
+    // the whole reason this test used to fail, and it is the same trap CLAUDE.md
+    // already records against Gate 19's own marker probe. Paged.js appends pages
+    // PROGRESSIVELY, and the fit scale is deliberately suspended for the
+    // duration of layout so that the diagram/image boxes this render publishes
+    // are measured in unscaled document space (see `previewFitSuspended` in
+    // resources/pagination-render/index.ts). So `pageCount > 0` goes true within
+    // roughly the first 25ms of a ~175ms render, and everything read at that
+    // moment is a half-laid-out document at scale 1.
+    //
+    // MEASURED, by instrumenting the render context rather than inferring: a
+    // probe firing on `pageCount > 0` sampled `{bodyClientWidth: 373,
+    // pageRenderedWidth: 816, pageCount: 5, zoom: "1"}` while that context's own
+    // log held nothing but a `start` entry, and the SAME render settled 173ms
+    // later at `{389, 359.04, 7, "0.44"}`. It also explains a page count that
+    // appeared to move between runs against an unchanged fixture (5, 6 and 7
+    // were all seen): three samples of one progressive append, never a
+    // pagination change.
+    //
+    // Requiring the published count to AGREE with the DOM's own is what makes
+    // this robust rather than merely later: on a long-lived harness a PREVIOUS
+    // render's result stays published while a new one clears and refills the
+    // DOM, so `publishedPageCount > 0` alone could be satisfied by a stale one.
+    //
+    // Deliberately NOT a poll on the scale itself. Waiting until the page looks
+    // scaled and then asserting that it is scaled would be vacuous; this waits
+    // on a signal every assertion below already assumed and none of them tests.
     await expect
-      .poll(async () => (await probePreviewFit(app))?.pageCount ?? 0, {
-        message: 'expected the sandboxed split preview to render at least one real page',
-        timeout: 30_000
-      })
-      .toBeGreaterThan(0)
+      .poll(
+        async () => {
+          const p = await probePreviewFit(app)
+          return p !== null && p.publishedPageCount > 0 && p.publishedPageCount === p.pageCount
+        },
+        {
+          message: 'expected the sandboxed split preview to finish a real, complete render',
+          timeout: 30_000
+        }
+      )
+      .toBe(true)
 
     const atDefault = (await probePreviewFit(app))!
     console.log('Gate 35 preview at default divider:', JSON.stringify(atDefault))
