@@ -14,6 +14,23 @@ import { join } from 'node:path'
 // harness is reached at all.
 const mocks = vi.hoisted(() => ({
   setBounds: vi.fn(),
+  // The harness WINDOW's own resize. Required by OSR: the offscreen surface
+  // is the window's content area, so a capture rect bigger than it is
+  // silently clamped -- which produced a landscape thumbnail of a portrait
+  // page until the window was resized alongside the view. Mocked AND
+  // asserted below, so this stays real coverage rather than a stub added to
+  // stop a TypeError.
+  setContentSize: vi.fn(),
+  // Hoisted into `mocks` (rather than left inline in the harness mock) purely
+  // so a test can assert the RECT it is called with -- see the explicit-rect
+  // test below.
+  capturePage: vi.fn(async () => ({
+    isEmpty: (): boolean => false,
+    resize: () => ({
+      toPNG: (): Buffer => Buffer.from('fake-png-bytes'),
+      toDataURL: (): string => 'data:image/png;base64,ZmFrZQ=='
+    })
+  })),
   sendDocument: vi.fn(async () => ({
     pageCount: 2,
     ready: true,
@@ -27,6 +44,7 @@ vi.mock('electron', () => ({
   BaseWindow: class {
     isDestroyed = (): boolean => false
     destroy = vi.fn()
+    setContentSize = mocks.setContentSize
   }
 }))
 
@@ -38,13 +56,7 @@ vi.mock('./pagination-window', () => ({
         once: vi.fn(),
         // The two-rAF paint wait inside getThumbnail.
         executeJavaScript: vi.fn(async () => undefined),
-        capturePage: vi.fn(async () => ({
-          isEmpty: (): boolean => false,
-          resize: () => ({
-            toPNG: (): Buffer => Buffer.from('fake-png-bytes'),
-            toDataURL: (): string => 'data:image/png;base64,ZmFrZQ=='
-          })
-        }))
+        capturePage: mocks.capturePage
       }
     },
     sendDocument: mocks.sendDocument
@@ -146,12 +158,27 @@ describe('getThumbnail page geometry', () => {
     await getThumbnail('---\npage: A4\n---\n\n# A4 report', userDataDir)
 
     expect(mocks.setBounds).toHaveBeenCalledWith({ x: 0, y: 0, width: 794, height: 1123 })
+    // The WINDOW must move with the view, or OSR clamps the capture to the
+    // window's default 800x600 content area and the aspect ratio comes out
+    // wrong with no error raised anywhere.
+    expect(mocks.setContentSize).toHaveBeenCalledWith(794, 1123)
   })
 
   it('sizes the harness view for a landscape document too', async () => {
     await getThumbnail('---\npage: A4\norientation: landscape\n---\n\n# Wide report', userDataDir)
 
     expect(mocks.setBounds).toHaveBeenCalledWith({ x: 0, y: 0, width: 1123, height: 794 })
+    expect(mocks.setContentSize).toHaveBeenCalledWith(1123, 794)
+  })
+
+  it('captures an explicit rect matching the page box, not a bare capturePage()', async () => {
+    // Under OSR a bare capturePage() takes the window's content area, which
+    // the window frame measures differently from the view -- measured at
+    // 1632x1898 and 1632x2176 for the same 816x1056 page depending on
+    // `useContentSize`. An explicit rect is what makes it exact.
+    await getThumbnail('---\npage: A4\n---\n\n# A4 report', userDataDir)
+
+    expect(mocks.capturePage).toHaveBeenCalledWith({ x: 0, y: 0, width: 794, height: 1123 })
   })
 
   // Same NaN trap `resolvePageConfig` closes for every other caller: a

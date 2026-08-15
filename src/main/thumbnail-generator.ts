@@ -108,7 +108,17 @@ function getHarness(): Promise<PaginationHarness> {
   if (!harnessPromise) {
     const win = new BaseWindow({ show: false })
     harnessWindow = win
-    harnessPromise = createPaginationHarness(win).then((harness) => {
+    // OFFSCREEN, and this is the one harness that must be. capturePage()
+    // cannot capture a view inside a never-shown BaseWindow -- it rejects
+    // with "Current display surface not available for capture", which is
+    // exactly what the Home screen was logging on every mount while
+    // rendering blank cards. See createPaginationHarness's own
+    // PaginationHarnessOptions.offscreen for the three-way measurement that
+    // settled this, including why moving the window off-screen does not work
+    // either. The never-shown window itself stays -- it is what keeps
+    // pagination off Chromium's rAF throttle (documented above) -- so OSR is
+    // added alongside that decision rather than replacing it.
+    harnessPromise = createPaginationHarness(win, { offscreen: true }).then((harness) => {
       // If the underlying WebContentsView is ever destroyed (e.g. via
       // destroyThumbnailHarness below, or some future unexpected teardown
       // of harnessWindow), drop the memoized promise so the NEXT
@@ -248,6 +258,19 @@ export async function getThumbnail(
       // `enqueueHarnessWork` (see its own comment above) serializes every
       // harness-dependent call — no second document can resize this view
       // between this line and the `capturePage()` below.
+      // The WINDOW has to be resized too, not just the view, and this is not
+      // belt-and-braces -- it is required by OSR. The offscreen surface is
+      // the window's CONTENT AREA, so a capture rect larger than it is
+      // silently CLAMPED rather than rejected. `new BaseWindow({show:false})`
+      // defaults to 800x600, so before this line an 816x1056 page captured as
+      // 800x600 and, since the resize below preserves aspect ratio, produced
+      // a 336x252 landscape thumbnail of a portrait page -- measured, not
+      // theorised, on the first build of this fix. No error is raised on that
+      // path: the capture succeeds, the image is non-empty, and only its
+      // SHAPE is wrong, which is exactly the kind of defect that ships.
+      if (harnessWindow && !harnessWindow.isDestroyed()) {
+        harnessWindow.setContentSize(geometry.pageWidthPx, geometry.pageHeightPx)
+      }
       harness.view.setBounds({
         x: 0,
         y: 0,
@@ -272,7 +295,24 @@ export async function getThumbnail(
         'Timed out waiting for the render context to paint before capturing a thumbnail'
       )
 
-      const image = await harness.view.webContents.capturePage()
+      // An EXPLICIT rect, not a bare capturePage(). Under OSR the captured
+      // surface is the WINDOW's content area, not the view's bounds -- and
+      // this view is deliberately resized per request just above (A4,
+      // landscape, Custom all differ from the window's creation-time Letter
+      // box). Measured: a bare capture of an 816x1056 view in a window sized
+      // 816x1056 came back 1632x1898 rather than 1632x2112, i.e. cropped by
+      // the frame, and `useContentSize` shifted it the other way to 1632x2176.
+      // Passing the rect makes the capture exactly the page box on every path
+      // regardless of how the window frame measures, which matters because
+      // the resize below preserves ASPECT RATIO -- a capture that is off by a
+      // frame's worth of pixels silently produces a subtly wrong-shaped
+      // thumbnail rather than an error.
+      const image = await harness.view.webContents.capturePage({
+        x: 0,
+        y: 0,
+        width: geometry.pageWidthPx,
+        height: geometry.pageHeightPx
+      })
       if (image.isEmpty()) {
         throw new Error('Captured thumbnail image was empty — refusing to cache a blank result')
       }
