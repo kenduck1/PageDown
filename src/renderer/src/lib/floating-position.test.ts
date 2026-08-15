@@ -6,6 +6,7 @@ import {
   intersectRect,
   rectWidth,
   sameRect,
+  topCenterAnchor,
   unionRect,
   type Rect
 } from './floating-position'
@@ -177,5 +178,48 @@ describe('computeFloatingPosition', () => {
     const anchor: Rect = { left: 340, top: 180, right: 400, bottom: 198 }
     const placement = computeFloatingPosition(anchor, { width: 280, height: 90 }, shortSafe)
     expect(placement.top).toBe(shortSafe.top + FLOATING_EDGE_PAD)
+  })
+})
+
+// The composer popovers' "no ProseMirror selection to anchor to" fallback --
+// reachable for real whenever LinkComposer/CommentComposer is opened from
+// Source mode (no Milkdown instance, so getSelectionRect() has nothing to
+// return). See topCenterAnchor's own doc comment for why a composer must still
+// render there while the bubble deliberately does not.
+describe('topCenterAnchor', () => {
+  it('collapses to a point on the rect’s top edge, horizontally centred', () => {
+    const anchor = topCenterAnchor(SPLIT_SAFE)
+    expect(anchor.left).toBe(anchor.right)
+    expect(anchor.top).toBe(anchor.bottom)
+    expect(anchor.top).toBe(SPLIT_SAFE.top)
+    expect(anchor.left).toBe((SPLIT_SAFE.left + SPLIT_SAFE.right) / 2)
+  })
+
+  // The whole point of collapsing it onto the TOP edge: there is by
+  // construction no room above, so computeFloatingPosition flips below and
+  // clamps to safe.top + FLOATING_EDGE_PAD -- exactly where the layout row
+  // this popover replaced used to sit. Degrading to the old behaviour rather
+  // than to an arbitrary corner is the property being pinned here.
+  it('places the overlay at the top of the safe rect, not at a corner', () => {
+    const placement = computeFloatingPosition(topCenterAnchor(SPLIT_SAFE), BUBBLE, SPLIT_SAFE)
+    expect(placement.placement).toBe('below')
+    expect(placement.top).toBe(SPLIT_SAFE.top + FLOATING_EDGE_PAD)
+    expect(placement.left + BUBBLE.width / 2).toBeCloseTo(
+      (SPLIT_SAFE.left + SPLIT_SAFE.right) / 2,
+      5
+    )
+  })
+
+  // The fallback anchor still runs through the real clamp, so it inherits the
+  // occlusion guarantee rather than bypassing it -- the failure mode being
+  // ruled out is a fallback that "just centres on the window" and lands under
+  // the native preview view.
+  it('still clamps clear of the split preview’s native view', () => {
+    const placement = computeFloatingPosition(
+      topCenterAnchor(SPLIT_SAFE),
+      { width: 340, height: 96 },
+      SPLIT_SAFE
+    )
+    expect(placement.left + Math.min(340, placement.maxWidth)).toBeLessThanOrEqual(SPLIT_VIEW_LEFT)
   })
 })

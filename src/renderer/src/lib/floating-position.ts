@@ -133,6 +133,37 @@ export function sameRect(a: Rect | null, b: Rect | null): boolean {
 }
 
 /**
+ * A zero-width, zero-height anchor at the horizontal centre of `rect`'s TOP
+ * edge -- the "we could not locate the selection, put it where the layout row
+ * used to be" fallback for the composer popovers (LinkComposer /
+ * CommentComposer).
+ *
+ * It is needed because those two, unlike the bubble and the slash palette, can
+ * be opened from surfaces that have no ProseMirror selection to anchor to at
+ * all: EditorToolbar's own buttons and the Mod-Shift-M shortcut both fire in
+ * SOURCE mode, where `editorRef` is null and `getSelectionRect()` therefore
+ * cannot return anything. Rendering nothing there -- SelectionBubble's own
+ * answer to a missing rect -- is the wrong trade for a composer: a bubble that
+ * declines to appear costs the user nothing (every command it offers is also
+ * on the toolbar and in a keymap), whereas a composer that declines to appear
+ * after an explicit "Insert link" click IS the dead control this codebase
+ * repeatedly names as worse than any visual glitch.
+ *
+ * Feeding this through computeFloatingPosition lands the overlay at
+ * `safe.top + FLOATING_EDGE_PAD`, horizontally centred: the anchor cannot fit
+ * an overlay ABOVE it (it sits on the safe rect's own top edge), so placement
+ * flips below and then clamps to exactly that. That is deliberately the same
+ * place the layout row occupied, so the fallback degrades to the OLD
+ * behaviour rather than to an arbitrary corner -- and, being a real anchor fed
+ * through the real clamp, it keeps the occlusion guarantee intact rather than
+ * bypassing it.
+ */
+export function topCenterAnchor(rect: Rect): Rect {
+  const centerX = (rect.left + rect.right) / 2
+  return { left: centerX, right: centerX, top: rect.top, bottom: rect.top }
+}
+
+/**
  * Places an overlay of `size` against `anchor`, confined to `safe`.
  *
  * Preferred placement is ABOVE the anchor, horizontally centred on it -- the
