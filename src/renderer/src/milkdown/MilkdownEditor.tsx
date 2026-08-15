@@ -22,6 +22,7 @@ import { createSlashPlugin, type SlashSession } from './slash-plugin'
 import { applyPageGuides, createPageGuidePlugin, type PageGuideInput } from './page-guide-plugin'
 import { enabledSlashItems } from './slash-items'
 import type { PageGeometry } from '../../../typography/page-geometry'
+import { pageSeamCssVariables } from '../../../typography/page-seam'
 import { documentStyleClasses, type DocumentStyle } from '../../../typography/document-style'
 
 interface MilkdownEditorProps {
@@ -98,6 +99,13 @@ interface MilkdownEditorProps {
   // pagination result to offer (every test that mounts this component
   // directly, for one).
   pageGuides?: PageGuideInput
+  /**
+   * How many page seams this canvas is currently DRAWING (not how many breaks
+   * the last render reported -- see createPageGuidePlugin for why those two
+   * differ). EditorScreen sizes the page card from it, so the card shows
+   * exactly as many whole sheets as there are boundaries drawn in it.
+   */
+  onPageSeamsChanged?: (count: number) => void
 }
 
 // Extends EditorCommands (editor-commands.ts) with flush() -- the one
@@ -160,6 +168,7 @@ const MilkdownEditor = forwardRef<MilkdownEditorHandle, MilkdownEditorProps>(
       onChange,
       onError,
       onFindMatchesChanged,
+      onPageSeamsChanged,
       onDropImage,
       onResolveLocalImage,
       onSelectionChanged,
@@ -238,6 +247,10 @@ const MilkdownEditor = forwardRef<MilkdownEditorHandle, MilkdownEditorProps>(
     // inside the mount effect below (see slashProse), same reasoning as
     // onFindMatchesChangedRef/onSelectionChangedRef above.
     const onSlashStateChangedRef = useRef(onSlashStateChanged)
+    // Same latest-ref treatment, for the page-guide plugin's drawn-seam-count
+    // callback -- constructed once inside the mount effect below
+    // (pageGuideProse), same reasoning as onFindMatchesChangedRef above.
+    const onPageSeamsChangedRef = useRef(onPageSeamsChanged)
     useEffect(() => {
       onChangeRef.current = onChange
       onErrorRef.current = onError
@@ -246,6 +259,7 @@ const MilkdownEditor = forwardRef<MilkdownEditorHandle, MilkdownEditorProps>(
       onResolveLocalImageRef.current = onResolveLocalImage
       onSelectionChangedRef.current = onSelectionChanged
       onSlashStateChangedRef.current = onSlashStateChanged
+      onPageSeamsChangedRef.current = onPageSeamsChanged
     })
 
     // Set once the editor has finished constructing (inside the mount
@@ -470,14 +484,17 @@ const MilkdownEditor = forwardRef<MilkdownEditorHandle, MilkdownEditorProps>(
         )
       )
 
-      // Takes no callback at all, unlike every other $prose plugin above:
-      // guides flow strictly one way (in), so there is nothing to report
-      // back to React and therefore no latest-ref to close over. It is still
-      // constructed here rather than hoisted into the static
-      // EDITOR_COMMAND_PLUGINS list because a Plugin instance carries
-      // per-view state and must not be shared across two live editors -- the
-      // same reason findProse/selectionProse are built per mount.
-      const pageGuideProse = $prose(() => createPageGuidePlugin())
+      // Guides flow one way IN (a settled render's recovered breaks) and one
+      // number back OUT (how many seams that actually produced, which the
+      // page card's height follows). Constructed here rather than hoisted
+      // into the static EDITOR_COMMAND_PLUGINS list because a Plugin instance
+      // carries per-view state and must not be shared across two live editors
+      // -- the same reason findProse/selectionProse are built per mount.
+      const pageGuideProse = $prose(() =>
+        createPageGuidePlugin((count) => {
+          onPageSeamsChangedRef.current?.(count)
+        })
+      )
 
       Editor.make()
         .config((ctx) => {
@@ -630,8 +647,19 @@ const MilkdownEditor = forwardRef<MilkdownEditorHandle, MilkdownEditorProps>(
     // box max-width constrains), silently reintroducing the width mismatch
     // that whole gate exists to catch -- Paged.js's own page-content box has
     // no equivalent extra inner padding beyond its page margin, which IS the
-    // content-width boundary already. py-6 stays: vertical spacing doesn't
-    // affect content WIDTH parity.
+    // content-width boundary already.
+    //
+    // THE py-6 THIS USED TO CARRY IS GONE, and its removal is part of making
+    // the card an actual page rather than a page-width strip. EditorScreen's
+    // page card now pads by the document's REAL marginTopPx/marginBottomPx,
+    // so 24px of extra ambient padding here would put the first line
+    // 24px below where one inch from the sheet's top edge actually is --
+    // visible as soon as the card has a page's height and a page's top edge
+    // to measure against, and meaningless before it did. Vertical spacing
+    // still doesn't affect content WIDTH parity, and it does not affect Gate
+    // 10's per-block deltas either: that gate measures every block's top
+    // RELATIVE to this mount's own .ProseMirror root, and padding on this div
+    // moves the root and its blocks together.
     //
     // pagedown-document: the shared document-typography.css scope class
     // (src/typography/document-typography.css) -- every selector in that
@@ -649,20 +677,27 @@ const MilkdownEditor = forwardRef<MilkdownEditorHandle, MilkdownEditorProps>(
         // is what keeps the two surfaces in typographic parity -- Gate 10
         // measures exactly that. `default`/`source-serif-4` deliberately
         // have no rules at all, so those two classes are inert by design.
-        // `relative` is the positioned ancestor the page-break guides resolve
-        // their `left: 0; right: 0` against (base.css's
-        // .pagedown-page-guide), so a guide spans exactly the document's own
-        // content width. Layout-neutral by construction -- `position:
-        // relative` with no offsets moves nothing and changes no box -- which
-        // is what lets it be added without touching Gate 10's parity numbers.
-        className={`milkdown-mount pagedown-document ${documentStyleClasses(documentStyle).join(' ')} relative flow-root min-h-full mx-auto py-6`}
+        // `relative` is kept for the selection/slash chrome that resolves
+        // against it. Layout-neutral by construction -- `position: relative`
+        // with no offsets moves nothing and changes no box -- which is what
+        // lets it be here without touching Gate 10's parity numbers. (The
+        // page seams no longer need it: they are in-flow boxes bled outward
+        // by negative margins, not absolutely positioned ones.)
+        className={`milkdown-mount pagedown-document ${documentStyleClasses(documentStyle).join(' ')} relative flow-root min-h-full mx-auto`}
         // The native `dir` attribute, not a CSS `direction` override: it
         // also drives the browser's own bidi text-run resolution and list/
         // table mirroring, which a bare `direction:` CSS property does not
         // fully replicate. The sandboxed paginator sets the same attribute
         // on its own <body> (resources/pagination-render/index.ts).
         dir={documentStyle.direction}
-        style={{ maxWidth: geometry.contentWidthPx }}
+        // The seam custom properties are published HERE rather than on
+        // EditorScreen's page card, even though the card is where the
+        // matching padding lives, because this component is the one that
+        // mounts the plugin that draws them -- a seam and the variables that
+        // size it stay in one place instead of depending on an ancestor two
+        // components away happening to still set them. They inherit down to
+        // every widget decoration inside .ProseMirror for free.
+        style={{ maxWidth: geometry.contentWidthPx, ...pageSeamCssVariables(geometry) }}
       />
     )
   }

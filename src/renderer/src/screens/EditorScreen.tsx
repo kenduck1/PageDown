@@ -37,6 +37,7 @@ import { computeFitScale } from '../lib/fit-scale'
 import { extractRawFrontmatter, replaceRawFrontmatter } from '../../../markdown/frontmatter-splice'
 import { resolvePageConfig, applyPageConfig, type PageConfig } from '../../../markdown/page-config'
 import { computePageGeometry } from '../../../typography/page-geometry'
+import { computePageCardMinHeightPx } from '../../../typography/page-seam'
 import { resolveDocumentStyle } from '../../../typography/document-style'
 
 // Exact copy pinned in docs/superpowers/specs/2026-08-08-undo-barrier-notice-design.md
@@ -200,6 +201,18 @@ function EditorScreen(): React.JSX.Element {
   // corrected" tradeoff `usePageCount` already accepts elsewhere in this
   // file, not a new one.
   const [splitPreviewError, setSplitPreviewError] = useState<string | null>(null)
+  // How many page seams the Milkdown canvas is currently drawing, reported up
+  // by the page-guide plugin (see createPageGuidePlugin's onSeamCountChanged).
+  // The ONLY consumer is the page card's min-height, which is what makes the
+  // card as many whole sheets tall as it has boundaries drawn in it. Local
+  // component state rather than appStore/documentStore for the same reason
+  // `toast`/`splitPreviewError` are: nothing outside this screen needs it.
+  //
+  // This cannot loop. The plugin reports only on a real CHANGE of count
+  // (change-only in its own view.update), and the state it feeds changes only
+  // the card's height -- which dispatches no ProseMirror transaction, so
+  // there is nothing for the plugin to react to in turn.
+  const [pageSeamCount, setPageSeamCount] = useState(0)
   // Ephemeral, EditorScreen-local UI state -- not in appStore/documentStore
   // because nothing else in the app needs it (see design doc's "kept local"
   // rationale). `id` is a monotonically increasing nonce (via the ref below),
@@ -1577,30 +1590,43 @@ function EditorScreen(): React.JSX.Element {
   // contentWidthPx, which is the correct choice THERE: it sits inside this
   // already-fixed-width box and only has to cap the text column.)
   //
-  // Top/bottom padding stay the mock's fixed 22px/34px and are deliberately
-  // NOT geometry.marginTopPx/marginBottomPx, even though left/right now are
-  // the document's real margins. They're cosmetic card chrome, not the
-  // page's own vertical margin: where content actually sits relative to a
-  // page's top/bottom edge is the paginator's concern, and this single
+  // TOP/BOTTOM PADDING ARE NOW THE DOCUMENT'S REAL MARGINS, and this reverses
+  // an earlier decision that used to be pinned by a test in
+  // EditorScreen.test.tsx. That decision was right for what the card was and
+  // wrong for what it is: it argued the fixed 22px/34px were "cosmetic card
+  // chrome, not the page's own vertical margin," because "this single
   // unpaginated card has no page boundaries to place them against in the
-  // first place. Gate 10 only measures block positions relative to each
-  // surface's own content root, so vertical chrome outside the editing root
-  // doesn't affect it either way. Don't "finish the job" by wiring these two
-  // up -- an EditorScreen.test.tsx test asserts they stay 22/34 for a
-  // document whose real top/bottom margins are 96px.
+  // first place." It has them now -- every page break the paginator reports
+  // is drawn as a real seam inside this card (see page-guide-plugin.ts and
+  // src/typography/page-seam.ts) -- so the top of the card IS the top edge of
+  // sheet one, and the first line has to sit exactly one top margin below it
+  // or the sheet is lying about its own geometry. MilkdownEditor's mount div
+  // dropped its own `py-6` in the same change, for the same reason: two
+  // ambient paddings stacked on the real margin put the first line 24px too
+  // low. Gate 10 is unaffected either way -- it measures block positions
+  // relative to each surface's own content root, so uniform vertical chrome
+  // outside the editing root cancels; verified by running it, not assumed.
   //
-  // Deliberately natural-height (grows/shrinks with the document, not
-  // stretched to fill the canvas) -- an earlier version of this fix tried to
-  // make the WHOLE card's blank space part of the clickable editable region
-  // (via a min-height/flexbox chain forcing ProseMirror's own DOM to
-  // physically fill the card), which was the wrong goal entirely, not just
-  // hard to get right: a real editor's text only exists where you've
-  // actually typed content or pressed Enter, so clicking below the last real
-  // line should move the cursor to the nearest real position (the end of
-  // the document), not silently start new content wherever you happened to
-  // click, which is what a physically-enlarged editable region would do.
-  // handlePageCardClick above implements the actual correct behavior
-  // instead.
+  // A MIN-HEIGHT OF ONE WHOLE SHEET is the other half. An empty document used
+  // to render as a ~78px-tall page-WIDTH strip, which is the specific thing
+  // that made the canvas not look like pages at all. `min-height`, never
+  // `height`: content longer than a page still grows the card past it.
+  // `seamCount` is the number of page boundaries actually drawn inside the
+  // card, reported up from the plugin that draws them, so the LAST page is a
+  // full sheet like every other one rather than ending wherever the text
+  // stopped -- see computePageCardMinHeightPx for the proof that the minimum
+  // always binds and therefore never fights the content, and for why it has
+  // to follow the DRAWN count rather than the last render's break count.
+  //
+  // Note what min-height deliberately does NOT do: it does not make the blank
+  // space below the last line part of the editable region. An earlier fix
+  // tried exactly that (a min-height/flexbox chain forcing ProseMirror's own
+  // DOM to physically fill the card) and it was the wrong goal, not merely
+  // hard to get right -- a real editor's text only exists where you have
+  // actually typed, so clicking below the last line should move the caret to
+  // the nearest real position, not start new content wherever you clicked.
+  // The min-height here is on the CARD, outside the editing root;
+  // handlePageCardClick implements the click behaviour.
   //
   // Split mode's own draggable divider. Tracks the drag on `window`, not the
   // divider element itself -- the cursor routinely moves faster than the
@@ -1654,10 +1680,11 @@ function EditorScreen(): React.JSX.Element {
       className="mx-auto my-8 shrink-0 rounded-sm bg-white shadow-page"
       style={{
         width: pageGeometry.pageWidthPx,
+        minHeight: computePageCardMinHeightPx(pageGeometry, pageSeamCount),
         paddingLeft: pageGeometry.marginLeftPx,
         paddingRight: pageGeometry.marginRightPx,
-        paddingTop: 22,
-        paddingBottom: 34
+        paddingTop: pageGeometry.marginTopPx,
+        paddingBottom: pageGeometry.marginBottomPx
       }}
       onMouseDown={handlePageCardMouseDown}
       onClick={handlePageCardClick}
@@ -1680,6 +1707,13 @@ function EditorScreen(): React.JSX.Element {
         onChange={(markdown) => updateContentForTab(activeTabId, markdown)}
         onError={(message) => useDocumentStore.setState({ error: message })}
         onFindMatchesChanged={findController.handleFormatMatches}
+        // How many page boundaries the canvas is really drawing right now,
+        // which is what the card's own min-height above is sized from. Comes
+        // back from the plugin rather than being derived here from
+        // `pageGuides`: the two disagree whenever breaks collapse onto a
+        // shared boundary or the guides fail closed on a stale block count,
+        // and the card has to follow what is DRAWN.
+        onPageSeamsChanged={setPageSeamCount}
         onDropImage={saveDroppedImage}
         // Deliberately the STORE action, not a closure over this render's
         // `filePath`: the resolver is published into ProseMirror plugin
