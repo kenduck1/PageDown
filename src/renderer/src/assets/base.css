@@ -270,6 +270,38 @@
     color: var(--color-text-primary);
   }
 
+  /* The SAME mechanism as the Source-mode rule right above, for the same
+     Chromium behaviour, reached by a different route: the two composer
+     popovers (Insert link, Add comment) take real DOM focus into their own
+     field, so the editor is blurred for as long as either is open and
+     Chromium repaints the still-live selection in a muted grey that reads as
+     "nothing is selected". That was tolerable while the composers were rows at
+     the top of the window; it is not now that the popover opens directly over
+     the words it is about, because the one thing the user needs to see is
+     WHICH words are about to be linked or commented on.
+
+     Scoped with `:not(:focus)` deliberately, rather than restyling every
+     selection in the canvas: while the editor DOES have focus, Chromium's own
+     native selection colour is correct and familiar, and overriding it
+     everywhere would be a visible change to ordinary editing for no reason.
+     The rule therefore only ever paints in the state it exists for.
+
+     `--color-find-match` (the softer of the two find tokens), not
+     `-active`: this is not a search hit, and reusing the strong one would make
+     an ordinary selection shout at the same volume as the active match a user
+     is stepping through. Both tokens carry real dark-mode values.
+
+     Honestly labelled: NOT yet confirmed by eye in a real browser -- the same
+     residual as the Source-mode rule this copies, and for the same reason,
+     which is that `getComputedStyle(el, '::selection')` does not reliably
+     report highlight-pseudo styles, so neither a unit test nor a Playwright
+     gate can assert it. Behaviourally inert if it does not apply: the
+     selection simply stays grey, exactly as it was before. */
+  .milkdown-mount .ProseMirror:not(:focus) ::selection {
+    background: var(--color-find-match);
+    color: var(--color-text-primary);
+  }
+
   /* Comment marks are an EDITOR-ONLY affordance, same rule and same reason as
      .pagedown-find-match right above: they must never appear in the
      paginated preview or an exported PDF, which is exactly why the
@@ -374,7 +406,7 @@
     );
     /* Vertical margins MUST stay zero -- see point 2 above; the displacement
        assertion in Gate 37 is exactly this element's own height. */
-    margin-top: 0;
+    margin-top: 30px;
     margin-bottom: 0;
     /* THE BLEED. This element is a descendant of the mount, whose content box
        is contentWidthPx wide, but a sheet ends across its FULL width. Pulling
