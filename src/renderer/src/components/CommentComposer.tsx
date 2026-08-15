@@ -1,20 +1,38 @@
-import { useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactElement } from 'react'
+import {
+  useLayoutEffect,
+  useRef,
+  useState,
+  type KeyboardEvent,
+  type ReactElement,
+  type RefObject
+} from 'react'
+import FloatingCard from './FloatingCard'
+import type { Rect } from '../lib/floating-position'
 import { useAppStore } from '../store/appStore'
 
-// A LAYOUT ROW, never a floating popover -- the exact same architectural
-// requirement FindBar.tsx documents at length, reused rather than
-// re-derived: Split mode's preview pane is a real native WebContentsView,
-// which composites above ALL DOM unconditionally, so any floating overlay
-// needs the same special-casing PageSetupModal had to add (a zero-size-
-// rectangle workaround). A layout row sidesteps this by construction --
-// inserting it shrinks the content area, which the existing ResizeObserver
-// chain (SplitPreview.tsx) already handles with no new code.
+// A POPOVER ANCHORED AT THE SELECTION, via FloatingCard -- not the full-width
+// layout row this used to be. See FloatingCard.tsx's header for why the
+// occlusion argument that made it a row (a WebContentsView composites above
+// ALL DOM unconditionally) is now solved by the clamp SelectionBubble proved
+// out rather than dodged by taking layout space, and why FindBar deliberately
+// did NOT move with it.
+//
+// The user-visible reason, in one line: the app already pops a bubble at the
+// selection, and its own "Add comment" button then sent the eye to a strip at
+// the top of the window to type into. A comment is about the words under the
+// cursor, so the field belongs there.
 export interface CommentComposerProps {
   // Returns whether the comment was actually applied -- false means the
   // current selection was empty or spanned more than one block (see
   // addCommentCommand's own doc comment, commands.ts). The composer shows a
   // real inline error in that case rather than silently closing.
   onAddComment: (text: string) => boolean
+  // Where to anchor, read at call time -- see FloatingCard's own `measure`
+  // doc comment for why this is a function rather than two rect props.
+  measure: () => { anchor: Rect | null; safe: Rect | null }
+  // The scrolling editor pane, so the popover follows the text when the pane
+  // resizes under it.
+  paneRef: RefObject<HTMLElement | null>
 }
 
 // A static id, not one generated via `useId()`, is safe here: appStore's
@@ -24,14 +42,30 @@ export interface CommentComposerProps {
 const COMMENT_ERROR_ID = 'comment-composer-error'
 
 // How tall the auto-growing field is allowed to get before it starts
-// scrolling internally, in px. Deliberately a cap rather than unbounded
-// growth: this composer is a LAYOUT ROW (see the module comment), so every
-// pixel it grows is a pixel taken from the editor canvas underneath it --
-// and an unbounded field would let a long comment push the canvas off
-// screen entirely. ~6 lines at this row's 12px/1.4 text.
+// scrolling internally, in px. ~6 lines at this popover's 12px/1.4 text.
+//
+// THE REASON FOR THE CAP CHANGED WITH THE SURFACE, and the cap survived the
+// change: as a layout row, every pixel it grew was a pixel taken from the
+// editor canvas underneath it, and an unbounded field could push the canvas
+// off screen. As a popover it steals no layout at all -- but an unbounded one
+// would grow past the safe rect, and computeFloatingPosition's vertical clamp
+// would then pin its TOP to `safe.top + FLOATING_EDGE_PAD` and let the bottom
+// (buttons included) run off the end of the pane. Capping the field and
+// scrolling it internally keeps the Add/Cancel buttons reachable no matter how
+// long the comment gets.
 const MAX_FIELD_HEIGHT_PX = 104
 
-function CommentComposer({ onAddComment }: CommentComposerProps): ReactElement | null {
+// Slightly wider than the link popover: a comment is prose, and a 300px field
+// at ~6 lines reads cramped. Still clamped down by FloatingCard when the pane
+// is narrower (Split at MIN_SPLIT_RATIO), so this is a preference rather than
+// a floor that could push it under the native preview view.
+const COMMENT_POPOVER_WIDTH_PX = 320
+
+function CommentComposer({
+  onAddComment,
+  measure,
+  paneRef
+}: CommentComposerProps): ReactElement | null {
   const isOpen = useAppStore((state) => state.commentComposerOpen)
   const closeComposer = useAppStore((state) => state.closeCommentComposer)
   const [text, setText] = useState('')
@@ -44,18 +78,17 @@ function CommentComposer({ onAddComment }: CommentComposerProps): ReactElement |
   // height, so without the reset the field would only ever grow and would
   // stay tall after the text was deleted.
   //
-  // useLayoutEffect, not useEffect: this runs before paint, so the row never
-  // shows a frame at the stale height. Declared BEFORE the `isOpen` early
-  // return below, like every other hook here -- hook order stays stable
-  // because the return is what varies, never the hook list.
+  // useLayoutEffect, not useEffect: this runs before paint, so the popover
+  // never shows a frame at the stale height. It is also what makes the growth
+  // visible to FloatingCard at all -- that component observes its own box with
+  // a ResizeObserver, so a height written here is picked up and the popover
+  // re-places itself around the taller card.
   useLayoutEffect(() => {
     const field = fieldRef.current
     if (!field) return
     field.style.height = 'auto'
     field.style.height = `${Math.min(field.scrollHeight, MAX_FIELD_HEIGHT_PX)}px`
   }, [text, isOpen])
-
-  if (!isOpen) return null
 
   const handleClose = (): void => {
     setText('')
@@ -65,11 +98,11 @@ function CommentComposer({ onAddComment }: CommentComposerProps): ReactElement |
 
   const handleSubmit = (): void => {
     if (text.trim() === '') return
-    // Trimmed, not raw: the field is multi-line now, so a Shift+Enter the
-    // user changed their mind about leaves a trailing newline that would
-    // otherwise be encoded into the marker and rendered as a blank line in
-    // the Comments sidebar forever. Interior newlines -- the whole point of
-    // the change -- are untouched.
+    // Trimmed, not raw: the field is multi-line, so a Shift+Enter the user
+    // changed their mind about leaves a trailing newline that would otherwise
+    // be encoded into the marker and rendered as a blank line in the Comments
+    // sidebar forever. Interior newlines -- the whole point of the multi-line
+    // field -- are untouched.
     const applied = onAddComment(text.trim())
     if (!applied) {
       setError('Select some text within a single paragraph first.')
@@ -79,7 +112,7 @@ function CommentComposer({ onAddComment }: CommentComposerProps): ReactElement |
   }
 
   // ENTER SUBMITS, SHIFT+ENTER INSERTS A NEWLINE -- deliberately that way
-  // round, not the reverse.
+  // round, not the reverse, and unchanged by the move to a popover.
   //
   // The overwhelmingly common comment is a single line ("typo", "cite this"),
   // and this composer already shipped with plain Enter submitting it; making
@@ -94,27 +127,28 @@ function CommentComposer({ onAddComment }: CommentComposerProps): ReactElement |
   // with the newline already in the value. Writing the newline ourselves
   // would mean reimplementing caret/selection-replacement handling for no
   // gain.
+  //
+  // Escape is deliberately absent here -- FloatingCard owns one window-level
+  // listener registered unconditionally on mount, which also catches an Escape
+  // pressed while focus has moved out of this field (the canvas and tab bar
+  // stay clickable behind the popover). See LinkComposer's matching note.
   const handleKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>): void => {
     if (event.key === 'Enter' && !event.shiftKey) {
       event.preventDefault()
       handleSubmit()
-    } else if (event.key === 'Escape') {
-      event.preventDefault()
-      handleClose()
     }
   }
 
   return (
-    <div
-      role="group"
-      aria-label="Add comment"
-      className="flex flex-none flex-col gap-1.5 border-b border-border-chrome bg-chrome-dark px-3 py-1.5 text-12 text-text-secondary"
+    <FloatingCard
+      open={isOpen}
+      measure={measure}
+      paneRef={paneRef}
+      onClose={handleClose}
+      label="Add comment"
+      widthPx={COMMENT_POPOVER_WIDTH_PX}
     >
-      {/* `items-end`, not `items-center`: the field grows downward as the
-          comment gains lines, and buttons floating to the vertical middle of
-          a six-line field read as unanchored. Bottom-aligned, they stay on
-          the same line as the last line of text, where the caret is. */}
-      <div className="flex items-end gap-1.5">
+      <div className="flex flex-col gap-1.5">
         <textarea
           ref={fieldRef}
           rows={1}
@@ -128,9 +162,15 @@ function CommentComposer({ onAddComment }: CommentComposerProps): ReactElement |
           // The Shift+Enter half of the key contract is genuinely
           // undiscoverable otherwise -- a single-looking field gives a user no
           // reason to suspect it takes more than one line. Stated in the
-          // placeholder rather than as a hint row so it costs no layout
-          // height, and sits exactly where the user is already looking.
+          // placeholder rather than as a hint row so it costs no height, and
+          // sits exactly where the user is already looking.
           placeholder="Add a comment… (Shift+Enter for a new line)"
+          // Safe for the same verified reason LinkComposer's own autoFocus is
+          // (see that file's note): DOM focus and ProseMirror's
+          // `state.selection` are independent, so focusing this field does not
+          // disturb the range addCommentCommand will mark. Proven end to end
+          // in the real app by phase0/gate27-comments.spec.ts, which types
+          // here and then reads the marker back off disk.
           autoFocus
           value={text}
           onChange={(e) => {
@@ -144,38 +184,42 @@ function CommentComposer({ onAddComment }: CommentComposerProps): ReactElement |
           // overwritten on the very next keystroke). `leading-[1.4]` is what
           // MAX_FIELD_HEIGHT_PX's own "~6 lines" figure is derived from, so
           // the two must move together.
-          className="min-h-[30px] min-w-0 flex-1 resize-none overflow-y-auto rounded-sm border border-border-chrome bg-page px-2.5 py-1.5 text-12 leading-[1.4] text-text-primary"
+          className="min-h-[30px] w-full min-w-0 resize-none overflow-y-auto rounded-sm border border-border-chrome bg-page px-2.5 py-1.5 text-12 leading-[1.4] text-text-primary"
         />
-        <button
-          type="button"
-          onClick={handleSubmit}
-          disabled={text.trim() === ''}
-          className="flex-none rounded-sm border border-border-chrome px-2.5 py-1 text-12 text-text-primary transition-colors hover:bg-chrome-light disabled:cursor-not-allowed disabled:opacity-40"
-        >
-          Add
-        </button>
-        <button
-          type="button"
-          onClick={handleClose}
-          className="flex-none rounded-sm px-2.5 py-1 text-12 text-text-secondary transition-colors hover:bg-chrome-light"
-        >
-          Cancel
-        </button>
+        {/* Product-completeness audit Tier 3, B.1: `role="alert"` announces
+        this the instant it appears (a genuinely discrete failure -- the
+        selection was empty or spanned multiple blocks, see addCommentCommand's
+        own doc comment -- not a value that updates continuously the way
+        FindBar's match count does), and `id`+`aria-describedby` above ties it
+        to the input it's actually ABOUT, so a screen reader reports it as part
+        of that field's own description too, not just as an unrelated aside
+        that happened to be announced around the same time. */}
+        {error && (
+          <span id={COMMENT_ERROR_ID} role="alert" className="text-11-5 text-red-600">
+            {error}
+          </span>
+        )}
+        {/* End-aligned, matching LinkComposer -- the two popovers are the same
+        control in two flavours and should not read as two different designs. */}
+        <div className="flex items-center justify-end gap-1.5">
+          <button
+            type="button"
+            onClick={handleClose}
+            className="flex-none rounded-sm px-2 py-1 text-12 text-text-secondary transition-colors hover:bg-chrome-light"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={handleSubmit}
+            disabled={text.trim() === ''}
+            className="flex-none rounded-sm border border-border-chrome px-2.5 py-1 text-12 text-text-primary transition-colors hover:bg-chrome-light disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            Add
+          </button>
+        </div>
       </div>
-      {/* Product-completeness audit Tier 3, B.1: `role="alert"` announces
-      this the instant it appears (a genuinely discrete failure -- the
-      selection was empty or spanned multiple blocks, see addCommentCommand's
-      own doc comment -- not a value that updates continuously the way
-      FindBar's match count does), and `id`+`aria-describedby` above ties it
-      to the input it's actually ABOUT, so a screen reader reports it as part
-      of that field's own description too, not just as an unrelated aside
-      that happened to be announced around the same time. */}
-      {error && (
-        <span id={COMMENT_ERROR_ID} role="alert" className="text-11-5 text-red-600">
-          {error}
-        </span>
-      )}
-    </div>
+    </FloatingCard>
   )
 }
 

@@ -1,8 +1,29 @@
+import { createRef } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import CommentComposer from './CommentComposer'
+import RealCommentComposer, { type CommentComposerProps } from './CommentComposer'
 import { initialAppState, useAppStore } from '../store/appStore'
+
+// The composer is a selection-anchored POPOVER (FloatingCard) rather than the
+// layout row it used to be, so it now takes two positioning props. Neither
+// carries any behaviour these tests are about, and jsdom would report all-zero
+// rects for them regardless (see FloatingCard.test.tsx's own header), so they
+// are supplied once here -- keeping every assertion below byte-identical to
+// what it asserted when this was a row, which is the point: the MOVE must not
+// have changed the contract.
+const paneRef = createRef<HTMLElement>()
+function CommentComposer(
+  props: Omit<CommentComposerProps, 'measure' | 'paneRef'>
+): React.ReactElement {
+  return (
+    <RealCommentComposer
+      {...props}
+      measure={() => ({ anchor: null, safe: null })}
+      paneRef={paneRef}
+    />
+  )
+}
 
 beforeEach(() => {
   useAppStore.setState(initialAppState)
@@ -59,7 +80,20 @@ describe('CommentComposer', () => {
 
     await user.type(screen.getByRole('textbox', { name: 'Comment text' }), 'a note{Enter}')
 
-    expect(screen.getByText('Select some text within a single paragraph first.')).toBeVisible()
+    // toBeInTheDocument, NOT toBeVisible -- and the reason is a jsdom
+    // artifact rather than a softened claim. The composer is now wrapped in
+    // FloatingCard, which hides its pre-measurement frame with `opacity: 0`
+    // (never `visibility: hidden`, which would strip it from the
+    // accessibility tree). In a real browser that state cannot survive the
+    // commit that mounts the card, because the callback ref measures during
+    // that same commit -- but jsdom has no layout engine and never measures
+    // anything, so it is stuck there permanently, and jest-dom's toBeVisible
+    // walks ancestors checking opacity. That the popover genuinely reaches
+    // opacity 1 in real Chromium is asserted by Gate 34, exactly as Gate 28
+    // asserts it for the bubble.
+    expect(
+      screen.getByText('Select some text within a single paragraph first.')
+    ).toBeInTheDocument()
     expect(useAppStore.getState().commentComposerOpen).toBe(true)
   })
 
@@ -91,7 +125,20 @@ describe('CommentComposer', () => {
     render(<CommentComposer onAddComment={onAddComment} />)
 
     await user.type(screen.getByRole('textbox', { name: 'Comment text' }), 'a note{Enter}')
-    expect(screen.getByText('Select some text within a single paragraph first.')).toBeVisible()
+    // toBeInTheDocument, NOT toBeVisible -- and the reason is a jsdom
+    // artifact rather than a softened claim. The composer is now wrapped in
+    // FloatingCard, which hides its pre-measurement frame with `opacity: 0`
+    // (never `visibility: hidden`, which would strip it from the
+    // accessibility tree). In a real browser that state cannot survive the
+    // commit that mounts the card, because the callback ref measures during
+    // that same commit -- but jsdom has no layout engine and never measures
+    // anything, so it is stuck there permanently, and jest-dom's toBeVisible
+    // walks ancestors checking opacity. That the popover genuinely reaches
+    // opacity 1 in real Chromium is asserted by Gate 34, exactly as Gate 28
+    // asserts it for the bubble.
+    expect(
+      screen.getByText('Select some text within a single paragraph first.')
+    ).toBeInTheDocument()
 
     await user.type(screen.getByRole('textbox', { name: 'Comment text' }), ' more')
     expect(
