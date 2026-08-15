@@ -108,6 +108,13 @@ interface PreviewFitProbe {
    * after `previewer.preview()` has resolved. See the settle poll below.
    */
   publishedPageCount: number
+  /**
+   * The live computed `zoom` on `#content-root`, i.e. the fit scale the render
+   * context currently has applied. Read as a string, exactly as
+   * getComputedStyle reports it, so a `'1'` is distinguishable from a real
+   * fitted value without going through Number() first.
+   */
+  contentRootZoom: string
 }
 
 // Reads the REAL laid-out geometry of the real sandboxed split-preview
@@ -151,7 +158,10 @@ async function probePreviewFit(app: ElectronApplication): Promise<PreviewFitProb
            publishedPageCount:
              window.__pagedownResult && window.__pagedownResult.type === 'result'
                ? window.__pagedownResult.pageCount
-               : 0
+               : 0,
+           contentRootZoom: document.getElementById('content-root')
+             ? getComputedStyle(document.getElementById('content-root')).zoom
+             : ''
          }
        })()`
     )) as PreviewFitProbe
@@ -619,6 +629,68 @@ test('Gate 35: the sandboxed PREVIEW pane is fitted too, and genuinely fits when
       atDefault.pageCount,
       'a single-page count would make the check above weak'
     ).toBeGreaterThan(1)
+
+    // --- THE FIT MUST SURVIVE A RENDER THAT EXITS EARLY --------------------
+    //
+    // Everything above measures the ONE path through the render handler that
+    // ends in a published, successful result. That path is not the only way a
+    // render finishes, and the others are what this section exists for.
+    //
+    // WHAT WENT WRONG, and why it is not visible anywhere above. "Is this a
+    // fitting harness?" and "is it safe to be scaled right now?" used to be a
+    // single variable: the handler zeroed `previewFitPageWidthPx` at the top of
+    // every request and restored it from `fitToWidth` only at the very end. So
+    // every early exit -- the empty-html short-circuit reached here, the
+    // missing-#content-root throw, both superseded-request guards and the whole
+    // catch block -- returned having thrown the answer away, leaving the
+    // harness believing it had never been asked to fit. The next `resize` (a
+    // divider drag) then recomputed the scale as 1 from that wrong answer.
+    //
+    // Emptying the document is the one early exit reachable through real UI:
+    // `markdownToHtml` returns '' for it, which is exactly the falsy value the
+    // handler short-circuits on rather than handing to Paged.js.
+    //
+    // NON-VACUOUS BY CONSTRUCTION: the poll below requires the sandbox to have
+    // actually PUBLISHED an empty result (both its own count and the DOM's at
+    // zero). If the editor ever stopped serialising an emptied document to
+    // empty Markdown -- `paragraphSchema.toMarkdown` substitutes a literal
+    // `<br />` for an empty paragraph in some contexts, which would render one
+    // real page -- this poll times out and says so, rather than quietly
+    // asserting against a path it never took.
+    const fittedZoomBeforeClear = wide.contentRootZoom
+    expect(Number(fittedZoomBeforeClear)).toBeLessThan(1)
+
+    await win.click('.milkdown-mount .ProseMirror')
+    await win.keyboard.press('ControlOrMeta+a')
+    await win.keyboard.press('Delete')
+
+    await expect
+      .poll(
+        async () => {
+          const p = await probePreviewFit(app)
+          return p !== null && p.publishedPageCount === 0 && p.pageCount === 0
+        },
+        {
+          message:
+            'expected emptying the document to drive a real empty render through the sandbox',
+          timeout: 20_000
+        }
+      )
+      .toBe(true)
+
+    const afterEmpty = (await probePreviewFit(app))!
+    console.log('Gate 35 preview after an empty render:', JSON.stringify(afterEmpty))
+
+    // THE ASSERTION. The pane has not moved, so the fit has no reason to
+    // change -- and it must not, because a render that produced no pages says
+    // nothing about how wide a page would have been. Pinned against the value
+    // observed moments earlier rather than against MIN_FIT_SCALE or a computed
+    // scale, so this keeps testing the PROPERTY (the fit survived) if the floor,
+    // the gutter or the default window width ever move.
+    expect(
+      afterEmpty.contentRootZoom,
+      'an empty render must not tear down the fit -- it exits before the success path that used to restore it'
+    ).toBe(fittedZoomBeforeClear)
   } finally {
     await restoreRecents()
     await rm(fixtureDir, { recursive: true, force: true })
