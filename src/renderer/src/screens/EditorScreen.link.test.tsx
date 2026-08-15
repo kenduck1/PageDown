@@ -209,31 +209,50 @@ describe('EditorScreen insert link', () => {
     expect(screen.queryByRole('group', { name: 'Insert link' })).not.toBeInTheDocument()
   })
 
-  // The composer is a LAYOUT ROW, not a floating popover, and that is an
-  // architectural requirement (a Split-mode WebContentsView composites above
-  // ALL DOM -- see LinkComposer.tsx/FindBar.tsx). This pins the structural
-  // property that enforces it: the row is a sibling in EditorScreen's own
-  // top-level column, ABOVE the content row, so opening it shrinks the
-  // content area (which is what makes SplitPreview's existing ResizeObserver
-  // re-report bounds) rather than painting over it.
-  it('renders the composer as a layout row above the content area, not as an overlay over it', async () => {
+  // THIS ASSERTION IS DELIBERATELY INVERTED FROM WHAT IT USED TO CLAIM, and
+  // the inversion is the change rather than a casualty of it. It previously
+  // read "renders the composer as a layout row above the content area, not as
+  // an overlay over it", and pinned the row being a sibling ABOVE
+  // `document-content` with no fixed/absolute positioning -- because a
+  // WebContentsView (Split mode's live preview) composites above ALL DOM
+  // unconditionally, so a floating panel is silently painted over.
+  //
+  // That threat is real and unchanged; what changed is that it is now SOLVED
+  // rather than dodged. SelectionBubble already floats safely by clamping into
+  // `intersect(canvasRect, editorPaneRect)`, a rect the editor pane and the
+  // native view are disjoint halves of, and lib/floating-position.ts was
+  // written generic on purpose so more callers could reuse it. FindBar stays a
+  // row (a find bar is conventionally full-width, and being a row is what lets
+  // it RESIZE the preview instead of covering it); a URL field belongs at the
+  // cursor. See FloatingCard.tsx's header.
+  //
+  // So the two structural properties worth pinning flipped, and both are
+  // pinned here: the popover is `position: fixed`, and it is rendered OUTSIDE
+  // `document-content` -- the latter being the one that is easy to regress and
+  // impossible to see, since both the single-pane branch and Split's left pane
+  // wrap their content in CSS `zoom`, which multiplies a fixed descendant's
+  // OFFSETS as well as its size (measured: left:400 top:300 renders at x=240
+  // y=180 under `zoom: 0.6`). Nesting it there would mis-anchor it and shrink
+  // its hit targets, with nothing failing anywhere.
+  it('renders the composer as a fixed popover at the screen root, outside the zoom wrapper', async () => {
     useDocumentStore.setState({ filePath: '/tmp/report.md', content: '# Report' })
     const user = userEvent.setup()
     render(<EditorScreen />)
 
     await user.click(screen.getByRole('button', { name: 'Insert link' }))
 
-    const row = screen.getByRole('group', { name: 'Insert link' })
+    const popover = screen.getByRole('group', { name: 'Insert link' })
     const contentRow = screen.getByTestId('document-content')
-    expect(row.contains(contentRow)).toBe(false)
-    expect(contentRow.contains(row)).toBe(false)
-    // Node.DOCUMENT_POSITION_FOLLOWING (4): the content area comes after the
-    // composer row in document order.
-    expect(row.compareDocumentPosition(contentRow) & Node.DOCUMENT_POSITION_FOLLOWING).toBe(4)
-    // No fixed/absolute positioning anywhere on the row itself -- an overlay
-    // would need one of them, and would then need SplitPreview's zero-size
-    // rectangle workaround the way both full-screen modals do.
-    expect(row.className).not.toMatch(/\b(fixed|absolute)\b/)
+    expect(popover.contains(contentRow)).toBe(false)
+    // The load-bearing half: NOT a descendant of the zoom-wrapped canvas.
+    expect(contentRow.contains(popover)).toBe(false)
+    expect(popover.style.position).toBe('fixed')
+    // Placed by real arithmetic rather than parked -- jsdom reports all-zero
+    // rects, so this cannot assert a meaningful pixel, but it can assert that
+    // a `left`/`top` were written at all (an unpositioned fixed element would
+    // leave both empty and land wherever it happened to flow).
+    expect(popover.style.left).not.toBe('')
+    expect(popover.style.top).not.toBe('')
   })
 
   // Capability-gap pass: the composer is prefilled from the LIVE selection

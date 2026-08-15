@@ -16,9 +16,9 @@ import type { TableAlignment } from '../milkdown/table-context'
 // design doc's "Tooling for non-Markdown-fluent users", alongside the
 // already-built persistent toolbar.
 //
-// THIS IS THE ONE FLOATING SURFACE IN THIS APP, and that is a deliberate,
-// argued exception rather than an oversight. FindBar, CommentComposer and
-// LinkComposer are all LAYOUT ROWS because a WebContentsView (Split mode's
+// THIS WAS THE FIRST FLOATING SURFACE IN THIS APP, and the argument it had to
+// make is now load-bearing for three more. FindBar, CommentComposer and
+// LinkComposer were all LAYOUT ROWS because a WebContentsView (Split mode's
 // live preview) composites above ALL DOM unconditionally. A selection bubble
 // cannot be a layout row and still be a selection bubble, so instead of
 // dodging the native view it is CLAMPED out of its column: everything it
@@ -27,7 +27,11 @@ import type { TableAlignment } from '../milkdown/table-context'
 // disjoint halves of. See that module's header for the measurements and for
 // why the PageSetupModal zero-rect workaround is the wrong tool here (it would
 // strobe the whole preview on every drag-select, through the same serialized
-// native queue that carries real renders).
+// native queue that carries real renders). The slash palette reused that clamp
+// next, and the two COMPOSERS followed (FloatingCard.tsx) once it was clear
+// the guarantee generalises -- FindBar is now the only surface that is still
+// deliberately a row, because a find bar is conventionally full-width and
+// being a row is what lets it RESIZE the preview rather than cover it.
 //
 // Rendered by EditorScreen at ITS ROOT, as a sibling of PageSetupModal /
 // ShortcutsHelpModal / Toast -- never inside the zoom wrapper. There is no
@@ -84,11 +88,16 @@ export interface SelectionBubbleCommands {
   toggleHeading: (level: 1 | 2 | 3) => void
   setParagraph: () => void
   // Both of these OPEN A COMPOSER (LinkComposer / CommentComposer), rather
-  // than embedding an input in the bubble: those composers are layout rows for
-  // the occlusion reason above, and duplicating them as floating fields would
-  // reintroduce exactly the problem this component had to argue its way out of
-  // once. Opening either also shifts the content area, which invalidates this
-  // bubble's anchor -- hence `suppressed` below.
+  // than embedding an input in the bubble itself. Those composers are now
+  // selection-anchored POPOVERS too -- they were full-width layout rows when
+  // this comment was first written, and reusing the clamp proved out here is
+  // what let them move (see FloatingCard.tsx) -- so the reason for keeping
+  // them separate is no longer "a field cannot float." It is that a bubble is
+  // a row of one-click toggles the user reads at a glance, and growing a text
+  // field inside it would resize the toolbar under the pointer mid-gesture.
+  // Both composers anchor to the same selection rect this bubble does, which
+  // is exactly why opening either one must SUPPRESS this bubble (see
+  // `suppressed` below) -- otherwise the two would open on top of each other.
   insertLink: () => void
   addComment: () => void
   // Removing a link is the one link action that does NOT need a composer --

@@ -259,7 +259,15 @@ function EditorScreen(): React.JSX.Element {
   // rect is a caret box): SelectionBubble's own visibility rules decide what
   // to do with it, and branching here would just be a second, drifting copy of
   // those rules.
-  const measureSelectionGeometry = useCallback((): void => {
+  // The measurement itself, with NO state of its own -- split out from
+  // measureSelectionGeometry below so the two composer popovers can call it
+  // directly. FloatingCard owns its own rect state and reads it through this
+  // at mount and on every scroll/resize tick, which is what lets it be placed
+  // correctly in the SAME commit that opens it (see that component's own
+  // `measure` doc comment). Sharing one reader rather than giving the
+  // composers a second copy is the same rule findAncestorListType follows: an
+  // anchor computed two ways is an anchor that can disagree with itself.
+  const readSelectionGeometry = useCallback((): { anchor: Rect | null; safe: Rect | null } => {
     // getTableRect FIRST, falling back to the selection rect. It returns
     // non-null only for a COLLAPSED selection inside a table -- the one case
     // where a caret-derived anchor cannot be kept fresh, because sameSnapshot
@@ -268,15 +276,20 @@ function EditorScreen(): React.JSX.Element {
     // doc comment for the full argument.
     const commands = editorRef.current
     const anchor = commands ? (commands.getTableRect() ?? commands.getSelectionRect()) : null
-    setSelectionAnchor((prev) => (sameRect(prev, anchor) ? prev : anchor))
     const pane = editorPaneRef.current
     const canvas = canvasRef.current
     const safe =
       pane && canvas
         ? intersectRect(canvas.getBoundingClientRect(), pane.getBoundingClientRect())
         : null
-    setSelectionSafeRect((prev) => (sameRect(prev, safe) ? prev : safe))
+    return { anchor, safe }
   }, [])
+
+  const measureSelectionGeometry = useCallback((): void => {
+    const { anchor, safe } = readSelectionGeometry()
+    setSelectionAnchor((prev) => (sameRect(prev, anchor) ? prev : anchor))
+    setSelectionSafeRect((prev) => (sameRect(prev, safe) ? prev : safe))
+  }, [readSelectionGeometry])
 
   const handleSelectionChanged = useCallback(
     (snapshot: SelectionSnapshot | null): void => {
@@ -1802,25 +1815,14 @@ function EditorScreen(): React.JSX.Element {
         onReplaceAll={findController.replaceAll}
         queryInputRef={findQueryInputRef}
       />
-      {/* Same layout-row placement/reasoning as FindBar immediately above --
-      see CommentComposer.tsx's own module comment. */}
-      <CommentComposer onAddComment={handleAddComment} />
-      {/* Same layout-row placement/reasoning as FindBar/CommentComposer above
-      -- see LinkComposer.tsx's own module comment, including why the
-      window.prompt call this replaced could never have worked in Electron. */}
-      <LinkComposer
-        // Prefilled from the live selection snapshot, so editing an existing
-        // link starts from its real current URL rather than a blank field --
-        // half of the fix for the "correcting a link's URL DELETED the link"
-        // bug (EditorCommands.insertLink's update-vs-toggle branch is the
-        // other half). Empty string when the selection carries no link, which
-        // is also what switches the row between Insert and Update wording and
-        // decides whether "Remove link" is offered at all.
-        initialHref={liveSelection?.linkHref ?? ''}
-        onInsertLink={handleInsertLink}
-        onRemoveLink={handleRemoveLink}
-      />
-      {/* Same layout-row placement/reasoning as FindBar/CommentComposer above
+      {/* NOTE: CommentComposer and LinkComposer used to sit HERE, as layout
+      rows between FindBar and the banners. They are now selection-anchored
+      popovers rendered at this screen's own root, down beside SelectionBubble
+      -- see FloatingCard.tsx for why, and for why FindBar deliberately stayed
+      a row. Do not move them back into this stack: a `position: fixed` child
+      of this flex column is out of flow and would take no space anyway, so
+      putting them here again would only misfile them. */}
+      {/* Same layout-row placement/reasoning as FindBar above
       -- see RemoteImageBanner.tsx's own module comment. */}
       <RemoteImageBanner />
       {/* Same layout-row family, one row below RemoteImageBanner -- order
@@ -2112,12 +2114,18 @@ function EditorScreen(): React.JSX.Element {
 
       `suppressed` is every overlay/composer that can be open at the same time:
       the two full-screen modals (which the bubble would otherwise sit on top
-      of, being z-40 under their z-50) plus the two composer ROWS, which the
-      bubble's own Link/Add-comment buttons open -- opening either shifts the
-      whole content area downward, invalidating the anchor this bubble was
-      placed against. Find is deliberately absent: it needs no suppression,
-      because applyFindState selects each match WITHOUT focusing, so
-      snapshot.hasFocus is already false while the user is in the find bar. */}
+      of, being z-40 under their z-50) plus the two composers, which the
+      bubble's own Link/Add-comment buttons open. THAT SECOND REASON CHANGED
+      WITH THE COMPOSERS AND STAYED TRUE, which is the dangerous shape of
+      stale comment, so it is restated rather than left: it used to be "opening
+      either shifts the whole content area downward, invalidating the anchor
+      this bubble was placed against," and a popover shifts nothing. It is now
+      the opposite problem -- both surfaces anchor to the SAME selection rect,
+      so without suppression a composer would open directly on top of the
+      bubble that spawned it. Find is deliberately absent: it needs no
+      suppression, because applyFindState selects each match WITHOUT focusing,
+      so snapshot.hasFocus is already false while the user is in the find
+      bar. */}
       <SelectionBubble
         snapshot={liveSelection}
         anchor={selectionAnchor}
@@ -2150,6 +2158,34 @@ function EditorScreen(): React.JSX.Element {
           deleteTable: () => editorRef.current?.deleteTable(),
           setColumnAlignment: (alignment) => editorRef.current?.setColumnAlignment(alignment)
         }}
+      />
+      {/* The two composer POPOVERS, rendered at this root for exactly the same
+      reason SelectionBubble immediately above is: both the single-pane branch
+      and Split's left pane wrap their content in CSS `zoom`, which multiplies
+      a fixed-position descendant's OFFSETS as well as its size, so a popover
+      nested in there would be both mis-anchored and rendered at the zoom
+      factor's own size. They read their anchor through `readSelectionGeometry`
+      -- the SAME reader that feeds the bubble -- so the popover opens exactly
+      where the bubble that spawned it was, rather than at a second,
+      independently-derived position. */}
+      <CommentComposer
+        onAddComment={handleAddComment}
+        measure={readSelectionGeometry}
+        paneRef={editorPaneRef}
+      />
+      <LinkComposer
+        // Prefilled from the live selection snapshot, so editing an existing
+        // link starts from its real current URL rather than a blank field --
+        // half of the fix for the "correcting a link's URL DELETED the link"
+        // bug (EditorCommands.insertLink's update-vs-toggle branch is the
+        // other half). Empty string when the selection carries no link, which
+        // is also what switches the popover between Insert and Update wording
+        // and decides whether "Remove link" is offered at all.
+        initialHref={liveSelection?.linkHref ?? ''}
+        onInsertLink={handleInsertLink}
+        onRemoveLink={handleRemoveLink}
+        measure={readSelectionGeometry}
+        paneRef={editorPaneRef}
       />
       {/* Same "render unconditionally at EditorScreen root" convention as
       SelectionBubble immediately above -- the component's own `items.length

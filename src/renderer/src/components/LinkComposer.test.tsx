@@ -1,8 +1,23 @@
+import { createRef } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import LinkComposer from './LinkComposer'
+import RealLinkComposer, { type LinkComposerProps } from './LinkComposer'
 import { initialAppState, useAppStore } from '../store/appStore'
+
+// The composer is a selection-anchored POPOVER (FloatingCard) rather than the
+// layout row it used to be, so it now takes two positioning props. Neither
+// carries any behaviour these tests are about, and jsdom would report all-zero
+// rects for them regardless (see FloatingCard.test.tsx's own header), so they
+// are supplied once here rather than repeated at eighteen call sites --
+// keeping every assertion below byte-identical to what it asserted when this
+// was a row, which is the point: the MOVE must not have changed the contract.
+const paneRef = createRef<HTMLElement>()
+function LinkComposer(props: Omit<LinkComposerProps, 'measure' | 'paneRef'>): React.ReactElement {
+  return (
+    <RealLinkComposer {...props} measure={() => ({ anchor: null, safe: null })} paneRef={paneRef} />
+  )
+}
 
 // The replacement for EditorToolbar's dead `window.prompt('Link URL')` call
 // (which THREW in Electron -- see LinkComposer.tsx's own module comment).
