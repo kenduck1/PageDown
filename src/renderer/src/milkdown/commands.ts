@@ -27,6 +27,7 @@ import { pagebreakNode } from './nodes/pagebreak'
 import { tocNode, tocViewProse } from './nodes/toc'
 import { commentSchema } from './nodes/comment'
 import { safeImageViewProse } from './image-security'
+import { taskItemViewProse } from './nodes/task-item'
 import { columnCellPositions, findTableContext, type TableAlignment } from './table-context'
 
 // prosemirror-history is not wired into either stock preset this editor
@@ -1090,5 +1091,12 @@ export const EDITOR_COMMAND_PLUGINS = [
   // behavior, not schema (round-trip fidelity for image syntax is
   // untouched), so this belongs here alongside historyProse/undoCommand,
   // not in plugins.ts's EDITOR_SCHEMA_PLUGINS.
-  safeImageViewProse
+  safeImageViewProse,
+  // The GFM task-list checkbox. Rendering behaviour, not schema -- the
+  // `checked` attr it reads and writes is @milkdown/preset-gfm's own, declared
+  // by extendListItemSchemaForTask and already covered by round-trip.test.ts
+  // -- so it belongs here beside safeImageViewProse/tocViewProse rather than
+  // in plugins.ts's EDITOR_SCHEMA_PLUGINS. See nodes/task-item.ts for why the
+  // canvas needed a control drawn at all, and why it is a real <input>.
+  taskItemViewProse
 ].flat()
