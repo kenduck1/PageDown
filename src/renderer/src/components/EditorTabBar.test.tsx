@@ -426,6 +426,117 @@ describe('EditorTabBar', () => {
       )
     })
 
+    // ----------------------------------------------------------------
+    // The drop indicator: ONE gap, ONE position
+    // ----------------------------------------------------------------
+    //
+    // User-reported: "when you move it there's two different places where the
+    // blue bar can snap to between two tabs". The hint used to be
+    // {overIndex, dropAfter}, so the gap between tabs N and N+1 had two
+    // painters -- tab N's right edge and tab N+1's left edge -- landing 4px
+    // apart across the row's 2px `gap-0.5`. Same drop, two indicators, no way
+    // to tell which you were getting.
+    //
+    // Asserted on the emitted class rather than on paint: as the comment
+    // further up this file records, base.css is never loaded into the test
+    // DOM, so getComputedStyle would read initial values here and prove
+    // nothing. The class names ARE the two positions -- inset +2px is a strip
+    // on a tab's left edge, inset -2px one on its right edge -- so which class
+    // lands on which tab is exactly the fact in question.
+    type DropStrip = { tab: number; edge: 'left' | 'right' }
+
+    function dropStrips(): DropStrip[] {
+      return screen.getAllByRole('tab').flatMap((el, tab): DropStrip[] => {
+        if (el.className.includes('shadow-[inset_2px')) return [{ tab, edge: 'left' }]
+        if (el.className.includes('shadow-[inset_-2px')) return [{ tab, edge: 'right' }]
+        return []
+      })
+    }
+
+    // Every tab 100px wide and butted together, so tab i spans x = i*100.
+    function stubRow(): void {
+      screen.getAllByRole('tab').forEach((el, i) => {
+        el.getBoundingClientRect = (() =>
+          ({ left: i * 100, width: 100, right: i * 100 + 100 }) as DOMRect) as never
+      })
+    }
+
+    it('paints the SAME single strip whether a gap is approached from its left or its right', () => {
+      openThree()
+      render(<EditorTabBar />)
+      stubRow()
+      const dataTransfer = makeDataTransfer()
+      const tabs = screen.getAllByRole('tab')
+      fireEvent.dragStart(tabs[0], { dataTransfer })
+
+      // Every interior gap of the 4-tab bar (a blank Untitled tab precedes the
+      // three opened ones), approached from both sides. Enumerated rather than
+      // spot-checked: the pre-fix code was CORRECT at both ends and wrong at
+      // every gap in between, so a test that only probed gap 0 or gap N would
+      // have passed against it.
+      for (let gap = 1; gap < tabs.length; gap++) {
+        // Right half of the tab left of the gap: x = (gap-1)*100 .. +100.
+        fireDragEvent(tabs[gap - 1], 'dragover', dataTransfer, (gap - 1) * 100 + 90)
+        const fromLeft = dropStrips()
+        // Left half of the tab right of the gap.
+        fireDragEvent(tabs[gap], 'dragover', dataTransfer, gap * 100 + 10)
+        const fromRight = dropStrips()
+
+        expect(fromLeft).toHaveLength(1)
+        expect(fromRight).toEqual(fromLeft)
+      }
+    })
+
+    it('never paints more than one strip, at any pointer position across the whole row', () => {
+      openThree()
+      render(<EditorTabBar />)
+      stubRow()
+      const dataTransfer = makeDataTransfer()
+      const tabs = screen.getAllByRole('tab')
+      fireEvent.dragStart(tabs[0], { dataTransfer })
+
+      for (let tab = 0; tab < tabs.length; tab++) {
+        for (const offset of [0, 10, 49, 50, 51, 90, 99]) {
+          fireDragEvent(tabs[tab], 'dragover', dataTransfer, tab * 100 + offset)
+          expect(dropStrips()).toHaveLength(1)
+        }
+      }
+    })
+
+    it('gives the two END gaps their own positions, distinct from every interior one', () => {
+      openThree()
+      render(<EditorTabBar />)
+      stubRow()
+      const dataTransfer = makeDataTransfer()
+      const tabs = screen.getAllByRole('tab')
+      const last = tabs.length - 1
+      fireEvent.dragStart(tabs[0], { dataTransfer })
+
+      // Before the first tab.
+      fireDragEvent(tabs[0], 'dragover', dataTransfer, 10)
+      expect(dropStrips()).toEqual([{ tab: 0, edge: 'left' }])
+
+      // After the last tab -- the one gap with no tab to its right, so the
+      // only place it can be drawn is inside the last tab's right edge.
+      fireDragEvent(tabs[last], 'dragover', dataTransfer, last * 100 + 90)
+      expect(dropStrips()).toEqual([{ tab: last, edge: 'right' }])
+    })
+
+    it('clears the strip when the drag ends without a drop (Escape, or off the bar)', () => {
+      openThree()
+      render(<EditorTabBar />)
+      stubRow()
+      const dataTransfer = makeDataTransfer()
+      const tabs = screen.getAllByRole('tab')
+
+      fireEvent.dragStart(tabs[0], { dataTransfer })
+      fireDragEvent(tabs[2], 'dragover', dataTransfer, 210)
+      expect(dropStrips()).toHaveLength(1)
+
+      fireEvent.dragEnd(tabs[0])
+      expect(dropStrips()).toEqual([])
+    })
+
     it('reordering does not switch the active tab', () => {
       openThree()
       render(<EditorTabBar />)
