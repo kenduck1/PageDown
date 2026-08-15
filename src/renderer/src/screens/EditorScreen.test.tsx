@@ -1907,12 +1907,22 @@ describe('EditorScreen', () => {
       const pageCard = await screen.findByTestId('page-card')
       expect(pageCard).toHaveStyle({ width: '794px', paddingLeft: '48px', paddingRight: '48px' })
 
-      // Top/bottom padding stay the fixed cosmetic 22px/34px from the design
-      // mock and are deliberately NOT marginTopPx/marginBottomPx -- this
-      // fixture's own 1in top/bottom margins would be 96px if they ever
-      // were, so this assertion fails loudly if someone "completes" the
-      // wiring by hooking them up. See renderPageCard's comment for why.
-      expect(pageCard).toHaveStyle({ paddingTop: '22px', paddingBottom: '34px' })
+      // Top/bottom padding ARE the document's own margins, and this assertion
+      // is the exact inverse of the one it replaces. That earlier assertion
+      // deliberately pinned a fixed cosmetic 22px/34px and said it should
+      // "fail loudly if someone completes the wiring" -- correct while the
+      // card was one continuous page-WIDTH strip with no page boundaries in
+      // it, since there was no sheet edge for a top margin to be measured
+      // from. There is now (page seams, src/typography/page-seam.ts), so the
+      // card's top edge is sheet one's top edge and the first line has to sit
+      // exactly one top margin below it. This fixture's 1in top/bottom
+      // margins are 96px each.
+      expect(pageCard).toHaveStyle({ paddingTop: '96px', paddingBottom: '96px' })
+
+      // ...and the card is at least one whole sheet tall, so an empty
+      // document reads as a sheet of paper rather than a short strip. A4 at
+      // 96dpi is 11.6929in -> 1123px.
+      expect(pageCard).toHaveStyle({ minHeight: '1123px' })
 
       // The editor mount inside the card gets the matching content width:
       // 794 - 48 - 48 = 698.

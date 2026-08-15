@@ -44,8 +44,15 @@ export const pageGuidePluginKey = new PluginKey<PageGuidePluginState>('pagedownP
 
 const EMPTY_INPUT: PageGuideInput = { breaks: [], blockCount: 0 }
 
+// The class name is still `...-page-guide` rather than `...-page-seam`
+// deliberately, even though what it draws is now a seam rather than a line:
+// it is an internal identifier referenced from base.css, this plugin's unit
+// tests and Gate 37, and renaming it would be pure churn across four files
+// for no user-visible gain. The user-visible naming is in the LABEL.
 export const PAGE_GUIDE_CLASS = 'pagedown-page-guide'
 export const PAGE_GUIDE_LABEL_CLASS = 'pagedown-page-guide-label'
+/** The gutter band between the two sheets -- the only part that is not paper. */
+export const PAGE_SEAM_GUTTER_CLASS = 'pagedown-page-seam-gutter'
 
 /**
  * The document position immediately AFTER top-level node `blockIndex`.
@@ -91,13 +98,33 @@ export function formatPageGuideLabel(guide: PageGuide): string {
   return `Pages ${first}–${last} end inside this block`
 }
 
+/**
+ * The seam's DOM: three stacked bands, of which only the middle one is drawn.
+ *
+ * The outer element's own height IS the boundary (paper above + gutter +
+ * paper below, all from the document's own margins -- see
+ * src/typography/page-seam.ts), and the gutter is painted over the middle of
+ * it. The paper bands need no element of their own: the page card behind them
+ * is already white, so "still paper" is simply "nothing drawn here".
+ *
+ * The label lives INSIDE the gutter rather than beside it -- there is now a
+ * real band to put it in, which is where a page separator's caption belongs,
+ * and it means the label cannot overlap document text the way a caption
+ * floating above a hairline could.
+ */
 function buildGuideElement(guide: PageGuide): HTMLElement {
   const element = document.createElement('div')
   element.className = guide.splitsBlock ? `${PAGE_GUIDE_CLASS} is-approximate` : PAGE_GUIDE_CLASS
   // Widget DOM is not part of the document, and ProseMirror does not mark it
   // uneditable for us. Without this, a caret can land inside the guide and
   // typing there produces DOM mutations ProseMirror has to reconcile against
-  // a document that has no such node.
+  // a document that has no such node. This matters MORE now than it did when
+  // the widget was a zero-height line: a seam is a ~216px target that a click
+  // could plausibly land in. (base.css additionally gives it
+  // `pointer-events: none`, so a click passes through to .ProseMirror and
+  // lands the caret at the nearest real position -- both are kept, since the
+  // attribute also governs caret movement by keyboard, which pointer-events
+  // says nothing about.)
   //
   // setAttribute, not the `contentEditable` IDL property: jsdom implements
   // the property without reflecting it to the attribute, so the property
@@ -106,10 +133,14 @@ function buildGuideElement(guide: PageGuide): HTMLElement {
   element.setAttribute('data-page-guide', String(guide.pages[0]))
   element.setAttribute('aria-hidden', 'true')
 
+  const gutter = document.createElement('div')
+  gutter.className = PAGE_SEAM_GUTTER_CLASS
+
   const label = document.createElement('span')
   label.className = PAGE_GUIDE_LABEL_CLASS
   label.textContent = formatPageGuideLabel(guide)
-  element.appendChild(label)
+  gutter.appendChild(label)
+  element.appendChild(gutter)
   return element
 }
 
@@ -170,8 +201,22 @@ export function buildPageGuideDecorations(doc: ProseNode, input: PageGuideInput)
  * recomputed against the live doc on every document change so that an edit
  * which changes the block count blanks them immediately instead of leaving
  * them hanging at stale positions until the next render lands.
+ *
+ * `onSeamCountChanged` reports how many seams are ACTUALLY DRAWN right now --
+ * which is not the same number as `input.breaks.length` and must not be
+ * derived from it by the caller. Breaks collapse onto shared boundaries
+ * (`groupPageGuides`), out-of-range ones are dropped, and the whole set is
+ * suppressed on a block-count mismatch. EditorScreen sizes the page card from
+ * this so the card shows exactly as many sheets as the canvas actually draws
+ * boundaries for -- a card sized for five sheets while the guides are failing
+ * closed would be a page and a half of unexplained blank paper, i.e. the
+ * wrong-layout-with-no-explanation failure the fail-closed posture exists to
+ * avoid. Reported from `view.update`, never from `apply`: `apply` runs inside
+ * transaction application, so a React setter there would fire a render from
+ * inside a ProseMirror dispatch (find-plugin.ts's rule, and the same reason
+ * that file reports its own match count through a callback).
  */
-export function createPageGuidePlugin(): Plugin {
+export function createPageGuidePlugin(onSeamCountChanged?: (count: number) => void): Plugin {
   return new Plugin<PageGuidePluginState>({
     key: pageGuidePluginKey,
     state: {
@@ -181,6 +226,32 @@ export function createPageGuidePlugin(): Plugin {
         if (!meta && !tr.docChanged) return previous
         const input = meta ?? previous.input
         return { input, decorations: buildPageGuideDecorations(newState.doc, input) }
+      }
+    },
+    view: (initialView) => {
+      // Seeded to -1 rather than 0 so the very first report always fires,
+      // even for the (normal) initial count of zero -- the caller starts from
+      // its own default and this is what makes the two provably agree rather
+      // than agree by coincidence. Everything after that is change-only, so
+      // the ~500ms page-count tick on an idle document costs no renders.
+      let reported = -1
+      const report = (view: EditorView): void => {
+        const count = pageGuidePluginKey.getState(view.state)?.decorations.find().length ?? 0
+        if (count === reported) return
+        reported = count
+        onSeamCountChanged?.(count)
+      }
+      report(initialView)
+      return {
+        update: report,
+        // Without this, a remount (every `key={revision}` change) would leave
+        // the card sized for the OUTGOING document's page count until the
+        // incoming editor's first update lands.
+        destroy: () => {
+          if (reported === 0) return
+          reported = 0
+          onSeamCountChanged?.(0)
+        }
       }
     },
     props: {

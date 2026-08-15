@@ -319,58 +319,136 @@
      goes dark" exemption for free while still keeping the values with every
      other colour in this file instead of buried in a rule body.
 
-     GEOMETRY IS THE LOAD-BEARING PART OF THIS RULE, not the colour.
-     `position: absolute` takes the widget out of flow entirely, which buys
-     two things that a zero-height in-flow element does not:
+     GEOMETRY IS THE LOAD-BEARING PART OF THESE RULES, not the colour.
 
-     1. It contributes NOTHING to layout height, so inserting a guide cannot
-        move a single block in the document. That is what keeps
-        phase0/gate10-editor-layout-parity.spec.ts's 0.000px editor/paginator
-        parity intact -- and Gate 10 cannot prove it, because its own
-        REPORT_TEMPLATE fixture is single-page and therefore has no page
-        breaks to draw at all. The real proof is Gate 36, which measures
-        every block's position in a multi-page document before and after the
-        guides arrive.
-     2. Out-of-flow boxes do not participate in margin collapsing, so the
-        margins of the two blocks a guide sits between still collapse
-        THROUGH it exactly as they did when they were adjacent siblings. An
-        in-flow zero-height div would have separated them, silently turning
-        one collapsed margin into two stacked ones -- a real layout change,
-        invisible in a screenshot, that would have broken parity on every
-        page boundary.
+     THIS USED TO BE A ZERO-HEIGHT, ABSOLUTELY POSITIONED 1px LINE, and the
+     comment here argued at length that being out of flow was the whole point
+     (no layout height, and no interruption of the margin collapsing between
+     the two blocks it sits between). That was the right call for a LINE. It
+     is the wrong call for what this is now: a real page boundary occupies
+     real vertical space, because on paper it IS real vertical space -- the
+     rest of the ending page's bottom margin, the gutter between two sheets,
+     and the starting page's top margin. Drawing that as a hairline was the
+     last piece of "the Format canvas is a page-width STRIP, not a page"
+     (see src/typography/page-seam.ts's own header).
 
-     `top` is deliberately left `auto`: for an absolutely positioned box that
-     resolves to the STATIC position, i.e. exactly where the box would have
-     sat in flow, which is the boundary we want. The positioned ancestor is
-     `.milkdown-mount` (which carries Tailwind's `relative`), so `left`/
-     `right` span the document's own content width. */
+     So the seam is now IN FLOW with a real height, and the two properties the
+     old comment defended are re-established deliberately rather than for free:
+
+     1. It moves the document by EXACTLY its own height, and only below
+        itself. That is a stronger, checkable claim than "it moves nothing",
+        and phase0/gate37-page-break-guides.spec.ts test 2 now measures it as
+        a step function -- zero displacement above the first seam, then
+        exactly one seam height per seam crossed, against a value the gate
+        computes from computePageSeamMetrics rather than from the DOM.
+     2. It does NOT double the inter-block margin, which is the trap an
+        in-flow box between two collapsing siblings normally springs. It
+        cannot here, because document-typography.css gives every block
+        `margin-top: 0` and puts all block spacing in `margin-bottom` -- so
+        the preceding block's bottom margin collapses against the seam's own
+        zero top margin (unchanged), and the seam's zero bottom margin
+        collapses against the following block's zero top margin (also
+        unchanged). The one element type that DOES carry a top margin is a
+        heading (1.5em), and the `+ *` rule below zeroes exactly that case --
+        which is not a workaround but a genuine fidelity FIX: Paged.js's own
+        `:first-child { margin-top: 0 }` already drops that margin for a
+        heading landing first on page 2+, so the editor used to render such a
+        heading 39px lower than the paginated output. That divergence is
+        documented in CLAUDE.md as a known, accepted gap; it is now closed at
+        every boundary the editor actually knows about.
+
+     The three bands are sized from CSS custom properties published by
+     MilkdownEditor's mount div from the live PageGeometry
+     (pageSeamCssVariables, src/typography/page-seam.ts) -- a document with
+     0.5in margins gets a visibly tighter boundary than one with 1in margins,
+     exactly as its printed output does. There are deliberately NO var()
+     fallbacks: a missing publisher must collapse the seam loudly rather than
+     render a plausible-but-wrong boundary, and page-seam.test.ts pins both
+     halves of that contract against this file's real text. */
   .milkdown-mount .ProseMirror .pagedown-page-guide {
-    position: absolute;
-    left: 0;
-    right: 0;
-    height: 0;
-    border-top: 1px dashed var(--color-page-guide);
+    /* Positioned ancestor for the gutter band and the label below. Relative
+       with no offsets is paint-time only -- it moves nothing. */
+    position: relative;
+    height: calc(
+      var(--pagedown-seam-paper-above) + var(--pagedown-seam-gap) + var(--pagedown-seam-paper-below)
+    );
+    /* Vertical margins MUST stay zero -- see point 2 above; the displacement
+       assertion in Gate 37 is exactly this element's own height. */
+    margin-top: 0;
+    margin-bottom: 0;
+    /* THE BLEED. This element is a descendant of the mount, whose content box
+       is contentWidthPx wide, but a sheet ends across its FULL width. Pulling
+       out by the document's own side margins lands the edges exactly on the
+       page edges, because contentWidth + marginLeft + marginRight ===
+       pageWidth is computePageGeometry's defining identity. Negative margins
+       rather than `position: absolute` + `left/right`, because this box has to
+       stay in flow to occupy its height at all -- which is the entire point. */
+    margin-left: calc(-1 * var(--pagedown-seam-bleed-left));
+    margin-right: calc(-1 * var(--pagedown-seam-bleed-right));
+    /* Clicks fall THROUGH to .ProseMirror underneath, so clicking near a
+       boundary puts the caret at the nearest real position. Without this the
+       click would land on a widget that is not part of the document at all,
+       and EditorScreen's handlePageCardClick would read it as a click on the
+       card's blank space and jump the caret to the end of the document. */
     pointer-events: none;
     user-select: none;
   }
 
-  /* A break that falls INSIDE a block cannot be drawn where it really is --
-     the editor has no sub-block coordinate to address (see
-     src/pagination/page-breaks.ts). A dotted, lighter line says "this one is
-     approximate" without needing the label to be read, matching design:69's
-     instruction to downgrade honestly and SAY SO rather than present a guess
-     as a fact. */
-  .milkdown-mount .ProseMirror .pagedown-page-guide.is-approximate {
-    border-top-style: dotted;
+  /* See point 2 above: the block that STARTS the next page loses its top
+     margin, matching what Paged.js's own per-page `:first-child` rule already
+     does on the paginated surface. A no-op for every block type whose
+     margin-top is already 0 (which is all of them except headings and `hr`). */
+  .milkdown-mount .ProseMirror .pagedown-page-guide + * {
+    margin-top: 0;
   }
 
-  /* Absolutely positioned relative to the guide so the label, like the line
-     itself, contributes no layout height. Sits just above the line at the
-     right-hand edge, where it is out of the way of the text it annotates. */
+  /* The gutter itself: the only band of the three that is NOT paper. It uses
+     `--color-canvas`, the same token as the scroll area the page card floats
+     on, and therefore -- unlike every other colour in this block -- it DOES
+     follow the app's dark theme. That is correct rather than an oversight of
+     the "document content never goes dark" rule: this band is precisely where
+     there is no document, so it should read as the same surface that surrounds
+     the sheet. The two 1px edges are the bottom of the ending sheet and the
+     top of the starting one; the soft inset shadow above the lower edge is the
+     new sheet casting onto the canvas, which is what actually sells "a second
+     sheet starts here" rather than "a rule is drawn on this page".
+
+     Borders, not box-shadow, for the two edges: an approximate boundary
+     restyles them to dashed below, and box-shadow has no line style. */
+  .milkdown-mount .ProseMirror .pagedown-page-seam-gutter {
+    position: absolute;
+    left: 0;
+    right: 0;
+    top: var(--pagedown-seam-paper-above);
+    height: var(--pagedown-seam-gap);
+    background: var(--color-canvas);
+    border-top: 1px solid var(--color-page-guide);
+    border-bottom: 1px solid var(--color-page-guide);
+    box-shadow: inset 0 -7px 6px -6px rgba(0, 0, 0, 0.16);
+  }
+
+  /* A break that falls INSIDE a block cannot be drawn where it really is --
+     the editor has no sub-block coordinate to address (see
+     src/pagination/page-breaks.ts). Dashed sheet edges say "this boundary is
+     approximate" without needing the label to be read, matching design:69's
+     instruction to downgrade honestly and SAY SO rather than present a guess
+     as a fact. Solid-versus-dashed replaces the old dashed-versus-dotted pair
+     for a reason: at 1px those two were nearly indistinguishable, and a real
+     sheet edge should look like a real edge when it is one. */
+  .milkdown-mount .ProseMirror .pagedown-page-guide.is-approximate .pagedown-page-seam-gutter {
+    border-top-style: dashed;
+    border-bottom-style: dashed;
+  }
+
+  /* Sits INSIDE the gutter, vertically centred, right-aligned to the TEXT
+     column rather than to the bled sheet edge -- inset by the same bleed the
+     seam pulled out by, so the label lines up with the right edge of the
+     paragraph above it instead of floating out over the page margin. */
   .milkdown-mount .ProseMirror .pagedown-page-guide-label {
     position: absolute;
-    right: 0;
-    bottom: 2px;
+    top: 50%;
+    right: var(--pagedown-seam-bleed-right);
+    transform: translateY(-50%);
     font-family: var(--font-sans);
     font-size: var(--text-11);
     line-height: 1;
