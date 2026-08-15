@@ -1205,6 +1205,21 @@
   /* Vertically centred on the FIRST line of the item: (1.7em line box minus
      the 1em control) / 2. Both surfaces set `line-height: 1.7` on `li`, so
      this is one number, not two. */
+  /* REQUIRED, and every em length in this rule depends on it -- a real
+     two-surface divergence caught by Gate 42, not by any unit test. A form
+     control does NOT inherit font-size: Chromium's UA stylesheet gives it its
+     own, so `1em` here resolves against the CONTROL's font, not the list
+     item's. The editor never sees that because Tailwind Preflight already
+     pins `font-size: 100%` on input/button/select/textarea; the sandboxed
+     context has no Preflight and nothing else contesting the UA, so the same
+     declarations produced a 14x14 control in the canvas and a 9.33x9.33 one
+     in the preview and PDF -- with `top` mis-resolving on the same surface for
+     the same reason. This is exactly the trap the `pre`/`code` rule above
+     already documents (a surface without Preflight hitting a Chromium font
+     default the other surface never meets), and the same one-declaration fix:
+     specifying any font-size at all makes the two surfaces agree by
+     construction rather than by luck. */
+  font-size: 1em;
   top: 0.35em;
   width: 1em;
   height: 1em;
