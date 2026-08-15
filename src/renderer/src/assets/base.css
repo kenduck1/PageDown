@@ -406,7 +406,7 @@
     );
     /* Vertical margins MUST stay zero -- see point 2 above; the displacement
        assertion in Gate 37 is exactly this element's own height. */
-    margin-top: 30px;
+    margin-top: 0;
     margin-bottom: 0;
     /* THE BLEED. This element is a descendant of the mount, whose content box
        is contentWidthPx wide, but a sheet ends across its FULL width. Pulling
