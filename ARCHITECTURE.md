@@ -263,6 +263,22 @@ the edited region. An untouched document's bytes are preserved exactly; an
 edited one is not guaranteed byte-identical outside the edit. This is inherent
 to WYSIWYG over Markdown.
 
+> **The frontmatter node renders invisibly, and must stay that way.**
+> Frontmatter is the document's page _configuration_, not content, and it
+> renders to nothing on every output surface — `mdast-util-to-hast` emits
+> nothing at all for a `yaml` node. `milkdown/nodes/frontmatter.ts` exists
+> only so the YAML survives the round trip: every part of the file must map to
+> something in the ProseMirror document, or serializing back out would
+> silently delete the user's page setup on their first keystroke.
+>
+> It previously rendered a bordered grey `Frontmatter (N lines)` box at the
+> top of the page card. That was a real editor/paginator divergence in the one
+> product whose premise is that the two agree, and it distorted decisions
+> around it — a template had its frontmatter deleted to avoid summoning it,
+> and `useCreateDocument` still carries a guard originally written for the
+> same reason. Do not give this node visible styling, a label, or layout
+> height again; `MilkdownEditor.test.tsx` pins this and is red-green verified.
+
 ### View modes
 
 `ViewMode` is `'format' | 'split' | 'source'`. Split mode's left pane is

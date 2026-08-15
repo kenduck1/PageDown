@@ -17,13 +17,17 @@
 //
 // The YAML frontmatter block this template used to carry is DELETED, not
 // rewritten. Its four keys (name/email/phone/location) exist nowhere in
-// PageConfig, so nothing in the app ever read or rendered them -- their only
-// observable effect was an opaque, non-editable `Frontmatter (4 lines)` node
-// sitting above a heading that already said the same thing. The contact line
-// below replaces it with the same information as real, editable, printing
-// document content. No page-config frontmatter was added in its place either:
-// that would put the very `Frontmatter (N lines)` block back on screen, and
-// this template's defaults (Letter, 1in) are already what it renders at.
+// PageConfig, so nothing in the app ever read or rendered them. The contact
+// line below replaces it with the same information as real, editable,
+// printing document content -- which is the right call regardless, since a
+// resume's contact details ARE content and belong on the page.
+//
+// Note that the ORIGINAL argument recorded here was partly about avoiding a
+// visible `Frontmatter (N lines)` box in the canvas. That box no longer
+// exists (see milkdown/nodes/frontmatter.ts), so adding page-config
+// frontmatter to this template is now purely a question of whether it needs
+// non-default page settings -- it does not; Letter/1in is already what it
+// renders at.
 //
 // Email uses an explicit `[text](mailto:...)` link rather than a bare
 // autolink literal: the explicit form is already proven to round-trip

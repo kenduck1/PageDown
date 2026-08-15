@@ -428,6 +428,58 @@ describe('MilkdownEditorHandle commands needing a real ranged selection — wire
     expect(root.textContent).toContain('X')
   })
 
+  it('renders the frontmatter node invisibly, with no visible label or box', async () => {
+    // Frontmatter is the document's page CONFIGURATION, not content, and it
+    // renders to NOTHING on every output surface (paginated preview, PDF,
+    // print, HTML and DOCX export) because mdast-util-to-hast emits nothing
+    // for a `yaml` node. The canvas must agree: this is a page-first editor
+    // whose entire premise is that what you edit matches what prints.
+    //
+    // This node once painted a bordered grey `Frontmatter (N lines)` box at
+    // the top of page 1. It was a real editor/paginator divergence, and it
+    // distorted product decisions around it -- the resume template had its
+    // frontmatter DELETED to avoid summoning it, and useCreateDocument still
+    // carries a comparison function whose only job is to avoid writing
+    // frontmatter that would show it.
+    //
+    // Asserting on textContent AND on the absence of paint-related styling,
+    // because the previous version failed on both counts and either one
+    // coming back is the bug.
+    const editor = await createTestEditor(
+      '---\npage: A4\nmargins:\n  top: 1\n---\n\n# Real heading',
+      PLUGINS
+    )
+    currentEditor = editor
+    const root = document.querySelector('.ProseMirror') as HTMLElement
+
+    const frontmatter = root.querySelector('div[data-type="frontmatter"]') as HTMLElement
+    // Still present: the node has to exist or serializing back out would
+    // silently delete the user's page setup on their first keystroke.
+    expect(frontmatter).toBeInTheDocument()
+    // ...carrying the real YAML, so it round-trips.
+    expect(frontmatter.getAttribute('data-value')).toContain('page: A4')
+
+    // But contributing NO visible text anywhere in the canvas.
+    expect(frontmatter.textContent).toBe('')
+    expect(root.textContent).not.toMatch(/Frontmatter/i)
+    expect(root.textContent).not.toContain('page: A4')
+
+    // ...and no painted box: zero height, no padding or margin of its own.
+    // (The class is deliberately NOT asserted empty -- ProseMirror adds its
+    // own `ProseMirror-selectednode` marker when the atom is selected, which
+    // is its bookkeeping, not styling this node asked for.)
+    const style = frontmatter.getAttribute('style') ?? ''
+    expect(style).toMatch(/height:\s*0(px)?/)
+    expect(style).toMatch(/padding:\s*0(px)?/)
+    expect(style).toMatch(/overflow:\s*hidden/)
+    // No utility classes painting a border/background, which is how the old
+    // visible box was styled.
+    expect(frontmatter.className).not.toMatch(/border|bg-|rounded|px-|py-/)
+
+    // The real document content is unaffected.
+    expect(root.textContent).toContain('Real heading')
+  })
+
   it('setFindState selects the active match without marking the document edited', async () => {
     const editor = await createTestEditor('alpha beta', FIND_PLUGINS)
     currentEditor = editor
