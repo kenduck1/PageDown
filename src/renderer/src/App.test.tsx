@@ -431,9 +431,10 @@ describe('App', () => {
       // The complement of the test above, and the common case by far: a user
       // who has never opened Settings. Writing their defaults out explicitly
       // produced a document whose bytes said exactly what the app would have
-      // done anyway -- and because frontmatter renders in the canvas as a
-      // non-editable `Frontmatter (N lines)` block, the very first thing a new
-      // user saw was an opaque grey box above an otherwise empty page.
+      // done anyway. (This originally also avoided a visible
+      // `Frontmatter (N lines)` box at the top of the canvas; that box no
+      // longer exists -- see milkdown/nodes/frontmatter.ts -- so what remains
+      // is simply not writing inert keys into the user's own file.)
       //
       // Asserted as "completely empty", not merely "no `page:` key": the
       // failure this guards against is a frontmatter block existing at all,

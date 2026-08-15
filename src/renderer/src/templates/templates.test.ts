@@ -87,12 +87,16 @@ describe('template starter content', () => {
 
   // The resume template used to ship a four-key frontmatter block
   // (name/email/phone/location). NONE of those keys exist in PageConfig, so
-  // nothing in the app ever read or rendered them -- their entire observable
-  // effect was an opaque, non-editable `Frontmatter (4 lines)` node sitting
-  // above a heading and contact line that already said the same thing. It is
-  // deleted, and this pins that directly rather than only via the generic
-  // check below, which a re-added block of inert keys would fail anyway but
-  // less legibly.
+  // nothing in the app ever read or rendered them -- inert keys in the user's
+  // own file, duplicating a heading and contact line that already said the
+  // same thing. It is deleted, and this pins that directly rather than only
+  // via the generic check below, which a re-added block of inert keys would
+  // fail anyway but less legibly.
+  //
+  // (The original reasoning also cited a visible `Frontmatter (4 lines)` box
+  // in the canvas. That box no longer exists -- see
+  // milkdown/nodes/frontmatter.ts -- so this test now pins only the "no inert
+  // keys" half, which stands on its own.)
   //
   // Note templates are deliberately exempt from the rule that a new blank
   // document only gets frontmatter when the user's saved default page config

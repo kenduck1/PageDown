@@ -9,13 +9,17 @@ import type { Preferences } from '../../../preload/index.d'
 // Does the user's saved default page config actually differ from what a
 // document with NO frontmatter at all already renders as?
 //
-// This exists to stop a brand-new blank document opening with an opaque
-// `Frontmatter (4 lines)` block at the top of it. That block is not editable
-// in the canvas by design (Page Setup is how you change it), so for the
-// overwhelmingly common case -- a user who has never opened Settings -- it was
-// a grey box of YAML that said exactly what the app would have done anyway,
-// sitting above an otherwise empty page. It is the first thing a new user
-// sees, and it reads like leftover junk.
+// This originally existed to stop a brand-new blank document opening with a
+// visible `Frontmatter (4 lines)` box at the top of the page card. That box is
+// GONE -- frontmatter now renders invisibly in the canvas, exactly as it does
+// on every output surface (see nodes/frontmatter.ts) -- so that reason no
+// longer applies.
+//
+// The guard is kept on its own merits: writing frontmatter whose every key
+// matches what the document would already render as adds noise to the user's
+// real file for no behavioural change, and this app's whole premise is that
+// the Markdown stays clean and portable. It is no longer load-bearing for
+// anything visual.
 //
 // Compared field-by-field against DEFAULT_PAGE_CONFIG rather than against
 // DEFAULT_PREFERENCES: the question that actually matters is "would writing
