@@ -1673,9 +1673,18 @@ describe('EditorScreen', () => {
     it('scales the Split(format) page card down to fit the measured pane', async () => {
       // 389px is the real measured pane width at this app's own default
       // 1000x840 window with the divider at 50% -- the exact configuration
-      // the user's report was about. 389 - 4 gutter = 385; 385 / 816 = 0.4718,
-      // below MIN_FIT_SCALE, so the floor applies and the page renders at 70%
-      // (571px) instead of 816px.
+      // the user's report was about. 389 - 24 gutter = 365; 365 / 816 = 0.4473,
+      // floored to whole percent -> 0.44, which is ABOVE MIN_FIT_SCALE, so the
+      // page genuinely fits rather than being clamped up to the floor.
+      //
+      // This used to expect 0.7 and is inverted deliberately: the floor was
+      // lowered from 0.7 to 0.4 and the gutter raised from 4 to 24 on direct
+      // user feedback ("the margin should be bigger and it should shrink down
+      // a bit more before it starts doing scrolling"). At 0.7 this very
+      // configuration -- the app's DEFAULT split -- was clamped up and
+      // scrolled. See MIN_FIT_SCALE's own comment for why the old floor's
+      // reasoning was right about the sub-floor regime and wrong about where
+      // to put the boundary.
       installControllableResizeObserver(389)
       useDocumentStore.setState({ filePath: '/tmp/report.md', content: '# Report' })
       useAppStore.setState({ viewMode: 'split', splitLeftMode: 'format', splitRatio: 50 })
@@ -1689,7 +1698,7 @@ describe('EditorScreen', () => {
 
       act(() => triggerResize?.())
       await waitFor(() => {
-        expect(wrapper.style.zoom).toBe('0.7')
+        expect(wrapper.style.zoom).toBe('0.44')
       })
     })
 
@@ -1709,7 +1718,7 @@ describe('EditorScreen', () => {
     it('reports the fit scale in the status bar rather than the inapplicable zoom', async () => {
       // The coherence half. Split's zoom control is disabled, so before this
       // feature the readout simply showed the user's own (inert) level. Now
-      // that the pane really is scaled, showing 100% while rendering 70% would
+      // that the pane really is scaled, showing 100% while rendering 44% would
       // restate the exact defect that control was already fixed for once.
       installControllableResizeObserver(389)
       useDocumentStore.setState({ filePath: '/tmp/report.md', content: '# Report' })
@@ -1718,7 +1727,7 @@ describe('EditorScreen', () => {
 
       act(() => triggerResize?.())
       await waitFor(() => {
-        expect(screen.getByLabelText('Zoom level')).toHaveValue('0.7')
+        expect(screen.getByLabelText('Zoom level')).toHaveValue('0.44')
       })
       expect(screen.getByLabelText('Zoom level')).toBeDisabled()
     })
