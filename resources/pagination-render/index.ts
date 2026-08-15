@@ -962,7 +962,52 @@ let previewFitPageWidthPx = 0
 // Deliberately NOT emitted for a non-fitting harness. A thumbnail captures a
 // view sized to exactly one page, so changing its body margin would move what
 // that capture frames.
-const PREVIEW_FIT_CHROME_CSS = 'html { scrollbar-gutter: stable; }\nbody { margin: 0; }'
+// 12px a side, matching FIT_GUTTER_PX (24 TOTAL) in
+// src/renderer/src/lib/fit-scale.ts. The two are a contract: that constant is
+// subtracted from the pane width before the scale is computed, and this is
+// what actually paints the space it reserved. If they disagree the page either
+// overflows the margin it was promised or floats inside a wider one.
+const PREVIEW_FIT_PADDING_PX = 12
+
+// The surround is painted a light grey, and that is the only reason the margin
+// is VISIBLE at all. `.pagedown-document` (document-typography.css) sets
+// `background: #ffffff` on this context's own <body>, so before this the page
+// and the space around it were the same white and a gutter was
+// indistinguishable from the page itself -- widening it would have changed
+// nothing a user could see.
+//
+// Overridden at `body.pagedown-document` rather than plain `body`: the class
+// selector wins on specificity otherwise. Hardcoded literal rather than a
+// custom property because this context has no access to base.css's tokens
+// (it declares only the handful of properties document-typography.css
+// references, hand-synced), and because document-typography.test.ts scans this
+// repo's shared stylesheet for the custom-property call syntax -- a value that
+// belongs to the PREVIEW CHROME rather than to document content has no
+// business in that file anyway. It is the same grey the app shell paints its
+// own canvas, so the preview reads as a page sitting on the app's surface.
+//
+// Deliberately NOT theme-aware. Document content is pinned light
+// unconditionally (see document-typography.css's own baseline note), and this
+// is the surface that content sits on.
+const PREVIEW_FIT_SURROUND = '#e6e6ea'
+
+// The rules that make the pane's width a MEASURABLE, STABLE number, plus the
+// margin the fit reserves. Emitted only in a fitting harness.
+//
+//   `scrollbar-gutter: stable` closes a real feedback loop -- a document short
+//   enough to lose its vertical scrollbar widens the content box, which raises
+//   the scale, which makes the content taller, which brings the scrollbar
+//   back. The editor pane pins its own copy of this loop with the same
+//   declaration.
+//
+//   `body { margin: 0 }` reclaims the UA's default 8px-a-side body margin, so
+//   the padding below is the ONLY horizontal inset and its number is therefore
+//   the one FIT_GUTTER_PX can be reconciled against. Leaving the UA margin in
+//   place would silently add 16px that the fit arithmetic knows nothing about.
+const PREVIEW_FIT_CHROME_CSS =
+  `html { scrollbar-gutter: stable; background: ${PREVIEW_FIT_SURROUND}; }\n` +
+  `body.pagedown-document { margin: 0; padding: ${PREVIEW_FIT_PADDING_PX}px; ` +
+  `background: ${PREVIEW_FIT_SURROUND}; }`
 
 function applyPreviewFitScale(): void {
   const fitting = previewFitPageWidthPx > 0

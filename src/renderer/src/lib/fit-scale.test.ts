@@ -21,9 +21,9 @@ describe('computeFitScale', () => {
   })
 
   it('shrinks a Letter page to fit a pane narrower than it', () => {
-    // 585 - 4 gutter = 581; 581 / 816 = 0.71201..., floored to whole percent.
+    // 585 - 24 gutter = 561; 561 / 816 = 0.68750, floored to whole percent.
     const scale = computeFitScale(PANE_AT_DIVIDER_75, PAGE_WIDTH_PX)
-    expect(scale).toBeCloseTo(0.71, 10)
+    expect(scale).toBeCloseTo(0.68, 10)
     // The property that actually matters, stated as the property rather than
     // as the number: the rendered page really does fit the pane it was
     // computed for.
@@ -35,13 +35,15 @@ describe('computeFitScale', () => {
     // sits above MIN_FIT_SCALE (below the floor every input collapses to the
     // floor and the quantiser is unobservable -- which is how an earlier
     // version of this test managed to assert nothing at all).
-    // 689.4 - 4 gutter = 685.4; 685.4 / 800 = 0.856750, whose nearest whole
+    // 709.4 - 24 gutter = 685.4; 685.4 / 800 = 0.856750, whose nearest whole
     // percent is 0.86 and whose floor is 0.85. Rounding to nearest would
-    // render 0.86 * 800 = 688px into a 689.4px pane whose usable width is
-    // 685.4 -- an overflow produced by the very function meant to prevent it.
-    const scale = computeFitScale(689.4, 800)
+    // render 0.86 * 800 = 688px into a pane whose usable width is 685.4 -- an
+    // overflow produced by the very function meant to prevent it. Written
+    // against FIT_GUTTER_PX rather than a literal so a future gutter change
+    // retunes the fixture instead of silently making this assert nothing.
+    const scale = computeFitScale(685.4 + FIT_GUTTER_PX, 800)
     expect(scale).toBeCloseTo(0.85, 10)
-    expect(scale * 800).toBeLessThanOrEqual(689.4 - 4)
+    expect(scale * 800).toBeLessThanOrEqual(685.4)
   })
 
   it('does not lose a whole step to binary floating-point error', () => {
@@ -55,23 +57,34 @@ describe('computeFitScale', () => {
     )
   })
 
-  it('stops at the floor rather than shrinking to fit an unreadably narrow pane', () => {
-    // Both of the app's real sub-floor configurations at the default window.
-    // At the floor the pane genuinely still scrolls -- that is what the floor
-    // MEANS -- and the point is that it scrolls a 571px page rather than an
-    // 816px one.
-    expect(computeFitScale(PANE_AT_DIVIDER_50, PAGE_WIDTH_PX)).toBe(MIN_FIT_SCALE)
+  it('stops at the floor rather than shrinking without limit', () => {
+    // Only the NARROWEST configuration is sub-floor now. That is the change:
+    // the floor is a backstop for panes genuinely too narrow to help, not a
+    // policy governing the common case.
     expect(computeFitScale(PANE_AT_DIVIDER_25, PAGE_WIDTH_PX)).toBe(MIN_FIT_SCALE)
-    expect(MIN_FIT_SCALE * PAGE_WIDTH_PX).toBeGreaterThan(PANE_AT_DIVIDER_50)
+    expect(MIN_FIT_SCALE * PAGE_WIDTH_PX).toBeGreaterThan(PANE_AT_DIVIDER_25)
   })
 
-  it('keeps body text at a readable size at the floor -- the reason the floor exists', () => {
-    // document-typography.css pins body text at 14px on both surfaces. The
-    // floor is argued as "the smallest size at which continuous body text
-    // stays comfortably readable", so this asserts the consequence directly
-    // rather than trusting the constant to still mean what its comment says.
-    const BODY_TEXT_PX = 14
-    expect(MIN_FIT_SCALE * BODY_TEXT_PX).toBeGreaterThanOrEqual(9.5)
+  it('FITS at the default 50/50 divider -- the configuration the old floor broke', () => {
+    // The whole point of lowering the floor from 0.7 to 0.4. At 0.7 this pane
+    // was clamped UP, rendering a 571px page into 389px and scrolling: the
+    // app's single most common Split configuration, scrolling by default.
+    // Asserted as the PROPERTY (it fits, with its margin intact) rather than
+    // as the number, so a future gutter or floor change has to keep the
+    // outcome rather than merely keep the arithmetic.
+    const scale = computeFitScale(PANE_AT_DIVIDER_50, PAGE_WIDTH_PX)
+    expect(scale).toBeGreaterThan(MIN_FIT_SCALE)
+    expect(scale * PAGE_WIDTH_PX).toBeLessThanOrEqual(PANE_AT_DIVIDER_50 - FIT_GUTTER_PX)
+  })
+
+  it('leaves a real, visible margin rather than sitting flush against the pane', () => {
+    // FIT_GUTTER_PX is TOTAL, so this is 12px each side, and the preview
+    // surface paints exactly that much padding. At the old value of 4 the page
+    // sat 2px from each edge -- not a margin, and invisible anyway because the
+    // sandbox paints its own surround white.
+    expect(FIT_GUTTER_PX).toBeGreaterThanOrEqual(16)
+    const scale = computeFitScale(PANE_AT_DIVIDER_75, PAGE_WIDTH_PX)
+    expect(PANE_AT_DIVIDER_75 - scale * PAGE_WIDTH_PX).toBeGreaterThanOrEqual(FIT_GUTTER_PX)
   })
 
   it('returns 1 for an unmeasured or nonsensical pane rather than collapsing the document', () => {
