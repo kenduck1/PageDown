@@ -79,22 +79,31 @@ export function pickCurrentPage(pageTops: readonly number[], viewportHeight: num
  * (see its own tests) -- a NaN numerator (a non-finite `scrollOffsetPx`, or
  * the 0/0 case below) clamps to 1, and Infinity clamps to `pageCount`. One
  * case it does NOT save on its own: a non-finite or non-positive
- * `contentHeightPx` with a genuinely positive `scrollOffsetPx` divides to
+ * `pagePitchPx` with a genuinely positive `scrollOffsetPx` divides to
  * POSITIVE Infinity, which `clampPageIndex` would then resolve to the LAST
  * page -- a plausible-looking but wrong answer (confidently wrong is worse
  * than obviously wrong for a feature that silently drives the preview), so
  * that one case is guarded explicitly below rather than left to fall out of
  * clampPageIndex's own, differently-motivated Infinity handling.
- * `computePageGeometry` always produces a positive `contentHeightPx` in
- * practice (see its own `MIN_CONTENT_PX` floor), so this guard is defensive
- * dead code in production, not a real input this function expects to see.
+ * `computeEditorPagePitchPx` always produces a positive pitch in practice
+ * (`computePageGeometry`'s own `MIN_CONTENT_PX` floor plus a non-negative
+ * seam), so this guard is defensive dead code in production, not a real input
+ * this function expects to see.
+ *
+ * THE SECOND ARGUMENT IS A PITCH, NOT A CONTENT HEIGHT, and the distinction
+ * became real rather than pedantic when the Format canvas started drawing page
+ * seams: the caller's surface now advances by a whole sheet plus a gutter per
+ * page, not by a content box. This function is indifferent to which -- it
+ * divides whatever it is given -- so the naming is the only place the
+ * difference is visible from here. See computeEditorPagePitchPx
+ * (src/typography/page-seam.ts) for the value the one real caller passes.
  */
 export function estimatePageFromScrollOffset(
   scrollOffsetPx: number,
-  contentHeightPx: number,
+  pagePitchPx: number,
   pageCount: number
 ): number {
-  if (!(contentHeightPx > 0)) return clampPageIndex(1, pageCount)
-  const estimated = Math.floor(scrollOffsetPx / contentHeightPx) + 1
+  if (!(pagePitchPx > 0)) return clampPageIndex(1, pageCount)
+  const estimated = Math.floor(scrollOffsetPx / pagePitchPx) + 1
   return clampPageIndex(estimated, pageCount)
 }

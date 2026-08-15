@@ -59,9 +59,9 @@ interface UseSplitFollowScrollOptions {
    * Master enable. EditorScreen computes this as `splitFollowEnabled &&
    * viewMode === 'split' && splitLeftMode === 'format'` -- the toggle AND
    * both structural preconditions. The `splitLeftMode === 'format'` half is
-   * not optional: `contentHeightPx` is the Milkdown page card's own content
-   * box height (Gate 10's 0.000px parity target), which has no relationship
-   * to a plain `<textarea>`'s scroll position in Source mode's left pane --
+   * not optional: `pagePitchPx` is derived from the Milkdown page card's own
+   * page box, which has no relationship to a plain `<textarea>`'s scroll
+   * position in Source mode's left pane --
    * applying this arithmetic there would be pure noise dressed up as a
    * position estimate, worse than not building it. In practice this is also
    * self-enforcing: Source mode's textarea absorbs its own overflow
@@ -75,17 +75,29 @@ interface UseSplitFollowScrollOptions {
   enabled: boolean
   /** EditorScreen's `editorPaneRef` -- the Split-mode left pane's own scroll container. */
   scrollElementRef: RefObject<HTMLDivElement | null>
-  /** This document's own per-page content height (computePageGeometry's own `contentHeightPx`). */
-  contentHeightPx: number
+  /**
+   * How far this document's page card advances per page, in DOCUMENT px --
+   * `computeEditorPagePitchPx` (src/typography/page-seam.ts), i.e. a whole
+   * sheet plus the gutter between two sheets.
+   *
+   * WAS `contentHeightPx`, AND THE RENAME IS THE POINT: the Format canvas now
+   * draws a real seam at every page boundary, so it advances by a sheet plus a
+   * gutter rather than by a bare content box, and the old divisor silently
+   * under-reports further and further into a document. Renaming the option
+   * (rather than quietly passing a different number into the same name) is
+   * what made `tsc` walk every call site, the same reason `scale` below is a
+   * required option rather than one defaulting to 1.
+   */
+  pagePitchPx: number
   /**
    * The CSS `zoom` currently applied to the page card INSIDE `scrollElementRef`
    * (EditorScreen's Split fit-to-width scale, `computeFitScale`). 1 when
    * nothing is scaled.
    *
    * LOAD-BEARING, and it invalidates this hook's original premise rather than
-   * merely refining it. `contentHeightPx` is a DOCUMENT-space length (the
-   * paginated page's own content box, the same number every other rendering
-   * surface uses), but `scrollElementRef.current.scrollTop` is measured in the
+   * merely refining it. `pagePitchPx` is a DOCUMENT-space length (built from
+   * the same per-document geometry every other rendering surface uses), but
+   * `scrollElementRef.current.scrollTop` is measured in the
    * SCROLL CONTAINER's space -- and standardized CSS `zoom` participates in
    * layout, so the container's `scrollHeight`/`scrollTop` are the document's
    * own lengths already multiplied by the scale. Measured directly rather than
@@ -110,7 +122,7 @@ interface UseSplitFollowScrollOptions {
    * must NOT be multiplied by `devicePixelRatio` before `setSplitPreviewBounds`.
    * Neither applies here: this is not a viewport coordinate being converted to
    * another viewport coordinate, it is a scaled length being converted back
-   * into the unscaled length `contentHeightPx` is expressed in.
+   * into the unscaled length `pagePitchPx` is expressed in.
    */
   scale: number
   /** The status bar's own page count (`usePageCount`'s value) -- `null` before it resolves. */
@@ -147,7 +159,7 @@ export interface SplitFollowScrollHandle {
 export function useSplitFollowScroll({
   enabled,
   scrollElementRef,
-  contentHeightPx,
+  pagePitchPx,
   scale,
   pageCount,
   onNavigate
@@ -163,9 +175,9 @@ export function useSplitFollowScroll({
   useEffect(() => {
     onNavigateRef.current = onNavigate
   })
-  const contentHeightRef = useRef(contentHeightPx)
+  const pagePitchRef = useRef(pagePitchPx)
   useEffect(() => {
-    contentHeightRef.current = contentHeightPx
+    pagePitchRef.current = pagePitchPx
   })
   // Threaded through a ref for the same reason as the other three, and with
   // one extra consequence worth naming: the fit scale changes on every window
@@ -207,7 +219,7 @@ export function useSplitFollowScroll({
 
     // The ONE place `scrollTop` is converted out of the (possibly scaled)
     // scroll container's coordinate space into the document space
-    // `contentHeightPx` is expressed in -- see `scale`'s own doc comment above
+    // `pagePitchPx` is expressed in -- see `scale`'s own doc comment above
     // for the measurement behind it. Both the seed below and every tick go
     // through this deliberately: with the division written out twice, one call
     // site could be corrected while the other silently was not, and the
@@ -221,7 +233,7 @@ export function useSplitFollowScroll({
       // resolve to the LAST page and to page 1 respectively, both plausible
       // enough to look like a real answer.
       const documentOffsetPx = currentScale > 0 ? el.scrollTop / currentScale : el.scrollTop
-      return estimatePageFromScrollOffset(documentOffsetPx, contentHeightRef.current, count)
+      return estimatePageFromScrollOffset(documentOffsetPx, pagePitchRef.current, count)
     }
 
     // Seed from whatever the editor pane is ALREADY scrolled to right now,
@@ -281,7 +293,7 @@ export function useSplitFollowScroll({
       }
       inFlightRef.current = false
     }
-    // Deliberately narrow: `onNavigate`/`contentHeightPx`/`pageCount` are
+    // Deliberately narrow: `onNavigate`/`pagePitchPx`/`pageCount` are
     // read through the latest-ref triple above precisely so this effect
     // does NOT tear down and recreate the interval (and re-seed
     // lastEstimateRef) on every keystroke's worth of page-count/geometry

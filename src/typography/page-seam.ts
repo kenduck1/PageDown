@@ -105,6 +105,27 @@ export function computePageCardMinHeightPx(geometry: PageGeometry, seamCount: nu
 }
 
 /**
+ * How far the Format canvas advances per page, once seams are drawn in it.
+ *
+ * This is the number Split mode's Follow estimate divides a scroll offset by,
+ * and it CHANGED when seams landed. Before them the canvas had no page
+ * boundaries at all, so page N began at `(N - 1) * contentHeightPx` and the
+ * content height was the right divisor. A seam inserts a real
+ * `computePageSeamMetrics(...).heightPx` at every boundary, so the pitch is
+ * now the content height plus one seam -- which reduces to `pageHeightPx +
+ * PAGE_SEAM_GAP_PX`, i.e. a whole sheet plus a gutter, exactly as the card's
+ * own min-height does. (page-seam.test.ts pins that identity.)
+ *
+ * Leaving the old divisor in place would not have failed loudly. It would
+ * have silently under-reported deeper and deeper into a document -- the same
+ * plausible-off-by-one-page failure mode the `scale` division already exists
+ * to prevent, which is why Gate 35's Follow test is the thing that catches it.
+ */
+export function computeEditorPagePitchPx(geometry: PageGeometry): number {
+  return geometry.contentHeightPx + computePageSeamMetrics(geometry).heightPx
+}
+
+/**
  * The CSS custom properties the seam rule in base.css reads, and which
  * MilkdownEditor's mount div publishes from the live `PageGeometry`.
  *
