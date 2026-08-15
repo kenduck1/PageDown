@@ -182,7 +182,13 @@ describe('HomeScreen', () => {
 
     await user.click(screen.getByText('Résumé'))
 
-    expect(useDocumentStore.getState().content).toContain('Jordan Rivera')
+    // Keyed on a structural heading unique to the resume template, not on a
+    // name: the templates were de-personalised (every plausible real person
+    // replaced with a role-descriptive placeholder), and this assertion used
+    // to pin the removed name, so it broke on that pass. A heading still
+    // discriminates the resume from every other template's starter content
+    // without re-coupling this test to prose that is meant to be edited.
+    expect(useDocumentStore.getState().content).toContain('## Experience')
     expect(useAppStore.getState().screen).toBe('editor')
   })
 

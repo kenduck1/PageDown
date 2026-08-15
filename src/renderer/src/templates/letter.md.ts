@@ -1,16 +1,30 @@
-export const LETTER_TEMPLATE = `January 1, 2026
+// De-personalisation pass -- see resume.md.ts for the placeholder convention
+// (plain title case, never bracketed) and the measurement that ruled brackets
+// out.
+//
+// The body was ALSO rewritten from a job-application letter to a
+// purpose-neutral formal letter, which is a content change beyond
+// de-personalisation and is deliberate: this template is advertised on the
+// Home screen as "Formal letter", and its old body was a second cover letter
+// -- near-duplicate starter content to the cover-letter template sitting one
+// card away from it, to the point that templates.test.ts has a test whose
+// only job is asserting the two strings differ at all. Structure (date block,
+// sender block, salutation, two body paragraphs, sign-off) is untouched.
+export const LETTER_TEMPLATE = `Month Day, Year
 
-Jordan Rivera
-123 Main Street
-San Francisco, CA 94103
+Your Name
+Street Address
+City, State ZIP
 
-Dear Hiring Committee,
+Dear Recipient Name,
 
-I am writing to express my interest in the Senior Product Designer role at your company. In my current position, I have led design for our core analytics product, and I believe my experience partnering closely with engineering to ship complex, high-impact features would translate well to your team.
+Open with the reason you are writing, in one sentence. A formal letter is read quickly, so the request or the news belongs at the top rather than saved for the end.
 
-I would welcome the chance to discuss how my background aligns with your needs. Thank you for your consideration.
+Use the body for the detail behind it — background, dates, amounts, or whatever the reader needs in order to act on it. Close by saying what you would like to happen next, and by when.
+
+Thank you for your time.
 
 Sincerely,
 
-Jordan Rivera
+Your Name
 `
