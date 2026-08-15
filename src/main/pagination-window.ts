@@ -485,7 +485,45 @@ const DEFAULT_SEND_DOCUMENT_TIMEOUT_MS = 10_000
 // 'none'`), so navigation and new-window attempts are hard-denied below, on
 // top of the isolated session/storage partition from
 // ensureRenderInfraRegistered().
-export async function createPaginationHarness(win: BaseWindow): Promise<PaginationHarness> {
+export interface PaginationHarnessOptions {
+  /**
+   * Render this harness's view OFFSCREEN (Chromium's OSR mode) instead of
+   * through a real compositor surface.
+   *
+   * Exists for exactly one consumer -- thumbnail-generator.ts -- and for one
+   * reason: **`capturePage()` cannot capture a view inside a never-shown
+   * `BaseWindow`.** It rejects with `Current display surface not available for
+   * capture`, because there is no display surface. That was a real,
+   * user-visible failure: the Home screen's template cards and recent-file
+   * rows logged that error on every mount and rendered blank.
+   *
+   * Measured directly rather than reasoned about (probe against this exact
+   * Electron build, three strategies, one page each):
+   *
+   *   neverShown_noOSR              -> "Current display surface not available"
+   *   neverShown_OSR                -> ok, 1600x1200, non-empty
+   *   show:false + offscreen window position -> same failure as the first
+   *
+   * So OSR is not a preference here, it is the only one of the three that
+   * works. The third result also rules out the tempting "just move the window
+   * off-screen" fix.
+   *
+   * Deliberately OPT-IN rather than applied to every harness. Page counting,
+   * PDF export and the Split-mode preview never call `capturePage()` -- page
+   * count reads no pixels at all, PDF export goes through `printToPDF`, and
+   * the Split preview is a real on-screen view -- so none of them has the
+   * problem this solves, and OSR would change their rendering path for no
+   * benefit. It changes nothing about the sandbox: `sandbox`,
+   * `contextIsolation`, `nodeIntegration` and the isolated `session` below
+   * are untouched.
+   */
+  offscreen?: boolean
+}
+
+export async function createPaginationHarness(
+  win: BaseWindow,
+  options: PaginationHarnessOptions = {}
+): Promise<PaginationHarness> {
   const renderSession = ensureRenderInfraRegistered()
 
   const view = new WebContentsView({
@@ -494,6 +532,9 @@ export async function createPaginationHarness(win: BaseWindow): Promise<Paginati
       contextIsolation: true,
       nodeIntegration: false,
       session: renderSession,
+      // See PaginationHarnessOptions.offscreen -- opt-in, and the only way
+      // capturePage() can succeed against a never-shown window.
+      offscreen: options.offscreen === true,
       // No `preload` — this context has no bridge to Node/Electron APIs.
       //
       // Real-world defense-in-depth for the rAF-starvation bug fixed at its
