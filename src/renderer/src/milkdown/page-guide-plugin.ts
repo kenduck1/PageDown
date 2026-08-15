@@ -27,12 +27,37 @@ import {
   type PageBreakPosition,
   type PageGuide
 } from '../../../pagination/page-breaks'
+import type { DocumentStyle } from '../../../typography/document-style'
+import { computeSeamRunningContent } from '../../../typography/editor-running-content'
 
 /** What the renderer pushes in: one settled render's recovered breaks. */
 export interface PageGuideInput {
   breaks: PageBreakPosition[]
   /** Top-level block count of the document those breaks were computed from. */
   blockCount: number
+  /**
+   * The document's running header/footer, so each seam can draw the footer of
+   * the page ending at it and the header of the page starting after it.
+   *
+   * OPTIONAL, deliberately: this is an additive field on an existing input
+   * type, and every pre-existing caller and test that pushes only
+   * `{ breaks, blockCount }` must keep meaning "no running content" rather
+   * than failing to compile. Absent means no bands are drawn, which is also
+   * the correct reading for a document that has neither.
+   *
+   * WHY THE SEAM DRAWS THESE AT ALL, rather than the page card positioning
+   * every band by geometry: a seam is placed after the BLOCK that ends its
+   * page, so it sits at or slightly above the geometric boundary, and that
+   * shortfall accumulates down a document (measured: 1.7px at seam 1, 3.4px
+   * at seam 2). Anchoring to the seam makes the bands exact by construction.
+   * See src/typography/editor-running-content.ts for the full reasoning and
+   * for the two bands the card still owns.
+   */
+  runningContent?: {
+    style: DocumentStyle
+    /** Total pages in the settled render, for `{total}` substitution. */
+    totalPages: number
+  }
 }
 
 export interface PageGuidePluginState {
@@ -98,6 +123,27 @@ export function formatPageGuideLabel(guide: PageGuide): string {
   return `Pages ${first}–${last} end inside this block`
 }
 
+/** Class on a seam's own header/footer band. Styled in base.css. */
+export const SEAM_RUNNING_BAND_CLASS = 'pagedown-seam-running'
+
+function buildRunningBand(
+  band: 'header' | 'footer',
+  content: { left: string; center: string; right: string }
+): HTMLElement {
+  const element = document.createElement('div')
+  element.className = `${SEAM_RUNNING_BAND_CLASS} ${SEAM_RUNNING_BAND_CLASS}--${band}`
+  element.setAttribute('data-testid', `seam-running-${band}`)
+  for (const side of ['left', 'center', 'right'] as const) {
+    const span = document.createElement('span')
+    span.className = `${SEAM_RUNNING_BAND_CLASS}-${side}`
+    // textContent, never innerHTML: this text comes from hand-editable
+    // frontmatter, which this project treats as untrusted input.
+    span.textContent = content[side]
+    element.appendChild(span)
+  }
+  return element
+}
+
 /**
  * The seam's DOM: three stacked bands, of which only the middle one is drawn.
  *
@@ -105,14 +151,19 @@ export function formatPageGuideLabel(guide: PageGuide): string {
  * paper below, all from the document's own margins -- see
  * src/typography/page-seam.ts), and the gutter is painted over the middle of
  * it. The paper bands need no element of their own: the page card behind them
- * is already white, so "still paper" is simply "nothing drawn here".
+ * is already white, so "still paper" is simply "nothing drawn here" -- except
+ * when the document has a running header or footer, which belong in exactly
+ * those two bands and are appended below.
  *
  * The label lives INSIDE the gutter rather than beside it -- there is now a
  * real band to put it in, which is where a page separator's caption belongs,
  * and it means the label cannot overlap document text the way a caption
  * floating above a hairline could.
  */
-function buildGuideElement(guide: PageGuide): HTMLElement {
+function buildGuideElement(
+  guide: PageGuide,
+  running?: PageGuideInput['runningContent']
+): HTMLElement {
   const element = document.createElement('div')
   element.className = guide.splitsBlock ? `${PAGE_GUIDE_CLASS} is-approximate` : PAGE_GUIDE_CLASS
   // Widget DOM is not part of the document, and ProseMirror does not mark it
@@ -141,6 +192,18 @@ function buildGuideElement(guide: PageGuide): HTMLElement {
   label.textContent = formatPageGuideLabel(guide)
   gutter.appendChild(label)
   element.appendChild(gutter)
+
+  // The two paper bands this seam already spans are exactly the ending page's
+  // bottom margin and the starting page's top margin -- i.e. exactly where a
+  // footer and a header belong. `guide.pages` is ascending, so its LAST entry
+  // is the page that actually ends here (several pages collapse onto one seam
+  // when they all break inside the same block).
+  if (running) {
+    const endingPage = guide.pages[guide.pages.length - 1]
+    const content = computeSeamRunningContent(running.style, endingPage, running.totalPages)
+    if (content.footer) element.appendChild(buildRunningBand('footer', content.footer))
+    if (content.header) element.appendChild(buildRunningBand('header', content.header))
+  }
   return element
 }
 
@@ -178,19 +241,40 @@ export function buildPageGuideDecorations(doc: ProseNode, input: PageGuideInput)
   const guides = groupPageGuides(input.breaks, doc.childCount)
   if (guides.length === 0) return DecorationSet.empty
 
+  const running = input.runningContent
+  const runningSignature = running
+    ? [
+        running.totalPages,
+        running.style.pageNumberFormat,
+        JSON.stringify(running.style.header),
+        JSON.stringify(running.style.footer)
+      ].join('|')
+    : 'none'
+
   const decorations = guides.map((guide) =>
-    Decoration.widget(positionAfterBlock(doc, guide.blockIndex), () => buildGuideElement(guide), {
-      // `side: -1` keeps the guide attached to the END of the block it
-      // follows rather than the start of the next one. It matters when the
-      // user types at the very start of the following block: with a positive
-      // side the widget would be pushed along by the inserted text.
-      side: -1,
-      // ProseMirror otherwise treats the widget as a possible selection
-      // target, so an ArrowDown through the document would stop on a
-      // decoration that is not part of the document at all.
-      ignoreSelection: true,
-      key: `page-guide-${guide.blockIndex}-${guide.pages.join(',')}-${guide.splitsBlock}`
-    })
+    Decoration.widget(
+      positionAfterBlock(doc, guide.blockIndex),
+      () => buildGuideElement(guide, input.runningContent),
+      {
+        // `side: -1` keeps the guide attached to the END of the block it
+        // follows rather than the start of the next one. It matters when the
+        // user types at the very start of the following block: with a positive
+        // side the widget would be pushed along by the inserted text.
+        side: -1,
+        // ProseMirror otherwise treats the widget as a possible selection
+        // target, so an ArrowDown through the document would stop on a
+        // decoration that is not part of the document at all.
+        ignoreSelection: true,
+        // The running-content signature is part of the key because
+        // ProseMirror reuses a widget whose key is unchanged WITHOUT calling
+        // its builder again -- so editing a header in Page Setup, or the page
+        // total changing under a `{total}` token, would leave every seam
+        // showing the previous text until something else forced a rebuild.
+        key:
+          `page-guide-${guide.blockIndex}-${guide.pages.join(',')}-${guide.splitsBlock}` +
+          `-${runningSignature}`
+      }
+    )
   )
   return DecorationSet.create(doc, decorations)
 }
@@ -270,8 +354,14 @@ export function createPageGuidePlugin(onSeamCountChanged?: (count: number) => vo
  */
 export function applyPageGuides(view: EditorView, next: PageGuideInput): void {
   const current = pageGuidePluginKey.getState(view.state)?.input
+  // Running content is compared as part of "nothing changed" -- without it,
+  // editing a header in Page Setup would be skipped as a no-op dispatch and
+  // every seam would keep showing the old text.
+  const sameRunning =
+    JSON.stringify(current?.runningContent ?? null) === JSON.stringify(next.runningContent ?? null)
   if (
     current &&
+    sameRunning &&
     current.blockCount === next.blockCount &&
     current.breaks.length === next.breaks.length &&
     current.breaks.every((position, index) => {

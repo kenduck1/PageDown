@@ -427,6 +427,72 @@
     box-shadow: inset 0 -7px 6px -6px rgba(0, 0, 0, 0.16);
   }
 
+  /* The document's own running header/footer, drawn INSIDE the seam.
+
+     The seam already spans exactly the ending page's bottom margin, the
+     gutter, and the starting page's top margin -- which is exactly where a
+     footer and a header belong on real paper. Anchoring them here rather
+     than positioning them by page geometry from the card is what keeps them
+     exact: a seam is placed after the BLOCK that ends its page, so it sits
+     slightly above the geometric boundary and that shortfall accumulates
+     down a document (measured at 1.7px and 3.4px on seams 1 and 2 of a
+     three-page probe). See src/typography/editor-running-content.ts.
+
+     Inset by the same bleed the seam pulled out by, for the same reason the
+     label is: these must line up with the TEXT column, matching how Paged.js
+     puts its own margin boxes in the page grid's content track.
+
+     Typography is deliberately NOT restated here -- it is inherited from the
+     .pagedown-document ancestor, which is the same shared stylesheet the
+     paginated surface reads, so the two cannot drift. */
+  /* The card's own two bands (first page's header, last page's footer) carry
+     .pagedown-document for typography parity, which pins an opaque white
+     background. Left as-is it paints over the seam gutter wherever the two
+     overlap by a pixel or two. They sit on white paper regardless, so the
+     background is pure downside. */
+  .pagedown-running-content {
+    background: transparent;
+  }
+
+  .milkdown-mount .ProseMirror .pagedown-seam-running {
+    position: absolute;
+    left: var(--pagedown-seam-bleed-left);
+    right: var(--pagedown-seam-bleed-right);
+    display: flex;
+    align-items: center;
+    pointer-events: none;
+  }
+
+  .milkdown-mount .ProseMirror .pagedown-seam-running--footer {
+    top: 0;
+    height: var(--pagedown-seam-paper-above);
+  }
+
+  .milkdown-mount .ProseMirror .pagedown-seam-running--header {
+    top: calc(var(--pagedown-seam-paper-above) + var(--pagedown-seam-gap));
+    height: var(--pagedown-seam-paper-below);
+  }
+
+  /* Three equal tracks, so the centre text is centred on the content column
+     rather than on whatever the left text happens to be -- matching how
+     Paged.js divides @top-left/@top-center/@top-right. */
+  .milkdown-mount .ProseMirror .pagedown-seam-running > span {
+    flex: 1 1 0;
+    min-width: 0;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+  }
+  .milkdown-mount .ProseMirror .pagedown-seam-running-left {
+    text-align: left;
+  }
+  .milkdown-mount .ProseMirror .pagedown-seam-running-center {
+    text-align: center;
+  }
+  .milkdown-mount .ProseMirror .pagedown-seam-running-right {
+    text-align: right;
+  }
+
   /* A break that falls INSIDE a block cannot be drawn where it really is --
      the editor has no sub-block coordinate to address (see
      src/pagination/page-breaks.ts). Dashed sheet edges say "this boundary is
