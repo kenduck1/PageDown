@@ -1,87 +1,223 @@
+<div align="center">
+
 # PageDown
 
-A page-first Markdown editor for desktop (Electron + React + TypeScript). Pages are the
-primary editing unit — like a word processor — but the underlying document is real,
-portable Markdown, not a custom markup language and not a continuous-scroll editor that
-only paginates at export time. It's built for long-form documents meant to be printed or
-exported (reports, résumés, letters) where exact page layout and print fidelity matter.
+**A page-first Markdown editor for documents that get printed.**
 
-PageDown is an early-stage desktop app under active development — expect rough edges.
-Known gaps worth naming up front: there is **no auto-update mechanism** (builds are not
-signed or notarized either), a **never-saved document is not autosaved** — closing prompts
-you, but a hard crash before the first save will lose it — and Split mode's editor and
-preview panes **do not scroll in sync**.
+Pages are the primary editing unit, the way they are in a word processor — but
+the file on disk is real, portable Markdown.
 
-## What it does
+[![CI](https://github.com/kenduck1/PageDown/actions/workflows/ci.yml/badge.svg)](https://github.com/kenduck1/PageDown/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Platforms](https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Linux-lightgrey)](https://github.com/kenduck1/PageDown/releases)
 
-- **Format / Source / Split editing modes** — a WYSIWYG canvas (Milkdown/ProseMirror),
-  plain raw-Markdown text editing, and a side-by-side live paginated preview.
-- **Real pagination**, powered by Paged.js and rendered inside a sandboxed context, so
-  the editor preview and the exported PDF stay pixel-consistent by construction.
-- **PDF export and native printing**, both driven through that same pagination render
-  context as the live preview.
-- **Mermaid diagrams and KaTeX math**, rendered inside the sandboxed context only.
-- **GitHub Flavored Markdown**: tables, task lists, footnotes, syntax-highlighted code
-  fences.
-- **Page Setup**: page size (Letter/A4/Legal/Custom), orientation, margins, header/footer
-  content and page numbering, a typography theme, and a font — all stored in the
-  document's own YAML frontmatter, so the document stays portable.
-- **Comments**, stored inline in the Markdown source via an HTML-comment convention —
-  no sidecar file required.
-- **Writing tools for people who don't write Markdown by hand**: a formatting toolbar, a
-  `/` slash command palette for inserting blocks, a selection bubble menu (including full
-  table row/column/alignment editing), and the usual live Markdown input rules.
-- **Find & Replace**, autosave with crash recovery and version history, image insertion by
-  drag-and-drop or file picker, multi-window support, tabs, an outline sidebar, word and
-  character counts, and app-level dark mode (the app chrome only — document content always
-  renders light, matching what actually prints).
-- **Export to PDF or self-contained HTML**, and native printing. The HTML export embeds its
-  own fonts and inlines local images, so the file stands alone.
-- **Desktop citizenship**: a real application menu with the shortcuts you'd expect
-  (`Cmd/Ctrl+S`, `+O`, `+N`, `+P`, …), `.md` file associations, a single-instance lock,
-  persisted window size and position, and a prompt before closing with unsaved work.
+![PageDown in Split mode — the editor on the left, live paginated preview on the right](docs/screenshots/split-mode.png)
 
-See `docs/superpowers/specs/` for the design docs behind these features, and
-`CLAUDE.md` for the fuller architectural notes.
+</div>
 
-## Development
+## Why
 
-Requires [pnpm](https://pnpm.io) — this repo pins `pnpm@10.30.3` in `package.json`.
+Most Markdown editors are a continuous scroll that only discovers where the
+pages fall when you export. That is fine for a blog post and unhelpful for a
+résumé, a letter, or a report someone is going to print — the documents where
+the page _is_ the unit you are designing.
+
+The usual alternative is to give up Markdown: use Word, or a custom markup
+language like LaTeX or Typst. PageDown tries the third option.
+
+- **You see pages while you edit.** Real page boundaries in the canvas, drawn
+  from the same pagination engine that produces the PDF — never independently
+  computed, because two pagination algorithms disagree exactly where it
+  matters.
+- **The preview and the export are the same render.** PDF export drives the
+  same sandboxed Paged.js context as the live preview, so they are consistent
+  by construction rather than by effort.
+- **The file stays portable.** Page size, margins, headers and footers live in
+  YAML frontmatter. Page breaks, comments, tables of contents and image sizing
+  use HTML-comment and attribute conventions that other Markdown renderers
+  ignore harmlessly. Open the same file anywhere else and it is still just
+  Markdown.
+
+> [!NOTE]
+> PageDown is early-stage and under active development — expect rough edges.
+> Known gaps, named up front: builds are **not signed or notarized** and there
+> is **no auto-update**; a never-saved document is crash-protected by a draft
+> store but has no version history; and Split mode's panes follow each other
+> by page rather than scrolling in exact sync.
+
+## Screenshots
+
+<table>
+<tr>
+<td width="50%">
+
+**Format** — a WYSIWYG canvas with real page boundaries.
+
+<img src="docs/screenshots/format-mode.png" alt="Format mode, showing a full page and the boundary where page 1 ends">
+
+</td>
+<td width="50%">
+
+**Source** — the exact bytes, syntax-coloured.
+
+<img src="docs/screenshots/source-mode.png" alt="Source mode, showing raw Markdown with syntax highlighting">
+
+</td>
+</tr>
+<tr>
+<td width="50%">
+
+**Page Setup** — size, margins, running headers and footers, written back to
+the document's own frontmatter.
+
+<img src="docs/screenshots/page-setup.png" alt="The Page Setup dialog">
+
+</td>
+<td width="50%">
+
+**Home** — templates and recent documents, with real rendered thumbnails.
+
+<img src="docs/screenshots/home.png" alt="The home screen showing eight document templates">
+
+</td>
+</tr>
+</table>
+
+## Features
+
+**Editing**
+
+- Three modes: **Format** (WYSIWYG), **Source** (raw Markdown), and **Split**
+  (editor plus live paginated preview, side by side)
+- Formatting toolbar, a `/` slash palette for inserting blocks, and a
+  selection bubble menu with full table row/column/alignment editing
+- Find & Replace across whichever surface is live
+- Comments, stored inline in the Markdown with no sidecar file
+- Tabs, multi-window, an outline sidebar, word and character counts
+
+**Layout**
+
+- Page size (Letter, A4, Legal, Custom), orientation and per-side margins
+- Running headers and footers with real page numbering (`{n}` / `{total}`,
+  decimal or roman)
+- Typography themes and document fonts
+- Page breaks via `<!-- pagebreak -->`, also recognising `\newpage` and
+  `\pagebreak` — and round-tripping whichever spelling you wrote
+- A table of contents via `<!-- toc -->` or `[TOC]`, with **real page numbers**
+
+**Markdown**
+
+- GitHub Flavored Markdown: tables, task lists, footnotes, strikethrough
+- Syntax-highlighted code fences
+- Mermaid diagrams and KaTeX math
+- Image sizing (`![Logo](logo.png){width=50%}`) and drag-to-resize
+- Images by drag-and-drop or file picker
+
+**Output**
+
+- **PDF export** and **native printing**, both through the same render context
+  as the preview
+- **HTML export** that is genuinely self-contained — fonts embedded, local
+  images inlined
+- **Word (.docx) export**
+
+**Desktop citizenship**
+
+- A real application menu with the shortcuts you would expect
+- `.md` file associations, single-instance lock, persisted window bounds
+- Autosave with crash recovery and version history
+- A prompt before closing or quitting with unsaved work
+- App-level dark mode — chrome only; document content always renders light,
+  matching what actually prints
+
+## Installing
+
+Download the latest build from the
+[Releases page](https://github.com/kenduck1/PageDown/releases).
+
+| Platform              | File                                           |
+| --------------------- | ---------------------------------------------- |
+| macOS (Apple Silicon) | `pagedown-<version>-arm64.dmg`                 |
+| macOS (Intel)         | `pagedown-<version>-x64.dmg`                   |
+| Windows               | `pagedown-<version>-setup.exe`                 |
+| Linux                 | `pagedown-<version>-x86_64.AppImage` or `.deb` |
+
+> [!WARNING]
+> **Builds are unsigned.** PageDown has no Apple Developer ID or Windows
+> Authenticode certificate, so both operating systems will warn you. This is a
+> real gap, not a formality — only bypass these warnings for a build you
+> obtained from the Releases page above.
+
+**macOS.** Gatekeeper will report that the app "is damaged and can't be
+opened", which is what it says for any unsigned, un-notarized app carrying a
+download quarantine flag. To run it anyway:
+
+```bash
+xattr -dr com.apple.quarantine /Applications/PageDown.app
+```
+
+**Windows.** SmartScreen will show "Windows protected your PC". Choose **More
+info → Run anyway**.
+
+**Linux.** Make the AppImage executable (`chmod +x pagedown-*.AppImage`), or
+install the `.deb` with `sudo dpkg -i pagedown_*.deb`.
+
+## Building from source
+
+Requires [pnpm](https://pnpm.io) — the version is pinned in `package.json`.
 
 ```bash
 pnpm install
-pnpm dev
+pnpm dev            # run in development
+
+pnpm build          # typecheck -> bundle -> pagination render context
+pnpm build:mac      # package for macOS
+pnpm build:win      # package for Windows
+pnpm build:linux    # package for Linux (AppImage / deb / snap)
 ```
 
-## Building
+## Development
 
 ```bash
-pnpm build         # typecheck -> electron-vite build -> pagination-render bundle
-pnpm build:mac     # macOS package, via electron-builder
-pnpm build:win     # Windows package
-pnpm build:linux   # Linux package (AppImage/snap/deb)
+pnpm typecheck      # main process + renderer (two separate tsconfigs)
+pnpm lint
+pnpm format
+pnpm test:unit      # Vitest
+pnpm test:phase0    # Playwright, against the real built app
 ```
 
-## Testing
-
-Three separate suites, each covering a different layer:
+`docs/screenshots/` is regenerated from the real app with:
 
 ```bash
-pnpm test:unit             # Vitest: fast unit/component tests
-pnpm test:phase0           # Playwright: gates against the real built app (engine-correctness checks)
-pnpm test:phase1:vitest    # Vitest: gates for the Milkdown/WYSIWYG integration
-pnpm test:phase1:playwright
+pnpm build && pnpm exec tsx scripts/capture-screenshots.ts
 ```
 
-`test:phase0` and `test:phase1:playwright` build the app first (via their own `pretest`
-hooks, `pnpm run build`) and then drive the real built app with Playwright's Electron
-driver — they're slower than `test:unit` and cover things a component test can't (real
-pagination timing, the sandboxed render context, real PDF output).
+See **[ARCHITECTURE.md](ARCHITECTURE.md)** for how the app is put together —
+the three execution contexts, the sandboxed render context and why it exists,
+the Markdown pipeline's ordering rules, and the editor/paginator parity
+invariant. It is worth reading before a substantial change: several of those
+invariants fail silently when broken.
 
-Other useful scripts:
+## Contributing
 
-```bash
-pnpm typecheck   # tsc --noEmit, main process + renderer (two separate tsconfigs)
-pnpm lint        # eslint --cache .
-pnpm format      # prettier --write .
-```
+Bug reports and fixes are welcome. See
+**[CONTRIBUTING.md](CONTRIBUTING.md)**.
+
+The single most useful thing in a bug report is the minimal Markdown document
+that reproduces the problem, including its frontmatter, plus which editing
+mode you were in.
+
+For security issues, please see **[SECURITY.md](SECURITY.md)** and report
+privately rather than opening an issue.
+
+## Licence
+
+[MIT](LICENSE).
+
+PageDown bundles three typefaces under the SIL Open Font License 1.1 —
+**Source Serif 4**, **Inter**, and **Source Code Pro** — with their licences
+in `src/renderer/src/assets/fonts/`. It builds on
+[Paged.js](https://pagedjs.org/), [Milkdown](https://milkdown.dev/) /
+[ProseMirror](https://prosemirror.net/),
+[unified](https://unifiedjs.com/)/remark,
+[Mermaid](https://mermaid.js.org/) and [KaTeX](https://katex.org/).

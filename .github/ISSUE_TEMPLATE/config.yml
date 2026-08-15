@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/kenduck1/PageDown/security/advisories/new
+    about: Please report security issues privately, never as a public issue.
+  - name: Architecture and design notes
+    url: https://github.com/kenduck1/PageDown/blob/main/ARCHITECTURE.md
+    about: Why things are built the way they are, before proposing a change.

@@ -1,0 +1,83 @@
+name: Bug report
+description: Something in PageDown behaves incorrectly
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to file this. The two most useful things you
+        can give us are **a document that reproduces it** and **which editing
+        mode you were in** — a lot of behaviour differs between Format, Source
+        and Split.
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What you expected, and what you got instead.
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Open a new document from the Report template
+        2. Switch to Split mode
+        3. ...
+    validations:
+      required: true
+
+  - type: dropdown
+    id: mode
+    attributes:
+      label: Which editing mode?
+      options:
+        - Format (WYSIWYG canvas)
+        - Source (raw Markdown)
+        - Split (editor + live preview)
+        - Not mode-specific / not sure
+    validations:
+      required: true
+
+  - type: textarea
+    id: document
+    attributes:
+      label: Minimal document that reproduces it
+      description: >
+        Paste the Markdown source, including the YAML frontmatter if there is
+        any — page size, margins and theme all affect layout. Please trim it to
+        the smallest document that still shows the problem.
+      render: markdown
+
+  - type: input
+    id: version
+    attributes:
+      label: PageDown version
+      description: Shown in the About panel, or the release you downloaded.
+      placeholder: 0.1.0
+    validations:
+      required: true
+
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options:
+        - macOS (Apple Silicon)
+        - macOS (Intel)
+        - Windows
+        - Linux
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before submitting
+      options:
+        - label: I checked that this still happens in a brand-new document
+          required: false
+        - label: I searched existing issues for the same problem
+          required: false

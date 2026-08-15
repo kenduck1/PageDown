@@ -1,0 +1,41 @@
+name: Feature request
+description: Suggest something PageDown should do
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        PageDown has some deliberate non-goals — it is a page-first editor for
+        documents that get printed or exported, and its source format is real,
+        portable Markdown. Suggestions that would require a custom markup
+        language, or that only make sense for a continuous-scroll editor, are
+        likely to be declined. See ARCHITECTURE.md for the reasoning.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem would this solve?
+      description: >
+        Describe the situation you are in when you want this, rather than the
+        feature itself. It is much easier to find a good solution from a
+        well-described problem than the other way round.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What did you have in mind?
+    validations:
+      required: true
+
+  - type: textarea
+    id: portability
+    attributes:
+      label: How should this be represented in the Markdown file?
+      description: >
+        Optional, but valuable. PageDown stores document configuration in YAML
+        frontmatter and things like page breaks, comments and image sizing as
+        HTML-comment or attribute conventions that other Markdown renderers
+        ignore harmlessly. If your idea needs to persist, how might it survive
+        a round trip through another editor?
