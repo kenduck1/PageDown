@@ -22,7 +22,7 @@ const SNAPSHOT: SelectionSnapshot = {
   empty: false,
   hasFocus: true,
   nodeSelection: false,
-  marks: { bold: false, italic: false, inlineCode: false, link: false },
+  marks: { bold: false, italic: false, inlineCode: false, strikethrough: false, link: false },
   headingLevel: null,
   listType: null,
   linkHref: null,
@@ -200,7 +200,7 @@ describe('SelectionBubble active state', () => {
     renderBubble({
       snapshot: {
         ...SNAPSHOT,
-        marks: { bold: true, italic: false, inlineCode: true, link: false },
+        marks: { bold: true, italic: false, inlineCode: true, strikethrough: false, link: false },
         headingLevel: 2
       }
     })

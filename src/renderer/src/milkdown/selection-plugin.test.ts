@@ -99,6 +99,25 @@ describe('readSelectionSnapshot', () => {
     expect(readSelectionSnapshot(view).marks.inlineCode).toBe(true)
   })
 
+  it('reports strikethrough, whose schema name is `strike_through` and not the obvious guess', async () => {
+    // Exactly the trap the italic/inlineCode test above guards, one package
+    // over: @milkdown/preset-gfm registers this mark as `strike_through` while
+    // its command, this app's label and this field are all spelled
+    // "strikethrough". Reading `schema.marks.strikethrough` yields undefined,
+    // markActive returns false for undefined, and the indicator is then
+    // permanently false with no error anywhere -- which is the same
+    // permanently-false-indicator defect Bold and Italic shipped with once.
+    const { view } = await viewFor('~~cat~~ dog')
+    const cat = posOf(view, 'cat')
+    select(view, cat, cat + 3)
+    expect(readSelectionSnapshot(view).marks.strikethrough).toBe(true)
+    // The negative half, so the assertion above cannot pass against a
+    // hardcoded true.
+    const dog = posOf(view, 'dog')
+    select(view, dog, dog + 3)
+    expect(readSelectionSnapshot(view).marks.strikethrough).toBe(false)
+  })
+
   it('reports a link', async () => {
     const { view } = await viewFor('[cat](https://example.com)')
     const start = posOf(view, 'cat')
@@ -156,7 +175,7 @@ describe('sameSnapshot', () => {
     empty: false,
     hasFocus: true,
     nodeSelection: false,
-    marks: { bold: false, italic: false, inlineCode: false, link: false },
+    marks: { bold: false, italic: false, inlineCode: false, strikethrough: false, link: false },
     headingLevel: null,
     listType: null,
     linkHref: null,

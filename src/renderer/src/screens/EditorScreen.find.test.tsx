@@ -37,6 +37,7 @@ const { mockEditorHandle, findMatchesListeners } = vi.hoisted(() => ({
     toggleBold: vi.fn(),
     toggleItalic: vi.fn(),
     toggleInlineCode: vi.fn(),
+    toggleStrikethrough: vi.fn(),
     toggleHeading: vi.fn(),
     setParagraph: vi.fn(),
     toggleBulletList: vi.fn(),
