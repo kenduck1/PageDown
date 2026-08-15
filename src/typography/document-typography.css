@@ -1112,3 +1112,114 @@
 .pagedown-pagebreak {
   break-after: page;
 }
+
+/* ==========================================================================
+   GFM TASK LISTS (`- [ ] alpha` / `- [x] beta`)
+   Added by the task-list rendering fix; kept as one self-contained block at
+   the end of the file so it stays easy to move or lift out whole.
+   ==========================================================================
+
+   THE DEFECT, both halves measured rather than inferred (reported by a user
+   as "why does the check box option create a bullet"): the two surfaces were
+   BOTH wrong, in two different ways, because neither had ever been named here.
+
+     - Canvas: @milkdown/preset-gfm's extendListItemSchemaForTask renders
+       `<li data-item-type="task" data-checked="false">` with NO <input> at
+       all -- it publishes state as data attributes and expects a consuming
+       THEME to draw the control, and this app imports no Milkdown theme CSS
+       (the same absence that once left ordinary lists with no bullets, closed
+       by this file's own list rules above). The `ul > li` `list-style-type:
+       disc` rule above then made a task item an ordinary bullet.
+     - Paginated (preview / PDF / print / HTML export): markdownToHtml emits a
+       structurally DIFFERENT list -- `<ul class="contains-task-list">` /
+       `<li class="task-list-item"><input type="checkbox" disabled> alpha</li>`
+       -- a real checkbox, but with nothing suppressing the marker, so it
+       showed a bullet AND a checkbox.
+
+   TWO SELECTOR FAMILIES, ONE DECLARATION BLOCK EACH, and that is the whole
+   point rather than an inconvenience. The surfaces genuinely have different
+   DOM (`li[data-item-type="task"]` vs `.task-list-item`), which is exactly the
+   trap this file's header documents: name the element on BOTH surfaces, or it
+   silently diverges. They are deliberately kept in one rule per concern so a
+   future edit cannot change one surface and forget the other.
+
+   THE CANVAS'S <input> IS REAL, NOT DRAWN. src/renderer/src/milkdown/nodes/
+   task-item.ts adds a ProseMirror node view rendering an actual, clickable
+   `<input type="checkbox">`; see its header for why a CSS `::before` box keyed
+   off `data-checked` was designed first and rejected (it is not a hit target,
+   so toggling would need rect arithmetic jsdom cannot evaluate). Because both
+   surfaces now render the SAME ELEMENT, one declaration block sizes and
+   positions both -- rather than two mechanisms kept numerically in sync by
+   hand.
+
+   THE CONTROL IS OUT OF FLOW ON BOTH SURFACES, and that is what buys parity by
+   construction rather than by tuning. On the paginated surface the <input> is
+   inline content, so it pushes the item's text right by its own width; in the
+   canvas it cannot be inline at all (it is a sibling of the block that holds
+   the content -- ProseMirror owns that block's children), so an in-flow
+   version would sit on its own LINE. Positioning it absolutely on both makes
+   neither surface's inline flow contain it, so the item text starts at exactly
+   the same offset on each -- the same offset a plain bullet's text starts at,
+   which also keeps a task item aligned with its plain siblings in a mixed
+   list. The paginated markup's leading space (`<input ...> alpha`) collapses
+   away as leading whitespace once the input leaves the flow, so both surfaces
+   render the text flush.
+
+   Gate 10 pins 0.000px editor/paginator parity but its REPORT_TEMPLATE fixture
+   contains no lists at all, so it can neither catch a divergence here nor
+   vouch for the fix -- parity is asserted directly instead, in
+   nodes/task-item.test.ts (mechanism) and phase0/gate42-task-lists.spec.ts
+   (real measured geometry), the same split nodes/image-size.test.ts uses.
+
+   THIS BLOCK REFERENCES NO CSS CUSTOM PROPERTY, deliberately: every custom
+   property this file references has to be hand-synced into the sandboxed
+   render context's own `:root` block or it silently no-ops on the pagination
+   surface only (document-typography.test.ts enforces this). Em-relative
+   lengths and a literal colour keep that obligation at zero. Note that the
+   guard scans for the property-reference SYNTAX anywhere in this file
+   including comments, so this paragraph deliberately describes it by name
+   rather than spelling it -- an earlier draft that wrote it out made the guard
+   believe those properties were genuinely referenced. The literal is the same
+   `#202124` the `.pagedown-document` baseline pins for body text, and it is a
+   literal for the same reason that one is: document content is unconditionally
+   light, so a themed token would be wrong here, not merely unnecessary. */
+
+.pagedown-document li[data-item-type='task'],
+.pagedown-document .task-list-item {
+  /* No marker: the checkbox IS the marker. */
+  list-style-type: none;
+  /* Containing block for the absolutely-positioned control below. */
+  position: relative;
+}
+
+.pagedown-document li[data-item-type='task'] > input[type='checkbox'],
+.pagedown-document .task-list-item input[type='checkbox'] {
+  position: absolute;
+  /* Logical, not `left`: this app supports a document-level `direction: rtl`
+     frontmatter key, and the marker gutter is on the other side there. The
+     list's own indent (`padding-inline-start: 2em` above) is logical for the
+     same reason, so the control tracks it under either direction. 1.5em back
+     from the item's edge sits it inside that 2em gutter, where the `disc`
+     marker it replaces used to be drawn. */
+  inset-inline-start: -1.5em;
+  /* Vertically centred on the FIRST line of the item: (1.7em line box minus
+     the 1em control) / 2. Both surfaces set `line-height: 1.7` on `li`, so
+     this is one number, not two. */
+  top: 0.35em;
+  width: 1em;
+  height: 1em;
+  /* The UA gives a checkbox its own margins (3px 3px 3px 4px in Chromium),
+     which would offset the two surfaces differently the moment either one's
+     box model changed. */
+  margin: 0;
+  accent-color: #202124;
+}
+
+/* The paginated surface's checkbox is `disabled` (markdownToHtml emits GitHub's
+   own markup, and an exported PDF is not interactive), which Chromium paints
+   at reduced opacity -- a real divergence from the canvas's live control, on a
+   surface whose whole job is print fidelity. Restoring full opacity leaves it
+   non-interactive but legible in print. */
+.pagedown-document .task-list-item input[type='checkbox']:disabled {
+  opacity: 1;
+}
