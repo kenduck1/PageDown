@@ -9,6 +9,7 @@ import EditorTabBar from '../components/EditorTabBar'
 import EditorToolbar from '../components/EditorToolbar'
 import EditorSidebar from '../components/EditorSidebar'
 import EditorStatusBar from '../components/EditorStatusBar'
+import { EditorRunningContent } from '../components/EditorRunningContent'
 import PageSetupModal from '../components/PageSetupModal'
 import FindBar from '../components/FindBar'
 import CommentComposer from '../components/CommentComposer'
@@ -1326,7 +1327,22 @@ function EditorScreen(): React.JSX.Element {
   // settles -- not on every keystroke, which is what an inline literal would
   // do (and which would dispatch a ProseMirror transaction per keystroke for
   // guides that had not moved).
-  const pageGuides = useMemo(() => ({ breaks: pageBreaks, blockCount }), [pageBreaks, blockCount])
+  // `runningContent` rides the SAME input the guides already use, rather than
+  // becoming a second prop into the editor: both are per-settled-render facts
+  // about page boundaries, both are consumed by the same plugin, and the seam
+  // is the only place the middle bands can be drawn correctly anyway (see
+  // src/typography/editor-running-content.ts). `pageSeamCount + 1` is the
+  // sheet count the card is actually drawn as, which is what `{total}` must
+  // agree with -- using the raw render's page count instead would make the
+  // editor briefly disagree with its own seams while a render settles.
+  const pageGuides = useMemo(
+    () => ({
+      breaks: pageBreaks,
+      blockCount,
+      runningContent: { style: documentStyle, totalPages: pageSeamCount + 1 }
+    }),
+    [pageBreaks, blockCount, documentStyle, pageSeamCount]
+  )
 
   // Split mode's fit-to-width scale (src/renderer/src/lib/fit-scale.ts holds
   // the arithmetic and, more importantly, the argued FLOOR).
@@ -1694,7 +1710,10 @@ function EditorScreen(): React.JSX.Element {
       // app theme, matching document-typography.css's own hardcoded
       // background/color pin on .pagedown-document (the Milkdown mount
       // this div wraps) for the same reason -- see that file's comment.
-      className="mx-auto my-8 shrink-0 rounded-sm bg-white shadow-page"
+      // `relative` is what EditorRunningContent's absolutely-positioned bands
+      // are offset against -- its containing block is this card's padding box,
+      // whose top-left is the sheet's own top-left corner.
+      className="relative mx-auto my-8 shrink-0 rounded-sm bg-white shadow-page"
       style={{
         width: pageGeometry.pageWidthPx,
         minHeight: computePageCardMinHeightPx(pageGeometry, pageSeamCount),
@@ -1749,6 +1768,17 @@ function EditorScreen(): React.JSX.Element {
         // every unrelated EditorScreen re-render (of which there are many --
         // every keystroke moves `content`).
         pageGuides={pageGuides}
+      />
+      {/* The document's running header/footer, one pair per sheet. Rendered
+          AFTER the editor so it paints above the text, and outside the
+          ProseMirror DOM entirely -- this is page configuration, not document
+          content, and it must never be something a caret can land in.
+          `pageSeamCount + 1` is the number of sheets the card is currently
+          drawn as, the same value its own min-height is sized from. */}
+      <EditorRunningContent
+        geometry={pageGeometry}
+        style={documentStyle}
+        pageCount={pageSeamCount + 1}
       />
     </div>
   )
