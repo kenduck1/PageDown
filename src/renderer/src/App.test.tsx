@@ -427,6 +427,39 @@ describe('App', () => {
       })
     })
 
+    it('writes NO frontmatter when the default page config is the built-in one', async () => {
+      // The complement of the test above, and the common case by far: a user
+      // who has never opened Settings. Writing their defaults out explicitly
+      // produced a document whose bytes said exactly what the app would have
+      // done anyway -- and because frontmatter renders in the canvas as a
+      // non-editable `Frontmatter (N lines)` block, the very first thing a new
+      // user saw was an opaque grey box above an otherwise empty page.
+      //
+      // Asserted as "completely empty", not merely "no `page:` key": the
+      // failure this guards against is a frontmatter block existing at all,
+      // whatever it happens to contain.
+      vi.mocked(window.api.getPreferences).mockResolvedValue({
+        spellcheckEnabled: true,
+        autosaveIntervalMs: 45_000,
+        defaultPageConfig: {
+          pageSize: 'Letter',
+          orientation: 'portrait',
+          theme: 'default',
+          fontFamily: 'source-serif-4'
+        },
+        colorScheme: 'system',
+        authorName: ''
+      })
+      render(<App />)
+      await screen.findByText('PageDown')
+      await vi.waitFor(() => expect(window.api.getPreferences).toHaveBeenCalled())
+
+      emitMenuCommand('file:new')
+
+      await vi.waitFor(() => expect(useAppStore.getState().screen).toBe('editor'))
+      expect(useDocumentStore.getState().content).toBe('')
+    })
+
     it('file:open opens the native dialog and navigates on success', async () => {
       vi.mocked(window.api.openFile).mockResolvedValue({
         filePath: '/tmp/opened.md',
