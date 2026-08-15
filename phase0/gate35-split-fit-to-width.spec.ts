@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { mergeRecentFiles, readRecentFiles, writeRecentFiles } from '../src/main/recent-files'
 import { PAGE_WIDTH_PX } from '../src/typography/page-geometry'
-import { MIN_FIT_SCALE } from '../src/renderer/src/lib/fit-scale'
+import { MIN_FIT_SCALE, FIT_GUTTER_PX } from '../src/renderer/src/lib/fit-scale'
 import { launchIsolatedApp } from './electron-launch'
 
 // Gate 35 -- Split-mode fit-to-width scaling.
@@ -302,12 +302,21 @@ test('Gate 35: Split mode scales the page card down to fit its pane, and Format 
     // (1b) It really is smaller, in real laid-out pixels.
     expect(split.cardRenderedWidth).toBeLessThan(PAGE_WIDTH_PX)
 
-    // At this pane width the exact fit falls below the floor, so the floor is
-    // what is applied -- and the floor is deliberately NOT "whatever fits".
-    // Pinned against the shared constant rather than a literal so the two
-    // cannot drift, but computed independently of computeFitScale itself so a
-    // bug in that function cannot define its own expected value.
-    expect(split.cardRenderedWidth).toBeCloseTo(MIN_FIT_SCALE * PAGE_WIDTH_PX, 1)
+    // At this pane width the page now GENUINELY FITS rather than landing on
+    // the floor. That inverts what this assertion used to say, and the change
+    // is deliberate: the floor was lowered from 0.7 to 0.4 on direct user
+    // feedback ("it should shrink down a bit more before it starts doing
+    // scrolling"), which moved the app's own DEFAULT divider position from
+    // below the floor to above it. See MIN_FIT_SCALE's own comment for why
+    // the old floor's reasoning was sound about the sub-floor regime and
+    // wrong about where to put the boundary.
+    //
+    // Asserted as the PROPERTY (it fits, with its reserved margin intact)
+    // rather than as a pinned scale, so a future gutter or floor change has to
+    // preserve the outcome instead of merely preserving the arithmetic. The
+    // floor is still pinned where it genuinely binds -- see the narrow-pane
+    // case in fit-scale.test.ts.
+    expect(split.cardRenderedWidth).toBeLessThanOrEqual(split.paneClientWidth - FIT_GUTTER_PX)
 
     // (1c) The user-visible consequence: materially less horizontal scrolling.
     // Stated as a comparison against the unscaled extent rather than as an
@@ -465,10 +474,12 @@ test('Gate 35: the sandboxed PREVIEW pane is fitted too, and genuinely fits when
     // leaving the preview beside it showing ~24% of a page at the divider
     // position that feature calls its success case.
     expect(atDefault.pageRenderedWidth).toBeLessThan(PAGE_WIDTH_PX)
-    // At the default divider the exact fit falls below the floor, so the floor
-    // is what lands. Pinned against the shared constant (never a literal) so
-    // the editor and preview panes cannot drift onto two different floors.
-    expect(atDefault.pageRenderedWidth).toBeCloseTo(MIN_FIT_SCALE * PAGE_WIDTH_PX, 0)
+    // Same inversion as the editor pane above: at the default divider the
+    // preview now fits rather than landing on the floor. Asserted as the
+    // property, with the same reasoning -- see MIN_FIT_SCALE.
+    expect(atDefault.pageRenderedWidth).toBeLessThanOrEqual(
+      atDefault.bodyClientWidth - FIT_GUTTER_PX
+    )
 
     // --- Widen the PREVIEW, by dragging the divider the other way ----------
     // The mirror image of test 2: there the editor pane was given ~75% of the

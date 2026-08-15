@@ -44,61 +44,68 @@
  * The smallest scale fit-to-width will ever apply. Below this the page is left
  * at the floor and the pane scrolls horizontally instead.
  *
- * WHY 0.7, and why it is deliberately NOT `ZOOM_OPTIONS`' own 0.5 minimum:
+ * WHY 0.4, having previously been 0.7. This was changed on direct user
+ * feedback -- "it should shrink down a bit more before it starts doing
+ * scrolling" -- and the earlier reasoning is worth stating because it was not
+ * wrong, it just optimised the wrong thing:
  *
- * 1. BELOW THE FLOOR THE PANE SCROLLS ANYWAY -- that is what "floor" means
- *    here. So in the sub-floor regime, shrinking further trades legibility for
- *    *less* scrolling while still scrolling: the worst of both. Once scrolling
- *    is unavoidable the only thing left worth optimising is whether the text
- *    can be read, which argues for a HIGH floor, not a low one. (This is the
- *    reasoning that flipped an earlier draft, which had picked 0.4 so that the
- *    default 50/50 split would fit exactly.)
- * 2. `document-typography.css` pins body text at 14px on both surfaces, so 0.7
- *    renders it at 9.8px -- the smallest size at which continuous body text
- *    stays comfortably readable on a desktop display at 100% OS scaling. The
- *    app cannot lean on a 2x display to rescue a smaller value: it pins fonts
- *    and metrics precisely (see the `--font-mono`/Mermaid-font findings) so
- *    that layout is deterministic across machines, and a floor that is only
- *    legible on Retina would undercut exactly that.
- * 3. The asymmetry with the manual 50% zoom level is the point, not an
- *    inconsistency. 50% is something a user picks ON PURPOSE, momentarily, to
- *    see a whole page; fit-to-width is something the app does TO them on every
- *    single entry into Split mode. An automatic path must not silently render
- *    someone's document at a size they would never have chosen.
+ *   The 0.7 argument was that below the floor the pane scrolls ANYWAY, so
+ *   shrinking further trades legibility for *less* scrolling while still
+ *   scrolling -- the worst of both -- and therefore once scrolling is
+ *   unavoidable the only thing left worth optimising is whether the text can
+ *   be read. That is sound in the sub-floor regime. Its mistake was where it
+ *   put the floor: at 0.7 the DEFAULT 50/50 divider fell BELOW the floor, so
+ *   the single most common configuration in the app scrolled, and the
+ *   "scrolling is unavoidable anyway" premise was self-inflicted rather than
+ *   given. At 0.4 the default configuration lands ABOVE the floor and fits
+ *   outright, which removes the regime that argument was reasoning about.
+ *
+ * So the floor is now what it always should have been: a backstop for panes
+ * genuinely too narrow to help, not a policy that governs the common case.
+ *
+ * Honest cost, stated rather than buried: 14px body text at 0.4 renders at
+ * 5.6px, which is unreadable. That only happens below roughly a 350px pane,
+ * where the alternative was a page scrolling at 0.7 and equally unreadable in
+ * a different way. Between about 350px and 585px the page now fits at a real
+ * computed scale instead of being clamped up and overflowing.
  *
  * Measured consequences at the app's own default 1000x840 window (canvas
- * 784px wide beside the 216px sidebar rail), Letter/1in:
+ * 784px wide beside the 216px sidebar rail), Letter/1in, with FIT_GUTTER_PX
+ * at 24:
  *
- *   divider 25%  pane 193px  fit needs 0.237 -> floor 0.70, page 571px, scrolls
- *   divider 50%  pane 389px  fit needs 0.477 -> floor 0.70, page 571px, scrolls
- *   divider 75%  pane 585px  fit needs 0.712 -> 0.71 applied, page 579px, FITS
+ *   divider 25%  pane 193px  needs 0.207 -> floor 0.40, page 326px, scrolls
+ *   divider 50%  pane 389px  needs 0.447 -> 0.44 applied, page 359px, FITS
+ *   divider 75%  pane 585px  needs 0.687 -> 0.68 applied, page 555px, FITS
  *
- * i.e. the page genuinely stops overflowing once the editor pane is given
- * roughly three quarters of the canvas, and everywhere narrower it renders
- * 30% smaller than before with correspondingly less horizontal scrolling.
+ * The middle row is the whole point of the change: the default split now fits
+ * with a real 12px margin on each side, where before it was clamped to 0.70,
+ * rendered a 571px page into a 389px pane, and scrolled.
  *
- * The PREVIEW pane's numbers are the mirror image, since the divider splits
- * one row: it fits once the divider gives the PREVIEW about three quarters,
- * and at the default 50/50 it is at the floor showing ~68% of the page rather
- * than the ~48% it showed before being fitted at all. That is the honest cost
- * of the floor on this side, and it is the right trade for the same reason:
- * an exact fit at 389px would render body text at 14 x 0.47 = 6.6px, a page
- * you can see the shape of and cannot read.
+ * Both panes share this constant and the divider splits one row, so the two
+ * are mirror images: whichever side the divider favours fits first.
  */
-export const MIN_FIT_SCALE = 0.7
+export const MIN_FIT_SCALE = 0.4
 
 /**
  * Breathing room subtracted from the pane's available width before fitting, so
  * a page that exactly fits is not flush against both pane edges with its
  * `shadow-page` clipped on each side.
  *
- * Deliberately tiny. It is subtracted from a width the caller has already
- * taken from `clientWidth` (the content box, i.e. scrollbar already excluded),
- * so it is pure aesthetics rather than a scrollbar reserve -- see
- * `computeFitScale`'s own note on why the caller must pass a content-box width
- * and not a border-box one.
+ * TOTAL, not per-side: it is subtracted once from the pane width, so this is
+ * twice the visual margin. 24 gives 12px each side, and the preview surface
+ * paints exactly that (`PREVIEW_FIT_CHROME_CSS`'s own `body` padding, kept
+ * numerically in step with this constant -- the two must agree or the page
+ * either overflows the margin it was given or floats inside a wider one).
+ *
+ * Raised from 4, which was "deliberately tiny" and read as flush: at 4 the
+ * page sat 2px from each pane edge, which is not a margin, and the sandbox
+ * paints its own surround white so there was nothing to see either way.
+ * Subtracted from a width the caller has already taken from `clientWidth`
+ * (the content box, scrollbar already excluded), so it is pure aesthetics
+ * rather than a scrollbar reserve -- see `computeFitScale`'s own note on why
+ * the caller must pass a content-box width and not a border-box one.
  */
-export const FIT_GUTTER_PX = 4
+export const FIT_GUTTER_PX = 24
 
 /**
  * Fit scales are quantised DOWN to whole percentage points.
