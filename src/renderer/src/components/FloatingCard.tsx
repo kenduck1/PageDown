@@ -62,6 +62,29 @@ import {
 // changes here is only WHERE the field is painted, never how the command is
 // dispatched. See LinkComposer.tsx's own note for the one thing this file must
 // therefore never do: call `view.focus()`, in either direction.
+//
+// DISCLOSED, MEASURED CONSEQUENCE OF THAT DIVERGENCE, not fixed here: while a
+// composer holds focus, THE USER CANNOT SEE WHAT THEY SELECTED. Gate 43
+// establishes this directly rather than by inference -- its first draft copied
+// gate28's ordering and read the selection box AFTER opening the composer,
+// which failed in 881ms on `expect(selectionBox).not.toBeNull()`: once an
+// <input> holds focus, `window.getSelection()` reports THAT input's own
+// collapsed selection, so the contenteditable's range is not merely painted in
+// Chromium's muted unfocused grey -- it is gone from the DOM Selection API
+// entirely.
+//
+// Two things follow, and the second is why this is recorded rather than
+// quietly fixed. First, a `::selection` rule cannot help: there is no
+// selection left to style, so the obvious one-line fix (which was written,
+// committed, and then reverted once this gate measured the real behaviour) is
+// dead CSS that reads like a solution. Second, this is NOT a regression -- the
+// layout rows lost the highlight in exactly the same way, for exactly the same
+// reason -- but it is more noticeable now that the popover sits on the words in
+// question. The real fix is a ProseMirror DECORATION over the composer's target
+// range, driven by the composer-open flag, i.e. the same machinery
+// find-plugin.ts already uses for match highlighting; that is a new plugin plus
+// handle wiring, and deliberately out of scope for a change that was about
+// WHERE the field appears.
 
 export interface FloatingCardProps {
   /** Renders nothing while false. */
