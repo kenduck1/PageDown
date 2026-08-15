@@ -19,6 +19,14 @@ export interface SelectionMarks {
   bold: boolean
   italic: boolean
   inlineCode: boolean
+  /**
+   * @milkdown/preset-gfm's `strike_through` mark (`~~text~~`). Note the
+   * underscored schema name -- the command, the CSS class and every label in
+   * this app call it "strikethrough", but the mark type registered in the
+   * schema is `strike_through`, and reading the wrong one here silently yields
+   * a permanently-false indicator rather than an error.
+   */
+  strikethrough: boolean
   link: boolean
 }
 
@@ -176,6 +184,7 @@ export function readSelectionSnapshot(view: EditorView): SelectionSnapshot {
       bold: markActive(state, state.schema.marks.strong),
       italic: markActive(state, state.schema.marks.emphasis),
       inlineCode: markActive(state, state.schema.marks.inlineCode),
+      strikethrough: markActive(state, state.schema.marks.strike_through),
       link: markActive(state, state.schema.marks.link)
     },
     linkHref: readLinkHref(state),
@@ -234,6 +243,7 @@ export function sameSnapshot(a: SelectionSnapshot | null, b: SelectionSnapshot |
     a.marks.bold !== b.marks.bold ||
     a.marks.italic !== b.marks.italic ||
     a.marks.inlineCode !== b.marks.inlineCode ||
+    a.marks.strikethrough !== b.marks.strikethrough ||
     a.marks.link !== b.marks.link
   ) {
     return false

@@ -762,6 +762,26 @@ function EditorToolbar({
               >
                 <span className="text-14 italic leading-none">I</span>
               </ToolbarIconButton>
+              {/* Strikethrough. Unlike Underline and Text colour immediately
+            above -- removed deliberately, and staying removed -- this one has
+            a real Markdown expression (`~~text~~`, portable GFM), so it is a
+            genuine gap rather than a control that could only ever pretend.
+            Everything behind it already shipped inside the composed `gfm`
+            array this editor mounts: the `strike_through` mark schema, its
+            input rule, toggleStrikethroughCommand and a Mod-Alt-x keymap. The
+            command was simply imported nowhere, so `~~text~~` round-tripped
+            and the shortcut worked while the UI offered no way in.
+            src/export/markdown-to-docx.ts had been handling the mark the whole
+            time too. Live pressed state from the same snapshot Bold/Italic
+            read, so it cannot drift from what the button then does. */}
+              <ToolbarIconButton
+                label="Strikethrough"
+                active={selection?.marks.strikethrough ?? false}
+                onClick={() => editorRef.current?.toggleStrikethrough()}
+                disabled={isSourceMode}
+              >
+                <span className="text-14 leading-none line-through">S</span>
+              </ToolbarIconButton>
             </div>
 
             <ToolbarDivider />

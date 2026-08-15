@@ -19,7 +19,8 @@ import {
   addColBeforeCommand,
   addRowAfterCommand,
   addRowBeforeCommand,
-  insertTableCommand
+  insertTableCommand,
+  toggleStrikethroughCommand
 } from '@milkdown/preset-gfm'
 import {
   undoCommand,
@@ -101,6 +102,19 @@ export interface EditorCommands {
   toggleBold: () => void
   // toggleEmphasisCommand -- same toggleMark-backed behavior as bold.
   toggleItalic: () => void
+  // toggleStrikethroughCommand -- @milkdown/preset-gfm's own command, a
+  // genuine toggleMark over the `strike_through` mark, so it behaves exactly
+  // like bold/italic rather than like inline code.
+  //
+  // It, its mark schema, its input rule and a Mod-Alt-x keymap have all
+  // shipped inside the composed `gfm` array this editor already mounts (read
+  // from the installed 7.21.3: `schema` carries strikethroughAttr/
+  // strikethroughSchema, `commands` carries this command, `keymap` carries
+  // strikethroughKeymap) -- so `~~text~~` round-tripped and the shortcut
+  // worked the whole time. The command was simply imported nowhere, so there
+  // was no way to reach it from the UI. This is the same shape of gap as
+  // toggleInlineCode above.
+  toggleStrikethrough: () => void
   // toggleInlineCodeCommand -- @milkdown/preset-commonmark's own command,
   // exported and keymapped (Mod-e) by that preset since before this project
   // existed, but never reachable from this app's own UI until the selection
@@ -429,6 +443,9 @@ export function buildEditorCommands(editor: Editor): EditorCommands {
     },
     toggleItalic: () => {
       editor.action(callCommand(toggleEmphasisCommand.key))
+    },
+    toggleStrikethrough: () => {
+      editor.action(callCommand(toggleStrikethroughCommand.key))
     },
     toggleInlineCode: () => {
       editor.action(callCommand(toggleInlineCodeCommand.key))

@@ -20,6 +20,7 @@ function createFakeEditorHandle(): MilkdownEditorHandle {
     toggleBold: vi.fn(),
     toggleItalic: vi.fn(),
     toggleInlineCode: vi.fn(),
+    toggleStrikethrough: vi.fn(),
     toggleHeading: vi.fn(),
     setParagraph: vi.fn(),
     toggleBulletList: vi.fn(),
@@ -185,6 +186,18 @@ describe('EditorToolbar', () => {
     await user.click(screen.getByRole('button', { name: 'Italic' }))
 
     expect(handle.toggleItalic).toHaveBeenCalledTimes(1)
+  })
+
+  it('Strikethrough calls editorRef.current.toggleStrikethrough()', async () => {
+    const handle = createFakeEditorHandle()
+    const ref = createRef<MilkdownEditorHandle>()
+    ref.current = handle
+    const user = userEvent.setup()
+    render(<EditorToolbar editorRef={ref} />)
+
+    await user.click(screen.getByRole('button', { name: 'Strikethrough' }))
+
+    expect(handle.toggleStrikethrough).toHaveBeenCalledTimes(1)
   })
 
   it('Bulleted list calls editorRef.current.toggleBulletList()', async () => {
@@ -430,6 +443,7 @@ describe('EditorToolbar', () => {
       'Redo',
       'Bold',
       'Italic',
+      'Strikethrough',
       'Bulleted list',
       'Numbered list',
       'Insert link',
@@ -485,6 +499,7 @@ describe('EditorToolbar', () => {
       'Redo',
       'Bold',
       'Italic',
+      'Strikethrough',
       'Bulleted list',
       'Numbered list',
       'Insert link',
@@ -909,7 +924,13 @@ describe('EditorToolbar', () => {
           empty: false,
           hasFocus: true,
           nodeSelection: false,
-          marks: { bold: true, italic: false, inlineCode: false, link: false },
+          marks: {
+            bold: true,
+            italic: false,
+            inlineCode: false,
+            strikethrough: false,
+            link: false
+          },
           headingLevel: null,
           listType: 'ordered_list',
           linkHref: null,
@@ -920,6 +941,13 @@ describe('EditorToolbar', () => {
     )
     expect(screen.getByRole('button', { name: 'Bold' })).toHaveAttribute('aria-pressed', 'true')
     expect(screen.getByRole('button', { name: 'Italic' })).toHaveAttribute('aria-pressed', 'false')
+    // Strikethrough reads the same snapshot Bold/Italic do, so it must report
+    // the mark it was given rather than a hardcoded false -- the exact defect
+    // Bold and Italic themselves shipped with until the bubble-menu pass.
+    expect(screen.getByRole('button', { name: 'Strikethrough' })).toHaveAttribute(
+      'aria-pressed',
+      'false'
+    )
     expect(screen.getByRole('button', { name: 'Numbered list' })).toHaveAttribute(
       'aria-pressed',
       'true'
@@ -931,6 +959,38 @@ describe('EditorToolbar', () => {
     expect(screen.getByRole('button', { name: 'Bulleted list' })).toHaveAttribute(
       'aria-pressed',
       'false'
+    )
+
+    // ...and genuinely reports true when the mark IS active. Without this the
+    // assertion above would pass against a permanently-false indicator, which
+    // is precisely the bug being guarded against.
+    rerender(
+      <EditorToolbar
+        editorRef={ref}
+        selection={{
+          from: 1,
+          to: 5,
+          empty: false,
+          hasFocus: true,
+          nodeSelection: false,
+          marks: {
+            bold: false,
+            italic: false,
+            inlineCode: false,
+            strikethrough: true,
+            link: false
+          },
+          headingLevel: null,
+          listType: null,
+          linkHref: null,
+          taskList: false,
+          table: null
+        }}
+      />
+    )
+    expect(screen.getByRole('button', { name: 'Strikethrough' })).toHaveAttribute(
+      'aria-pressed',
+      'true'
     )
 
     rerender(<EditorToolbar editorRef={ref} selection={null} />)
@@ -1012,7 +1072,7 @@ describe('EditorToolbar', () => {
         empty: true,
         hasFocus: true,
         nodeSelection: false,
-        marks: { bold: false, italic: false, inlineCode: false, link: false },
+        marks: { bold: false, italic: false, inlineCode: false, strikethrough: false, link: false },
         linkHref: null,
         headingLevel: null,
         table: null

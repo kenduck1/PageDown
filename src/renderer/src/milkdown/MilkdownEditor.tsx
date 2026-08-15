@@ -337,6 +337,7 @@ const MilkdownEditor = forwardRef<MilkdownEditorHandle, MilkdownEditorProps>(
       replaceActiveMatch: (replacement) => commandsRef.current?.replaceActiveMatch(replacement),
       replaceAllMatches: (replacement) => commandsRef.current?.replaceAllMatches(replacement),
       toggleInlineCode: () => commandsRef.current?.toggleInlineCode(),
+      toggleStrikethrough: () => commandsRef.current?.toggleStrikethrough(),
       getSelectedText: () => commandsRef.current?.getSelectedText() ?? '',
       getSelectionRect: () => commandsRef.current?.getSelectionRect() ?? null,
       getTableRect: () => commandsRef.current?.getTableRect() ?? null,

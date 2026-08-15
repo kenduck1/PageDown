@@ -233,6 +233,30 @@ describe('MilkdownEditorHandle commands needing a real ranged selection — wire
     expect(root.querySelector('h1')?.innerHTML).toBe('Hello World')
   })
 
+  it('toggleStrikethrough() wraps a real selection, and it serializes as GFM `~~text~~`', async () => {
+    // The mark, its command, its input rule and a Mod-Alt-x keymap have all
+    // shipped inside the composed `gfm` array this editor already mounts --
+    // the command was simply imported nowhere, so there was no way to reach it
+    // from the UI. Asserted through the real rendered DOM like its bold/italic
+    // siblings above, so dispatching the wrong command's key fails here.
+    const editor = await createTestEditor('# Hello World', PLUGINS)
+    currentEditor = editor
+    const root = document.querySelector('.ProseMirror') as HTMLElement
+    const commands = buildEditorCommands(editor)
+
+    selectWorld(editor)
+    commands.toggleStrikethrough()
+    expect(root.querySelector('h1')?.innerHTML).toBe('Hello <del>World</del>')
+
+    // And the half that matters for a Markdown app: it has to survive as real
+    // portable syntax, not merely as a mark in the editor's own memory.
+    expect(editor.action(getMarkdown())).toBe('# Hello ~~World~~\n')
+
+    selectWorld(editor)
+    commands.toggleStrikethrough()
+    expect(root.querySelector('h1')?.innerHTML).toBe('Hello World')
+  })
+
   it('getSelectionRect() returns a rect for a real ranged selection -- ZEROS under jsdom, see the warning', async () => {
     // Pins the plumbing (handle -> readSelectionRect -> coordsAtPos), NOT the
     // numbers: jsdom has no layout, and this repo's own test-setup.ts Range
