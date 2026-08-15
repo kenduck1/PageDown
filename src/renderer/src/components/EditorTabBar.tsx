@@ -3,7 +3,12 @@ import { useDocumentStore } from '../store/documentStore'
 // Moved out to lib/ when the window-close guard needed the identical label for
 // its "save the changes you made to <name>?" dialog -- see that module.
 import { tabLabel } from '../lib/tab-label'
-import { computeReorderIndex, isDropAfter } from '../lib/tab-reorder'
+import {
+  clampInsertionIndex,
+  computeReorderIndex,
+  isDropAfter,
+  resolveInsertionIndex
+} from '../lib/tab-reorder'
 
 // The ONLY dataTransfer type a tab drag carries, and deliberately a private
 // one -- no `text/plain`, no `text/uri-list`.
@@ -78,7 +83,13 @@ function EditorTabBar({ onRequestCloseTab }: EditorTabBarProps): React.JSX.Eleme
   // tab. The authoritative dragged-tab id travels in the dataTransfer, which
   // is what the drop handler actually reads.
   const [draggingTabId, setDraggingTabId] = useState<string | null>(null)
-  const [dropHint, setDropHint] = useState<{ index: number; after: boolean } | null>(null)
+  // An INSERTION INDEX (a gap between tabs, 0..tabs.length), never a
+  // tab-plus-a-side. This used to be `{index, after}` and that shape was the
+  // user-reported bug: "after tab N" and "before tab N+1" are one gap, but
+  // stored that way they rendered as two strips 4px apart, so the indicator
+  // snapped between two positions that meant the same thing. See
+  // resolveInsertionIndex's own comment. One integer in, one strip out.
+  const [dropIndex, setDropIndex] = useState<number | null>(null)
 
   const handleClose = (tabId: string): void => {
     if (onRequestCloseTab) {
@@ -143,7 +154,7 @@ function EditorTabBar({ onRequestCloseTab }: EditorTabBarProps): React.JSX.Eleme
     event.preventDefault()
     event.dataTransfer.dropEffect = 'move'
     const rect = event.currentTarget.getBoundingClientRect()
-    setDropHint({ index, after: isDropAfter(event.clientX, rect.left, rect.width) })
+    setDropIndex(resolveInsertionIndex(index, isDropAfter(event.clientX, rect.left, rect.width)))
   }
 
   const handleDrop = (event: React.DragEvent, overIndex: number): void => {
@@ -156,13 +167,16 @@ function EditorTabBar({ onRequestCloseTab }: EditorTabBarProps): React.JSX.Eleme
     // off the type list alone.)
     const tabId = event.dataTransfer.getData(TAB_DRAG_TYPE)
     setDraggingTabId(null)
-    setDropHint(null)
+    setDropIndex(null)
     if (!tabId) return
     const fromIndex = tabs.findIndex((tab) => tab.id === tabId)
     if (fromIndex === -1) return
     const rect = event.currentTarget.getBoundingClientRect()
     const after = isDropAfter(event.clientX, rect.left, rect.width)
-    reorderTab(tabId, computeReorderIndex(fromIndex, overIndex, after))
+    // Resolved through the SAME resolveInsertionIndex the hint above uses, so
+    // the drop cannot land in a different gap than the one the indicator was
+    // pointing at -- the two would otherwise be two transcriptions of one rule.
+    reorderTab(tabId, computeReorderIndex(fromIndex, resolveInsertionIndex(overIndex, after)))
   }
 
   // Fires whether the drag ended in a drop, outside the bar, or via Escape --
@@ -170,7 +184,7 @@ function EditorTabBar({ onRequestCloseTab }: EditorTabBarProps): React.JSX.Eleme
   // get stuck mid-drag.
   const handleDragEnd = (): void => {
     setDraggingTabId(null)
-    setDropHint(null)
+    setDropIndex(null)
   }
 
   // Completes the roving-tabindex pattern this component only half-had:
@@ -223,7 +237,22 @@ function EditorTabBar({ onRequestCloseTab }: EditorTabBarProps): React.JSX.Eleme
       const delta = event.key === 'ArrowRight' ? 1 : event.key === 'ArrowLeft' ? -1 : 0
       if (delta === 0) return
       event.preventDefault()
-      const destination = Math.min(Math.max(currentIndex + delta, 0), tabs.length - 1)
+      // Expressed as the GAP the nudge aims at and pushed through the same
+      // computeReorderIndex the drop path uses, rather than as a final index
+      // computed here by its own formula. "Nudge right" means "into the gap
+      // after my right-hand neighbour" -- gap currentIndex + 2, exactly what a
+      // drop on that neighbour's right half resolves to -- and "nudge left"
+      // means gap currentIndex - 1, what a drop on the left neighbour's left
+      // half resolves to. Two independent formulas for one intent is how the
+      // pointer and keyboard paths drift apart, and the drift would be
+      // invisible until someone reordered the same tabs both ways.
+      //
+      // The clamp is on the GAP (0..tabs.length), not on the final index: at
+      // either end the clamped gap is the one the tab already occupies, so
+      // computeReorderIndex returns currentIndex and the early return below
+      // makes it a no-op -- no separate end-of-row special case needed.
+      const insertionIndex = clampInsertionIndex(currentIndex + (delta > 0 ? 2 : -1), tabs.length)
+      const destination = computeReorderIndex(currentIndex, insertionIndex)
       if (destination === currentIndex) return
       reorderTab(tabId, destination)
       // Focus follows the tab, not the position -- a user nudging a tab along
@@ -283,13 +312,32 @@ function EditorTabBar({ onRequestCloseTab }: EditorTabBarProps): React.JSX.Eleme
         // a spacer element on purpose: it paints inside the tab's existing
         // box, so showing it cannot change any tab's width or position -- and
         // a drop indicator that reflows the very bar you are aiming at would
-        // move the target out from under the pointer.
+        // move the target out from under the pointer. (An absolutely
+        // positioned line was reconsidered while fixing the double-position
+        // bug below and rejected again for the same reason plus a second one:
+        // it would sit over the tabs and need `pointer-events-none` to keep
+        // the bar clickable, which is a footgun this shape cannot have.)
+        //
+        // GAP INDEX -> POSITION, and it is a FUNCTION: every gap maps to
+        // exactly one strip. Gap i is painted inside tab i's LEFT edge for
+        // every i < tabs.length; the one gap with no tab to its right --
+        // `tabs.length`, past the end -- is painted inside the LAST tab's
+        // right edge, the only place it can go.
+        //
+        // The bug this replaces: the hint was a tab plus a side, so gap i had
+        // TWO painters -- tab i-1 drawing its right edge and tab i drawing its
+        // left edge. With the row's 2px `gap-0.5` between tabs those strips
+        // land 4px apart, so hovering across a tab midpoint moved the
+        // indicator between two spots that would produce the identical order.
+        // Only the interior gaps were affected; the two ends always had a
+        // single painter, which is why this read as "somewhere in the middle
+        // it snaps between two places" rather than as wholesale nonsense.
         const dropEdge =
-          dropHint && dropHint.index === index
-            ? dropHint.after
+          dropIndex === index
+            ? 'shadow-[inset_2px_0_0_0_var(--color-accent)]'
+            : dropIndex === tabs.length && index === tabs.length - 1
               ? 'shadow-[inset_-2px_0_0_0_var(--color-accent)]'
-              : 'shadow-[inset_2px_0_0_0_var(--color-accent)]'
-            : ''
+              : ''
         return (
           <div
             key={tab.id}
