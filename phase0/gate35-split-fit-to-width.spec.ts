@@ -593,32 +593,50 @@ test('Gate 35: Follow scroll reports the right page from a SCALED editor pane', 
       4
     )
 
-    // THE DISCRIMINATING SCROLL. `contentHeightPx` for Letter/1in is 864px, so
-    // the top of DOCUMENT page 3 is 2 x 864 = 1728 document px -- which, in
-    // the scaled pane's own coordinate space, is 1728 * scale. Scrolling a
-    // little past that must report page 3.
+    // THE DISCRIMINATING SCROLL. The Format canvas now draws a real seam at
+    // every page boundary, so it advances by a whole SHEET plus the gutter
+    // between two sheets, not by a bare content box: 1056 + 24 = 1080 document
+    // px per page for Letter/1in. The top of DOCUMENT page 3 is therefore
+    // 2 x 1080 = 2160, and scrolling comfortably into page 3 must report 3.
     //
-    // Reading the scale back out of the DOM (rather than hardcoding 0.7) is
-    // what keeps this honest if the floor or the window default ever moves:
-    // the arithmetic under test is the CONVERSION, not the particular scale.
-    const CONTENT_HEIGHT_PX = 864
-    const targetScrollTop = Math.round((CONTENT_HEIGHT_PX * 2 + 40) * scale)
+    // THIS CONSTANT MOVED FROM 864 (contentHeightPx) TO 1080 (page pitch) WHEN
+    // SEAMS LANDED, and it is deliberately a hand-derived literal rather than
+    // an import of computeEditorPagePitchPx -- Gate 16's rule: an expectation
+    // computed by the code under test moves with that code's bugs, and this
+    // gate would then pass green against wrong output.
+    //
+    // Reading the SCALE back out of the DOM (rather than hardcoding it) is a
+    // different case and stays as it was: the arithmetic under test here is
+    // the CONVERSION, not the particular scale, so the gate must not care
+    // whether the floor or the window default moves.
+    const PAGE_PITCH_PX = 1080
+    const targetDocumentOffset = PAGE_PITCH_PX * 2 + 200
+    const targetScrollTop = Math.round(targetDocumentOffset * scale)
     console.log(
       `Gate 35 Follow: scale ${scale}, scrolling the editor pane to scrollTop ${targetScrollTop} ` +
-        `(document offset ${Math.round(targetScrollTop / scale)}px, i.e. page 3)`
+        `(document offset ${targetDocumentOffset}px, i.e. page 3 at a ${PAGE_PITCH_PX}px pitch)`
     )
-    await win.evaluate((top) => {
+    const achievedScrollTop = await win.evaluate((top) => {
       const card = document.querySelector('[data-testid="page-card"]') as HTMLElement
       const pane = card.closest('.overflow-auto') as HTMLElement
       pane.scrollTop = top
+      return pane.scrollTop
     }, targetScrollTop)
+    // A pane that cannot scroll that far clamps SILENTLY, and the page
+    // assertion below would then be measuring a different offset than the one
+    // this test reasoned about. Fail on the real cause instead.
+    expect(
+      achievedScrollTop,
+      'the editor pane must genuinely scroll to the requested offset, not clamp short of it'
+    ).toBeCloseTo(targetScrollTop, 0)
 
     // Follow samples on a 500ms interval and the resulting navigation goes
     // through the real serialized harness queue, so poll rather than sampling.
     //
     // WHY PAGE 3 IS THE WHOLE POINT: without the scale conversion the same
-    // scrollTop reads as floor(1249 / 864) + 1 = page 2 -- a plausible,
-    // silent, off-by-one-page wrong answer rather than a crash. This assertion
+    // scrollTop reads as floor(targetScrollTop / 1080) + 1, which is page 2 at
+    // the 0.7 floor and page 1 at 0.4 -- a plausible, silent,
+    // off-by-one-or-two-page wrong answer rather than a crash. This assertion
     // is the only place in the suite that can tell those two apart.
     await expect(win.getByRole('button', { name: `Page 3 of ${totalPages}` })).toBeVisible({
       timeout: 20_000

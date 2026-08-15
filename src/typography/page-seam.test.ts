@@ -8,6 +8,7 @@ import {
   PAGE_SEAM_CSS_VARIABLES,
   computePageSeamMetrics,
   computePageCardMinHeightPx,
+  computeEditorPagePitchPx,
   pageSeamCssVariables
 } from './page-seam'
 
@@ -77,6 +78,20 @@ describe('computePageCardMinHeightPx', () => {
         LETTER.marginBottomPx
       expect(computePageCardMinHeightPx(LETTER, seamCount)).toBeGreaterThanOrEqual(naturalWorstCase)
     }
+  })
+})
+
+describe('computeEditorPagePitchPx', () => {
+  it('is a whole sheet plus one gutter', () => {
+    expect(computeEditorPagePitchPx(LETTER)).toBe(1056 + PAGE_SEAM_GAP_PX)
+  })
+
+  it('is strictly greater than the contentHeightPx divisor it replaced', () => {
+    // The whole reason Split-mode Follow had to change: the canvas advances by
+    // more than a content box per page now, and the old divisor would have
+    // under-reported the page further and further into a document rather than
+    // failing loudly.
+    expect(computeEditorPagePitchPx(LETTER)).toBeGreaterThan(LETTER.contentHeightPx)
   })
 })
 

@@ -37,7 +37,7 @@ import { computeFitScale } from '../lib/fit-scale'
 import { extractRawFrontmatter, replaceRawFrontmatter } from '../../../markdown/frontmatter-splice'
 import { resolvePageConfig, applyPageConfig, type PageConfig } from '../../../markdown/page-config'
 import { computePageGeometry } from '../../../typography/page-geometry'
-import { computePageCardMinHeightPx } from '../../../typography/page-seam'
+import { computeEditorPagePitchPx, computePageCardMinHeightPx } from '../../../typography/page-seam'
 import { resolveDocumentStyle } from '../../../typography/document-style'
 
 // Exact copy pinned in docs/superpowers/specs/2026-08-08-undo-barrier-notice-design.md
@@ -1383,21 +1383,25 @@ function EditorScreen(): React.JSX.Element {
   // why zero new IPC is needed.
   //
   // `splitLeftMode === 'format'` is required, not just `viewMode ===
-  // 'split'`: `pageGeometry.contentHeightPx` is the Milkdown page card's own
-  // content-box height (Gate 10's 0.000px parity target against the
-  // paginated preview), which has no relationship to a plain <textarea>'s
-  // scroll position in Source mode's left pane -- see the hook's own
-  // `enabled` doc comment for why this is checked explicitly rather than
-  // relied upon only being reachable by construction.
+  // 'split'`: the pitch below is the Milkdown page card's own page box, which
+  // has no relationship to a plain <textarea>'s scroll position in Source
+  // mode's left pane -- see the hook's own `enabled` doc comment for why this
+  // is checked explicitly rather than relied upon only being reachable by
+  // construction.
   const splitFollowScroll = useSplitFollowScroll({
     enabled: splitFollowEnabled && viewMode === 'split' && splitLeftMode === 'format',
     scrollElementRef: editorPaneRef,
-    contentHeightPx: pageGeometry.contentHeightPx,
-    // The pane this hook samples `scrollTop` from now contains a CSS-`zoom`ed
-    // wrapper, so its scroll offset is no longer in the same coordinate space
-    // as `contentHeightPx` -- see the hook's own `scale` doc comment for the
-    // measurement and for why omitting this silently under-reports the page
-    // rather than failing.
+    // A whole sheet plus a gutter, NOT the bare content height this used to
+    // pass. The canvas now draws a real seam at every page boundary, so it
+    // advances by a page rather than by a content box; see
+    // computeEditorPagePitchPx for why the old divisor would have
+    // under-reported silently rather than failed.
+    pagePitchPx: computeEditorPagePitchPx(pageGeometry),
+    // The pane this hook samples `scrollTop` from also contains a CSS-`zoom`ed
+    // wrapper, so its scroll offset is not in the same coordinate space as the
+    // pitch -- see the hook's own `scale` doc comment for the measurement and
+    // for why omitting this silently under-reports the page rather than
+    // failing.
     scale: splitFitScale,
     pageCount,
     onNavigate: handleNavigateToPage

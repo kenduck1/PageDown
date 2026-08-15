@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import { mergeRecentFiles, readRecentFiles, writeRecentFiles } from '../src/main/recent-files'
 import { markdownToHtml } from '../src/markdown/pipeline'
 import { BLOCK_INDEX_ATTRIBUTE } from '../src/pagination/page-breaks'
+import { computePageSeamMetrics } from '../src/typography/page-seam'
 import { launchIsolatedApp } from './electron-launch'
 import { LETTER_GEOMETRY, DEFAULT_STYLE } from './gate-geometry'
 
@@ -32,16 +33,27 @@ import { LETTER_GEOMETRY, DEFAULT_STYLE } from './gate-geometry'
 // 3. That the guides genuinely PAINT (a non-zero box), the same thing
 //    Gate 17 asserts for find highlights -- a decoration present in the DOM
 //    but collapsed to zero area passes every unit test and is invisible.
-// 4. **That the guides displace NOTHING.** This is the Gate 10 question, and
-//    it needs its own gate: Gate 10's REPORT_TEMPLATE fixture is SINGLE-PAGE
-//    (that gate asserts `pageCount === 1` directly), so it has no page
-//    breaks, draws no guides, and therefore cannot answer whether guides
-//    disturb its 0.000px parity -- it is unaffected VACUOUSLY. Test 2 below
-//    is the real answer: every top-level block's position in a genuinely
-//    multi-page document, measured before and after the guides arrive, in
-//    the real app.
-
-const TOLERANCE_PX = 0.001
+// 4. **That a guide displaces the document by EXACTLY the seam it draws, at
+//    EXACTLY the boundaries it draws one, and by nothing anywhere above the
+//    first.** This is the Gate 10 question, and it needs its own gate: Gate
+//    10's REPORT_TEMPLATE fixture is SINGLE-PAGE (that gate asserts
+//    `pageCount === 1` directly), so it has no page breaks, draws no guides,
+//    and therefore cannot answer whether they disturb its 0.000px parity --
+//    it is unaffected VACUOUSLY. Test 2 below is the real answer.
+//
+//    THIS ASSERTION USED TO READ "the guides displace NOTHING", 0.000px
+//    across 121 blocks, and that was correct when a guide was a zero-height
+//    absolutely-positioned hairline. A guide is now a page SEAM: it occupies
+//    the real vertical space a page boundary occupies on paper (the ending
+//    page's remaining bottom margin, a gutter between the sheets, the
+//    starting page's top margin), so "moves nothing" is false BY DESIGN. The
+//    replacement is strictly stronger rather than weaker -- "something moved"
+//    would have been weaker, and is not what this asserts. It pins the
+//    displacement as an exact STEP FUNCTION: zero for every block above the
+//    first seam, then exactly one seam height more per seam crossed, with the
+//    seam height computed from computePageSeamMetrics rather than measured
+//    from the DOM or hardcoded, so it cannot be fitted to whatever the app
+//    happens to do.
 
 // Short, uniform paragraphs, so every break falls cleanly BETWEEN blocks
 // rather than inside one -- which is what makes test 1's "the block above the
@@ -150,17 +162,43 @@ async function readEditorGuides(win: Page): Promise<EditorGuide[]> {
   })
 }
 
-// Every top-level block's top, relative to the editing root. The guides are
-// EXCLUDED, so this measures only real document content -- which is exactly
-// what must not move.
-async function readBlockTops(win: Page): Promise<number[]> {
+interface BlockLayout {
+  /** Every real document block's top, relative to the editing root, guides excluded. */
+  tops: number[]
+  /**
+   * For each seam, how many real blocks precede it -- so a seam recorded as
+   * `m` displaces every block whose index is >= m, and nothing above it.
+   *
+   * Captured in the SAME pass as `tops` rather than derived from the guide
+   * labels afterwards, because the two have to describe the same instant: a
+   * seam and the blocks it pushes down are read from one DOM walk.
+   */
+  seamAfterBlockCounts: number[]
+  /** Each seam's own laid-out height, for the direct pin against page geometry. */
+  seamHeights: number[]
+}
+
+// Every top-level block's top relative to the editing root, plus where the
+// seams sit among them. The guides are EXCLUDED from `tops`, so that array
+// measures only real document content -- which is what the displacement claim
+// is about.
+async function readBlockLayout(win: Page): Promise<BlockLayout> {
   return win.evaluate(() => {
     const root = document.querySelector('.milkdown-mount .ProseMirror')
-    if (!root) return []
+    if (!root) return { tops: [], seamAfterBlockCounts: [], seamHeights: [] }
     const rootTop = root.getBoundingClientRect().top
-    return Array.from(root.children)
-      .filter((child) => !child.classList.contains('pagedown-page-guide'))
-      .map((child) => child.getBoundingClientRect().top - rootTop)
+    const tops: number[] = []
+    const seamAfterBlockCounts: number[] = []
+    const seamHeights: number[] = []
+    for (const child of Array.from(root.children)) {
+      if (child.classList.contains('pagedown-page-guide')) {
+        seamAfterBlockCounts.push(tops.length)
+        seamHeights.push(child.getBoundingClientRect().height)
+        continue
+      }
+      tops.push(child.getBoundingClientRect().top - rootTop)
+    }
+    return { tops, seamAfterBlockCounts, seamHeights }
   })
 }
 
@@ -300,52 +338,122 @@ test('Gate 37: every guide lands on the block that really ends that page', async
   }
 })
 
-test('Gate 37: drawing the guides moves nothing in the document', async () => {
+test('Gate 37: a seam displaces the document by exactly its own height, and only below itself', async () => {
   test.setTimeout(120_000)
 
   // This is the answer to "does this break Gate 10's 0.000px parity?" that
   // Gate 10 itself structurally cannot give: its fixture is single-page, so
-  // no guide is ever drawn there and its non-disturbance is vacuous.
+  // no seam is ever drawn there and its non-disturbance is vacuous.
   //
-  // Guides are absolutely positioned, which buys two things a zero-height
-  // in-flow element would not: no contribution to layout height, AND no
-  // interruption of margin collapsing between the two blocks they sit
-  // between. The second is the subtle one -- an in-flow zero-height div
-  // between two paragraphs turns one collapsed margin into two stacked ones,
-  // which would move every block below every guide.
+  // A seam is IN FLOW and has real height -- it is the vertical space a page
+  // boundary genuinely occupies on paper. So the claim is not "nothing moved";
+  // it is that the movement is exactly, and only, the space the boundaries
+  // themselves take:
+  //
+  //   * every block above the first seam is at exactly its original position
+  //   * every block below k seams is exactly k seam-heights lower
+  //   * the seam height is what the document's own page geometry says it is
+  //
+  // The last of those three is what stops the other two being circular. It is
+  // computed here from computePageSeamMetrics against the same LETTER_GEOMETRY
+  // the rest of this suite paginates at -- never measured out of the DOM and
+  // never hardcoded, so a bug in the app's own seam sizing cannot define its
+  // own expected value.
+  //
+  // The trap this specifically rules out is margin doubling. An in-flow box
+  // dropped between two collapsing siblings normally separates them, turning
+  // one collapsed margin into two stacked ones -- which would show up here as
+  // a displacement LARGER than the seam by exactly one block margin, at every
+  // boundary. base.css keeps the collapse intact instead (see its own note);
+  // this is what proves it.
   const fixture = await openFixtureDocument(CLEAN_FIXTURE, 'layout')
   const { close, win, fixtureDir, restoreRecents } = fixture
 
   try {
     // The "before" read is only meaningful if it genuinely precedes the
-    // guides, so that is asserted rather than assumed -- guides need a full
+    // seams, so that is asserted rather than assumed -- they need a full
     // 500ms debounce plus a real pagination round trip, but a slow-enough
     // machine could in principle invert the order, and this failing loudly is
     // far better than the comparison silently becoming before-vs-before.
     expect(
       await win.locator('.milkdown-mount .ProseMirror .pagedown-page-guide').count(),
-      'the baseline must be measured before any guide exists'
+      'the baseline must be measured before any seam exists'
     ).toBe(0)
-    const before = await readBlockTops(win)
-    expect(before.length).toBeGreaterThan(100)
+    const before = await readBlockLayout(win)
+    expect(before.tops.length).toBeGreaterThan(100)
+    expect(before.seamAfterBlockCounts).toHaveLength(0)
 
     await waitForGuides(win, 1)
-    const after = await readBlockTops(win)
+    const after = await readBlockLayout(win)
 
-    expect(after).toHaveLength(before.length)
+    expect(after.tops).toHaveLength(before.tops.length)
+    expect(
+      after.seamAfterBlockCounts.length,
+      'a multi-page fixture must produce at least one seam, or this test proves nothing'
+    ).toBeGreaterThan(0)
 
-    const deltas = after.map((top, index) => Math.abs(top - before[index]))
-    const worst = Math.max(...deltas)
-    const worstIndex = deltas.indexOf(worst)
-    console.log(
-      `\nGate 37 layout displacement across ${before.length} blocks: ` +
-        `max ${worst.toFixed(3)}px (block ${worstIndex})`
+    // (a) THE SEAM IS THE SIZE THE DOCUMENT'S OWN GEOMETRY SAYS IT IS.
+    // Letter with 1in margins: 96px of the ending page's paper + a 24px
+    // gutter + 96px of the starting page's paper.
+    const expectedSeamHeight = computePageSeamMetrics(LETTER_GEOMETRY).heightPx
+    for (const [index, height] of after.seamHeights.entries()) {
+      expect(height, `seam ${index} is not one page boundary tall`).toBeCloseTo(
+        expectedSeamHeight,
+        2
+      )
+    }
+
+    // (b) THE DISPLACEMENT IS AN EXACT STEP FUNCTION.
+    const seamsAbove = (blockIndex: number): number =>
+      after.seamAfterBlockCounts.filter((count) => count <= blockIndex).length
+    const rows = after.tops.map((top, index) => ({
+      block: index,
+      seamsAbove: seamsAbove(index),
+      expected: seamsAbove(index) * expectedSeamHeight,
+      actual: top - before.tops[index]
+    }))
+    const worstRow = rows.reduce((worst, row) =>
+      Math.abs(row.actual - row.expected) > Math.abs(worst.actual - worst.expected) ? row : worst
     )
 
+    console.log(
+      `\nGate 37 seam displacement across ${before.tops.length} blocks, ` +
+        `${after.seamAfterBlockCounts.length} seams of ${expectedSeamHeight}px ` +
+        `(after blocks ${after.seamAfterBlockCounts.join(', ')}):`
+    )
+    console.table([
+      ...rows.filter((row) => row.block < 2 || after.seamAfterBlockCounts.includes(row.block)),
+      { ...worstRow, block: `${worstRow.block} (worst)` as unknown as number }
+    ])
+
+    // Written per block rather than as one max-delta, so a failure names the
+    // block AND says whether the document moved too far or not far enough.
+    for (const row of rows) {
+      expect(
+        row.actual,
+        `block ${row.block} sits below ${row.seamsAbove} seam(s), so it must have moved ` +
+          `exactly ${row.expected.toFixed(3)}px when they appeared -- it moved ` +
+          `${row.actual.toFixed(3)}px`
+      ).toBeCloseTo(row.expected, 3)
+    }
+
+    // (c) THE ANTI-VACUITY HALF, in the same shape Gates 28/29 use. Every
+    // assertion above is satisfied trivially if `expected` is 0 everywhere,
+    // which is exactly what a regression to a zero-height seam would produce
+    // -- and that regression is a real, visible product defect (the canvas
+    // stops looking like pages) that would otherwise leave this test green.
     expect(
-      worst,
-      `block ${worstIndex} moved ${worst.toFixed(3)}px when the page guides appeared`
-    ).toBeLessThan(TOLERANCE_PX)
+      expectedSeamHeight,
+      'a zero-height seam would satisfy every assertion above for free'
+    ).toBeGreaterThan(100)
+    expect(
+      rows.some((row) => row.seamsAbove > 0),
+      'some block must sit below a seam, or the step function is never exercised'
+    ).toBe(true)
+    expect(
+      rows.filter((row) => row.seamsAbove === 0).length,
+      'some block must sit ABOVE the first seam, or "moves nothing above it" is never exercised'
+    ).toBeGreaterThan(0)
   } finally {
     await rm(fixtureDir, { recursive: true, force: true })
     await restoreRecents()

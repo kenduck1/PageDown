@@ -18,7 +18,7 @@ function makeScrollRef(initialScrollTop = 0): { current: HTMLDivElement } {
   return { current: { scrollTop: initialScrollTop } as HTMLDivElement }
 }
 
-const CONTENT_HEIGHT_PX = 864 // matches page-nav.test.ts's own fixture value
+const PAGE_PITCH_PX = 864 // matches page-nav.test.ts's own fixture value
 const FOLLOW_INTERVAL_MS = 500
 const IN_FLIGHT_TIMEOUT_MS = 3000
 
@@ -30,7 +30,7 @@ describe('useSplitFollowScroll', () => {
       useSplitFollowScroll({
         enabled: false,
         scrollElementRef,
-        contentHeightPx: CONTENT_HEIGHT_PX,
+        pagePitchPx: PAGE_PITCH_PX,
         scale: 1,
         pageCount: 20,
         onNavigate
@@ -53,7 +53,7 @@ describe('useSplitFollowScroll', () => {
       useSplitFollowScroll({
         enabled: true,
         scrollElementRef,
-        contentHeightPx: CONTENT_HEIGHT_PX,
+        pagePitchPx: PAGE_PITCH_PX,
         scale: 1,
         pageCount: 20,
         onNavigate
@@ -70,14 +70,14 @@ describe('useSplitFollowScroll', () => {
       useSplitFollowScroll({
         enabled: true,
         scrollElementRef,
-        contentHeightPx: CONTENT_HEIGHT_PX,
+        pagePitchPx: PAGE_PITCH_PX,
         scale: 1,
         pageCount: 20,
         onNavigate
       })
     )
     // Scroll past two content-heights -- page 3.
-    scrollElementRef.current.scrollTop = CONTENT_HEIGHT_PX * 2 + 10
+    scrollElementRef.current.scrollTop = PAGE_PITCH_PX * 2 + 10
     vi.advanceTimersByTime(FOLLOW_INTERVAL_MS)
     expect(onNavigate).toHaveBeenCalledTimes(1)
     expect(onNavigate).toHaveBeenCalledWith(3)
@@ -90,13 +90,13 @@ describe('useSplitFollowScroll', () => {
       useSplitFollowScroll({
         enabled: true,
         scrollElementRef,
-        contentHeightPx: CONTENT_HEIGHT_PX,
+        pagePitchPx: PAGE_PITCH_PX,
         scale: 1,
         pageCount: 20,
         onNavigate
       })
     )
-    scrollElementRef.current.scrollTop = CONTENT_HEIGHT_PX * 2
+    scrollElementRef.current.scrollTop = PAGE_PITCH_PX * 2
     vi.advanceTimersByTime(FOLLOW_INTERVAL_MS)
     expect(onNavigate).toHaveBeenCalledTimes(1)
     // Simulate the confirmation that would normally arrive via
@@ -125,24 +125,24 @@ describe('useSplitFollowScroll', () => {
       useSplitFollowScroll({
         enabled: true,
         scrollElementRef,
-        contentHeightPx: CONTENT_HEIGHT_PX,
+        pagePitchPx: PAGE_PITCH_PX,
         scale: 1,
         pageCount: 20,
         onNavigate
       })
     )
-    scrollElementRef.current.scrollTop = CONTENT_HEIGHT_PX * 1 // page 2
+    scrollElementRef.current.scrollTop = PAGE_PITCH_PX * 1 // page 2
     vi.advanceTimersByTime(FOLLOW_INTERVAL_MS)
     expect(onNavigate).toHaveBeenCalledTimes(1)
     expect(onNavigate).toHaveBeenLastCalledWith(2)
 
     // Keep scrolling further WITHOUT ever confirming settlement -- three
     // more ticks, three more distinct positions.
-    scrollElementRef.current.scrollTop = CONTENT_HEIGHT_PX * 2
+    scrollElementRef.current.scrollTop = PAGE_PITCH_PX * 2
     vi.advanceTimersByTime(FOLLOW_INTERVAL_MS)
-    scrollElementRef.current.scrollTop = CONTENT_HEIGHT_PX * 3
+    scrollElementRef.current.scrollTop = PAGE_PITCH_PX * 3
     vi.advanceTimersByTime(FOLLOW_INTERVAL_MS)
-    scrollElementRef.current.scrollTop = CONTENT_HEIGHT_PX * 4
+    scrollElementRef.current.scrollTop = PAGE_PITCH_PX * 4
     vi.advanceTimersByTime(FOLLOW_INTERVAL_MS)
 
     // Still just the one call from before -- every later tick was skipped
@@ -157,18 +157,18 @@ describe('useSplitFollowScroll', () => {
       useSplitFollowScroll({
         enabled: true,
         scrollElementRef,
-        contentHeightPx: CONTENT_HEIGHT_PX,
+        pagePitchPx: PAGE_PITCH_PX,
         scale: 1,
         pageCount: 20,
         onNavigate
       })
     )
-    scrollElementRef.current.scrollTop = CONTENT_HEIGHT_PX * 1
+    scrollElementRef.current.scrollTop = PAGE_PITCH_PX * 1
     vi.advanceTimersByTime(FOLLOW_INTERVAL_MS)
     expect(onNavigate).toHaveBeenCalledTimes(1)
 
     result.current.notifySettled()
-    scrollElementRef.current.scrollTop = CONTENT_HEIGHT_PX * 5
+    scrollElementRef.current.scrollTop = PAGE_PITCH_PX * 5
     vi.advanceTimersByTime(FOLLOW_INTERVAL_MS)
     expect(onNavigate).toHaveBeenCalledTimes(2)
     expect(onNavigate).toHaveBeenLastCalledWith(6)
@@ -181,13 +181,13 @@ describe('useSplitFollowScroll', () => {
       useSplitFollowScroll({
         enabled: true,
         scrollElementRef,
-        contentHeightPx: CONTENT_HEIGHT_PX,
+        pagePitchPx: PAGE_PITCH_PX,
         scale: 1,
         pageCount: 20,
         onNavigate
       })
     )
-    scrollElementRef.current.scrollTop = CONTENT_HEIGHT_PX * 1
+    scrollElementRef.current.scrollTop = PAGE_PITCH_PX * 1
     vi.advanceTimersByTime(FOLLOW_INTERVAL_MS)
     expect(onNavigate).toHaveBeenCalledTimes(1)
 
@@ -199,21 +199,21 @@ describe('useSplitFollowScroll', () => {
     // the exact same virtual millisecond (both are scheduled from this
     // hook, and that ordering is an implementation detail of neither this
     // hook nor this test).
-    scrollElementRef.current.scrollTop = CONTENT_HEIGHT_PX * 8
+    scrollElementRef.current.scrollTop = PAGE_PITCH_PX * 8
     vi.advanceTimersByTime(IN_FLIGHT_TIMEOUT_MS + FOLLOW_INTERVAL_MS)
     expect(onNavigate).toHaveBeenCalledTimes(2)
     expect(onNavigate).toHaveBeenLastCalledWith(9)
   })
 
   it('ignores pageCount === null and pageCount <= 0 -- nothing to follow to yet', () => {
-    const scrollElementRef = makeScrollRef(CONTENT_HEIGHT_PX * 3)
+    const scrollElementRef = makeScrollRef(PAGE_PITCH_PX * 3)
     const onNavigate = vi.fn()
     const { rerender } = renderHook(
       ({ pageCount }: { pageCount: number | null }) =>
         useSplitFollowScroll({
           enabled: true,
           scrollElementRef,
-          contentHeightPx: CONTENT_HEIGHT_PX,
+          pagePitchPx: PAGE_PITCH_PX,
           scale: 1,
           pageCount,
           onNavigate
@@ -231,7 +231,7 @@ describe('useSplitFollowScroll', () => {
   // --- fit-to-width scale correction -------------------------------------
   // Split mode's left pane now carries a CSS-`zoom`ed wrapper (EditorScreen's
   // computeFitScale), so `scrollTop` is measured in a SCALED coordinate space
-  // while `contentHeightPx` is a document-space length. These four tests pin
+  // while `pagePitchPx` is a document-space length. These four tests pin
   // the conversion between them -- see the hook's own `scale` doc comment for
   // the real-browser measurement the arithmetic is derived from.
 
@@ -249,13 +249,13 @@ describe('useSplitFollowScroll', () => {
       useSplitFollowScroll({
         enabled: true,
         scrollElementRef,
-        contentHeightPx: CONTENT_HEIGHT_PX,
+        pagePitchPx: PAGE_PITCH_PX,
         scale,
         pageCount: 20,
         onNavigate
       })
     )
-    scrollElementRef.current.scrollTop = CONTENT_HEIGHT_PX * 2 * scale + 10
+    scrollElementRef.current.scrollTop = PAGE_PITCH_PX * 2 * scale + 10
     vi.advanceTimersByTime(FOLLOW_INTERVAL_MS)
     expect(onNavigate).toHaveBeenCalledTimes(1)
     expect(onNavigate).toHaveBeenCalledWith(3)
@@ -270,13 +270,13 @@ describe('useSplitFollowScroll', () => {
     // user never scrolled to, undoing whatever navigation just landed -- the
     // same class of regression the seeding logic itself exists to prevent.
     const scale = 0.7
-    const scrollElementRef = makeScrollRef(CONTENT_HEIGHT_PX * 2 * scale + 10)
+    const scrollElementRef = makeScrollRef(PAGE_PITCH_PX * 2 * scale + 10)
     const onNavigate = vi.fn()
     renderHook(() =>
       useSplitFollowScroll({
         enabled: true,
         scrollElementRef,
-        contentHeightPx: CONTENT_HEIGHT_PX,
+        pagePitchPx: PAGE_PITCH_PX,
         scale,
         pageCount: 20,
         onNavigate
@@ -300,13 +300,13 @@ describe('useSplitFollowScroll', () => {
         useSplitFollowScroll({
           enabled: true,
           scrollElementRef,
-          contentHeightPx: CONTENT_HEIGHT_PX,
+          pagePitchPx: PAGE_PITCH_PX,
           scale,
           pageCount: 20,
           onNavigate
         })
       )
-      scrollElementRef.current.scrollTop = CONTENT_HEIGHT_PX * 2 + 10
+      scrollElementRef.current.scrollTop = PAGE_PITCH_PX * 2 + 10
       vi.advanceTimersByTime(FOLLOW_INTERVAL_MS)
       expect(onNavigate, `scale ${String(scale)}`).toHaveBeenCalledWith(3)
       unmount()
@@ -325,7 +325,7 @@ describe('useSplitFollowScroll', () => {
         useSplitFollowScroll({
           enabled: true,
           scrollElementRef,
-          contentHeightPx: CONTENT_HEIGHT_PX,
+          pagePitchPx: PAGE_PITCH_PX,
           scale,
           pageCount: 20,
           onNavigate
@@ -333,7 +333,7 @@ describe('useSplitFollowScroll', () => {
       { initialProps: { scale: 1 } }
     )
     rerender({ scale: 0.5 })
-    scrollElementRef.current.scrollTop = CONTENT_HEIGHT_PX * 3 * 0.5 + 10
+    scrollElementRef.current.scrollTop = PAGE_PITCH_PX * 3 * 0.5 + 10
     vi.advanceTimersByTime(FOLLOW_INTERVAL_MS)
     expect(onNavigate).toHaveBeenCalledTimes(1)
     expect(onNavigate).toHaveBeenCalledWith(4)
@@ -346,14 +346,14 @@ describe('useSplitFollowScroll', () => {
       useSplitFollowScroll({
         enabled: true,
         scrollElementRef,
-        contentHeightPx: CONTENT_HEIGHT_PX,
+        pagePitchPx: PAGE_PITCH_PX,
         scale: 1,
         pageCount: 20,
         onNavigate
       })
     )
     unmount()
-    scrollElementRef.current.scrollTop = CONTENT_HEIGHT_PX * 4
+    scrollElementRef.current.scrollTop = PAGE_PITCH_PX * 4
     vi.advanceTimersByTime(FOLLOW_INTERVAL_MS * 5)
     expect(onNavigate).not.toHaveBeenCalled()
   })
