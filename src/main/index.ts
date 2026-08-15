@@ -276,7 +276,7 @@ app.on('open-file', (event, filePath) => {
 // launch's argv and takes the actual action.
 //
 // Scoped by Electron to the app's own userData path (confirmed against
-// Electron's documented behavior, not assumed) -- phase0/phase1 gate specs,
+// Electron's documented behavior, not assumed) -- tests/gates/phase1 gate specs,
 // which each launch via `launchIsolatedApp`'s own fresh `--user-data-dir`
 // per test (CLAUDE.md's own documented reason: never pollute a real
 // developer's recent-files.json), therefore never collide with each other
@@ -342,10 +342,10 @@ app.on('second-instance', (_event, argv) => {
 // build an edited markdown string and run it through `markdownToHtml`
 // (itself only reachable from a plain Node context, not from inside
 // `app.evaluate()`'s bare V8 context) before phase 2 can run. See
-// phase0/gate7-incremental-relayout.spec.ts.
+// tests/gates/gate7-incremental-relayout.spec.ts.
 //
 // Task 9 adds `exportToPdf` for the same reason again: its own consumer
-// (phase0/gate4-export.spec.ts) needs to call `harness.view.webContents
+// (tests/gates/gate4-export.spec.ts) needs to call `harness.view.webContents
 // .printToPDF(...)` from inside `app.evaluate()`, which requires reaching
 // `exportToPdf` itself the same bridged way every other main-process-only
 // function on this object already is. `sendGate4HeaderFooterProbe` is
@@ -353,11 +353,11 @@ app.on('second-instance', (_event, argv) => {
 // see pagination-window.ts's own comment on why this probe exists at all.
 //
 // Task 4 (Home Screen) adds `getThumbnail` for the same reason again:
-// phase0/gate8-thumbnail-generation.spec.ts needs to call it from inside
+// tests/gates/gate8-thumbnail-generation.spec.ts needs to call it from inside
 // `app.evaluate()`'s bare V8 context, same as every other entry here.
 //
 // Gated behind `is.dev` (App identity/packaging cleanup pass): this object
-// exists purely for phase0/phase1 gate specs, which always launch the
+// exists purely for tests/gates/phase1 gate specs, which always launch the
 // unpackaged `out/` build directly (`_electron.launch(['out/main/index.js'])`,
 // never a real electron-builder package) — so `is.dev` (`!app.isPackaged`,
 // per @electron-toolkit/utils) is `true` for every one of them, and this
@@ -2064,7 +2064,7 @@ app.whenReady().then(async () => {
   // Real integration into app UI is out of scope for Task 3.
   //
   // Gated behind `is.dev` for the same reason as the __pagedownPhase0
-  // bridge above: every phase0/phase1 gate spec launches the unpackaged
+  // bridge above: every tests/gates/phase1 gate spec launches the unpackaged
   // `out/` build, where `is.dev` is `true` (`!app.isPackaged`), so no gate's
   // behavior changes. A real packaged install (`is.dev === false`) no
   // longer spins up this extra, permanently-off-screen sandboxed renderer

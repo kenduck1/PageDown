@@ -31,7 +31,7 @@ import type { PaginationHarness } from '../main/pagination-window'
 //   carried a note about stylesheets to point at in the first place.)
 // - `generateTaggedPDF: true` — Electron/Chromium's experimental tagged-PDF
 //   option (see printToPDF's docs). Phase 0 Gate 4
-//   (phase0/gate4-export.spec.ts) exists specifically to try this for real
+//   (tests/gates/gate4-export.spec.ts) exists specifically to try this for real
 //   and record what the resulting tag tree actually contains, rather than
 //   assume either "it works" or "PDFs from this pipeline are unavoidably
 //   untagged" — see this project's findings doc for the measured result.

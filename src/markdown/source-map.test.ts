@@ -155,7 +155,7 @@ describe('annotateSourceOffsets', () => {
 
     it('pins both code units of a multi-code-unit decode (surrogate pair) directly, independent of any corpus fixture', () => {
       // Review found the corpus-level coverage of this case (the one
-      // `&Afr;` sentence in phase0/corpus/entities-and-escapes.md) had no
+      // `&Afr;` sentence in tests/gates/corpus/entities-and-escapes.md) had no
       // pin keeping it there: editing that fixture (e.g. swapping `&Afr;`
       // for a single-code-unit entity like `&copy;`) would leave the
       // Playwright gate's totalRuns/totalMatches counts unchanged and

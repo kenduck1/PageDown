@@ -77,7 +77,7 @@ import type { WindowUiState } from '../menu/window-state'
 // Undo/Redo/Cut/Copy/Paste keep their roles and their standard accelerators,
 // and that IS measured rather than reasoned about. Electron already installs
 // a default menu carrying those same role accelerators when an app sets none
-// -- the state this app shipped in until now -- and phase0/gate20 has been
+// -- the state this app shipped in until now -- and tests/gates/gate20 has been
 // passing real Mod-Z/Mod-Shift-Z ProseMirror undo/redo against it the whole
 // time, and still passes with this menu installed. So a role accelerator on
 // an editing command demonstrably does not rob the page of the keystroke

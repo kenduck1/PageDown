@@ -183,7 +183,7 @@ pnpm typecheck      # main process + renderer (two separate tsconfigs)
 pnpm lint
 pnpm format
 pnpm test:unit      # Vitest
-pnpm test:phase0    # Playwright, against the real built app
+pnpm test:gates    # Playwright, against the real built app
 ```
 
 `docs/screenshots/` is regenerated from the real app with:

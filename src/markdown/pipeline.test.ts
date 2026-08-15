@@ -93,7 +93,7 @@ describe('markdownToHtml', () => {
   })
 
   it('preserves raw-HTML content from the raw-html.md corpus fixture instead of dropping it', () => {
-    const source = readFileSync(join(__dirname, '../../phase0/corpus/raw-html.md'), 'utf-8')
+    const source = readFileSync(join(__dirname, '../../tests/gates/corpus/raw-html.md'), 'utf-8')
     const { html } = markdownToHtml(source)
 
     // Inline and block raw HTML survive (content, not necessarily attributes).
@@ -109,7 +109,7 @@ describe('markdownToHtml', () => {
   })
 
   it('leaves annotateSourceOffsets behavior on a plain corpus fixture unaffected', () => {
-    const source = readFileSync(join(__dirname, '../../phase0/corpus/short.md'), 'utf-8')
+    const source = readFileSync(join(__dirname, '../../tests/gates/corpus/short.md'), 'utf-8')
     const { sourceMap } = markdownToHtml(source)
 
     // short.md has no raw HTML or pagebreak content at all, so this is a
@@ -132,7 +132,7 @@ describe('markdownToHtml', () => {
   })
 
   it("produces a well-formed sourceMap for a document containing raw HTML and a pagebreak marker (the spec's own open technical question)", () => {
-    const source = readFileSync(join(__dirname, '../../phase0/corpus/raw-html.md'), 'utf-8')
+    const source = readFileSync(join(__dirname, '../../tests/gates/corpus/raw-html.md'), 'utf-8')
     const { sourceMap } = markdownToHtml(source)
 
     expect(sourceMap).toBeDefined()

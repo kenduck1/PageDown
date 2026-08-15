@@ -220,7 +220,7 @@ registerBreakHandlers()
 //          is inserted as raw CSS and never parsed through atpage.js, so
 //          those defaults stood. This context's content box has therefore
 //          been 624 x 864 px all along -- confirmed independently by
-//          phase0/gate3-mermaid.spec.ts's untouched `expect(sequence.width)
+//          tests/gates/gate3-mermaid.spec.ts's untouched `expect(sequence.width)
 //          .toBe(624)` assertion, which passes both before and after this
 //          rule existed. This rule restates that same geometry exactly, so
 //          it is geometrically a no-op today.
@@ -566,7 +566,7 @@ interface OutgoingSuccess {
   // for exactly the same reason `diagramBoxes` does, one layer down: a
   // local image reference that silently 404s produces an `<img>` element
   // that is present, `complete === true`, and `naturalWidth === 0` -- the
-  // classic "failed to load" signature (phase0/gate4-export.spec.ts already
+  // classic "failed to load" signature (tests/gates/gate4-export.spec.ts already
   // asserts precisely that signature for the corpus's unserved images).
   // Nothing about "pagination finished without throwing" distinguishes a
   // real, decoded image from that failure, so a non-zero `naturalWidth`
@@ -620,7 +620,7 @@ type OutgoingMessage = OutgoingSuccess | OutgoingError
 // this would conflate two different state machines for no benefit.
 //
 // Deferred cleanup, not done as part of this Phase 0 spike: like the rest
-// of the __pagedownPhase0 bridge (src/main/index.ts), these gate7-phase1/
+// of the __pagedownPhase0 bridge (src/main/index.ts), these gate7-tests/spike/
 // gate7-phase2 handlers ship unconditionally in this render bundle rather
 // than being gated behind a dev/test-only flag — consistent with that
 // existing precedent, but worth closing before Phase 0's scaffolding is
@@ -734,7 +734,7 @@ type Gate7Result = Gate7Phase1Success | Gate7Phase2Success | Gate7Error
 // buildDocumentStylesheet(geometry)'s result); what remains unique is that
 // the stylesheet is CALLER-SUPPLIED per request and carries margin-box
 // rules — so
-// `phase0/gate4-export.spec.ts` has actual generated running-header/footer
+// `tests/gates/gate4-export.spec.ts` has actual generated running-header/footer
 // content to export and inspect the tagging of. Reuses the SAME
 // `activePreviewer`/`currentRequestId` module state as the 'render' handler
 // above (Polisher-cleanup-before-next-run and stale-result-discarding both
@@ -757,7 +757,7 @@ type Gate7Result = Gate7Phase1Success | Gate7Phase2Success | Gate7Error
 // running-header/footer-content-free. This probe is therefore no longer the
 // ONLY source of margin-box content in this harness, but it remains the
 // only one whose stylesheet is CALLER-SUPPLIED, which is what lets
-// `phase0/gate4-export.spec.ts` pin an exact, hand-authored
+// `tests/gates/gate4-export.spec.ts` pin an exact, hand-authored
 // `@top-center`/`@bottom-center` shape rather than whatever a fixture's own
 // `DocumentStyle` happens to produce.
 interface Gate4ProbeMessage {
@@ -928,7 +928,7 @@ window.__pagedownPageNav = {
 // `getComputedStyle().width` still report the document-space value. Several
 // gates probe this DOM through `executeJavaScript` asking document-space
 // questions ("is an A4 page 794px wide?"); they divide by the live scale via
-// phase0/gate-geometry.ts's PREVIEW_DOCUMENT_SCALE_JS. A new probe that
+// tests/gates/gate-geometry.ts's PREVIEW_DOCUMENT_SCALE_JS. A new probe that
 // forgets to will silently measure the divider position instead of the
 // document.
 let previewFitStyle: HTMLStyleElement | undefined
@@ -1279,7 +1279,7 @@ function ensureMermaidStylesInjected(): void {
 // that mode's own disclosed ceiling already lives on.
 //
 // MEASURED before building it, rather than assumed: two byte-identical
-// sendDocument() calls on ONE harness against phase0/corpus/mermaid-
+// sendDocument() calls on ONE harness against tests/gates/corpus/mermaid-
 // diagrams.md logged 970 CSP style-src violations EACH. That count is a
 // direct behavioural fingerprint of Mermaid's own internal d3 painting (see
 // renderMermaidDiagrams's DOMParser comment for why those violations exist
@@ -1569,7 +1569,7 @@ function ensureMermaidLabelFontRegistered(): void {
 //
 // What this used to do: set width/height from the viewBox and stop, leaving a
 // diagram taller than the page to Paged.js. MEASURED, in the real app, before
-// changing anything — phase0/corpus/mermaid-diagrams.md's 20-stage chain
+// changing anything — tests/gates/corpus/mermaid-diagrams.md's 20-stage chain
 // (144.05 x 1956px natural, against a 624 x 864px content box) split into
 // FOUR page-clones, and a per-clone structural census of what survived reads:
 //
@@ -2418,7 +2418,7 @@ window.addEventListener('message', async (event: MessageEvent<IncomingMessage>) 
     // whereas a Range-created fragment is an ordinary, non-inert
     // DocumentFragment. That inertness silently broke Gate 5's own
     // pre-existing "CSP blocks inline script execution" regression test
-    // (phase0/gate5-sandbox.spec.ts) — caught by actually re-running the
+    // (tests/gates/gate5-sandbox.spec.ts) — caught by actually re-running the
     // full Phase 0 suite after this task's changes, not assumed safe: the
     // injected `<img onerror=...>` payload still never executed (CSP's own
     // protection was never actually at risk), but the browser stopped even
@@ -2700,7 +2700,7 @@ window.addEventListener('message', async (event: MessageEvent<IncomingMessage>) 
 // gate7Previewer instance, so that specific failure mode was never
 // deliberately provoked and observed. See
 // docs/superpowers/plans/2026-07-25-phase0-findings.md's Gate 7 section for
-// the full writeup and phase0/gate7-incremental-relayout.spec.ts for the
+// the full writeup and tests/gates/gate7-incremental-relayout.spec.ts for the
 // two-phase experiment that exercises this against very-long.md.
 //
 // Phase 1 (below): full paginate of the original document, capturing the
@@ -2722,7 +2722,7 @@ let gate7Root: HTMLElement | undefined
 // Walks `node` up via `.parentNode` until it reaches a direct child of
 // `root` (chunker.source is a flat DocumentFragment of top-level
 // h2/p/p/h2/p/p/... siblings for this corpus — see
-// phase0/corpus/generate-long.ts — so this is at most a couple of hops for
+// tests/gates/corpus/generate-long.ts — so this is at most a couple of hops for
 // a breakToken whose node is a paragraph's text node).
 function findTopLevelAncestor(node: Node, root: Node): Node {
   let current = node

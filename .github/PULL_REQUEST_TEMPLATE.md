@@ -16,7 +16,7 @@ asserting it passed.
   pnpm typecheck
   pnpm lint
   pnpm test:unit
-  pnpm test:phase0   (if this touches rendering, pagination, export or window behaviour)
+  pnpm test:gates   (if this touches rendering, pagination, export or window behaviour)
 -->
 
 ## Checklist

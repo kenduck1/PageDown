@@ -143,7 +143,7 @@ function RecentRow({
       preference: the filename substring in this button's own name made it
       match the exact same bare `new RegExp(filename)` pattern nine
       pre-existing gate specs already use to click a recent-file row's
-      MAIN open button (phase0/gate11/14/16/17/18/19/20/22/23), producing a
+      MAIN open button (tests/gates/gate11/14/16/17/18/19/20/22/23), producing a
       genuine Playwright strict-mode ambiguity (two buttons, one name
       match) -- caught by gate14 failing for real, not a flake. A screen
       reader traversing this row already announces the filename via the

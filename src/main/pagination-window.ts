@@ -457,7 +457,7 @@ export interface PaginationHarness {
   // to derive a DocumentStyle from either, so every real caller computes it
   // via `resolveDocumentStyle` from the same PageConfig it already read
   // `geometry` from, or passes `DEFAULT_DOCUMENT_STYLE` where there is
-  // deliberately no document (the phase0/phase1 gate specs).
+  // deliberately no document (the tests/gates/phase1 gate specs).
   sendDocument(
     html: string,
     geometry: PageGeometry,
@@ -467,7 +467,7 @@ export interface PaginationHarness {
 }
 
 // The general-purpose default every existing caller (thumbnail-generator.ts,
-// every phase0/phase1 gate) implicitly relied on before this became a real
+// every tests/gates/phase1 gate) implicitly relied on before this became a real
 // parameter -- unchanged from the literal `10_000` this replaces.
 const DEFAULT_SEND_DOCUMENT_TIMEOUT_MS = 10_000
 
@@ -749,7 +749,7 @@ export async function sendGate7Phase2(
 // did not — margin boxes still need `@top-center`/`@bottom-center` rules
 // nobody supplies.) This sends real `@page` CSS containing those margin-box
 // rules alongside the body HTML so the render context actually generates
-// that content once, for phase0/gate4-export.spec.ts to export and inspect.
+// that content once, for tests/gates/gate4-export.spec.ts to export and inspect.
 export interface Gate4ProbeResult {
   pageCount: number
 }

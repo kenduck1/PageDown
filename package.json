@@ -38,11 +38,11 @@
     "build:mac": "electron-vite build && pnpm run build:pagination-render && electron-builder --mac",
     "build:linux": "electron-vite build && pnpm run build:pagination-render && electron-builder --linux",
     "test:unit": "vitest run",
-    "test:phase1:vitest": "vitest run --config vitest.phase1.config.ts",
-    "pretest:phase1:playwright": "pnpm run build",
-    "test:phase1:playwright": "playwright test --config=playwright.phase1.config.ts",
-    "pretest:phase0": "pnpm run build",
-    "test:phase0": "playwright test"
+    "test:spike:vitest": "vitest run --config vitest.spike.config.ts",
+    "pretest:spike:playwright": "pnpm run build",
+    "test:spike:playwright": "playwright test --config=playwright.spike.config.ts",
+    "pretest:gates": "pnpm run build",
+    "test:gates": "playwright test"
   },
   "dependencies": {
     "@electron-toolkit/preload": "^3.0.2",

@@ -2,7 +2,7 @@
 // (src/renderer/src/milkdown/image-security.ts drives it). Pure, and separated
 // from the DOM wiring on purpose: jsdom has no layout engine and no real
 // pointer events, so a drag can only be proven end to end in a gate
-// (phase0/gate41-image-resize.spec.ts) -- but the geometry itself is ordinary
+// (tests/gates/gate41-image-resize.spec.ts) -- but the geometry itself is ordinary
 // arithmetic that deserves real unit tests rather than a 60-second Electron
 // launch per case.
 //

@@ -35,7 +35,7 @@ import { linkReferenceSchema } from './nodes/reference'
 // node_modules/.pnpm used for this sub-project's other before/after numbers,
 // this moves structural round-trip fidelity from 344/400 (86.0%) to 363/400
 // (90.8%) with byte-exact fidelity unchanged-to-better (118 -> 119), and
-// moves nothing at all across phase0/corpus + this app's templates (13/21
+// moves nothing at all across tests/gates/corpus + this app's templates (13/21
 // byte, 20/21 structural either way). There IS a real trade in the other
 // direction and it is worth naming: for a link whose text is EXACTLY
 // coextensive with an emphasis (`**[bold link](url)**`), the two orderings

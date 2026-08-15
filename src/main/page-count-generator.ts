@@ -81,7 +81,7 @@ let harnessWindow: BaseWindow | null = null
 // to blow past `sendDocument`'s own 10s poll deadline for any real,
 // longer document. This was never caught by any existing gate because every
 // existing off-canvas harness consumer either (a) only ever tests trivial,
-// single-paragraph fixture content (phase0/gate8-thumbnail-generation.spec.ts),
+// single-paragraph fixture content (tests/gates/gate8-thumbnail-generation.spec.ts),
 // or (b) dispatches a small, fixed number of calls in a tight burst right
 // after harness creation (Home screen's template thumbnails) -- neither
 // pattern gives the throttle enough successive occluded frames to ramp up.

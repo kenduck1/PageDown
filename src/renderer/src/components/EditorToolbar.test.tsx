@@ -138,7 +138,7 @@ describe('EditorToolbar', () => {
   // jsdom has no layout engine -- every width here is 0 -- so it structurally
   // cannot verify either of the two properties that actually matter: that the
   // formatting controls are REACHABLE, and that the toolbar is ONE ROW.
-  // phase0/gate33-toolbar-reachability.spec.ts proves both in the real app.
+  // tests/gates/gate33-toolbar-reachability.spec.ts proves both in the real app.
   // What this test can do is pin the two declarations the single-row layout
   // rests on, both of which read as incidental styling and are not.
   //
@@ -527,7 +527,7 @@ describe('EditorToolbar', () => {
 
   // THE SINGLE-ROW INVARIANT, expressed as the only thing jsdom can actually
   // check about it. jsdom has no layout engine (every width is 0), so the real
-  // "is this one row at 1000px" proof lives in phase0/gate33 -- but the CAUSE
+  // "is this one row at 1000px" proof lives in tests/gates/gate33 -- but the CAUSE
   // of the two-row toolbar is checkable here, and it is the one that would
   // come back by accident: a control being re-added to the right-hand cluster.
   //

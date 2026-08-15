@@ -1,4 +1,4 @@
-# The phase0 Playwright gates, on demand only.
+# The Playwright gates in tests/gates, on demand only.
 #
 # WHY THIS IS NOT PART OF CI
 #
@@ -26,7 +26,7 @@
 # That distinction has correctly resolved this question several times; do not
 # collapse it into "the gates are flaky, ignore them".
 
-name: Gates (phase0)
+name: Gates (real app)
 
 on:
   workflow_dispatch:
@@ -41,7 +41,7 @@ permissions:
 
 jobs:
   gates:
-    name: phase0 gates
+    name: real-app gates
     # macOS only. This is where the gates are developed and where their
     # measured baselines were taken; a Linux runner would additionally need a
     # virtual display, and would compare pixel measurements against numbers
@@ -60,7 +60,7 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
-      # `pretest:phase0` runs `pnpm build` for us, so the gates always drive
+      # `pretest:gates` runs `pnpm build` for us, so the gates always drive
       # a freshly compiled app rather than a stale out/ directory.
       - name: Run gates
         env:
@@ -68,9 +68,9 @@ jobs:
         run: |
           set -euo pipefail
           if [ -n "$FILTER" ]; then
-            pnpm test:phase0 -- -g "$FILTER"
+            pnpm test:gates -- -g "$FILTER"
           else
-            pnpm test:phase0
+            pnpm test:gates
           fi
 
       # Traces and screenshots from a failed run are the only way to tell a

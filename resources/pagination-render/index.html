@@ -37,7 +37,7 @@
     script-src deliberately still has NO 'unsafe-inline'/nonce -- that's the
     actual XSS-relevant vector (arbitrary script execution), and Gate 5's
     "CSP blocks inline script execution" regression test
-    (phase0/gate5-sandbox.spec.ts) still passes unmodified. connect-src
+    (tests/gates/gate5-sandbox.spec.ts) still passes unmodified. connect-src
     'none' is also unchanged, so even an inline style that somehow did get
     through has no scripted network path out for exfiltration.
 

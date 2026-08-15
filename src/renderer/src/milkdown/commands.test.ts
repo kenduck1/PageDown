@@ -47,7 +47,7 @@ afterEach(() => {
 // documents for input rules. So: these tests verify the COMMAND half
 // (commands.call(undoCommand.key)/redoCommand.key) actually undoes/redoes a
 // real edit when invoked directly -- proving the keymap's own command
-// callbacks are correct -- and phase0/gate-format-mode-shortcuts.spec.ts (a
+// callbacks are correct -- and tests/gates/gate-format-mode-shortcuts.spec.ts (a
 // real Playwright gate against the actual built app, real Chromium, not
 // jsdom) covers the keyboard-dispatch half this file structurally cannot.
 describe('historyKeymap command wiring', () => {

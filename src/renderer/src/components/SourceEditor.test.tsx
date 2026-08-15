@@ -83,7 +83,7 @@ describe('SourceEditor', () => {
 
   describe('syntax-highlight mirror', () => {
     // jsdom has no layout engine, so nothing here can prove ALIGNMENT -- that
-    // is phase0/gate38's job, measuring a real painted token's box against the
+    // is tests/gates/gate38's job, measuring a real painted token's box against the
     // real character under it in Chromium. What jsdom can prove is the
     // structural contract the alignment rests on, and these are those parts.
     it('renders a mirror painting exactly the textarea value, hidden from assistive tech', () => {

@@ -46,8 +46,8 @@ src/typography/    Shared page geometry, document styling, the stylesheet
 src/pagination/    Pagination helpers shared with the sandboxed context
 src/export/        PDF / HTML / DOCX export
 resources/         The sandboxed pagination render context (built separately)
-phase0/            Playwright gates against the real built app
-phase1/            Frozen Milkdown feasibility-spike gates
+tests/gates/       Playwright gates against the real built app
+tests/spike/       Frozen Milkdown feasibility-spike gates
 ```
 
 ## Execution contexts
@@ -297,7 +297,7 @@ The single most important invariant in the codebase.
 
 `src/typography/document-typography.css` is shared verbatim by **both**
 rendering surfaces: the Milkdown mount and the sandboxed context's `<body>`.
-`phase0/gate10-editor-layout-parity.spec.ts` measures per-block position
+`tests/gates/gate10-editor-layout-parity.spec.ts` measures per-block position
 deltas between them and asserts **0.000px** drift.
 
 Three rules follow:
@@ -375,26 +375,26 @@ Use `?raw` with an ambient type declaration.
 
 Three suites with different purposes. Do not blur them.
 
-| Command              | What it is                                                           |
-| -------------------- | -------------------------------------------------------------------- |
-| `pnpm test:unit`     | Vitest + jsdom. Fast unit and component tests.                       |
-| `pnpm test:phase0`   | Playwright driving the **real built app**. Engine-correctness gates. |
-| `pnpm test:phase1:*` | Frozen Milkdown feasibility-spike gates.                             |
+| Command             | What it is                                                           |
+| ------------------- | -------------------------------------------------------------------- |
+| `pnpm test:unit`    | Vitest + jsdom. Fast unit and component tests.                       |
+| `pnpm test:gates`   | Playwright driving the **real built app**. Engine-correctness gates. |
+| `pnpm test:spike:*` | Frozen Milkdown feasibility-spike gates.                             |
 
-**`phase0` gates exist for things no component test can reach**: real
+**`tests/gates` exist for things no component test can reach**: real
 pagination timing, the sandboxed render context, real PDF output, real
 keyboard dispatch through Chromium, and anything requiring a layout engine
 (jsdom has none — it can assert a component received `style={{width: 794}}`,
 never that anything is 794 real pixels wide).
 
 **Every gate that launches the app must go through `launchIsolatedApp`**
-(`phase0/electron-launch.ts`), never a bare `_electron.launch()`. A bare launch
+(`tests/gates/electron-launch.ts`), never a bare `_electron.launch()`. A bare launch
 inherits Electron's default userData path — the same directory a developer's
 real app instance uses — and will read and write your actual recents list and
 thumbnail cache. This is a hard rule because it has already broken a real
 install once.
 
-**Some `phase1` gates fail on purpose.** Their failure _is_ the recorded
+**Some `tests/spike` gates fail on purpose.** Their failure _is_ the recorded
 finding from a feasibility spike that is now frozen. Do not "fix" them by
 loosening assertions.
 

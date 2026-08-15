@@ -14,7 +14,7 @@ import {
 // The real numbers, so these tests fail against the actual geometry rather
 // than a convenient one: at the app's own default 900x670 window with
 // splitRatio 50, the split preview's native WebContentsView occupies
-// x 561-900 (pinned at +/-2px by phase0/gate15-split-mode.spec.ts), and the
+// x 561-900 (pinned at +/-2px by tests/gates/gate15-split-mode.spec.ts), and the
 // editor pane it must never reach into runs x 216-555 (216px sidebar + a 6px
 // divider). SAFE below is the intersection the bubble is confined to.
 const SPLIT_SAFE: Rect = { left: 216, top: 123, right: 561, bottom: 606 }

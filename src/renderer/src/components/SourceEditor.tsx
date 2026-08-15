@@ -57,7 +57,7 @@ export interface SourceEditorHandle {
 // bearing and documented elsewhere in the codebase against THIS element:
 // `value={content}` being a genuinely controlled binding (the mutation-tested
 // F3 finding below); Find & Replace driving the browser's own selection via
-// setSelectionRange on the real DOM node, which phase0/gate17 reads back as
+// setSelectionRange on the real DOM node, which tests/gates/gate17 reads back as
 // selectionStart/selectionEnd; drag-and-drop image insertion at
 // selectionStart; base.css's ::selection rule existing because Chromium mutes
 // an unfocused selection; and gate17/gate21 asserting exact document bytes by
@@ -68,7 +68,7 @@ export interface SourceEditorHandle {
 // literally here. What it gives up in exchange is the alignment guarantee: a
 // real editor component cannot get its own text out of register with its own
 // caret, whereas this can, which is why the metrics live in one shared rule
-// and why phase0/gate38 measures a real painted token's box against the real
+// and why tests/gates/gate38 measures a real painted token's box against the real
 // character under it rather than trusting the CSS.
 //
 // Fully controlled with a direct string binding -- unlike MilkdownEditor,

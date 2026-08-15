@@ -13,7 +13,7 @@ import type { MenuCommand } from '../../../menu/commands'
 // genuinely prove is exactly this: given a delivered command, does the right
 // thing happen. That the MENU delivers those commands correctly (labels,
 // accelerators, enablement) is app-menu-template.test.ts's job, and that a
-// real menu is genuinely installed in a real app is phase0/gate30's.
+// real menu is genuinely installed in a real app is tests/gates/gate30's.
 //
 // Uses the same module-mocked MilkdownEditor as EditorScreen.viewMode.test.tsx,
 // and for the same discriminating reason: the fake has NO unmount side

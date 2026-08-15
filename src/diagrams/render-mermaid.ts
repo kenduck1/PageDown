@@ -84,7 +84,7 @@ let initialized = false
 //     the first renderMermaidToSvg call of a render pass — see that
 //     function for why the registration cannot simply ride along on the
 //     per-document stylesheet Paged.js receives later. Gate 3
-//     (phase0/gate3-mermaid.spec.ts) asserts the loaded-and-applied end
+//     (tests/gates/gate3-mermaid.spec.ts) asserts the loaded-and-applied end
 //     state in the real app rather than trusting either half.
 export async function renderMermaidToSvg(
   diagramSource: string,

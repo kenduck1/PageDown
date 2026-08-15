@@ -57,7 +57,7 @@ import {
 // not merely assumed to be: ProseMirror's `state.selection` is document state,
 // wholly independent of DOM focus, and both composers already ran this exact
 // flow as rows with an `autoFocus` field -- proven end to end in the real app
-// by phase0/gate27-comments.spec.ts, which selects text, focuses the comment
+// by tests/gates/gate27-comments.spec.ts, which selects text, focuses the comment
 // field, types, submits, saves, and reads the marker back off disk. What
 // changes here is only WHERE the field is painted, never how the command is
 // dispatched. See LinkComposer.tsx's own note for the one thing this file must

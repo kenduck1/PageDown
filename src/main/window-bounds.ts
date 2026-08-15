@@ -15,7 +15,7 @@ const WINDOW_STATE_FILENAME = 'window-state.json'
 //
 // Width is a deliberately modest +100px over the old default, not a bigger,
 // more comfortable jump -- verified empirically against
-// phase0/gate28-bubble-menu.spec.ts's and gate29-slash-menu.spec.ts's own
+// tests/gates/gate28-bubble-menu.spec.ts's and gate29-slash-menu.spec.ts's own
 // Split-mode "clamp is binding" assertions, both tuned at the OLD 900px
 // default: the Format-mode editor pane is a FIXED-width page card (see
 // gate16-page-geometry.spec.ts's own finding), so a selection's unclamped

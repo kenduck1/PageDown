@@ -35,7 +35,7 @@ import { isMacPlatform } from '../lib/platform'
 // body below is factored into `openFindFromShortcut` and called from BOTH
 // here and the menu-command handler, rather than the menu handler doing a
 // bare `openFind()` and silently losing the seed-from-selection and focus
-// behaviour. phase0/gate17 passing after this change confirms the flow still
+// behaviour. tests/gates/gate17 passing after this change confirms the flow still
 // works end to end; it deliberately does not discriminate which path ran,
 // because by construction nothing observable depends on that.
 //

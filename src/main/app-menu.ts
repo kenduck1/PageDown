@@ -22,7 +22,7 @@ import type { MenuCommand } from '../menu/commands'
 // established treatment: it is lifecycle wiring around functions that are
 // already tested elsewhere, and its real behaviour (a menu genuinely
 // installed, a title genuinely set) is only observable in a running Electron
-// app -- see phase0/gate30-app-menu.spec.ts.
+// app -- see tests/gates/gate30-app-menu.spec.ts.
 
 interface AppMenuDeps {
   userDataDir: string

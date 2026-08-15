@@ -642,7 +642,7 @@ const MilkdownEditor = forwardRef<MilkdownEditorHandle, MilkdownEditorProps>(
     // Wiring sub-project); for a document with no frontmatter it still
     // resolves to exactly CONTENT_WIDTH_PX (624 = 816 - 96 - 96, Letter with
     // 1in margins), which is what Gate 10
-    // (phase0/gate10-editor-layout-parity.spec.ts) measures against its own
+    // (tests/gates/gate10-editor-layout-parity.spec.ts) measures against its own
     // no-frontmatter fixture. Horizontal ambient padding here would make the
     // actual rendered TEXT narrower than that (padding subtracts from the
     // box max-width constrains), silently reintroducing the width mismatch
