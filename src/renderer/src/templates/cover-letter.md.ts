@@ -1,23 +1,38 @@
-export const COVER_LETTER_TEMPLATE = `Alex Morgan
-[alex.morgan@example.com](mailto:alex.morgan@example.com)
-(555) 234-9876
+// De-personalisation pass -- see resume.md.ts for the placeholder convention
+// (plain title case, never bracketed) and the measurement that ruled brackets
+// out.
+//
+// The sender/recipient blocks are one paragraph each held together by soft
+// line breaks; that structure is unchanged, only the text inside it. The two
+// body paragraphs are now written AS INSTRUCTIONS to the person filling the
+// template in, rather than as a stranger's plausible-sounding accomplishments
+// -- a middle paragraph about a specific dashboard project cannot be
+// de-personalised by swapping the proper nouns out of it, because the whole
+// paragraph is the personal part.
+//
+// The phone number moved from (555) 234-9876 to the 555-01xx block: only
+// 555-0100 through 555-0199 are actually reserved for fictional use, so the
+// old number was a real, assignable one.
+export const COVER_LETTER_TEMPLATE = `Your Name
+[your.name@example.com](mailto:your.name@example.com)
+(555) 012-3456
 
-March 3, 2026
+Month Day, Year
 
-Hiring Team
-Bright Path Analytics
-500 Market Street
-Seattle, WA 98101
+Hiring Manager
+Company Name
+Street Address
+City, State ZIP
 
-Dear Hiring Team,
+Dear Hiring Manager,
 
-I'm writing to apply for the Data Analyst position posted on your careers page. Over the past three years I've built dashboards and reporting pipelines that helped a 40-person operations team cut manual reporting time in half, and I'd welcome the chance to bring that same focus on clarity and automation to Bright Path.
+I'm writing to apply for the Job Title position posted on your careers page. Replace this opening with one or two sentences on why this role and this company in particular — the more specific it is, the less it reads like a form letter.
 
-In my current role I partner directly with finance and operations stakeholders to turn raw data into decisions, not just charts — a skill I understand is central to how your team works. I've attached my résumé for more detail and would be glad to talk further at your convenience.
+Use this paragraph for a single concrete example: the problem you were handed, what you did about it, and how it turned out. One story with a number in it lands better than a list of responsibilities.
 
-Thank you for your time and consideration.
+Thank you for your time and consideration. My résumé is attached, and I would be glad to talk further at your convenience.
 
 Sincerely,
 
-Alex Morgan
+Your Name
 `

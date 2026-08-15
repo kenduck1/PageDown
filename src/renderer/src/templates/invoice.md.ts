@@ -1,10 +1,25 @@
+// De-personalisation pass -- see resume.md.ts for the placeholder convention
+// (plain title case, never bracketed) and the measurement that ruled brackets
+// out. Two invented companies with full street addresses became "Your
+// Business Name" / "Client Company" plus generic address fields.
+//
+// The line items, their rates, and the subtotal/tax/total arithmetic are
+// deliberately left CONCRETE. They identify nobody, and blanking them would
+// cost the template the thing it exists to demonstrate: a Qty/Rate/Amount
+// table whose numbers actually add up to the totals underneath it. The
+// invoice number is reset to INV-0001 (a plausible FIRST invoice) rather than
+// placeholdered, for the same reason.
+//
+// The table's column widths are the exact padding remark-stringify emits, so
+// editing a cell means re-running templates.test.ts's byte-identity block
+// rather than eyeballing the alignment.
 export const INVOICE_TEMPLATE = `# Invoice
 
-**Invoice #:** INV-1042 · **Date:** March 3, 2026 · **Due:** March 17, 2026
+**Invoice #:** INV-0001 · **Date:** Month Day, Year · **Due:** Month Day, Year
 
-**From:** Riverside Design Studio, 221 Elm Street, Suite 4, Austin, TX 78701
+**From:** Your Business Name, Street Address, City, State ZIP
 
-**Bill To:** Northwind Retail Group, 88 Harbor Way, Portland, OR 97201
+**Bill To:** Client Company, Street Address, City, State ZIP
 
 ## Items
 
