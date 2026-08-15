@@ -940,6 +940,39 @@ let previewFitStyle: HTMLStyleElement | undefined
 // `resize` event with no render attached to it.
 let previewFitPageWidthPx = 0
 
+// Whether the current request's layout and measurement passes are still in
+// flight, in which case the `zoom` below is forced to 1 no matter what
+// `previewFitPageWidthPx` says.
+//
+// TWO FLAGS RATHER THAN ONE, and the split is a fix for a measured defect
+// rather than tidiness. "Is this a fitting harness?" and "is it safe to be
+// scaled right now?" used to be the SAME variable: the render handler zeroed
+// `previewFitPageWidthPx` at the top of every request and only restored it from
+// `fitToWidth` on the single success path at the very end. Two consequences,
+// both observed rather than reasoned about:
+//
+//   EVERY EARLY EXIT LOST THE ANSWER. The empty-html short-circuit, the
+//   missing-#content-root throw, the two superseded-request guards and the
+//   whole catch block all return without ever reaching that restore, so the
+//   harness was left believing it had never been asked to fit at all. A
+//   `resize` -- i.e. a divider drag -- arriving before the next SUCCESSFUL
+//   render then recomputed the scale as 1 from that wrong answer, and the
+//   preview snapped to an unscaled page until something else re-rendered it.
+//
+//   THE CHROME RULES WENT WITH IT. On a harness's first request there is no
+//   `previewFitStyle` yet, so zeroing the width makes applyPreviewFitScale take
+//   its stay-out-of-<head> early return and emit nothing at all -- leaving
+//   <body> on the UA's 8px margins for the whole of pagination. Measured
+//   directly by instrumenting this file: mid-render the sandbox reported
+//   `bodyClientWidth: 373` against the 389 the same render settles at, so the
+//   page area reflowed by 16px part-way through its own layout.
+//
+// Splitting them answers `fitToWidth` ONCE, at the top of the request where no
+// exit path can lose it, and reduces the reset to the one thing the measurement
+// invariant ever actually needed -- the scale itself -- released in a `finally`
+// so no future early return can skip it either.
+let previewFitSuspended = false
+
 // The two rules that make the pane's width a MEASURABLE, STABLE number, as
 // opposed to the scale itself. Both exist only in a fitting harness, and both
 // are load-bearing:
@@ -1006,8 +1039,8 @@ const PREVIEW_FIT_SURROUND = '#e6e6ea'
 //   place would silently add 16px that the fit arithmetic knows nothing about.
 const PREVIEW_FIT_CHROME_CSS =
   `html { scrollbar-gutter: stable; background: ${PREVIEW_FIT_SURROUND}; }\n` +
-  `body.pagedown-document { margin: 0; padding: ${PREVIEW_FIT_PADDING_PX}px; ` +
-  `background: ${PREVIEW_FIT_SURROUND}; }`
+  `body { margin: 0; padding: ${PREVIEW_FIT_PADDING_PX}px; }\n` +
+  `body.pagedown-document { background: ${PREVIEW_FIT_SURROUND}; }`
 
 function applyPreviewFitScale(): void {
   const fitting = previewFitPageWidthPx > 0
@@ -1046,7 +1079,17 @@ function applyPreviewFitScale(): void {
   // padding or a border, without another round of this same lesson. It cannot
   // become self-referential: the `zoom` below is on #content-root, a
   // DESCENDANT, so it never moves the box being measured.
-  const scale = fitting ? computeFitScale(document.body.clientWidth, previewFitPageWidthPx) : 1
+  //
+  // `previewFitSuspended` short-circuits BEFORE `clientWidth` is read, so a
+  // suspended render pays no forced layout for a measurement it is going to
+  // discard -- and, more to the point, the chrome rules above still get written
+  // while it is suspended. That is the whole difference between suspending the
+  // scale and tearing the fit down: the box this function measures stops moving
+  // part-way through a render.
+  const scale =
+    fitting && !previewFitSuspended
+      ? computeFitScale(document.body.clientWidth, previewFitPageWidthPx)
+      : 1
   previewFitStyle.textContent = `${PREVIEW_FIT_CHROME_CSS}\n#content-root { zoom: ${scale}; }`
 }
 
@@ -2220,16 +2263,24 @@ window.addEventListener('message', async (event: MessageEvent<IncomingMessage>) 
   const { requestId, html, geometry, documentStyle, fitToWidth } = event.data
   currentRequestId = requestId
 
-  // Fit-to-width OFF for the whole of this render, restored only once the
-  // result below has been measured. Not housekeeping: Paged.js lays out
-  // against real computed lengths, and every post-pagination measurement this
-  // handler takes (measureDiagramBoxes, measureImageBoxes, and Gate 3's
-  // fractional-pixel diagram pins behind them) reads
-  // getBoundingClientRect(), which comes back already scaled under an
-  // ancestor `zoom`. On a long-lived harness -- which is exactly the harness
-  // that asks for fitting -- leaving the previous render's scale in place
-  // would silently multiply this render's numbers by it.
-  previewFitPageWidthPx = 0
+  // Answer "is this request fitted?" ONCE, here, and suspend only the SCALE for
+  // the duration of the layout and measurement passes.
+  //
+  // The suspension is the load-bearing half and its effect is unchanged:
+  // Paged.js lays out against real computed lengths, and every post-pagination
+  // measurement this handler takes (measureDiagramBoxes, measureImageBoxes, and
+  // Gate 3's fractional-pixel diagram pins behind them) reads
+  // getBoundingClientRect(), which comes back already scaled under an ancestor
+  // `zoom`. On a long-lived harness -- exactly the harness that asks for
+  // fitting -- leaving the previous render's scale in place would silently
+  // multiply this render's own numbers by it.
+  //
+  // What changed is that the fit CONFIGURATION no longer rides on that reset:
+  // it is established here, before any of this handler's early exits exist, and
+  // only the scale is taken away. See `previewFitSuspended` for the two defects
+  // the old single-flag shape caused.
+  previewFitPageWidthPx = fitToWidth === true ? geometry.pageWidthPx : 0
+  previewFitSuspended = true
   applyPreviewFitScale()
 
   // The sandbox's <body> carries `.pagedown-document` statically
@@ -2497,8 +2548,11 @@ window.addEventListener('message', async (event: MessageEvent<IncomingMessage>) 
     // literal has already been taken, in the unscaled document coordinate
     // space they are pinned in. Before publishing, so a caller that probes the
     // DOM the moment its result arrives sees the finished state rather than a
-    // frame of unscaled page.
-    previewFitPageWidthPx = fitToWidth === true ? geometry.pageWidthPx : 0
+    // frame of unscaled page. The `finally` below is the backstop for the paths
+    // that never get here; this explicit release is kept rather than left to it
+    // so that the publish-after-scale ordering stays visible at the one place
+    // it matters.
+    previewFitSuspended = false
     applyPreviewFitScale()
 
     window.__pagedownResult = result
@@ -2554,6 +2608,22 @@ window.addEventListener('message', async (event: MessageEvent<IncomingMessage>) 
       error: err instanceof Error ? (err.stack ?? err.message) : String(err)
     }
     window.__pagedownResult = result
+  } finally {
+    // The structural half of the fix, covering every path that returns without
+    // reaching the explicit release above: the empty-html short-circuit, the
+    // missing-#content-root throw, both superseded-request guards, and the
+    // catch block. A `finally` rather than four more call sites specifically so
+    // that a future early return cannot reintroduce the bug by omission.
+    //
+    // GUARDED ON THE REQUEST STILL BEING CURRENT, which is not optional. A
+    // SUPERSEDED run must not release the suspension its successor has already
+    // taken out -- doing so would apply the scale part-way through that
+    // successor's own layout and measurement, which is exactly the corruption
+    // the suspension exists to prevent. The successor releases its own.
+    if (currentRequestId === requestId && previewFitSuspended) {
+      previewFitSuspended = false
+      applyPreviewFitScale()
+    }
   }
 })
 
