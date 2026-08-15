@@ -540,7 +540,7 @@ function EditorToolbar({
         551.3 to 769.4. If a future control pushes past that, the failure mode
         is a horizontally scrolling formatting region -- degraded, but not
         broken, because shouldPinToolbarGroup refuses to pin an occluding
-        group -- and phase0/gate33 fails on a named assertion, not silently. */}
+        group -- and tests/gates/gate33 fails on a named assertion, not silently. */}
       <div
         className="flex flex-none items-center gap-x-3.5 border-b border-border-subtle bg-page px-3.5 py-1.5"
         role="toolbar"

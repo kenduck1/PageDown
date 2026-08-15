@@ -1,5 +1,0 @@
-# esbuild output of milkdown-compare.ts, generated at test-run time by
-# gate3-layout-parity.spec.ts. A build artifact, not a source file -- kept
-# out of git even under a blind `git add phase1/fixtures/`.
-milkdown-compare.js
-milkdown-compare.js.map

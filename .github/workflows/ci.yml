@@ -14,7 +14,7 @@
 # test and only surfaces when out/main/index.js actually runs. Compiling on
 # each platform is the cheapest check that catches it.
 #
-# The phase0 Playwright gates are deliberately absent from this workflow --
+# The Playwright gates in tests/gates are deliberately absent here --
 # see .github/workflows/gates.yml for why.
 
 name: CI

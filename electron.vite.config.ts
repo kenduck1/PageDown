@@ -21,7 +21,7 @@ export default defineConfig({
       // (confirmed by reproducing it via `paginateAndTime` in this task —
       // see docs/superpowers/plans/2026-07-25-phase0-findings.md's Gate 2
       // notes). This had never been caught before because Gate 1
-      // (phase0/gate1-source-offset.spec.ts) and the unit tests
+      // (tests/gates/gate1-source-offset.spec.ts) and the unit tests
       // (src/markdown/pipeline.test.ts) only ever import pipeline.ts
       // directly through Playwright/Vitest's own TypeScript transform,
       // which correctly unwraps `.default` for an ESM default import — they
@@ -101,7 +101,7 @@ export default defineConfig({
           // the module identically to the emitted `require("docx")`) reported
           // `{Packer:"function", Document:"function", Paragraph:"function",
           // hasDefaultOnly:false}` and packed a real 8493-byte PK-prefixed
-          // file. phase0/gate39-docx-export.spec.ts is the permanent version of
+          // file. tests/gates/gate39-docx-export.spec.ts is the permanent version of
           // that check: it drives a real export through the real compiled app.
           //
           // Left externalized on purpose rather than "excluded to be safe":

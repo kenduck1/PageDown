@@ -51,7 +51,7 @@ import { resolveDocumentStyle } from '../typography/document-style'
 // The fix taken here: a fresh, dedicated, hidden BaseWindow PER EXPORT
 // (destroyed afterward) for the harness -- `mainWindow` (`win`) is now used
 // ONLY for `dialog.showSaveDialog`'s modality, never as the harness's
-// parent window. Confirmed via phase0/gate12-pdf-export-ipc.spec.ts's own
+// parent window. Confirmed via tests/gates/gate12-pdf-export-ipc.spec.ts's own
 // repeated-export regression test, through the real IPC path end to end
 // (not just the raw diagnostic above): three consecutive real exports of a
 // 60-paragraph document no longer degrade.
@@ -88,7 +88,7 @@ export async function withFreshHarness<T>(
     // documented at length in resources/pagination-render/index.ts (see its
     // "What this rule does and does NOT do" note, itself a correction of an
     // earlier wrong claim) and confirmed independently by
-    // phase0/gate3-mermaid.spec.ts's untouched `expect(sequence.width)
+    // tests/gates/gate3-mermaid.spec.ts's untouched `expect(sequence.width)
     // .toBe(624)`. The exported PDF follows the same `@page` box, because
     // src/export/export-pdf.ts passes `preferCSSPageSize: true` — not the
     // view bounds. So export would produce correct geometry without this

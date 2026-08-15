@@ -1635,7 +1635,7 @@ describe('EditorScreen', () => {
   describe('Split-mode fit-to-width', () => {
     // jsdom has no layout engine and its ResizeObserver is a no-op stub
     // (test-setup.ts), so the REAL proof that a scaled page genuinely fits a
-    // real pane lives in phase0/gate35-split-fit-to-width.spec.ts. What is
+    // real pane lives in tests/gates/gate35-split-fit-to-width.spec.ts. What is
     // testable here is the WIRING -- that the measured width reaches
     // computeFitScale, that its result reaches the wrapper's `zoom` and the
     // status-bar readout, and that nothing outside Split(format) is touched.
@@ -1941,7 +1941,7 @@ describe('EditorScreen', () => {
 
     it('a document with no frontmatter still gets the Letter/1in default geometry (816 - 96 - 96 = 624)', async () => {
       // The regression guard for the DEFAULT case: Gate 10
-      // (phase0/gate10-editor-layout-parity.spec.ts) asserts this mount's
+      // (tests/gates/gate10-editor-layout-parity.spec.ts) asserts this mount's
       // real content width is exactly CONTENT_WIDTH_PX (624) for its own
       // no-frontmatter fixture, so a change that made the default A4, or
       // that produced NaN geometry from a partial config, would break real

@@ -9,7 +9,7 @@ import { formatAttributeBlock } from '../../../../markdown/image-size'
 // PageDown's remark configuration can produce", with reference-style links
 // named there as v1 corpus content -- and it is one of the only two
 // structural causes behind the 2026-08-09 gap audit's measured round-trip
-// divergence (phase0/corpus/reference-links-and-footnotes.md is the fixture
+// divergence (tests/gates/corpus/reference-links-and-footnotes.md is the fixture
 // that exercises it).
 //
 // ROOT CAUSE, and it is NOT "Milkdown has no schema for these so the parser

@@ -337,7 +337,7 @@
 
      1. It moves the document by EXACTLY its own height, and only below
         itself. That is a stronger, checkable claim than "it moves nothing",
-        and phase0/gate37-page-break-guides.spec.ts test 2 now measures it as
+        and tests/gates/gate37-page-break-guides.spec.ts test 2 now measures it as
         a step function -- zero displacement above the first seam, then
         exactly one seam height per seam crossed, against a value the gate
         computes from computePageSeamMetrics rather than from the DOM.

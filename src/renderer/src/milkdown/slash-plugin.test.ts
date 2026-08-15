@@ -203,7 +203,7 @@ describe('slash-plugin: opening a session', () => {
   // plugin's OWN logic correctly open a session? That is a real, direct test
   // of insertedSingleSlash's new behavior, just not a test that the browser
   // quirk itself exists -- that half is only provable against the real
-  // built app (phase0/gate29-slash-menu.spec.ts's own "trailing space" test,
+  // built app (tests/gates/gate29-slash-menu.spec.ts's own "trailing space" test,
   // added alongside this fix).
   //
   // TWO ROUNDS of this fix, and the test below is what the SECOND one is

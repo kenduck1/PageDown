@@ -35,7 +35,7 @@ import type { ElectronApplication, Page } from '@playwright/test'
 import { mkdir, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { launchIsolatedApp } from '../phase0/electron-launch'
+import { launchIsolatedApp } from '../tests/gates/electron-launch'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const REPO_ROOT = join(HERE, '..')

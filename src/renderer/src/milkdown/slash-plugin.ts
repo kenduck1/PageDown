@@ -274,7 +274,7 @@ const SLASH_INSERTION_TEXT = /^\s*\/$/
 // session, and still don't (see the checks below).
 //
 // !!! WIDENED, Gate 29 fix -- a real bug jsdom cannot reproduce, only found
-// by driving REAL Chromium (phase0/gate29-slash-menu.spec.ts's own
+// by driving REAL Chromium (tests/gates/gate29-slash-menu.spec.ts's own
 // investigation), and the widening below is ITSELF the product of a second
 // round of real-app measurement, not the first guess !!! The ORIGINAL
 // version of this function required `tr` to be EXACTLY one ReplaceStep whose

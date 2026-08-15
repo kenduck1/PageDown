@@ -42,7 +42,7 @@ import { extractComments } from '../lib/extractComments'
 // ProseMirror state is real, and remark-stringify's output is real. It CANNOT
 // vouch for anything pixel-shaped (every rect is all-zero -- see
 // FloatingCard.test.tsx's header), nor for a real Chromium input pipeline;
-// phase0/gate34 covers the end-to-end version, including the disk round trip.
+// tests/gates/gate34 covers the end-to-end version, including the disk round trip.
 
 afterEach(() => {
   cleanup()

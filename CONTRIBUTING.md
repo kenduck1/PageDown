@@ -42,9 +42,9 @@ Three suites, covering different layers. See the Testing section of
 
 ```bash
 pnpm test:unit                    # fast; jsdom
-pnpm test:phase0                  # Playwright against the real built app
-pnpm test:phase1:vitest           # frozen Milkdown spike gates
-pnpm test:phase1:playwright
+pnpm test:gates                  # Playwright against the real built app
+pnpm test:spike:vitest           # frozen Milkdown spike gates
+pnpm test:spike:playwright
 ```
 
 Single files and single tests:
@@ -52,17 +52,17 @@ Single files and single tests:
 ```bash
 pnpm exec vitest run src/renderer/src/store/appStore.test.ts
 pnpm exec vitest run -t "goEditor switches screen"
-pnpm exec playwright test phase0/gate2-performance.spec.ts
-pnpm exec playwright test phase0/gate15-split-mode.spec.ts -g "Split mode"
+pnpm exec playwright test tests/gates/gate2-performance.spec.ts
+pnpm exec playwright test tests/gates/gate15-split-mode.spec.ts -g "Split mode"
 ```
 
-`test:phase0` and `test:phase1:playwright` build the app first via their own
+`test:gates` and `test:spike:playwright` build the app first via their own
 `pretest` hooks, then drive the real binary. They are much slower than
 `test:unit`.
 
 ### Two things to know before you chase a gate failure
 
-**A bare timeout is probably not your bug.** The phase0 gates launch a real
+**A bare timeout is probably not your bug.** The gates in `tests/gates` launch a real
 multi-process Electron app repeatedly, and under host load those launches
 intermittently hang. The measured rate is roughly 25–33%, confirmed by
 re-running an unmodified build. The signature is a bare `Test timeout` plus a
@@ -76,7 +76,7 @@ anything. And if you are testing a change, A/B against _your change removed_ —
 a passing unrelated control gate rules out the environment, it does not
 exonerate your diff.
 
-**Some phase1 gates fail deliberately.** Their failure is the recorded finding
+**Some tests/spike gates fail deliberately.** Their failure is the recorded finding
 from a frozen feasibility spike. Don't loosen their assertions.
 
 ## Code style

@@ -595,7 +595,7 @@
    unlike this file's usual practice: `position: relative` + `top: -0.5em`
    takes the glyph out of normal text flow, which genuinely changes the
    ORDER Chromium's own print/PDF text extraction reports it in relative to
-   surrounding body text (confirmed with phase0/gate4-export.spec.ts's real
+   surrounding body text (confirmed with tests/gates/gate4-export.spec.ts's real
    exported-PDF text-subsequence check against the
    reference-links-and-footnotes.md corpus fixture -- Preflight's exact
    rule broke it, this simpler one doesn't). `vertical-align: super`
@@ -1168,7 +1168,7 @@
    Gate 10 pins 0.000px editor/paginator parity but its REPORT_TEMPLATE fixture
    contains no lists at all, so it can neither catch a divergence here nor
    vouch for the fix -- parity is asserted directly instead, in
-   nodes/task-item.test.ts (mechanism) and phase0/gate42-task-lists.spec.ts
+   nodes/task-item.test.ts (mechanism) and tests/gates/gate42-task-lists.spec.ts
    (real measured geometry), the same split nodes/image-size.test.ts uses.
 
    THIS BLOCK REFERENCES NO CSS CUSTOM PROPERTY, deliberately: every custom

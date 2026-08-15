@@ -10,7 +10,7 @@
 //
 // This module holds the arithmetic for the missing half. It is PURE and
 // dependency-free so that it can be unit-tested and, more importantly, so
-// that phase0/gate37-page-break-guides.spec.ts can compute the SAME expected
+// that tests/gates/gate37-page-break-guides.spec.ts can compute the SAME expected
 // numbers from the SAME source the app renders from -- the gate asserts real
 // measured displacement against a value derived here, never against a
 // hardcoded literal it could be fitted to.

@@ -169,7 +169,7 @@ function CommentComposer({
           // (see that file's note): DOM focus and ProseMirror's
           // `state.selection` are independent, so focusing this field does not
           // disturb the range addCommentCommand will mark. Proven end to end
-          // in the real app by phase0/gate27-comments.spec.ts, which types
+          // in the real app by tests/gates/gate27-comments.spec.ts, which types
           // here and then reads the marker back off disk.
           autoFocus
           value={text}

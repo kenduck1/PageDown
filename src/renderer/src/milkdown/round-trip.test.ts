@@ -6,7 +6,7 @@ import { createTestEditor } from './test-editor'
 import { EDITOR_SCHEMA_PLUGINS } from './plugins'
 import { encodeCommentMeta, decodeCommentMeta } from '../../../markdown/comment-plugin'
 
-const CORPUS_DIR = join(__dirname, '..', '..', '..', '..', 'phase0', 'corpus')
+const CORPUS_DIR = join(__dirname, '..', '..', '..', '..', 'tests', 'gates', 'corpus')
 
 // EDITOR_SCHEMA_PLUGINS is the exact composition MilkdownEditor.tsx (the
 // real, mounted editor) builds -- shared so this test's composition cannot

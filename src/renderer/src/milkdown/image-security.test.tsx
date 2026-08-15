@@ -388,7 +388,7 @@ describe('local image resolution — real editor mount', () => {
 // ---------------------------------------------------------------------------
 // jsdom has no layout engine, so every rect here is stubbed and every number
 // is one this file supplies. That is a real limit and is why
-// phase0/gate41-image-resize.spec.ts exists: only real Chromium can say
+// tests/gates/gate41-image-resize.spec.ts exists: only real Chromium can say
 // whether a real pointer drag lands on a real grip at a real corner. What IS
 // provable here is the wiring the gate cannot isolate -- how many transactions
 // a whole gesture produces, what ends up in the SAVED MARKDOWN, and that one

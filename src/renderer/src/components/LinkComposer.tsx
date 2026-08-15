@@ -159,7 +159,7 @@ function LinkComposer({
           // This is also why applyFindState's rule (never call view.focus())
           // is not violated: nothing in this component touches the editor view
           // at all, in either direction. Proven end to end in the real app by
-          // phase0/gate27-comments.spec.ts for the comment composer -- the
+          // tests/gates/gate27-comments.spec.ts for the comment composer -- the
           // identical flow -- and now by gate34 for this one.
           autoFocus
           value={href}

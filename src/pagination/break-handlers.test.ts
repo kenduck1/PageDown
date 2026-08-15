@@ -7,7 +7,7 @@ import { SignificantWhitespaceHandler } from './break-handlers'
 // engine at all (every rect is 0x0 at 0,0), so a jsdom test of it could only
 // assert that it declines to act -- which is exactly what it would also do if
 // it were completely broken. Its real coverage is
-// phase0/gate4-export.spec.ts's split-code-block regression section, against
+// tests/gates/gate4-export.spec.ts's split-code-block regression section, against
 // the actual built app. Same split, same reasoning, as
 // milkdown/commands.test.ts vs. gate20 for keymaps.
 //

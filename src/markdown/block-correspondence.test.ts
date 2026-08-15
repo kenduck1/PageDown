@@ -93,11 +93,11 @@ async function expectCorrespondence(label: string, source: string): Promise<void
   ).toBe(expected)
 }
 
-const CORPUS_DIR = join(process.cwd(), 'phase0/corpus')
+const CORPUS_DIR = join(process.cwd(), 'tests/gates/corpus')
 
 describe('top-level block correspondence between the two parse pipelines', () => {
   for (const file of readdirSync(CORPUS_DIR).filter((name) => name.endsWith('.md'))) {
-    it(`agrees on phase0/corpus/${file}`, async () => {
+    it(`agrees on tests/gates/corpus/${file}`, async () => {
       await expectCorrespondence(file, readFileSync(join(CORPUS_DIR, file), 'utf8'))
     })
   }

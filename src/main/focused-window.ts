@@ -17,7 +17,7 @@ import { app, BrowserWindow } from 'electron'
 //   - app-menu.ts repainted the ENTIRE menu into DEFAULT_WINDOW_UI_STATE --
 //     every document-scoped item greyed out, File > Save included -- because
 //     its own `focused === null` branch fell through to the neutral default.
-//     This one is not a maybe: phase0/gate30-app-menu.spec.ts was FAILING on
+//     This one is not a maybe: tests/gates/gate30-app-menu.spec.ts was FAILING on
 //     exactly that assertion before this file existed, in an environment where
 //     the app window never receives OS focus, and the failure reproduces
 //     identically on an unmodified checkout of the previous commit.

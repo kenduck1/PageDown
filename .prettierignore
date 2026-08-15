@@ -5,34 +5,34 @@ LICENSE.md
 tsconfig.json
 tsconfig.*.json
 
-# esbuild output generated at test-run time by phase1/gate3-layout-parity.spec.ts
+# esbuild output generated at test-run time by tests/spike/gate3-layout-parity.spec.ts
 # (gitignored, but Prettier doesn't read .gitignore). Kept in sync with the
 # matching `ignores` entry in eslint.config.mjs.
-phase1/fixtures/*.js
+tests/spike/fixtures/*.js
 
 # The Phase 0 reference corpus is INPUT to byte-exact assertions, not prose to
 # be tidied. `pnpm format` (prettier --write .) really did silently rewrite
 # every *emphasis* to _emphasis_ in here, which changes the exact character
 # offsets gate1-source-offset.spec.ts asserts its source-offset mapping
 # against, and the exact rendered text gate4-export.spec.ts sweeps for an
-# exact on-screen/PDF match. phase1/gate1-schema-fidelity.test.ts and
-# phase1/gate3-layout-parity.spec.ts read the same files, so this one entry
+# exact on-screen/PDF match. tests/spike/gate1-schema-fidelity.test.ts and
+# tests/spike/gate3-layout-parity.spec.ts read the same files, so this one entry
 # protects both suites. Deliberately the WHOLE directory rather than *.md:
 # everything in it exists to be fed to a gate verbatim, including any future
 # fixture that isn't Markdown. corpus/generate-long.ts is swept up by that and
 # so no longer auto-formatted -- accepted, since ESLint still lints it (see
 # below for why there is no matching eslint.config.mjs entry here).
-phase0/corpus
+tests/gates/corpus
 
 # Committed gate result baselines, written by the gates themselves. Prettier
 # stripped the no-newline-at-EOF markers off these, which shows up as spurious
 # diff churn on every run and makes a real, meaningful baseline change harder
 # to spot. Also a genuine .pdf/.png output directory, which prettier leaves
 # alone anyway.
-phase0/results
+tests/gates/results
 
 # NOTE on the "kept in sync with eslint.config.mjs" convention above: it does
 # NOT apply to these two entries. ESLint only has matching config for JS/TS, so
-# it never visits the .md/.json files at issue -- and phase0/corpus does hold
+# it never visits the .md/.json files at issue -- and tests/gates/corpus does hold
 # one real .ts file (generate-long.ts) that SHOULD stay linted. Adding these
 # paths to eslint's `ignores` would lose that for no benefit.

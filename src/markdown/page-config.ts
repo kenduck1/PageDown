@@ -21,7 +21,7 @@
 //
 // YAML key convention
 // --------------------
-// `phase0/corpus/foreign-frontmatter.md` (an existing fixture, predating
+// `tests/gates/corpus/foreign-frontmatter.md` (an existing fixture, predating
 // this module) already establishes `page:` (a bare scalar page-size name,
 // e.g. `page: Letter`) and `margins:` as the intended key names from
 // earlier design-doc-referenced examples -- this module keeps both names.
@@ -288,7 +288,7 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 }
 
 // Tolerates the legacy bare-scalar `margins: 1in` shorthand seen in
-// phase0/corpus/foreign-frontmatter.md (uniform margin on every side, with
+// tests/gates/corpus/foreign-frontmatter.md (uniform margin on every side, with
 // or without a trailing unit suffix, and whether or not the YAML parser
 // resolved it to a number already) as well as PageConfig's own structured
 // per-side object. Anything else (wrong shape, non-finite sub-values,

@@ -179,7 +179,7 @@ function nextDisplayedElement(node: Element): Element | null {
 // overflowing `<tr>`, so it is never part of this walk and is never
 // reconstructed. Confirmed empirically, not just from reading the source:
 // Task 9/Gate 4's synthetic-table struct-tree test
-// (phase0/gate4-export.spec.ts) found exactly 4 `<th>`-tagged struct
+// (tests/gates/gate4-export.spec.ts) found exactly 4 `<th>`-tagged struct
 // elements total (one header row's worth) across a table that splits into
 // two page fragments, not 8 — the header genuinely does not repeat today.
 //
@@ -205,7 +205,7 @@ function nextDisplayedElement(node: Element): Element | null {
 // rendered visually overlapping the newly-inserted `<thead>` instead of
 // after the preceding rows — content present and correct in the DOM (all
 // cells intact, right text), just catastrophically mispositioned on
-// screen/in the PDF. Isolated directly (phase0/gate6-break-quality.spec.ts
+// screen/in the PDF. Isolated directly (tests/gates/gate6-break-quality.spec.ts
 // and this task's own investigation, not assumed): the bug requires BOTH
 // (a) a `<thead>` with at least one real row/cell inserted after the page
 // was laid out (an empty `<thead>`, or an unrelated element like
@@ -310,7 +310,7 @@ export class TableContinuationHandler extends Handler {
 // Fixes a real, measured PRINT-FIDELITY CONTENT-LOSS bug: a long fenced code
 // block split across pages silently lost ~1-2 lines of real text from the
 // EXPORTED PDF on every page carrying an internal split of that block. Found
-// via phase0/corpus/code-blocks-spanning-pages.md; characterized before this
+// via tests/gates/corpus/code-blocks-spanning-pages.md; characterized before this
 // handler existed as gate4-export.spec.ts's `PRE_SPLIT_TRUNCATION_FILES`
 // category (now removed, since this fixes it).
 //
