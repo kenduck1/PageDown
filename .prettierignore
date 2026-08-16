@@ -36,3 +36,17 @@ tests/gates/results
 # it never visits the .md/.json files at issue -- and tests/gates/corpus does hold
 # one real .ts file (generate-long.ts) that SHOULD stay linted. Adding these
 # paths to eslint's `ignores` would lose that for no benefit.
+
+# The sandboxed render context's HTML shell, hand-formatted on purpose.
+#
+# Prettier wants to rewrap the Content-Security-Policy <meta> across several
+# lines. The policy string is duplicated in src/main/pagination-window.ts as
+# CSP_POLICY_TEMPLATE and the two MUST stay in sync -- keeping both on one
+# line is what makes them diffable by eye. This file also carries a
+# %%CSP_STYLE_NONCE%% placeholder substituted at build time.
+#
+# Reformatting it buys nothing (CI runs eslint, not prettier) and touches the
+# one file where a silent change is hardest to notice, so it is excluded
+# rather than reformatted. It was already unformatted before this exclusion
+# existed; nothing regressed.
+resources/pagination-render/index.html

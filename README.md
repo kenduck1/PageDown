@@ -179,12 +179,16 @@ pnpm build:linux    # package for Linux (AppImage / deb / snap)
 ## Development
 
 ```bash
+pnpm verify         # typecheck + lint + unit tests — what CI checks
+pnpm test:gates     # Playwright, against the real built app
+
 pnpm typecheck      # main process + renderer (two separate tsconfigs)
 pnpm lint
 pnpm format
 pnpm test:unit      # Vitest
-pnpm test:gates    # Playwright, against the real built app
 ```
+
+Requires Node 22 (`.nvmrc`).
 
 `docs/screenshots/` is regenerated from the real app with:
 

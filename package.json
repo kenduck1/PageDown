@@ -26,6 +26,7 @@
     "typecheck:node": "tsc --noEmit -p tsconfig.node.json --composite false",
     "typecheck:web": "tsc --noEmit -p tsconfig.web.json --composite false",
     "typecheck": "pnpm run typecheck:node && pnpm run typecheck:web",
+    "verify": "pnpm run typecheck && pnpm run lint && pnpm run test:unit",
     "start": "electron-vite preview",
     "predev": "pnpm run build:pagination-render",
     "dev": "electron-vite dev",
@@ -114,5 +115,8 @@
     "typescript": "^5.9.3",
     "vite": "^7.2.6",
     "vitest": "^4.1.10"
+  },
+  "engines": {
+    "node": ">=22"
   }
 }
