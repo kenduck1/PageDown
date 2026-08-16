@@ -97,6 +97,27 @@ obvious-looking simplification is wrong. If you find one of those, please read
 it before simplifying past it — most were written after the simplification was
 tried and reverted.
 
+## Screenshots
+
+`docs/screenshots/` is captured from the real built app, never hand-edited:
+
+```bash
+pnpm build && pnpm exec tsx scripts/capture-screenshots.ts
+```
+
+**Changing a starter template invalidates `home.png`, and nothing enforces
+that.** The Home screen renders real thumbnails of the real template content,
+so editing `src/renderer/src/templates/` leaves the committed screenshot
+showing text that no longer exists. The same applies to any change that
+alters the editor chrome, the page card, or Page Setup. Re-run the capture and
+commit the result alongside the change.
+
+Split mode's screenshot is a composite of two real captures — its preview pane
+is a native `WebContentsView` with its own compositing surface, which a
+single `capturePage()` cannot see. The script pastes the preview's own capture
+at the bounds the app reports. See its header comment; every pixel is real
+output at its real position, and nothing in it is mocked.
+
 ## Pull requests
 
 - One logical change per PR.

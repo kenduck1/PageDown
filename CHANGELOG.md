@@ -62,6 +62,6 @@ first version packaged for download rather than run from source.
 - **Split mode re-paginates the whole document per settled edit.** Around 170ms
   for 20 pages, ~2.5s for 300 — fine for reports and letters, degrading for
   very long documents.
-- Split mode's preview pane is not scaled to fit, so a wide page can be cropped
-  at narrow divider positions.
 - Orphan and widow control is not implemented.
+- Split mode's two panes follow each other by page rather than scrolling in
+  exact sync, and can drift on documents with heavy break avoidance.
