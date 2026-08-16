@@ -164,6 +164,8 @@ jobs:
             echo "| macOS (Intel) | \`*-x64.dmg\` |"
             echo "| Windows | \`*-setup.exe\` |"
             echo "| Linux | \`*.AppImage\` or \`*.deb\` |"
+            echo ""
+            echo "See [CHANGELOG.md](https://github.com/${GITHUB_REPOSITORY}/blob/${GITHUB_REF_NAME}/CHANGELOG.md) for what changed, and the README's *Installing* section for the unsigned-build steps."
           } > release-notes.md
           cat release-notes.md
 

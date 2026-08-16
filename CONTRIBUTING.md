@@ -31,9 +31,15 @@ pnpm format       # prettier --write .
 pnpm test:unit    # vitest
 ```
 
-Before opening a pull request, run `pnpm typecheck`, `pnpm lint` and
-`pnpm test:unit`. CI runs exactly these, plus a `pnpm build` on macOS, Windows
-and Linux.
+Before opening a pull request, run:
+
+```bash
+pnpm verify   # typecheck + lint + test:unit, exactly what CI's check job runs
+```
+
+CI runs those three, plus a `pnpm build` on macOS, Windows and Linux — that
+last job exists to catch a specific failure that only appears in the compiled
+main-process bundle (see ARCHITECTURE.md).
 
 ## Tests
 

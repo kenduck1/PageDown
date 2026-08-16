@@ -1,0 +1,56 @@
+# Dependency updates.
+#
+# Grouped rather than one PR per package: this project pins a lot of tightly
+# coupled things (seven @milkdown/* packages that must move together at the
+# same version, and the whole unified/remark/rehype chain), and splitting those
+# across separate PRs produces changes that cannot be reviewed or merged
+# independently.
+#
+# WHAT NOT TO AUTO-MERGE HERE, EVER
+#
+# Several dependencies are pinned to an EXACT version deliberately, because
+# their behaviour feeds page layout and a patch bump can silently move page
+# counts: pagedjs, katex, mermaid, and the @milkdown/* set. Dependabot will
+# still open PRs for those, and that is useful — but each one needs the gate
+# suite run against it (`pnpm test:gates`), not just CI. See ARCHITECTURE.md's
+# Testing section.
+version: 2
+
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      # Must move together — they share a peer version.
+      milkdown:
+        patterns:
+          - '@milkdown/*'
+      # The Markdown pipeline. A change to any one of these can alter what a
+      # document MEANS, so they are reviewed as a unit.
+      unified:
+        patterns:
+          - 'unified'
+          - 'remark*'
+          - 'rehype*'
+          - 'mdast-util-*'
+          - 'hast-util-*'
+          - 'micromark*'
+      # Build and test tooling, where a grouped bump is usually safe.
+      tooling:
+        patterns:
+          - '@types/*'
+          - 'eslint*'
+          - 'prettier'
+          - 'typescript'
+          - 'vite'
+          - 'vitest'
+          - '@vitest/*'
+          - '@playwright/test'
+          - 'electron-vite'
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
