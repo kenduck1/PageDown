@@ -15,6 +15,20 @@ export default defineConfig(
   // future similarly-generated fixture bundle is covered too.
   { ignores: ['**/node_modules', '**/dist', '**/out', 'tests/spike/fixtures/*.js'] },
   tseslint.configs.recommended,
+  // Plain-JS Node bootstrap scripts loaded via `--import` before anything else
+  // in a worker (currently the Vitest DOM teardown shim). They cannot carry TS
+  // annotations -- Node executes them directly, with no transform -- so the two
+  // TypeScript-shaped rules below are unsatisfiable rather than merely
+  // inconvenient. Scoped to this one directory and extension so nothing in
+  // src/ or tests/ loses them; an empty function is exactly the point of a
+  // no-op shim.
+  {
+    files: ['scripts/**/*.mjs'],
+    rules: {
+      '@typescript-eslint/explicit-function-return-type': 'off',
+      '@typescript-eslint/no-empty-function': 'off'
+    }
+  },
   eslintPluginReact.configs.flat.recommended,
   eslintPluginReact.configs.flat['jsx-runtime'],
   {
