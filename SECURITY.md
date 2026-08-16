@@ -25,6 +25,45 @@ downloaded, emailed, or checked out from someone else's repository, and it can
 contain arbitrary raw HTML. The interesting boundaries are therefore between
 _document content_ and _the machine it is opened on_.
 
+Untrusted input arrives in three forms, and each crosses a boundary with its
+own enforcement point before anything renders:
+
+```mermaid
+flowchart TD
+    subgraph untrusted["Untrusted input"]
+        MD["Markdown body, including raw HTML"]
+        FM["YAML frontmatter"]
+        PATH["Renderer-supplied file path"]
+    end
+
+    subgraph privileged["Privileged main process"]
+        SANITIZE["hast-util-sanitize, one whole-tree pass"]
+        REMOTE["Remote image policy, blocked unless consented"]
+        CONFIG["Page config resolved, page size and margins clamped"]
+        ALLOW{"isKnownPath allowlist"}
+        TOKEN["Per-load asset token registry"]
+        DENY["Refused, or the path is dropped"]
+    end
+
+    subgraph sandboxed["Sandboxed pagedown-render:// context"]
+        RENDER["Paged.js, Mermaid and KaTeX render the document here"]
+        CAPS["No IPC, no contextBridge, no preload, no filesystem"]
+    end
+
+    MD --> SANITIZE --> REMOTE
+    FM --> CONFIG
+    PATH --> ALLOW
+    ALLOW -- "not on the allowlist" --> DENY
+    ALLOW -- "on the allowlist" --> TOKEN
+    REMOTE ==> RENDER
+    CONFIG == "header and footer text escaped where it becomes CSS" ==> RENDER
+    TOKEN == "one token, realpath-confined to the document directory" ==> RENDER
+    RENDER --- CAPS
+```
+
+Document HTML only ever reaches the sandboxed context, and it arrives already
+sanitized. Nothing in that context can call back into the main process.
+
 ### What the app defends against
 
 **Document content executing with privilege.** All document rendering —
@@ -42,6 +81,27 @@ dialog, is already in the persisted recents list, or was delivered by the
 operating system through a file association — none of which a renderer can
 forge. Two real vulnerabilities of exactly this shape existed before that
 check was added.
+
+The allowlist is the persisted recents list itself, and only three code paths
+write to it — all three requiring either a real dialog the user drove or a
+path the operating system handed the app directly:
+
+```mermaid
+flowchart LR
+    DIALOG["Native Open dialog"] --> ADD["addRecentFile"]
+    SAVEAS["Native Save-As dialog"] --> ADD
+    OSOPEN["OS file association or command line, validated as an existing absolute .md file"] --> ADD
+    EARLIER["An entry written in an earlier session"] --> LIST
+    ADD --> LIST[("recent-files.json")]
+    LIST --> KNOWN{"isKnownPath"}
+    KNOWN -- "on the list" --> ALLOWED["Handler may touch the path"]
+    KNOWN -- "not on the list" --> REFUSED["Refused, or the path is dropped"]
+```
+
+Handlers differ in what they do on a miss. Opening a path throws, because the
+path is the whole request; page counting and the live preview drop it and
+continue with local assets denied, so a document that has aged out of the
+ten-entry list still renders.
 
 **Filesystem traversal via document-referenced assets.** Local images resolve
 only through a per-call token registry. Paths are symlink-resolved with
