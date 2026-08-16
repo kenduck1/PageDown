@@ -178,11 +178,34 @@ jobs:
           set -euo pipefail
           echo "Assets to attach:"
           ls -lh installers/
-          gh release create "$TAG_NAME" \
+          url="$(gh release create "$TAG_NAME" \
             --repo "$REPO" \
             --title "$TAG_NAME" \
             --draft \
             --notes-file release-notes.md \
-            installers/*
-          echo "Draft created. Review it under Releases, optionally hit"
-          echo "'Generate release notes' to append the commit log, then publish."
+            installers/*)"
+
+          # Print the draft's real URL, and say plainly why it does not look
+          # like the tag. GitHub parks every DRAFT at an `untagged-<hash>`
+          # permalink and does not bind it to the tag until it is published --
+          # so the Releases tab shows the tag's auto-generated "Source code"
+          # zips next to a separate draft holding the actual installers. That
+          # is confusing enough to have been reported as "the dmg is missing"
+          # when all five assets were present and downloadable.
+          {
+            echo "### Draft release created"
+            echo ""
+            echo "$url"
+            echo ""
+            echo "The installers are attached to the DRAFT. Its URL says"
+            echo "\`untagged-…\` because GitHub only binds a draft to its tag"
+            echo "when you publish it — until then the Releases tab also shows"
+            echo "the bare \`$TAG_NAME\` tag with only auto-generated source"
+            echo "archives. Publishing the draft moves the installers onto the tag."
+            echo ""
+            echo "Assets attached:"
+            gh release view "$TAG_NAME" --repo "$REPO" \
+              --json assets --jq '.assets[] | "- " + .name'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          echo "Draft: $url"
