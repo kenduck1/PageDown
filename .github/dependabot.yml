@@ -37,8 +37,19 @@ updates:
           - 'mdast-util-*'
           - 'hast-util-*'
           - 'micromark*'
-      # Build and test tooling, where a grouped bump is usually safe.
+      # Build and test tooling — MINOR AND PATCH ONLY.
+      #
+      # `update-types` is the important part, learned the hard way: the first
+      # run of this config grouped majors in here too and produced one PR
+      # bundling TypeScript 5.9->7.0, ESLint 9->10, Vitest 7->8 and Vite 6->7.
+      # TypeScript 7 removed `baseUrl`, so all four CI jobs failed on a
+      # tsconfig error and a Playwright patch bump sat stuck behind a
+      # migration. A major in this set needs its own branch and its own
+      # verification; excluding them here means each arrives alone.
       tooling:
+        update-types:
+          - minor
+          - patch
         patterns:
           - '@types/*'
           - 'eslint*'
