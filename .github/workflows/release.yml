@@ -111,7 +111,7 @@ jobs:
         run: pnpm exec electron-builder $BUILDER_ARGS --publish never
 
       - name: Collect installers
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: installers-${{ matrix.artifact }}
           # Installers only. The .blockmap files electron-builder emits
