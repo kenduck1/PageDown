@@ -38,7 +38,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # Catches the easy, expensive mistake: tagging v0.2.0 without bumping
       # package.json, which electron-builder would happily package as 0.1.0
@@ -83,7 +83,7 @@ jobs:
             artifact: linux
             builder_args: --linux AppImage deb
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: pnpm/action-setup@v4
 
