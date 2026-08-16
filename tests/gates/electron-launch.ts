@@ -4,7 +4,7 @@ import { mkdtemp, readdir, rm, stat } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-// Every tests/gates/phase1 gate that drives the real built app via
+// Every gate that drives the real built app via
 // _electron.launch() must go through this helper instead of calling
 // electron.launch() directly. Electron's default userData path
 // (app.getPath('userData'), left unset by a bare electron.launch() call)
@@ -132,7 +132,7 @@ process.once('exit', () => {
 
 // How old a stray pagedown-gate-userdata-* directory must be before the
 // janitor below will delete it. Deliberately far longer than any real gate
-// run (the whole phase0 suite is minutes, not hours), so this can never race
+// run (the whole gate suite is minutes, not hours), so this can never race
 // a directory another worker is actively using -- the point is to bound
 // accumulation to a single session's worth of leaks, not to collect promptly.
 const STALE_USERDATA_AGE_MS = 6 * 60 * 60 * 1000

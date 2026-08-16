@@ -276,7 +276,7 @@ app.on('open-file', (event, filePath) => {
 // launch's argv and takes the actual action.
 //
 // Scoped by Electron to the app's own userData path (confirmed against
-// Electron's documented behavior, not assumed) -- tests/gates/phase1 gate specs,
+// Electron's documented behavior, not assumed) -- gate specs,
 // which each launch via `launchIsolatedApp`'s own fresh `--user-data-dir`
 // per test (CLAUDE.md's own documented reason: never pollute a real
 // developer's recent-files.json), therefore never collide with each other
@@ -357,7 +357,7 @@ app.on('second-instance', (_event, argv) => {
 // `app.evaluate()`'s bare V8 context, same as every other entry here.
 //
 // Gated behind `is.dev` (App identity/packaging cleanup pass): this object
-// exists purely for tests/gates/phase1 gate specs, which always launch the
+// exists purely for gate specs, which always launch the
 // unpackaged `out/` build directly (`_electron.launch(['out/main/index.js'])`,
 // never a real electron-builder package) — so `is.dev` (`!app.isPackaged`,
 // per @electron-toolkit/utils) is `true` for every one of them, and this
@@ -2064,7 +2064,7 @@ app.whenReady().then(async () => {
   // Real integration into app UI is out of scope for Task 3.
   //
   // Gated behind `is.dev` for the same reason as the __pagedownPhase0
-  // bridge above: every tests/gates/phase1 gate spec launches the unpackaged
+  // bridge above: every gate spec launches the unpackaged
   // `out/` build, where `is.dev` is `true` (`!app.isPackaged`), so no gate's
   // behavior changes. A real packaged install (`is.dev === false`) no
   // longer spins up this extra, permanently-off-screen sandboxed renderer
@@ -2081,10 +2081,13 @@ app.whenReady().then(async () => {
     createPaginationHarness(mainWindow)
       .then((harness) => {
         harness.view.setBounds({ x: -9999, y: -9999, width: PAGE_WIDTH_PX, height: PAGE_HEIGHT_PX })
-        console.log('[phase0] pagination render harness ready:', harness.view.webContents.getURL())
+        console.log(
+          '[pagination-spike] pagination render harness ready:',
+          harness.view.webContents.getURL()
+        )
       })
       .catch((err) => {
-        console.error('[phase0] failed to create pagination render harness', err)
+        console.error('[pagination-spike] failed to create pagination render harness', err)
       })
   }
 

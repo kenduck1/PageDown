@@ -158,7 +158,7 @@ export function enqueueExport<T>(task: () => Promise<T>): Promise<T> {
 // window fix above, should no longer routinely exceed) sendDocument's own
 // 10s general-purpose default -- export gets a longer allowance than that
 // default on purpose, the same "give a known-heavier workload more time
-// than the routine case" reasoning phase0's own Gate 7 spike uses for its
+// than the routine case" reasoning Gate 7's own spike uses for its
 // own 30s poll deadline (see pagination-window.ts's GATE7_POLL_DEADLINE_MS).
 const EXPORT_PAGINATION_TIMEOUT_MS = 30_000
 

@@ -33,7 +33,7 @@ function renderSidebar(): void {
 }
 
 // The reported bug: four pills in a single row inside a 216px rail were
-// squished with their text clipped. Measured in the real built app (phase0
+// squished with their text clipped. Measured in the real built app (gate
 // probe, identical at the 1000px default window and at the 760px
 // MIN_WINDOW_WIDTH, because the rail is `w-[216px] shrink-0`): the track's
 // content box is 182px, and the four labels alone measure 35.94 + 42.59 +

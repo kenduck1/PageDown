@@ -9,7 +9,7 @@ import { launchIsolatedApp } from '../gates/electron-launch'
 // sendDocument now also requires -- see tests/gates/gate-geometry.ts for why
 // they're one shared pair, and why they have to be threaded through
 // app.evaluate()'s own single argument rather than referenced from inside
-// the callback. Imported across the phase1 -> phase0 boundary exactly like
+// the callback. Imported across the spike -> gates boundary exactly like
 // launchIsolatedApp directly above it.
 import { LETTER_GEOMETRY, DEFAULT_STYLE } from '../gates/gate-geometry'
 
@@ -171,7 +171,10 @@ function stripFrontmatter(markdown: string): string {
 test('Gate 3: editor/paginator layout parity for mixed.md top-level blocks', async () => {
   test.setTimeout(60_000)
 
-  const rawMarkdown = readFileSync(join(__dirname, '..', 'tests', 'gates', 'corpus', 'mixed.md'), 'utf8')
+  const rawMarkdown = readFileSync(
+    join(__dirname, '..', 'tests', 'gates', 'corpus', 'mixed.md'),
+    'utf8'
+  )
   const bodyMarkdown = stripFrontmatter(rawMarkdown)
 
   // --- Build the Milkdown comparison bundle -------------------------------

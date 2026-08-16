@@ -4,7 +4,7 @@
 // answered by checking that bytes were written -- the interesting claims
 // (a real page break is present, the page size is A4, the frontmatter did not
 // leak into the body) are all claims about `word/document.xml` INSIDE that
-// archive. This module is what lets the unit tests and the phase0 gate open
+// archive. This module is what lets the unit tests and the gate open
 // the produced file and assert on its actual contents.
 //
 // Deliberately NOT `jszip` -- which IS present in the tree as a transitive

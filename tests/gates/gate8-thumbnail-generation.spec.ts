@@ -108,7 +108,7 @@ test('Gate 8 regression: a ~13-page document paginates well under the harness ti
 
   // Generated inline (not read from tests/gates/corpus/) so this test has no
   // dependency on a corpus fixture that might get regenerated/recalibrated
-  // for unrelated reasons (see the phase0 findings doc's own history of
+  // for unrelated reasons (see the gate findings doc's own history of
   // long.md/very-long.md's section-to-page ratio being recalibrated twice).
   // ~4.33 sections/page (measured in tests/gates/corpus/generate-long.ts's own
   // calibration) x 52 sections targets ~12 pages — squarely inside the
