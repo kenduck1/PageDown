@@ -52,6 +52,29 @@ tests/spike/       Frozen Milkdown feasibility-spike gates
 
 ## Execution contexts
 
+```mermaid
+flowchart TD
+  subgraph SHELL["Renderer / app shell - src/renderer"]
+    UI["React UI"]
+    API["window.api - contextBridge, deep-frozen"]
+    UI --> API
+  end
+  subgraph MAIN["Main process - src/main"]
+    IPC["ipcMain handlers"]
+    FIO["File I/O - isKnownPath allowlist"]
+    HARN["Render harnesses"]
+    IPC --> FIO
+    IPC --> HARN
+  end
+  subgraph SBX["Pagination render context - resources - separate origin, own session partition, no preload"]
+    PJS["Paged.js, Mermaid and KaTeX over untrusted document HTML"]
+  end
+  API -->|"ipcRenderer.invoke / send"| IPC
+  HARN -->|"executeJavaScript then window.postMessage"| PJS
+  PJS -.->|"result polled from window.__pagedownResult"| HARN
+  UI x-.-x|"no IPC, no contextBridge"| PJS
+```
+
 There are **three** distinct runtime contexts. Know which one a file belongs
 to before editing it — they have very different capabilities.
 
@@ -140,6 +163,25 @@ all, so there is nothing for it to permit. `connect-src` stays `'none'`.
 
 ## The Markdown pipeline
 
+```mermaid
+flowchart TD
+  MD["Markdown source"]
+  PARSE["remark-parse plus gfm, frontmatter and math"]
+  TR["remark transforms - pagebreak, toc, image attrs, comment"]
+  R2H["remark-rehype with allowDangerousHtml"]
+  RAW["hast-util-raw - whole tree back to one HTML string, reparsed"]
+  SAN["sanitize - one pass over the whole tree"]
+  OUT["rehype-stringify, then per-render tokens swapped back out"]
+  MD --> PARSE --> TR --> R2H --> RAW --> SAN --> POST --> OUT
+  subgraph POST["Must run AFTER sanitize"]
+    direction TB
+    IMG["rewriteLocalImageSrcs to pagedown-render asset URLs"]
+    REM["applyRemoteImagePolicy drops remote img src"]
+    HL["rehype-highlight adds hljs classes"]
+    IMG --> REM --> HL
+  end
+```
+
 `src/markdown/pipeline.ts`.
 
 **One parser everywhere.** `unified` + `remark-parse` / `remark-gfm` /
@@ -199,6 +241,30 @@ non-obvious details:
 
 ## Pagination and page geometry
 
+```mermaid
+flowchart TD
+  FM["YAML frontmatter in the .md file"]
+  RPC["resolvePageConfig - merges over DEFAULT_PAGE_CONFIG"]
+  CFG["PageConfig"]
+  GEO["computePageGeometry - clamps margins"]
+  STY["resolveDocumentStyle - theme, font, running content"]
+  MSG["RenderRequestMessage - typed payload, so a dropped field is a compile error"]
+  SBX["Sandbox builds the @page rule and body classes per request"]
+  SURF["Split preview, status-bar page count, thumbnails, PDF export and print"]
+  CARD["Milkdown page card in EditorScreen"]
+  EXP["HTML and DOCX export - own writers, no render harness"]
+  FM --> RPC --> CFG
+  CFG --> GEO
+  CFG --> STY
+  GEO --> CARD
+  STY --> CARD
+  GEO --> MSG
+  STY --> MSG
+  MSG --> SBX --> SURF
+  GEO --> EXP
+  STY --> EXP
+```
+
 Paged.js runs inside the sandboxed context. A document's own frontmatter drives
 every rendering surface:
 
@@ -213,9 +279,10 @@ every rendering surface:
   a plausible typo (`6` instead of `0.6`) yields negative content height, which
   makes Paged.js emit roughly one page per source node with the whole document
   duplicated on each — thousands of pages, indistinguishable from a hang. The
-  clamp lives in this one pure function precisely because all five consuming
-  surfaces route through it, where an input `min`/`max` would cover exactly one
-  entry point.
+  clamp lives in this one pure function precisely because every consuming
+  surface routes through it — the editor page card, the live preview, page
+  counting, thumbnails, and PDF, print, HTML and DOCX export — where an input
+  `min`/`max` would cover exactly one entry point.
 - `resolveDocumentStyle(config)` (`src/typography/document-style.ts`) does the
   same for the non-geometric half: theme, font, running header/footer.
 
@@ -293,12 +360,29 @@ external rewrites (History restore, Page Setup apply) land through the store.
 
 ## Typography parity
 
+```mermaid
+flowchart TD
+  DTC["src/typography/document-typography.css - every rule scoped under .pagedown-document"]
+  BASE["src/renderer/src/assets/base.css - editor-only chrome, find highlights, comment marks, page guides"]
+  MOUNT["Milkdown mount div - class milkdown-mount pagedown-document"]
+  BODY["Sandbox body - class pagedown-document, plus a hand-synced :root block"]
+  G10["Gate 10 compares per-block tops and the content width across both"]
+  DTC -->|"@import from base.css"| MOUNT
+  DTC -->|"imported as text, handed to previewer.preview"| BODY
+  BASE --> MOUNT
+  BASE x-.-x|"never reaches the sandbox"| BODY
+  MOUNT --> G10
+  BODY --> G10
+```
+
 The single most important invariant in the codebase.
 
 `src/typography/document-typography.css` is shared verbatim by **both**
 rendering surfaces: the Milkdown mount and the sandboxed context's `<body>`.
 `tests/gates/gate10-editor-layout-parity.spec.ts` measures per-block position
-deltas between them and asserts **0.000px** drift.
+deltas between them, asserting each is within 1px — and **measures 0.000px** on
+every block. It additionally requires the editing root's width to equal
+`CONTENT_WIDTH_PX` exactly, with no tolerance at all.
 
 Three rules follow:
 
