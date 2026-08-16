@@ -152,7 +152,16 @@ async function readEditorGuides(win: Page): Promise<EditorGuide[]> {
       const previous = guide.previousElementSibling
       const box = guide.getBoundingClientRect()
       return {
-        label: (guide.textContent ?? '').trim(),
+        // The LABEL element specifically, not the seam's whole textContent.
+        // The seam is a region, not a line: it also carries the document's
+        // running header and footer, because it spans exactly the ending
+        // page's bottom margin and the next page's top margin (see
+        // src/typography/editor-running-content.ts). Reading the whole
+        // element appended those -- "Pages 3-5 end inside this blockPage 5
+        // of 5" -- which is what this probe caught. Addressing the label
+        // directly is what the assertions below always meant, and it stays
+        // correct if anything else is ever added to the seam.
+        label: (guide.querySelector('.pagedown-page-guide-label')?.textContent ?? '').trim(),
         approximate: guide.classList.contains('is-approximate'),
         precedingText: (previous?.textContent ?? '').trim(),
         boxHeight: box.height,
