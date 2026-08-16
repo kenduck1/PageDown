@@ -105,7 +105,7 @@ function EditorSidebar({
   return (
     <div className="flex h-full w-[216px] shrink-0 flex-col gap-3.5 border-r border-border-subtle bg-chrome-light p-3.5">
       {/* TWO ROWS, not one, and the numbers are measured rather than
-          estimated (real built app, phase0 probe, both at the 1000px default
+          estimated (real built app, gate probe, both at the 1000px default
           window and at the 760px MIN_WINDOW_WIDTH -- identical, because this
           rail is `w-[216px] shrink-0` and therefore window-width-independent).
 

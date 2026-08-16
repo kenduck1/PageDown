@@ -45,7 +45,7 @@ import { launchIsolatedApp } from './electron-launch'
 // not a gap in this codebase -- so no renderer-side interception of
 // window.api is possible here, full stop. Falling back to the brief's other
 // named option (a main-process probe) instead, but NOT by extending the
-// phase0-only `__pagedownPhase0` bridge (CLAUDE.md: "don't extend it for
+// dev-only `__pagedownPhase0` bridge (CLAUDE.md: "don't extend it for
 // new product features") -- there is a THIRD, already-established pattern
 // in this exact codebase for exactly this class of problem:
 // asset-evidence.ts's `readImageBoxes`, used by gate8/gate12, drives

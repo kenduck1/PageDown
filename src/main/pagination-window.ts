@@ -449,7 +449,7 @@ export interface PaginationHarness {
   // (it only ever sees already-converted HTML), so every real caller must
   // compute it from the document's own frontmatter (Task 4's job) or from
   // DEFAULT_PAGE_CONFIG where there is deliberately no document to read one
-  // from (see src/pagination/paginate.ts and the phase0 gate specs).
+  // from (see src/pagination/paginate.ts and the gate specs).
   //
   // `documentStyle` (Page Setup Completeness, Task 5) is REQUIRED for the
   // exact same reason and positioned right after `geometry`, before the
@@ -457,7 +457,7 @@ export interface PaginationHarness {
   // to derive a DocumentStyle from either, so every real caller computes it
   // via `resolveDocumentStyle` from the same PageConfig it already read
   // `geometry` from, or passes `DEFAULT_DOCUMENT_STYLE` where there is
-  // deliberately no document (the tests/gates/phase1 gate specs).
+  // deliberately no document (the gate specs).
   sendDocument(
     html: string,
     geometry: PageGeometry,
@@ -467,7 +467,7 @@ export interface PaginationHarness {
 }
 
 // The general-purpose default every existing caller (thumbnail-generator.ts,
-// every tests/gates/phase1 gate) implicitly relied on before this became a real
+// every gate) implicitly relied on before this became a real
 // parameter -- unchanged from the literal `10_000` this replaces.
 const DEFAULT_SEND_DOCUMENT_TIMEOUT_MS = 10_000
 
