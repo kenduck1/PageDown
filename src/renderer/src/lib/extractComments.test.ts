@@ -144,3 +144,59 @@ describe('extractComments with a legacy split same-id comment', () => {
     expect(extractComments(source).map((comment) => comment.id)).toEqual(['dup', 'two'])
   })
 })
+
+// The sidebar is the one surface that has to answer "is this comment
+// resolved?", and it answers it by parsing the document -- so the resolved flag
+// has to survive that parse, including for the multi-marker shapes one logical
+// comment can take.
+describe('extractComments and resolved state', () => {
+  const BASE = { author: 'Kai', text: 'a note', createdAt: '2026-08-11T09:00:00.000Z' }
+  const RESOLVED = '2026-08-12T14:30:00.000Z'
+
+  function pair(id: string, body: string, resolvedAt?: string): string {
+    const data = encodeCommentMeta({ ...BASE, resolvedAt })
+    return `<!--comment id="${id}" data="${data}"-->${body}<!--/comment id="${id}"-->`
+  }
+
+  // BACKWARD COMPATIBILITY at the surface that decides which list a comment
+  // appears in. A comment written before resolution existed carries no
+  // `resolvedAt`, and must read as an ordinary ACTIVE comment -- never as
+  // resolved, and never dropped for having a payload that "looks wrong".
+  it('reports a comment with no resolvedAt as null, not missing or resolved', () => {
+    const source = `Before. ${pair('c1', 'the marked phrase')}. After.`
+
+    const [comment] = extractComments(source)
+
+    expect(comment.resolvedAt).toBeNull()
+    expect(comment.text).toBe('a note')
+  })
+
+  it('reports a resolved comment’s own stamp', () => {
+    const source = `Before. ${pair('c1', 'the marked phrase', RESOLVED)}. After.`
+
+    expect(extractComments(source)[0].resolvedAt).toBe(RESOLVED)
+  })
+
+  // A multi-block (or hand-wrapped) comment is SEVERAL same-id marker pairs.
+  // The dedupe that collapses them into one row has to carry the resolved flag
+  // through with everything else, or a three-paragraph resolved comment would
+  // reappear in the active list.
+  it('keeps the resolved flag when collapsing same-id occurrences into one entry', () => {
+    const source = `${pair('dup', 'first block', RESOLVED)}\n\n${pair('dup', 'second block', RESOLVED)}\n`
+
+    const comments = extractComments(source)
+
+    expect(comments).toHaveLength(1)
+    expect(comments[0].resolvedAt).toBe(RESOLVED)
+    expect(comments[0].matchedText).toBe('first block second block')
+  })
+
+  it('separates a resolved comment from an active one in the same document', () => {
+    const source = `${pair('a', 'active span')}\n\n${pair('b', 'done span', RESOLVED)}\n`
+
+    expect(extractComments(source).map((comment) => [comment.id, comment.resolvedAt])).toEqual([
+      ['a', null],
+      ['b', RESOLVED]
+    ])
+  })
+})

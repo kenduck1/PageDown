@@ -28,6 +28,8 @@ function renderSidebar(): void {
       onRestoreVersion={vi.fn()}
       onSelectComment={vi.fn()}
       onResolveComment={vi.fn()}
+      onUnresolveComment={vi.fn()}
+      onDeleteComment={vi.fn()}
     />
   )
 }

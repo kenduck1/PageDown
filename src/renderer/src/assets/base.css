@@ -55,6 +55,25 @@
   --color-find-match: #fdf0b4;
   --color-find-match-active: #f7c948;
   --color-comment-mark: #e3d6fb;
+  /* A RESOLVED comment's mark. Deliberately NOT a lighter violet: the point is
+     that a resolved comment stops competing with active ones for attention, and
+     a paler version of the same fill still reads as "highlighted text", just
+     less confidently. Dropping the fill entirely and leaving a dotted underline
+     in a neutral grey moves it into a different visual CATEGORY instead -- a
+     footnote-ish annotation rather than a highlight -- which is what "still
+     there, no longer shouting" actually looks like.
+
+     Also deliberately not `--color-text-faint` reused directly: this is a
+     document-surface colour, and the canvas never goes dark (document-
+     typography.css pins .pagedown-document to #ffffff/#202124 as literals), so
+     it must stay legible on white under BOTH app themes rather than following
+     the chrome's own faint-text token into a near-white dark-mode value. Same
+     light-only reasoning --color-page-guide and --color-composer-target already
+     record; hence no :root[data-theme='dark'] counterpart below. Measured
+     against the page it always sits on (#ffffff): 2.85:1, which is well above
+     the 1.26-1.37 band the FILL tokens occupy -- correct, because this one is
+     a foreground line the reader has to actually see, not a wash behind text. */
+  --color-comment-resolved: #9aa0a6;
   --color-slash-query: #d9e6fb;
   /* The range an open Insert-link / Add-comment composer will act on. A
      FOURTH distinct hue (soft green) after find's yellow, comments' violet
@@ -305,6 +324,35 @@
     background: var(--color-comment-mark);
     border-radius: 2px;
     cursor: pointer;
+  }
+
+  /* A RESOLVED comment: still findable, no longer shouting. The violet fill is
+     dropped for a dotted underline, so the span stops reading as an active
+     highlight while remaining visibly annotated -- you can still see that this
+     text was commented on, click it to reveal the comment in the sidebar, and
+     unresolve it from there.
+
+     `text-decoration` rather than `border-bottom`. Both are layout-neutral here
+     -- per CSS 2.1 10.6.1 an inline box's margins, borders and padding do not
+     affect line box height, so neither would shift the surrounding text -- so
+     this is not the layout decision it might look like. It is chosen because a
+     decoration follows the TEXT (it re-draws per line when a marked span wraps,
+     and hugs the glyphs) while a border draws one rule under each inline
+     fragment's box, which reads as a boxed span rather than an annotated
+     phrase. Worth stating either way: nothing about a comment reaches the
+     paginated surface at all (the comment-to-hast handler is a pure
+     passthrough), so no rule here can be what breaks Gate 10's 0.000px
+     editor/paginator parity.
+
+     Overrides only what it means to override. The base rule above still
+     supplies `cursor: pointer`, so a resolved mark stays clickable, and it
+     still carries `.pagedown-comment-mark`, so every existing selector
+     (EditorScreen's scroll-into-view and click-to-reveal, Gate 27's counts)
+     keeps matching it. */
+  .milkdown-mount .ProseMirror .pagedown-comment-mark.pagedown-comment-resolved {
+    background: none;
+    text-decoration: underline dotted var(--color-comment-resolved);
+    text-underline-offset: 3px;
   }
 
   /* The typed "/query" itself while a slash-command session is open --

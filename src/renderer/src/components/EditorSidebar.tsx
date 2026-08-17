@@ -31,7 +31,11 @@ export interface EditorSidebarProps {
   onRestoreVersion: (content: string) => void | Promise<void>
   // Forwarded straight through to EditorComments.
   onSelectComment: (id: string) => void
+  // The three comment-lifecycle actions, forwarded straight through.
+  // Resolve/unresolve keep the comment in the document; delete removes it.
   onResolveComment: (id: string) => void
+  onUnresolveComment: (id: string) => void
+  onDeleteComment: (id: string) => void
   /** The comment clicked in the document, highlighted in the Comments list. */
   activeCommentId?: string | null
 }
@@ -100,6 +104,8 @@ function EditorSidebar({
   onRestoreVersion,
   onSelectComment,
   onResolveComment,
+  onUnresolveComment,
+  onDeleteComment,
   activeCommentId
 }: EditorSidebarProps): React.JSX.Element {
   const sidebarTab = useAppStore((state) => state.sidebarTab)
@@ -179,6 +185,8 @@ function EditorSidebar({
             content={content}
             onSelectComment={onSelectComment}
             onResolveComment={onResolveComment}
+            onUnresolveComment={onUnresolveComment}
+            onDeleteComment={onDeleteComment}
             activeCommentId={activeCommentId}
           />
         ) : (

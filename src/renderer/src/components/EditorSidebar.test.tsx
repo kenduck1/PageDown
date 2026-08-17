@@ -26,6 +26,8 @@ describe('EditorSidebar', () => {
         onRestoreVersion={vi.fn()}
         onSelectComment={vi.fn()}
         onResolveComment={vi.fn()}
+        onUnresolveComment={vi.fn()}
+        onDeleteComment={vi.fn()}
       />
     )
 
@@ -47,6 +49,8 @@ describe('EditorSidebar', () => {
         onRestoreVersion={vi.fn()}
         onSelectComment={vi.fn()}
         onResolveComment={vi.fn()}
+        onUnresolveComment={vi.fn()}
+        onDeleteComment={vi.fn()}
       />
     )
 
@@ -70,6 +74,8 @@ describe('EditorSidebar', () => {
         onRestoreVersion={vi.fn()}
         onSelectComment={vi.fn()}
         onResolveComment={vi.fn()}
+        onUnresolveComment={vi.fn()}
+        onDeleteComment={vi.fn()}
       />
     )
 
@@ -94,6 +100,8 @@ describe('EditorSidebar', () => {
         onRestoreVersion={vi.fn()}
         onSelectComment={vi.fn()}
         onResolveComment={vi.fn()}
+        onUnresolveComment={vi.fn()}
+        onDeleteComment={vi.fn()}
       />
     )
 
@@ -116,6 +124,8 @@ describe('EditorSidebar', () => {
         onRestoreVersion={vi.fn()}
         onSelectComment={vi.fn()}
         onResolveComment={vi.fn()}
+        onUnresolveComment={vi.fn()}
+        onDeleteComment={vi.fn()}
       />
     )
 
@@ -134,6 +144,8 @@ describe('EditorSidebar', () => {
         onRestoreVersion={vi.fn()}
         onSelectComment={vi.fn()}
         onResolveComment={vi.fn()}
+        onUnresolveComment={vi.fn()}
+        onDeleteComment={vi.fn()}
       />
     )
 
@@ -154,6 +166,8 @@ describe('EditorSidebar', () => {
         onRestoreVersion={vi.fn()}
         onSelectComment={vi.fn()}
         onResolveComment={vi.fn()}
+        onUnresolveComment={vi.fn()}
+        onDeleteComment={vi.fn()}
       />
     )
 
@@ -175,6 +189,8 @@ describe('EditorSidebar', () => {
         onRestoreVersion={vi.fn()}
         onSelectComment={vi.fn()}
         onResolveComment={vi.fn()}
+        onUnresolveComment={vi.fn()}
+        onDeleteComment={vi.fn()}
       />
     )
 
@@ -252,6 +268,8 @@ describe('EditorSidebar', () => {
         onRestoreVersion={vi.fn()}
         onSelectComment={vi.fn()}
         onResolveComment={vi.fn()}
+        onUnresolveComment={vi.fn()}
+        onDeleteComment={vi.fn()}
       />
     )
 
@@ -329,6 +347,8 @@ describe('EditorSidebar', () => {
         onRestoreVersion={vi.fn()}
         onSelectComment={vi.fn()}
         onResolveComment={vi.fn()}
+        onUnresolveComment={vi.fn()}
+        onDeleteComment={vi.fn()}
       />
     )
 
@@ -356,6 +376,8 @@ describe('EditorSidebar', () => {
         onRestoreVersion={vi.fn()}
         onSelectComment={vi.fn()}
         onResolveComment={vi.fn()}
+        onUnresolveComment={vi.fn()}
+        onDeleteComment={vi.fn()}
       />
     )
 

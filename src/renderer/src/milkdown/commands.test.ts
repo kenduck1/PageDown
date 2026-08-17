@@ -13,6 +13,8 @@ import {
   redoCommand,
   addCommentCommand,
   resolveCommentCommand,
+  unresolveCommentCommand,
+  deleteCommentCommand,
   insertTaskListCommand,
   insertMathBlockCommand,
   insertMermaidBlockCommand,
@@ -158,22 +160,30 @@ describe('comment mark commands', () => {
     expect(editor.action(getMarkdown())).not.toContain('<!--comment')
   })
 
-  it('resolveCommentCommand removes every mark instance for the given id, leaving the text intact', async () => {
+  // Builds a one-comment document and hands back the editor plus the id, so
+  // each lifecycle test below states only what it is actually about.
+  async function editorWithComment(): Promise<{ editor: Editor; id: string }> {
     const editor = await createTestEditor('Some plain text here.', PLUGINS)
     const view = editor.action((ctx) => ctx.get(editorViewCtx)) as EditorView
     view.dispatch(view.state.tr.setSelection(TextSelection.create(view.state.doc, 6, 11)))
     editor.action((ctx) =>
       ctx.get(commandsCtx).call(addCommentCommand.key, { author: 'Kai', text: 'a note' })
     )
-
-    const withComment = editor.action(getMarkdown())
-    const idMatch = withComment.match(/<!--comment id="([^"]+)"/)
+    const idMatch = editor.action(getMarkdown()).match(/<!--comment id="([^"]+)"/)
     expect(idMatch).not.toBeNull()
+    return { editor, id: idMatch![1] }
+  }
 
-    const resolved = editor.action((ctx) =>
-      ctx.get(commandsCtx).call(resolveCommentCommand.key, idMatch![1])
-    )
-    expect(resolved).toBe(true)
+  // DELETE is what "resolve" used to do. This test is the old
+  // `resolveCommentCommand removes every mark instance...` test, renamed onto
+  // the command that now carries that behaviour -- kept rather than replaced,
+  // because removing the mark cleanly (and leaving the text) is still a real
+  // requirement, it just answers to a different name.
+  it('deleteCommentCommand removes every mark instance for the given id, leaving the text intact', async () => {
+    const { editor, id } = await editorWithComment()
+
+    const deleted = editor.action((ctx) => ctx.get(commandsCtx).call(deleteCommentCommand.key, id))
+    expect(deleted).toBe(true)
 
     const output = editor.action(getMarkdown())
     expect(output).not.toContain('<!--comment')
@@ -181,12 +191,164 @@ describe('comment mark commands', () => {
     expect(output).toContain('plain')
   })
 
-  it('resolveCommentCommand returns false for an id that is not present', async () => {
-    const editor = await createTestEditor('Some plain text here.', PLUGINS)
+  // The headline behaviour change: resolve KEEPS the comment. The marker pair
+  // is still in the file, its author/text/createdAt are untouched, and the only
+  // difference is a `resolvedAt` stamp inside the payload.
+  it('resolveCommentCommand keeps the comment in the document and stamps resolvedAt', async () => {
+    const { editor, id } = await editorWithComment()
+
     const resolved = editor.action((ctx) =>
-      ctx.get(commandsCtx).call(resolveCommentCommand.key, 'not-a-real-id')
+      ctx.get(commandsCtx).call(resolveCommentCommand.key, id)
     )
-    expect(resolved).toBe(false)
+    expect(resolved).toBe(true)
+
+    const output = editor.action(getMarkdown())
+    expect(output).toContain(`<!--comment id="${id}"`)
+    expect(output).toContain(`<!--/comment id="${id}"-->`)
+    expect(output).toContain('plain')
+
+    const [reloaded] = extractComments(output)
+    expect(reloaded.resolvedAt).not.toBeNull()
+    expect(Number.isNaN(new Date(reloaded.resolvedAt!).getTime())).toBe(false)
+    // Nothing else about the comment moved.
+    expect(reloaded.text).toBe('a note')
+    expect(reloaded.author).toBe('Kai')
+  })
+
+  it('unresolveCommentCommand clears the stamp and leaves an unresolved comment', async () => {
+    const { editor, id } = await editorWithComment()
+    editor.action((ctx) => ctx.get(commandsCtx).call(resolveCommentCommand.key, id))
+
+    const unresolved = editor.action((ctx) =>
+      ctx.get(commandsCtx).call(unresolveCommentCommand.key, id)
+    )
+    expect(unresolved).toBe(true)
+
+    const output = editor.action(getMarkdown())
+    const [reloaded] = extractComments(output)
+    expect(reloaded.resolvedAt).toBeNull()
+    expect(reloaded.text).toBe('a note')
+  })
+
+  // Round-tripping a resolved comment through the FILE and back into the editor
+  // is the thing the whole design rests on -- the resolved state has no other
+  // home. Serialise, reparse into a fresh editor, and the state must still be
+  // there and still be resolved.
+  it('a resolved comment survives a full markdown round trip', async () => {
+    const { editor, id } = await editorWithComment()
+    editor.action((ctx) => ctx.get(commandsCtx).call(resolveCommentCommand.key, id))
+    const saved = editor.action(getMarkdown())
+
+    const reopened = await createTestEditor(saved, PLUGINS)
+    const resaved = reopened.action(getMarkdown())
+
+    const [before] = extractComments(saved)
+    const [after] = extractComments(resaved)
+    // ANTI-VACUITY, and it is not paranoia: `after.resolvedAt ===
+    // before.resolvedAt` is trivially satisfied by `null === null`, so a
+    // serializer that silently dropped the stamp on EVERY save would leave both
+    // sides null and this comparison green. Verified against exactly that
+    // mutation. Assert the state is really there before asserting it survived.
+    expect(before.resolvedAt).not.toBeNull()
+    expect(after.resolvedAt).toBe(before.resolvedAt)
+    expect(after.id).toBe(before.id)
+    expect(after.text).toBe('a note')
+    await reopened.destroy()
+  })
+
+  // BACKWARD COMPATIBILITY through the real editor: a comment whose payload
+  // predates `resolvedAt` must parse, read as unresolved, and -- crucially --
+  // re-serialise to the SAME BYTES. If the serializer started writing a
+  // `resolvedAt: ""` into the payload, every existing document in the world
+  // would come back from its first Format-mode edit with different bytes.
+  it('a pre-existing comment with no resolvedAt reads as unresolved and re-serialises unchanged', async () => {
+    // Built by hand with btoa, NOT via encodeCommentMeta -- these are literally
+    // the bytes a build predating resolution wrote. Encoding the fixture with
+    // the current encoder would make this test vacuous: any change to what an
+    // unresolved comment encodes to would move BOTH sides of the comparison
+    // together and the byte-identity assertion would keep passing. Verified:
+    // under a mutation that always writes `"resolvedAt":""`, the
+    // encodeCommentMeta-built version passed and this one fails.
+    const data = btoa(
+      JSON.stringify({
+        author: 'Kai',
+        text: 'older comment',
+        createdAt: '2026-08-09T06:00:00Z'
+      })
+    )
+    const source = `Before. <!--comment id="c-old" data="${data}"-->the marked phrase<!--/comment id="c-old"-->. After.`
+
+    const [parsed] = extractComments(source)
+    expect(parsed.resolvedAt).toBeNull()
+
+    const editor = await createTestEditor(source, PLUGINS)
+    const output = editor.action(getMarkdown())
+    expect(output.trim()).toBe(source.trim())
+    expect(output).toContain(`data="${data}"`)
+    await editor.destroy()
+  })
+
+  // The DOM half of "a resolved comment's highlight is visibly muted": the
+  // styling is driven by a second class the mark's own toDOM emits, so this
+  // asserts the class (jsdom has no CSS pipeline at all -- see
+  // EditorComments.test.tsx's own note -- so a computed background here would
+  // read the initial value regardless of which rules exist).
+  //
+  // The base `.pagedown-comment-mark` class must SURVIVE on a resolved mark:
+  // EditorScreen's scroll-into-view and click-to-reveal both select on it, and
+  // so does Gate 27, so a resolved comment that dropped it would silently stop
+  // being clickable and revealable.
+  it('a resolved mark carries the resolved class alongside the base one; an unresolved mark does not', async () => {
+    const { editor, id } = await editorWithComment()
+    const markSelector = '.pagedown-comment-mark'
+    const editorDom = (): Element => editor.action((ctx) => ctx.get(editorViewCtx).dom)
+
+    const before = editorDom().querySelectorAll(markSelector)
+    expect(before).toHaveLength(1)
+    expect(before[0].classList.contains('pagedown-comment-resolved')).toBe(false)
+    expect(before[0].getAttribute('data-comment-resolved-at')).toBeNull()
+
+    editor.action((ctx) => ctx.get(commandsCtx).call(resolveCommentCommand.key, id))
+
+    const after = editorDom().querySelectorAll(markSelector)
+    expect(after).toHaveLength(1)
+    expect(after[0].classList.contains('pagedown-comment-resolved')).toBe(true)
+    expect(after[0].getAttribute('data-comment-resolved-at')).toBeTruthy()
+    expect(after[0].textContent).toBe('plain')
+
+    editor.action((ctx) => ctx.get(commandsCtx).call(unresolveCommentCommand.key, id))
+
+    const undone = editorDom().querySelectorAll(markSelector)
+    expect(undone).toHaveLength(1)
+    expect(undone[0].classList.contains('pagedown-comment-resolved')).toBe(false)
+    expect(undone[0].getAttribute('data-comment-resolved-at')).toBeNull()
+  })
+
+  it('every comment command returns false for an id that is not present', async () => {
+    const editor = await createTestEditor('Some plain text here.', PLUGINS)
+    for (const command of [resolveCommentCommand, unresolveCommentCommand, deleteCommentCommand]) {
+      expect(editor.action((ctx) => ctx.get(commandsCtx).call(command.key, 'not-a-real-id'))).toBe(
+        false
+      )
+    }
+  })
+
+  // A dry run -- a command invoked with no `dispatch` -- is the standard
+  // ProseMirror "is this applicable right now" check, and must never mutate.
+  // resolve/unresolve build their transaction eagerly (they have to, in order
+  // to answer "would this change anything"), which is exactly the shape that
+  // accidentally dispatches.
+  it('resolveCommentCommand reports false rather than re-stamping an already-resolved comment', async () => {
+    const { editor, id } = await editorWithComment()
+    expect(editor.action((ctx) => ctx.get(commandsCtx).call(resolveCommentCommand.key, id))).toBe(
+      true
+    )
+    const once = editor.action(getMarkdown())
+
+    expect(editor.action((ctx) => ctx.get(commandsCtx).call(resolveCommentCommand.key, id))).toBe(
+      false
+    )
+    expect(editor.action(getMarkdown())).toBe(once)
   })
 })
 

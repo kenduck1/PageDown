@@ -5,18 +5,31 @@ import { join } from 'node:path'
 import { mergeRecentFiles, readRecentFiles, writeRecentFiles } from '../../src/main/recent-files'
 import { launchIsolatedApp } from './electron-launch'
 import { markdownToHtml } from '../../src/markdown/pipeline'
-import { encodeCommentMeta } from '../../src/markdown/comment-plugin'
+import {
+  encodeCommentMeta,
+  decodeCommentMeta,
+  type CommentMeta
+} from '../../src/markdown/comment-plugin'
 import { LETTER_GEOMETRY, DEFAULT_STYLE } from './gate-geometry'
 
 // Gate 27 -- Comments, against the REAL built app. Two halves, mirroring the
 // same split this feature's own architecture has (docs/superpowers/specs/
-// 2026-08-09-comments-design.md): a real UI add/resolve/persist round trip
-// (Test 1, matching Gate 20/22's real-app-UI template), and proof that a
-// comment is 100% invisible on the sandboxed pagination/PDF surface (Test 2,
-// matching Gate 3/26's harness-driven template) -- the two things a
-// component/unit-test suite structurally cannot prove: that a real
+// 2026-08-09-comments-design.md): a real UI round trip through the full
+// comment lifecycle (Test 1, matching Gate 20/22's real-app-UI template), and
+// proof that a comment is 100% invisible on the sandboxed pagination/PDF
+// surface (Test 2/3, matching Gate 3/26's harness-driven template) -- the two
+// things a component/unit-test suite structurally cannot prove: that a real
 // Chromium/ProseMirror selection genuinely produces a real DOM mark, and
 // that nothing about a comment leaks into what actually gets printed.
+//
+// Test 1 walks add -> resolve -> unresolve -> delete, reading the real file off
+// disk after each. That ordering is the point rather than thoroughness for its
+// own sake: RESOLVE and DELETE used to be the same action, and the bytes on
+// disk are the only place the difference between them is actually recorded --
+// resolve must leave the marker pair in the file with a `resolvedAt` stamp
+// inside its payload, delete must take the pair away entirely. A test that only
+// checked the DOM could not tell a resolved comment from a deleted one after
+// the next reload.
 //
 // FLAKE NOTE: both tests pass individually, quickly (under ~2s each) and
 // repeatably in isolation (`-g "<test name>"`) -- verified repeatedly while
@@ -49,6 +62,15 @@ async function getMainWindow(app: ElectronApplication): Promise<Page> {
 }
 
 const MOD = process.platform === 'darwin' ? 'Meta' : 'Control'
+
+// Decodes the FIRST comment payload out of a real saved document. Resolved
+// state lives inside that base64 blob, so every assertion about it has to go
+// through the real decoder -- a substring check against base64 would pass or
+// fail for reasons unrelated to what the comment actually says.
+function readPayload(markdown: string): CommentMeta | null {
+  const match = markdown.match(/<!--comment id="[^"]+" data="([^"]+)"-->/)
+  return match ? decodeCommentMeta(match[1]) : null
+}
 
 interface OpenedFixture {
   app: ElectronApplication
@@ -97,7 +119,7 @@ async function openFixtureDocument(body: string): Promise<OpenedFixture> {
   return { app, close, win, fixtureDir, fixturePath, restoreRecents }
 }
 
-test('Gate 27: adding and resolving a comment through the real UI persists and un-persists real marker syntax on disk', async () => {
+test('Gate 27: add / resolve / unresolve / delete through the real UI, each persisting the right bytes on disk', async () => {
   test.setTimeout(90_000)
 
   const fixture = await openFixtureDocument('# Gate 27 Fixture\n\nOriginal marked sentence.\n')
@@ -182,13 +204,81 @@ test('Gate 27: adding and resolving a comment through the real UI persists and u
     expect(savedWithComment).toContain('Original marked sentence.')
     expect(savedWithComment).toContain(`<!--/comment id="${commentId}"-->`)
 
+    // A freshly added comment is UNRESOLVED, which in this format means its
+    // payload carries no `resolvedAt` key at all -- not an empty one. Decoded
+    // rather than string-matched, because the payload is base64 and a substring
+    // check against it would prove nothing either way.
+    expect(readPayload(savedWithComment)?.resolvedAt).toBeUndefined()
+
     // The real Comments sidebar tab lists it, via the real extractComments
     // parse of the just-saved source.
     await win.getByRole('button', { name: 'Comments' }).click()
     await expect(win.getByText('needs a citation')).toBeVisible()
     await expect(win.getByText('"Original marked sentence."')).toBeVisible()
 
+    // ---- RESOLVE: the comment STAYS, and the mark is visibly muted --------
+    //
+    // This is the behaviour change this gate exists to pin. Resolving used to
+    // delete the mark outright, so a resolved comment was simply gone.
     await win.getByRole('button', { name: 'Resolve' }).click()
+
+    // The mark is still in the document, still carrying the base class every
+    // other consumer selects on, and now also the resolved one that drives its
+    // muted styling.
+    const resolvedMark = win.locator('.pagedown-comment-mark')
+    await expect(resolvedMark).toHaveCount(1)
+    await expect(resolvedMark).toHaveClass(/pagedown-comment-resolved/)
+    await expect(resolvedMark).toHaveText('Original marked sentence.')
+    await expect(paragraph).toHaveText('Original marked sentence.')
+
+    await win.getByRole('button', { name: 'Save' }).click()
+    await expect
+      .poll(
+        async () => readPayload(await readFile(fixturePath, 'utf8'))?.resolvedAt !== undefined,
+        {
+          timeout: 10_000
+        }
+      )
+      .toBe(true)
+
+    const savedResolvedState = await readFile(fixturePath, 'utf8')
+    // Still one ordinary marker pair -- resolving changed the payload, nothing
+    // structural.
+    expect(savedResolvedState).toContain(`<!--comment id="${commentId}"`)
+    expect(savedResolvedState).toContain(`<!--/comment id="${commentId}"-->`)
+    expect(savedResolvedState).toContain('Original marked sentence.')
+    const resolvedPayload = readPayload(savedResolvedState)
+    expect(resolvedPayload?.text).toBe('needs a citation')
+    expect(Number.isNaN(new Date(resolvedPayload!.resolvedAt!).getTime())).toBe(false)
+
+    // ---- UNRESOLVE: back to the active list ------------------------------
+    //
+    // The sidebar has moved the row into its own Resolved section, collapsed by
+    // default -- so the disclosure itself is part of the round trip, not
+    // scaffolding around it.
+    await win.getByRole('button', { name: 'Resolved (1)' }).click()
+    await win.getByRole('button', { name: 'Unresolve' }).click()
+    await expect(win.locator('.pagedown-comment-mark')).toHaveCount(1)
+    await expect(win.locator('.pagedown-comment-mark')).not.toHaveClass(/pagedown-comment-resolved/)
+
+    await win.getByRole('button', { name: 'Save' }).click()
+    await expect
+      .poll(async () => readPayload(await readFile(fixturePath, 'utf8'))?.resolvedAt, {
+        timeout: 10_000
+      })
+      .toBeUndefined()
+
+    // ---- DELETE: the mark actually goes ----------------------------------
+    //
+    // Two clicks, deliberately: the confirmation is the thing keeping a
+    // destructive, sidebar-unreachable-by-undo action from being a misclick
+    // away from a one-click resolve.
+    await expect(win.getByRole('button', { name: 'Resolve' })).toBeVisible()
+    await win.getByRole('button', { name: 'Delete', exact: true }).click()
+    // Asking is not doing: the mark must still be there at this point.
+    await expect(win.locator('.pagedown-comment-mark')).toHaveCount(1)
+    await win.getByRole('button', { name: 'Confirm delete' }).click()
+
     await expect(win.locator('.pagedown-comment-mark')).toHaveCount(0)
     await expect(paragraph).toHaveText('Original marked sentence.')
 
@@ -199,10 +289,10 @@ test('Gate 27: adding and resolving a comment through the real UI persists and u
       })
       .toBe(true)
 
-    const savedResolved = await readFile(fixturePath, 'utf8')
-    expect(savedResolved).not.toContain('<!--comment')
-    expect(savedResolved).not.toContain('<!--/comment')
-    expect(savedResolved).toContain('Original marked sentence.')
+    const savedDeleted = await readFile(fixturePath, 'utf8')
+    expect(savedDeleted).not.toContain('<!--comment')
+    expect(savedDeleted).not.toContain('<!--/comment')
+    expect(savedDeleted).toContain('Original marked sentence.')
   } finally {
     await restoreRecents()
     await rm(fixtureDir, { recursive: true, force: true })
@@ -295,7 +385,21 @@ test('Gate 27: a comment is invisible in the sandboxed pagination preview and ne
       text: 'needs a citation',
       createdAt: '2026-08-09T06:00:00Z'
     })
-    const markdown = `# Gate 27 Preview Check\n\nBefore. <!--comment id="c1" data="${dataAttr}"-->the marked phrase<!--/comment id="c1"-->. After.\n`
+    // A RESOLVED comment must be exactly as invisible on the printed surface as
+    // an active one. It is a different payload shape reaching the same
+    // passthrough handler, so it is worth measuring rather than assuming: a
+    // resolved comment is still pure authoring metadata, and an exported PDF
+    // renders the DOCUMENT, never a view of who annotated it.
+    const resolvedAttr = encodeCommentMeta({
+      author: 'Kai',
+      text: 'already dealt with',
+      createdAt: '2026-08-09T06:00:00Z',
+      resolvedAt: '2026-08-12T14:30:00.000Z'
+    })
+    const markdown =
+      `# Gate 27 Preview Check\n\n` +
+      `Before. <!--comment id="c1" data="${dataAttr}"-->the marked phrase<!--/comment id="c1"-->. After.\n\n` +
+      `Second. <!--comment id="c2" data="${resolvedAttr}"-->the resolved phrase<!--/comment id="c2"-->. End.\n`
     const { html } = markdownToHtml(markdown)
 
     const result = await app.evaluate(
@@ -334,12 +438,19 @@ test('Gate 27: a comment is invisible in the sandboxed pagination preview and ne
     expect(result.sendResult.ready).toBe(true)
     // The marked TEXT survives, completely ordinary -- proving the comment-
     // to-hast passthrough handler didn't drop content, only its own marker
-    // structure.
+    // structure. True of a resolved comment's span as much as an active one's:
+    // resolving a comment must not make the text it wrapped disappear from the
+    // printed page.
     expect(result.bodyText).toContain('the marked phrase')
-    // Zero structural trace of the comment anywhere in the sandboxed DOM.
+    expect(result.bodyText).toContain('the resolved phrase')
+    // Zero structural trace of either comment anywhere in the sandboxed DOM --
+    // including the resolved class, which exists only in the editor's own
+    // stylesheet and must never reach this surface.
     expect(result.commentTraceCount).toBe(0)
     expect(result.bodyText).not.toContain('<!--comment')
     expect(result.bodyText).not.toContain('needs a citation')
+    expect(result.bodyText).not.toContain('already dealt with')
+    expect(result.bodyText).not.toContain('2026-08-12')
 
     const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs')
     const pdfBuffer = Buffer.from(result.pdfBuffer)
@@ -353,8 +464,10 @@ test('Gate 27: a comment is invisible in the sandboxed pagination preview and ne
     }
 
     expect(extractedText).toContain('the marked phrase')
+    expect(extractedText).toContain('the resolved phrase')
     expect(extractedText).not.toContain('<!--comment')
     expect(extractedText).not.toContain('needs a citation')
+    expect(extractedText).not.toContain('already dealt with')
   } finally {
     await close()
   }

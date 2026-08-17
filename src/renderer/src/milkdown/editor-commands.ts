@@ -28,6 +28,8 @@ import {
   insertPagebreakCommand,
   addCommentCommand,
   resolveCommentCommand,
+  unresolveCommentCommand,
+  deleteCommentCommand,
   deleteTableRowCommand,
   deleteTableColumnCommand,
   deleteWholeTableCommand,
@@ -318,9 +320,17 @@ export interface EditorCommands {
   // nothing when the selection is empty or spans more than one block -- see
   // addCommentCommand's own doc comment for the exact refusal conditions.
   addComment: (author: string, text: string) => boolean
-  // resolveCommentCommand (commands.ts) -- removes every mark instance for
-  // the given comment id, anywhere in the document.
+  // The three comment-lifecycle commands (commands.ts). Each sweeps EVERY mark
+  // instance carrying the id, anywhere in the document -- one logical comment
+  // is routinely several marks (a multi-block comment, or one spanning a
+  // hand-wrapped line), so acting on a subset would leave orphaned halves.
+  //
+  // resolveComment/unresolveComment only flip the mark's `resolvedAt` attr, so
+  // the comment stays in the file either way; deleteComment is the destructive
+  // one that removes the mark outright (what `resolveComment` used to do).
   resolveComment: (id: string) => void
+  unresolveComment: (id: string) => void
+  deleteComment: (id: string) => void
   // Tells the composer-target plugin (composer-target-plugin.ts) whether an
   // Insert-link / Add-comment popover is currently open over this editor, so
   // it can paint the range that composer will act on.
@@ -670,6 +680,12 @@ export function buildEditorCommands(editor: Editor): EditorCommands {
     },
     resolveComment: (id) => {
       editor.action(callCommand(resolveCommentCommand.key, id))
+    },
+    unresolveComment: (id) => {
+      editor.action(callCommand(unresolveCommentCommand.key, id))
+    },
+    deleteComment: (id) => {
+      editor.action(callCommand(deleteCommentCommand.key, id))
     },
     setComposerTargetActive: (active) => {
       editor.action((ctx) => {

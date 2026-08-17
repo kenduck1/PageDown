@@ -36,6 +36,8 @@ const { mockEditorHandle } = vi.hoisted(() => ({
     getSelectionRect: vi.fn(() => null),
     addComment: vi.fn(() => true),
     resolveComment: vi.fn(),
+    unresolveComment: vi.fn(),
+    deleteComment: vi.fn(),
     runSlashItem: vi.fn(),
     closeSlashMenu: vi.fn(),
     getSlashItems: vi.fn(() => []),

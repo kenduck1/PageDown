@@ -18,6 +18,26 @@ export interface CommentMeta {
   author: string
   text: string
   createdAt: string
+  // ISO timestamp of when the comment was resolved; ABSENT (never an empty
+  // string) for an unresolved one.
+  //
+  // Resolved state lives IN THE DOCUMENT, inside this same base64 payload,
+  // for the reason the whole comment architecture exists: no sidecar file,
+  // the `.md` IS the document. It stays portable for free, because the
+  // payload sits inside an HTML comment every other Markdown renderer
+  // ignores -- exactly the argument the marker syntax itself rests on.
+  //
+  // OPTIONAL is load-bearing in BOTH directions, not merely a nicety:
+  //   - BACKWARD: every comment written before this field existed has no
+  //     `resolvedAt`, and must read as a perfectly ordinary unresolved
+  //     comment rather than as a malformed payload. decodeCommentMeta's own
+  //     shape check therefore never requires it.
+  //   - FORWARD: encodeCommentMeta OMITS the key entirely when it is absent,
+  //     so an unresolved comment still encodes to byte-identical bytes to
+  //     what this format produced before resolution existed. That is what
+  //     keeps round-trip/byte-identity tests -- and untouched documents on
+  //     real users' disks -- from moving at all.
+  resolvedAt?: string
 }
 
 // Extends Parent (not the bare unist Node) and overrides `children` to
@@ -30,6 +50,10 @@ export interface Comment extends Parent {
   author: string
   text: string
   createdAt: string
+  // Optional for the same reason CommentMeta.resolvedAt is -- see there.
+  // Absent on every comment written before resolution existed, and on every
+  // unresolved comment written since.
+  resolvedAt?: string
   children: PhrasingContent[]
 }
 
@@ -100,8 +124,30 @@ function base64ToUtf8(base64: string): string {
   return new TextDecoder().decode(bytes)
 }
 
+// Key order is PINNED by rebuilding the payload here rather than stringifying
+// whatever object the caller happened to construct: JSON.stringify serializes
+// in insertion order, so two call sites building the same logical comment with
+// their keys in a different order would emit different bytes for it. That was
+// already true before `resolvedAt` existed and simply never bit; adding a
+// fourth, CONDITIONAL key makes it worth pinning, because the whole
+// backward/forward-compatibility story below depends on knowing exactly what an
+// unresolved comment encodes to.
+//
+// `resolvedAt` is omitted entirely (not written as `""`/`null`) when absent, so
+// an unresolved comment's bytes are byte-for-byte what this function produced
+// before resolution existed. JSON.stringify would already drop an `undefined`
+// value, but relying on that is a silent invariant; the explicit branch is the
+// one place this guarantee is stated.
 export function encodeCommentMeta(meta: CommentMeta): string {
-  return utf8ToBase64(JSON.stringify(meta))
+  const payload: CommentMeta = {
+    author: meta.author,
+    text: meta.text,
+    createdAt: meta.createdAt
+  }
+  if (meta.resolvedAt !== undefined && meta.resolvedAt !== '') {
+    payload.resolvedAt = meta.resolvedAt
+  }
+  return utf8ToBase64(JSON.stringify(payload))
 }
 
 // Returns null (never throws) for a malformed/corrupted payload -- comment
@@ -122,7 +168,26 @@ export function decodeCommentMeta(data: string): CommentMeta | null {
       typeof (parsed as CommentMeta).text === 'string' &&
       typeof (parsed as CommentMeta).createdAt === 'string'
     ) {
-      return parsed as CommentMeta
+      const meta = parsed as CommentMeta
+      // `resolvedAt` is NOT part of the shape check above, deliberately: a
+      // payload written before the field existed has no `resolvedAt` at all,
+      // and must decode as an ordinary UNRESOLVED comment rather than as a
+      // malformed one. That is the entire backward-compatibility story, and it
+      // costs exactly this: not requiring the key.
+      //
+      // A present-but-wrong-TYPED `resolvedAt` (hand-edited to a number, say --
+      // this payload is reachable in a text editor) degrades to unresolved
+      // rather than rejecting the whole payload, following the same fail-open
+      // posture the rest of this module already takes. Rejecting would return
+      // null, which leaves the marker pair as inert LITERAL TEXT in the
+      // document -- i.e. one bad character in one field would visibly dump
+      // `<!--comment id="..." data="...">` into the user's prose and lose the
+      // comment. Degrading loses only the resolved flag, and leaves a comment
+      // the user can still read, act on, and re-resolve.
+      const resolvedAt = typeof meta.resolvedAt === 'string' ? meta.resolvedAt : undefined
+      return resolvedAt === undefined || resolvedAt === ''
+        ? { author: meta.author, text: meta.text, createdAt: meta.createdAt }
+        : { author: meta.author, text: meta.text, createdAt: meta.createdAt, resolvedAt }
     }
     return null
   } catch {
@@ -546,6 +611,9 @@ function processContainer(container: Parent): void {
       author: start.meta.author,
       text: start.meta.text,
       createdAt: start.meta.createdAt,
+      // Undefined for an unresolved comment (including every comment written
+      // before this field existed) -- see CommentMeta.resolvedAt.
+      resolvedAt: start.meta.resolvedAt,
       children: between,
       position:
         children[i].position && children[endIndex].position
@@ -639,10 +707,12 @@ function commentRunPosition(
 // remarkPagebreakToMarkdown, see that function's own comment for why `this`
 // must be accessed directly in the attacher body).
 //
-// Re-encodes author/text/createdAt from the node's CURRENT attrs on every
-// call, not an unparsed original string carried through -- an edited or
-// re-authored comment's saved bytes must actually reflect the edit. `id`
-// stays whatever the node already carries (identity, not content).
+// Re-encodes author/text/createdAt/resolvedAt from the node's CURRENT attrs on
+// every call, not an unparsed original string carried through -- an edited,
+// re-authored, or just-resolved comment's saved bytes must actually reflect the
+// change. `id` stays whatever the node already carries (identity, not content),
+// which is also what lets one logical comment span several blocks as several
+// same-id marker pairs.
 export function remarkCommentToMarkdown(this: Processor): void {
   const data = this.data() as { toMarkdownExtensions?: unknown[] }
   const extensions = data.toMarkdownExtensions ?? (data.toMarkdownExtensions = [])
@@ -669,7 +739,16 @@ export function remarkCommentToMarkdown(this: Processor): void {
       ? `<!--comment id="${typedNode.id}" data="${encodeCommentMeta({
           author: typedNode.author,
           text: typedNode.text,
-          createdAt: typedNode.createdAt
+          createdAt: typedNode.createdAt,
+          // `|| undefined` rather than a straight pass-through, because the
+          // two producers of this node disagree about how they spell "not
+          // resolved": remarkComment (this file) leaves the field ABSENT,
+          // while Milkdown's mark schema (nodes/comment.ts) has to use the
+          // empty string, since a ProseMirror attr cannot be absent -- it has
+          // a declared default. Normalising here means an unresolved comment
+          // encodes identically no matter which side produced it, which is
+          // what keeps byte-identity holding through a Format-mode edit.
+          resolvedAt: typedNode.resolvedAt || undefined
         })}"-->`
       : ''
     const endText = isLast ? `<!--/comment id="${typedNode.id}"-->` : ''

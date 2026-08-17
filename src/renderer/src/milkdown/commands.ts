@@ -13,7 +13,7 @@ import {
   isInTable
 } from '@milkdown/prose/tables'
 import { Fragment } from '@milkdown/prose/model'
-import type { Mark } from '@milkdown/prose/model'
+import type { Mark, MarkType } from '@milkdown/prose/model'
 import {
   bulletListSchema,
   listItemSchema,
@@ -459,33 +459,149 @@ export const addCommentCommand = $command(
   }
 )
 
-// Removes every mark instance carrying the given `id` from the WHOLE
-// document, not just the current selection -- a single logical comment can
-// in principle be represented by more than one ProseMirror mark instance
-// sharing the same id (e.g. if editing ever split a marked range), so
-// "resolve this comment" must sweep everywhere, matching how the sidebar's
-// own extractComments treats same-id occurrences as one comment. Walks
-// every descendant (not just text nodes) because a comment can mark any
-// inline content, including non-text inline nodes this schema might add in
-// the future -- matching Mark, not the node's type, so this only ever
-// removes marks belonging to THIS one comment id, never an unrelated,
-// overlapping comment.
+// ---------------------------------------------------------------------------
+// Comment lifecycle: resolve / unresolve / delete
+// ---------------------------------------------------------------------------
+//
+// Three DISTINCT actions where there used to be one. "Resolve" used to delete
+// the mark outright, so a resolved comment was simply gone: no record of what
+// was resolved, no way back, and no separate, deliberate way to say "this
+// comment was a mistake, remove it". Resolving and deleting are different
+// decisions with different consequences and now have different commands.
+//
+// All three sweep the WHOLE document for every mark carrying the id, never just
+// the selection, and that is a correctness requirement rather than thoroughness
+// for its own sake: ONE logical comment is routinely SEVERAL ProseMirror mark
+// instances. A comment spanning three paragraphs is three marked runs (the
+// serializer closes an open mark at every block end); a comment spanning a
+// hand-wrapped line is two, because @milkdown/preset-commonmark's
+// hardbreakClearMarkPlugin refuses to let any mark sit on a hardbreak. Acting on
+// a subset would leave orphaned halves -- half a comment resolved, half still
+// active, and on delete, a marker pair left behind with no partner.
+
+// Every position range in the document whose node carries a comment mark with
+// this id, paired with the mark instance found there.
+//
+// Walks every descendant (not just text nodes) because a comment can mark any
+// inline content, including non-text inline nodes this schema might add later --
+// and matches the Mark INSTANCE, not merely the type, so an unrelated,
+// overlapping comment is never touched.
+//
+// Read off `state.doc` once, before any step is applied, which is safe because
+// every step these three commands build is an AddMarkStep or a RemoveMarkStep:
+// neither changes the document's size, so a position collected here stays valid
+// for the whole transaction with no mapping.
+function commentMarkRanges(
+  state: EditorState,
+  markType: MarkType,
+  id: string
+): Array<{ from: number; to: number; mark: Mark }> {
+  const ranges: Array<{ from: number; to: number; mark: Mark }> = []
+  state.doc.descendants((node, pos) => {
+    const mark = node.marks.find((m: Mark) => m.type === markType && m.attrs.id === id)
+    if (mark) ranges.push({ from: pos, to: pos + node.nodeSize, mark })
+    return true
+  })
+  return ranges
+}
+
+// The shared body of resolve and unresolve: rewrite every mark carrying `id` so
+// that its `resolvedAt` attr becomes `next`, leaving the marked TEXT completely
+// untouched.
+//
+// ProseMirror has no "change this mark's attrs" primitive -- a Mark is
+// immutable and identified by its attrs -- so the only way to edit one is to
+// remove it and add a new instance over the same range. Both are done on one
+// Transaction, so it is a single undo step.
+//
+// The per-range `addMark` is also what keeps this clear of the hardbreak hazard
+// addCommentCommand documents at length: each range is exactly one node that
+// ALREADY carries the mark, and a hardbreak never does (that preset plugin
+// strips it), so no emitted AddMarkStep's range can contain a hardbreak, so
+// nothing re-triggers the `isInline` attr reset that silently hardens a soft
+// wrap. Sweeping with one wide `addMark(from, to)` across the whole comment
+// would reintroduce exactly that bug.
+function buildSetResolvedAt(
+  ctx: Ctx,
+  state: EditorState,
+  id: string,
+  next: string
+): Transaction | null {
+  const markType = commentSchema.type(ctx)
+  const ranges = commentMarkRanges(state, markType, id)
+  if (ranges.length === 0) return null
+  // Already in the requested state everywhere -- report inapplicable rather
+  // than dispatching a transaction with no observable effect, which would
+  // otherwise put an empty entry in the undo history and mark a clean document
+  // dirty.
+  //
+  // Compared as RESOLVEDNESS (has a stamp / has none), not as the exact string:
+  // `next` for a resolve is a freshly-generated `now`, which never equals an
+  // existing stamp, so an exact compare would silently re-stamp an already-
+  // resolved comment with a new time and report `true` -- rewriting the file
+  // and losing the real moment it was resolved at. Comparing the booleans also
+  // deliberately does NOT no-op a PARTIALLY resolved comment (some marks
+  // stamped, some not -- only reachable by hand-editing one pair of a
+  // multi-block comment), so acting on it repairs it to a consistent state.
+  const wantResolved = next !== ''
+  if (ranges.every(({ mark }) => Boolean(mark.attrs.resolvedAt) === wantResolved)) return null
+
+  const tr = state.tr
+  for (const { from, to, mark } of ranges) {
+    tr.removeMark(from, to, mark)
+    tr.addMark(from, to, markType.create({ ...mark.attrs, resolvedAt: next }))
+  }
+  return tr
+}
+
+// RESOLVE -- keeps the comment in the document and stamps it with the moment it
+// was resolved. The timestamp is generated here rather than passed in, exactly
+// like addCommentCommand's own `createdAt`, so it always reflects the real
+// moment of the action.
 export const resolveCommentCommand = $command(
   'ResolveComment',
   (ctx) => (id?: string) => (state, dispatch) => {
     if (!id) return false
+    const tr = buildSetResolvedAt(ctx, state, id, new Date().toISOString())
+    if (!tr) return false
+    dispatch?.(tr)
+    return true
+  }
+)
+
+// UNRESOLVE -- puts a resolved comment back in the active list, by clearing the
+// stamp. '' (not undefined) is the ProseMirror spelling of "unresolved"; see
+// nodes/comment.ts's own attr comment for why the two sides of the pipeline
+// spell it differently, and remarkCommentToMarkdown for where '' becomes an
+// omitted key again on save.
+export const unresolveCommentCommand = $command(
+  'UnresolveComment',
+  (ctx) => (id?: string) => (state, dispatch) => {
+    if (!id) return false
+    const tr = buildSetResolvedAt(ctx, state, id, '')
+    if (!tr) return false
+    dispatch?.(tr)
+    return true
+  }
+)
+
+// DELETE -- removes the mark entirely, leaving the text it wrapped in place.
+// This is what "Resolve" used to do; it is the same code, correctly named. It
+// is genuinely destructive in a way resolve is not: nothing about the comment
+// survives in the file afterwards, and the sidebar has no way to bring it back
+// (the ProseMirror undo stack does, but its keymap only fires while the editor
+// itself has DOM focus, which it does not when the click came from the sidebar
+// rail). That asymmetry is why the UI puts a confirmation step in front of this
+// one and none in front of resolve.
+export const deleteCommentCommand = $command(
+  'DeleteComment',
+  (ctx) => (id?: string) => (state, dispatch) => {
+    if (!id) return false
     const markType = commentSchema.type(ctx)
-    let tr = state.tr
-    let found = false
-    state.doc.descendants((node, pos) => {
-      const mark = node.marks.find((m: Mark) => m.type === markType && m.attrs.id === id)
-      if (mark) {
-        tr = tr.removeMark(pos, pos + node.nodeSize, mark)
-        found = true
-      }
-      return true
-    })
-    if (!found) return false
+    const ranges = commentMarkRanges(state, markType, id)
+    if (ranges.length === 0) return false
+    const tr = state.tr
+    for (const { from, to, mark } of ranges) tr.removeMark(from, to, mark)
     dispatch?.(tr)
     return true
   }
@@ -1079,7 +1195,12 @@ export const EDITOR_COMMAND_PLUGINS = [
   // exactly like safeImageViewProse at the end of this list.
   tocViewProse,
   addCommentCommand,
+  // The comment lifecycle -- resolve/unresolve keep the comment in the file and
+  // only flip its `resolvedAt` stamp; delete is the one that removes the mark.
+  // See their shared section comment above for why all three sweep by id.
   resolveCommentCommand,
+  unresolveCommentCommand,
+  deleteCommentCommand,
   // The three new block-insertion commands this task adds -- see each of
   // their own doc comments above. Behavior plugins, not schema (same
   // reasoning as insertPagebreakCommand immediately above): none of them

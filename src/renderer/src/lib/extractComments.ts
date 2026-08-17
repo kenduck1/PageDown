@@ -13,6 +13,16 @@ export interface ExtractedComment {
   createdAt: string
   sourceOffset: number
   matchedText: string
+  // ISO timestamp of resolution, or null for an active comment.
+  //
+  // `null` rather than `undefined`, unlike the mdast/file shape's optional
+  // field: this is a fully-derived view model for the sidebar, so "not
+  // resolved" is a real, known answer rather than a missing key, and a
+  // required field means `tsc` catches any consumer that forgets to consider
+  // resolved comments at all. Every comment written before resolution existed
+  // reads as null here, which is the entire backward-compatibility
+  // requirement -- see decodeCommentMeta.
+  resolvedAt: string | null
 }
 
 // Flattens a comment's own marked span to plain text, the exact same
@@ -90,6 +100,13 @@ export function extractComments(source: string): ExtractedComment[] {
       author: node.author,
       text: node.text,
       createdAt: node.createdAt,
+      // First occurrence wins, exactly like every other scalar field here.
+      // Every command that writes this attr writes it to ALL of a comment's
+      // marks at once, so the fragments of one logical comment always agree;
+      // a file whose fragments disagree can only come from hand-editing one
+      // pair's payload, and a deterministic rule is better there than a
+      // scan-all-fragments tie-break nobody can predict from the file.
+      resolvedAt: node.resolvedAt ?? null,
       sourceOffset,
       matchedText: matchedText(node)
     })

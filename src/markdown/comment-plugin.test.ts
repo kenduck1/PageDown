@@ -250,3 +250,108 @@ describe('remarkComment across a line break inside one paragraph', () => {
     expect((out.match(/<!--\/comment id=/g) ?? []).length).toBe(2)
   })
 })
+
+// The FILE FORMAT half of comment resolution. Resolved state lives inside the
+// same base64 payload as author/text/createdAt -- no sidecar file, and
+// invisible to every other Markdown renderer, exactly like the marker syntax
+// itself. These tests pin the two properties the whole design rests on:
+// backward compatibility with every comment written before the field existed,
+// and byte-stability for an unresolved comment.
+describe('comment resolution in the encoded payload', () => {
+  const CREATED = '2026-08-11T09:00:00.000Z'
+  const RESOLVED = '2026-08-12T14:30:00.000Z'
+  const BASE: CommentMeta = { author: 'Kai', text: 'a note', createdAt: CREATED }
+
+  it('round-trips a resolvedAt stamp', () => {
+    const meta: CommentMeta = { ...BASE, resolvedAt: RESOLVED }
+    expect(decodeCommentMeta(encodeCommentMeta(meta))).toEqual(meta)
+  })
+
+  // BACKWARD COMPATIBILITY. This is the exact byte string a build that predates
+  // resolution would have written -- constructed here by hand, NOT by calling
+  // encodeCommentMeta, so the test still fails if the encoder ever starts
+  // emitting something different for the same logical comment.
+  it('reads a payload written before resolvedAt existed as a normal unresolved comment', () => {
+    const legacy = btoa(JSON.stringify({ author: 'Kai', text: 'a note', createdAt: CREATED }))
+    const decoded = decodeCommentMeta(legacy)
+
+    expect(decoded).not.toBeNull()
+    expect(decoded).toEqual(BASE)
+    expect(decoded!.resolvedAt).toBeUndefined()
+  })
+
+  // FORWARD COMPATIBILITY, and the reason `resolvedAt` is omitted rather than
+  // written as "". An unresolved comment must encode to byte-identical bytes to
+  // what this format produced before resolution existed -- otherwise every
+  // existing document on disk comes back from its first edit with different
+  // bytes, and every byte-identity test in this repo moves at once.
+  it('encodes an unresolved comment to exactly the pre-resolution bytes', () => {
+    const legacyBytes = btoa(JSON.stringify({ author: 'Kai', text: 'a note', createdAt: CREATED }))
+
+    expect(encodeCommentMeta(BASE)).toBe(legacyBytes)
+    expect(encodeCommentMeta({ ...BASE, resolvedAt: undefined })).toBe(legacyBytes)
+    // An empty string is the ProseMirror side's spelling of "unresolved" (an
+    // attr cannot be absent), and must normalise to the same omitted key.
+    expect(encodeCommentMeta({ ...BASE, resolvedAt: '' })).toBe(legacyBytes)
+  })
+
+  // FAIL-OPEN, matching the rest of this module: a hand-mangled resolvedAt
+  // degrades the comment to unresolved rather than rejecting the payload, which
+  // would leave the marker pair as inert LITERAL TEXT dumped into the user's
+  // prose and lose the comment entirely.
+  it('degrades a wrongly-typed resolvedAt to unresolved instead of rejecting the comment', () => {
+    const mangled = btoa(
+      JSON.stringify({ author: 'Kai', text: 'a note', createdAt: CREATED, resolvedAt: 12345 })
+    )
+    const decoded = decodeCommentMeta(mangled)
+
+    expect(decoded).not.toBeNull()
+    expect(decoded!.text).toBe('a note')
+    expect(decoded!.resolvedAt).toBeUndefined()
+  })
+
+  it('carries resolvedAt onto the parsed mdast comment node, and absence as undefined', () => {
+    const processor = unified().use(remarkParse).use(remarkComment)
+    const parse = (data: string): Record<string, unknown> => {
+      const tree = processor.runSync(
+        processor.parse(`Before. <!--comment id="c1" data="${data}"-->x<!--/comment id="c1"-->.\n`)
+      ) as Root
+      const paragraph = tree.children[0] as { children: Record<string, unknown>[] }
+      return paragraph.children.find((child) => child.type === 'comment')!
+    }
+
+    expect(parse(encodeCommentMeta({ ...BASE, resolvedAt: RESOLVED })).resolvedAt).toBe(RESOLVED)
+    expect(parse(encodeCommentMeta(BASE)).resolvedAt).toBeUndefined()
+  })
+
+  // The serialize half: a resolved comment written back out must still be one
+  // ordinary marker pair whose payload decodes to the same stamp.
+  it('serializes a resolved comment back to one marker pair carrying the stamp', () => {
+    const tree = {
+      type: 'root',
+      children: [
+        {
+          type: 'paragraph',
+          children: [
+            {
+              type: 'comment',
+              id: 'c1',
+              ...BASE,
+              resolvedAt: RESOLVED,
+              children: [{ type: 'text', value: 'x' }]
+            }
+          ]
+        }
+      ]
+    }
+
+    const out = unified()
+      .use(remarkCommentToMarkdown)
+      .use(remarkStringify)
+      .stringify(tree as never)
+
+    expect((out.match(/<!--comment id=/g) ?? []).length).toBe(1)
+    const data = out.match(/data="([^"]+)"/)![1]
+    expect(decodeCommentMeta(data)!.resolvedAt).toBe(RESOLVED)
+  })
+})

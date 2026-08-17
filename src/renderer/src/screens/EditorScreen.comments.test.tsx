@@ -34,6 +34,8 @@ const mockEditorHandle = vi.hoisted(() => ({
   getSelectionRect: vi.fn(() => null),
   addComment: vi.fn(() => true),
   resolveComment: vi.fn(),
+  unresolveComment: vi.fn(),
+  deleteComment: vi.fn(),
   runSlashItem: vi.fn(),
   closeSlashMenu: vi.fn(),
   getSlashItems: vi.fn(() => []),
@@ -263,6 +265,56 @@ describe('EditorScreen comments', () => {
     await user.click(screen.getByRole('button', { name: 'Resolve' }))
 
     expect(mockEditorHandle.resolveComment).toHaveBeenCalledWith('c1')
+    // Resolve must not be wired to the destructive one by accident -- the two
+    // buttons sit next to each other in the same row.
+    expect(mockEditorHandle.deleteComment).not.toHaveBeenCalled()
+  })
+
+  it('Unresolve calls editorRef.unresolveComment for a resolved comment', async () => {
+    const dataAttr = Buffer.from(
+      JSON.stringify({
+        author: 'Kai',
+        text: 'needs revision',
+        createdAt: '2026-08-09T06:00:00Z',
+        resolvedAt: '2026-08-12T14:30:00.000Z'
+      }),
+      'utf8'
+    ).toString('base64')
+    const content = `Some text. <!--comment id="c1" data="${dataAttr}"-->marked span<!--/comment id="c1"-->. More text.`
+    useDocumentStore.setState({ filePath: '/tmp/report.md', content })
+    useAppStore.setState({ viewMode: 'format' })
+    const user = userEvent.setup()
+    render(<EditorScreen />)
+
+    await user.click(screen.getByRole('button', { name: 'Comments' }))
+    await user.click(screen.getByRole('button', { name: 'Resolved (1)' }))
+    await user.click(screen.getByRole('button', { name: 'Unresolve' }))
+
+    expect(mockEditorHandle.unresolveComment).toHaveBeenCalledWith('c1')
+  })
+
+  // Deleting a comment can leave `activeCommentId` pointing at a mark that no
+  // longer exists -- the dangling reference appStore's own comment on that
+  // field warns about. Resolving cannot, because the mark is still there.
+  it('Delete confirms, calls editorRef.deleteComment, and clears the active comment', async () => {
+    const dataAttr = Buffer.from(
+      JSON.stringify({ author: 'Kai', text: 'needs revision', createdAt: '2026-08-09T06:00:00Z' }),
+      'utf8'
+    ).toString('base64')
+    const content = `Some text. <!--comment id="c1" data="${dataAttr}"-->marked span<!--/comment id="c1"-->. More text.`
+    useDocumentStore.setState({ filePath: '/tmp/report.md', content })
+    useAppStore.setState({ viewMode: 'format', activeCommentId: 'c1' })
+    const user = userEvent.setup()
+    render(<EditorScreen />)
+
+    await user.click(screen.getByRole('button', { name: 'Comments' }))
+    await user.click(screen.getByRole('button', { name: 'Delete' }))
+    expect(mockEditorHandle.deleteComment).not.toHaveBeenCalled()
+
+    await user.click(screen.getByRole('button', { name: 'Confirm delete' }))
+
+    expect(mockEditorHandle.deleteComment).toHaveBeenCalledWith('c1')
+    expect(useAppStore.getState().activeCommentId).toBeNull()
   })
 
   it('Escape closes the composer, matching Cancel', async () => {

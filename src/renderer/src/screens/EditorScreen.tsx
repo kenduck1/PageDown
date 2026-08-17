@@ -75,6 +75,7 @@ function EditorScreen(): React.JSX.Element {
   const goHome = useAppStore((state) => state.goHome)
   const revealComment = useAppStore((state) => state.revealComment)
   const activeCommentId = useAppStore((state) => state.activeCommentId)
+  const clearActiveComment = useAppStore((state) => state.clearActiveComment)
   const pageSetupOpen = useAppStore((state) => state.pageSetupOpen)
   // Read here as well as in EditorToolbar (which still renders the Page setup
   // button) because File > Page Setup… is a second, independent trigger --
@@ -1180,8 +1181,28 @@ function EditorScreen(): React.JSX.Element {
     el?.scrollIntoView({ behavior: 'smooth', block: 'center' })
   }
 
+  // Resolve and unresolve only flip the comment's own `resolvedAt` stamp -- the
+  // comment stays in the document either way -- so neither needs to touch
+  // `activeCommentId`: the mark the reader clicked is still there, still
+  // clickable, and the sidebar row it points at still exists (in the Resolved
+  // section, which EditorComments force-opens while the active comment lives in
+  // it).
   const handleResolveComment = (id: string): void => {
     editorRef.current?.resolveComment(id)
+  }
+
+  const handleUnresolveComment = (id: string): void => {
+    editorRef.current?.unresolveComment(id)
+  }
+
+  // Delete is the one that removes the mark, so it is also the one that can
+  // leave `activeCommentId` pointing at a comment that no longer exists --
+  // exactly the dangling reference appStore's own comment on that field warns
+  // about. Cleared here rather than inside the store action because only this
+  // call site knows which id was destroyed.
+  const handleDeleteComment = (id: string): void => {
+    editorRef.current?.deleteComment(id)
+    if (activeCommentId === id) clearActiveComment()
   }
 
   // Backs LinkComposer (the layout row that replaced EditorToolbar's dead
@@ -1929,6 +1950,8 @@ function EditorScreen(): React.JSX.Element {
             onSelectComment={handleSelectComment}
             activeCommentId={activeCommentId}
             onResolveComment={handleResolveComment}
+            onUnresolveComment={handleUnresolveComment}
+            onDeleteComment={handleDeleteComment}
           />
         )}
         <div ref={canvasRef} data-testid="document-content" className="flex-1 overflow-hidden">
