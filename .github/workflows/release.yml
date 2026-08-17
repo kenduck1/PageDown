@@ -98,17 +98,74 @@ jobs:
       - name: Build application
         run: pnpm build
 
+      # Signs and notarizes when the macOS certificate secrets are present, and
+      # builds UNSIGNED when they are not -- deliberately, so this workflow
+      # keeps working unchanged while an Apple Developer enrollment is pending
+      # and starts signing the moment the secrets are added, with no edit here.
+      #
+      # Secrets required for signing (all five, macOS only):
+      #   MAC_CERT_P12_BASE64          Developer ID Application cert exported
+      #                                as .p12, then `base64 -i cert.p12 | pbcopy`
+      #   MAC_CERT_PASSWORD            the password set during that export
+      #   APPLE_ID                     the Apple ID that owns the enrollment
+      #   APPLE_APP_SPECIFIC_PASSWORD  appleid.apple.com -> Sign-In and Security
+      #                                -> App-Specific Passwords (NOT the account password)
+      #   APPLE_TEAM_ID                the 10-character Team ID
+      #
+      # Note what signing puts in the binary, since it is public: the
+      # certificate's common name, i.e. `Developer ID Application: <NAME>
+      # (<TEAMID>)`, readable by anyone via `codesign -dv --verbose=4`. For an
+      # individual enrollment that NAME is a legal name. Enrolling as an
+      # organization puts the company name there instead. Nothing else from the
+      # Apple account is embedded.
       - name: Package installers
         env:
-          # No signing identity exists on the runner. Without this,
-          # electron-builder searches the keychain and can fail confusingly
-          # rather than just producing an unsigned build.
-          CSC_IDENTITY_AUTO_DISCOVERY: false
-          # electron-builder.yml sets `publish: null`; this makes the intent
-          # explicit at the call site too. Assets are uploaded by the
-          # `release` job below, never by electron-builder itself.
           BUILDER_ARGS: ${{ matrix.builder_args }}
-        run: pnpm exec electron-builder $BUILDER_ARGS --publish never
+          IS_MAC: ${{ matrix.os == 'macos-latest' }}
+          CSC_LINK: ${{ secrets.MAC_CERT_P12_BASE64 }}
+          CSC_KEY_PASSWORD: ${{ secrets.MAC_CERT_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          if [ "$IS_MAC" = "true" ] && [ -n "${CSC_LINK:-}" ] && [ -n "${APPLE_ID:-}" ]; then
+            echo "Signing identity present -- signing and notarizing."
+            echo "Notarization contacts Apple and can take several minutes."
+            pnpm exec electron-builder $BUILDER_ARGS --publish never -c.mac.notarize=true
+          else
+            if [ "$IS_MAC" = "true" ]; then
+              echo "::warning::No macOS signing secrets set -- building UNSIGNED."
+              echo "::warning::Users will see 'PageDown is damaged'. See the README's Installing section."
+            fi
+            # Without this, electron-builder searches the keychain for an
+            # identity and can fail confusingly rather than simply producing an
+            # unsigned build.
+            CSC_IDENTITY_AUTO_DISCOVERY=false \
+              pnpm exec electron-builder $BUILDER_ARGS --publish never
+          fi
+
+      # Records, in the run summary, whether what just shipped is actually
+      # signed -- read from the artifact rather than inferred from whether a
+      # secret was set, because "the secret exists" and "the binary is signed"
+      # are different claims and only the second one matters to a user.
+      - name: Report signing status
+        if: matrix.os == 'macos-latest'
+        run: |
+          set -euo pipefail
+          app="$(find dist/mac* -maxdepth 1 -name '*.app' -print -quit 2>/dev/null || true)"
+          if [ -z "$app" ]; then
+            echo "No .app found to check." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          echo "### macOS signing" >> "$GITHUB_STEP_SUMMARY"
+          if codesign -dv --verbose=4 "$app" 2>&1 | grep -q "^Authority=Developer ID Application"; then
+            codesign -dv --verbose=4 "$app" 2>&1 | grep "^Authority=Developer ID Application" \
+              | sed 's/^/- /' >> "$GITHUB_STEP_SUMMARY"
+            echo "- Gatekeeper: $(spctl -a -vv "$app" 2>&1 | tail -1)" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "- **UNSIGNED** — users will see \"PageDown is damaged\" on first launch." >> "$GITHUB_STEP_SUMMARY"
+          fi
 
       - name: Collect installers
         uses: actions/upload-artifact@v4

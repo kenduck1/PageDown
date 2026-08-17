@@ -36,12 +36,55 @@ nsis:
   uninstallDisplayName: ${productName}
   createDesktopShortcut: always
 mac:
+  # BOTH keys are required for a hardened-runtime build, and only
+  # `entitlementsInherit` was set. That one applies to the helper processes
+  # electron-builder signs on the app's behalf; `entitlements` applies to the
+  # main executable itself. With it missing, the main binary is signed without
+  # the JIT entitlements below, and Electron's own V8 fails to start under
+  # hardened runtime -- an app that launches fine unsigned and crashes on
+  # first run once signed, which is the worst possible time to find out.
+  entitlements: build/entitlements.mac.plist
   entitlementsInherit: build/entitlements.mac.plist
+  # Required for notarization; Apple rejects an un-hardened submission.
+  hardenedRuntime: true
+  # CI has no Gatekeeper assessment to make and the check needs a logged-in
+  # session, so leaving it on makes signed builds fail on the runner only.
+  gatekeeperAssess: false
+  # A MAP, not a list -- and that is a real bug fix, not a style change.
+  #
+  # This was a YAML sequence (`- NSCameraUsageDescription: ...`), inherited
+  # from the electron-vite scaffold. electron-builder merges `extendInfo` into
+  # Info.plist verbatim, so a sequence produced a key literally named "0"
+  # holding a nested dictionary:
+  #
+  #     "0" => { "NSDocumentsFolderUsageDescription" => "..." }
+  #
+  # Verified by inspecting a real built app with `plutil -p`. macOS looks for
+  # these at the TOP level, so every usage description this project thought it
+  # was declaring has been invisible to the OS in every build ever made. It
+  # would have surfaced as a permission prompt with no explanatory text, or a
+  # silent denial.
+  #
+  # Camera and microphone are set to null to REMOVE them. They are not ours --
+  # Electron ships both in its own default Info.plist, so deleting our entries
+  # left them in place (confirmed: they were still there after removal). This
+  # app has no camera or microphone code path anywhere, and a usage string is
+  # a declaration to the user that the app may ask. A document editor
+  # advertising camera access is alarming to anyone who reads it and useless
+  # to everyone else. Removing them also shrinks what a notarization or
+  # store review has to account for.
   extendInfo:
-    - NSCameraUsageDescription: Application requests access to the device's camera.
-    - NSMicrophoneUsageDescription: Application requests access to the device's microphone.
-    - NSDocumentsFolderUsageDescription: Application requests access to the user's Documents folder.
-    - NSDownloadsFolderUsageDescription: Application requests access to the user's Downloads folder.
+    NSCameraUsageDescription: null
+    NSMicrophoneUsageDescription: null
+    NSDocumentsFolderUsageDescription: PageDown opens and saves your Markdown documents.
+    NSDownloadsFolderUsageDescription: PageDown opens and saves documents in your Downloads folder.
+  # DEFAULT-OFF, and overridden per run rather than flipped here.
+  #
+  # Notarization needs real Apple credentials. Leaving this true would break
+  # every local `pnpm build:mac` and every CI run without secrets. The release
+  # workflow passes `-c.mac.notarize=true` only when a signing identity is
+  # actually present, so an unsigned build stays possible and a signed one
+  # notarizes automatically. See .github/workflows/release.yml.
   notarize: false
 dmg:
   # ${arch} is REQUIRED here, not cosmetic: the release workflow builds macOS
