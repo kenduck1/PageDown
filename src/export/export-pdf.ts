@@ -39,7 +39,20 @@ export async function exportToPdf(harness: PaginationHarness): Promise<Buffer> {
   return harness.view.webContents.printToPDF({
     preferCSSPageSize: true,
     printBackground: true,
-    margins: { marginType: 'none' },
+    // Electron 43 replaced the `marginType: 'default'|'none'|...` enum with a
+    // plain per-side margin object measured in INCHES, and its default is
+    // ~0.4in on every side rather than zero. So this cannot be omitted: doing
+    // so would silently inset every exported page by 0.4in on top of the
+    // document's own margins, shrinking the content box and moving page
+    // breaks -- a change that looks like a pagination bug rather than a
+    // dependency upgrade.
+    //
+    // Explicit zeros are the exact equivalent of the old `marginType: 'none'`,
+    // and being zeros they are unit-independent, so the inches-vs-pixels
+    // change between versions cannot bite. `preferCSSPageSize: true` above
+    // means the document's own @page rule is what actually establishes the
+    // page box; these margins only have to add nothing to it.
+    margins: { top: 0, bottom: 0, left: 0, right: 0 },
     generateTaggedPDF: true
   })
 }
