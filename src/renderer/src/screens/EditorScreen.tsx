@@ -532,6 +532,33 @@ function EditorScreen(): React.JSX.Element {
     closeCommentComposer()
   }, [revision, closeLinkComposer, closeCommentComposer])
 
+  // While either composer is open, the canvas paints the range it will act on
+  // (milkdown/composer-target-plugin.ts). This is not decoration on top of the
+  // real selection -- it STANDS IN for it. Gate 43 measured that the moment
+  // the composer's own <input> takes DOM focus, `window.getSelection()`
+  // reports that input's collapsed selection and the contenteditable's range
+  // vanishes from the DOM Selection API entirely, so the user could no longer
+  // see what they had selected. The `::selection` rule that looks like the fix
+  // is dead CSS for exactly that reason; it was written, committed and
+  // reverted (e56b10e).
+  //
+  // ONE flag for BOTH composers, deliberately: they are mutually exclusive in
+  // practice and the highlight means the same thing either way ("this is what
+  // your link/comment will attach to"), so a per-composer channel would be two
+  // ways to say one thing, with a state where they disagree.
+  //
+  // Keyed on the composed boolean rather than on the two flags separately, so
+  // opening Add comment straight from an open Insert link produces no
+  // transaction at all -- and `setComposerTargetActive` is itself idempotent,
+  // so an unrelated re-render costs nothing either. Ordering against the
+  // revision effect above is safe in the one direction that matters: a remount
+  // closes both composers, which flips this to false against an editor that is
+  // already inactive.
+  const composerTargetActive = commentComposerOpen || linkComposerOpen
+  useEffect(() => {
+    editorRef.current?.setComposerTargetActive(composerTargetActive)
+  }, [composerTargetActive])
+
   // Publishes the live Milkdown flush to the window-close guard, which runs
   // from App.tsx (the only component mounted on every screen) and so has no
   // way to reach `editorRef` itself. Without it, closing the window within

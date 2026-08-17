@@ -63,28 +63,32 @@ import {
 // dispatched. See LinkComposer.tsx's own note for the one thing this file must
 // therefore never do: call `view.focus()`, in either direction.
 //
-// DISCLOSED, MEASURED CONSEQUENCE OF THAT DIVERGENCE, not fixed here: while a
-// composer holds focus, THE USER CANNOT SEE WHAT THEY SELECTED. Gate 43
-// establishes this directly rather than by inference -- its first draft copied
+// MEASURED CONSEQUENCE OF THAT DIVERGENCE -- now FIXED, and the measurement is
+// kept because it is the whole reason the fix takes the shape it does. While a
+// composer holds focus, the user could not see what they had selected. Gate 43
+// established this directly rather than by inference: its first draft copied
 // gate28's ordering and read the selection box AFTER opening the composer,
-// which failed in 881ms on `expect(selectionBox).not.toBeNull()`: once an
+// which failed in 881ms on `expect(selectionBox).not.toBeNull()`. Once an
 // <input> holds focus, `window.getSelection()` reports THAT input's own
 // collapsed selection, so the contenteditable's range is not merely painted in
 // Chromium's muted unfocused grey -- it is gone from the DOM Selection API
-// entirely.
+// entirely. (Gate 43 still asserts that, at `expect(await
+// readSelectionBox(win)).toBeNull()`, and it is still true: the fix does not
+// restore the DOM selection, it paints over the range without one.)
 //
-// Two things follow, and the second is why this is recorded rather than
-// quietly fixed. First, a `::selection` rule cannot help: there is no
-// selection left to style, so the obvious one-line fix (which was written,
-// committed, and then reverted once this gate measured the real behaviour) is
-// dead CSS that reads like a solution. Second, this is NOT a regression -- the
-// layout rows lost the highlight in exactly the same way, for exactly the same
-// reason -- but it is more noticeable now that the popover sits on the words in
-// question. The real fix is a ProseMirror DECORATION over the composer's target
-// range, driven by the composer-open flag, i.e. the same machinery
-// find-plugin.ts already uses for match highlighting; that is a new plugin plus
-// handle wiring, and deliberately out of scope for a change that was about
-// WHERE the field appears.
+// So a `::selection` rule cannot help -- there is no selection left to style.
+// That obvious one-liner was written, committed, and then REVERTED once this
+// gate measured the real behaviour (e56b10e); it is dead CSS that reads like a
+// solution, and it must not be re-attempted. What works is the only thing that
+// can paint a range the browser no longer considers selected: a ProseMirror
+// DECORATION. It lives in src/renderer/src/milkdown/composer-target-plugin.ts,
+// is driven by the composer-open flag through
+// MilkdownEditorHandle.setComposerTargetActive (EditorScreen wires the two
+// flags to it), and is styled by `.pagedown-composer-target` in base.css. Note
+// this was never a regression introduced by the move to popovers -- the layout
+// rows lost the highlight in exactly the same way, for exactly the same reason
+// -- it was simply far more noticeable once the panel sat on the words in
+// question.
 
 export interface FloatingCardProps {
   /** Renders nothing while false. */

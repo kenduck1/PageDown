@@ -15,6 +15,7 @@ import { EDITOR_COMMAND_PLUGINS } from './commands'
 import { PINNED_STRINGIFY_OPTIONS, PINNED_GFM_OPTIONS } from './stringify-options'
 import { buildEditorCommands, chooseSlashItem, type EditorCommands } from './editor-commands'
 import { createFindPlugin } from './find-plugin'
+import { createComposerTargetPlugin } from './composer-target-plugin'
 import { createDropImagePlugin, insertDroppedImages } from './drop-image'
 import { createImageResolverPlugin } from './image-security'
 import { createSelectionPlugin, type SelectionSnapshot } from './selection-plugin'
@@ -343,6 +344,7 @@ const MilkdownEditor = forwardRef<MilkdownEditorHandle, MilkdownEditorProps>(
       getTableRect: () => commandsRef.current?.getTableRect() ?? null,
       addComment: (author, text) => commandsRef.current?.addComment(author, text) ?? false,
       resolveComment: (id) => commandsRef.current?.resolveComment(id),
+      setComposerTargetActive: (active) => commandsRef.current?.setComposerTargetActive(active),
       runSlashItem: (id) => commandsRef.current?.runSlashItem(id),
       closeSlashMenu: () => commandsRef.current?.closeSlashMenu(),
       getSlashItems: (query) => commandsRef.current?.getSlashItems(query) ?? [],
@@ -387,6 +389,16 @@ const MilkdownEditor = forwardRef<MilkdownEditorHandle, MilkdownEditorProps>(
           onFindMatchesChangedRef.current?.(count, activeIndex)
         })
       )
+
+      // Per-mount for the same "a Plugin instance carries per-view state"
+      // reason findProse is -- but NOT for findProse's other reason: this one
+      // takes no callback at all and never notifies React, because the
+      // composer-open flag it reacts to ORIGINATES in React (appStore) and
+      // flows strictly one way in. See composer-target-plugin.ts's header for
+      // why a decoration is the only thing that can paint this range once the
+      // composer's own <input> has taken focus and destroyed the DOM
+      // selection.
+      const composerTargetProse = $prose(() => createComposerTargetPlugin())
 
       // Same per-mount construction as findProse above, for the same reason.
       // Note this one reports through the ref even for its `null`
@@ -543,6 +555,7 @@ const MilkdownEditor = forwardRef<MilkdownEditorHandle, MilkdownEditorProps>(
         .use(listener)
         .use(editedTrackerProse)
         .use(findProse)
+        .use(composerTargetProse)
         .use(selectionProse)
         .use(dropImageProse)
         .use(imageResolverProse)

@@ -87,7 +87,8 @@ const mockEditorHandle = vi.hoisted(() => ({
       ? { left: 220, top: 200, right: 520, bottom: 320 }
       : null
   ),
-  setActiveSlashIndex: vi.fn()
+  setActiveSlashIndex: vi.fn(),
+  setComposerTargetActive: vi.fn()
 }))
 
 const { snapshotToFire } = vi.hoisted(() => ({

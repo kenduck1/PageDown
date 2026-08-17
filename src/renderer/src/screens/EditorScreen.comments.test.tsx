@@ -49,7 +49,8 @@ const mockEditorHandle = vi.hoisted(() => ({
   deleteTable: vi.fn(),
   setColumnAlignment: vi.fn(),
   getTableRect: vi.fn(() => null),
-  setActiveSlashIndex: vi.fn()
+  setActiveSlashIndex: vi.fn(),
+  setComposerTargetActive: vi.fn()
 }))
 
 vi.mock('../milkdown/MilkdownEditor', () => ({
@@ -145,6 +146,28 @@ describe('EditorScreen comments', () => {
     await user.click(screen.getByRole('button', { name: 'Add comment' }))
 
     expect(screen.getByRole('group', { name: 'Add comment' })).toBeInTheDocument()
+  })
+
+  // The comment half of the composer-target highlight's wiring. EditorScreen
+  // drives ONE flag from `commentComposerOpen || linkComposerOpen`, so this is
+  // not a duplicate of EditorScreen.link.test.tsx's own version: dropping
+  // either operand leaves the other file's test green while that composer
+  // silently loses the highlight -- which is the entire user-visible defect
+  // (open Add comment, and the text you selected is invisible, because the
+  // field's own DOM focus destroyed the selection).
+  it('turns the composer-target highlight on while the comment composer is open, and off when it closes', async () => {
+    useDocumentStore.setState({ filePath: '/tmp/report.md', content: '# Report' })
+    useAppStore.setState({ viewMode: 'format' })
+    const user = userEvent.setup()
+    render(<EditorScreen />)
+
+    expect(mockEditorHandle.setComposerTargetActive).not.toHaveBeenCalledWith(true)
+
+    await user.click(screen.getByRole('button', { name: 'Add comment' }))
+    expect(mockEditorHandle.setComposerTargetActive).toHaveBeenCalledWith(true)
+
+    await user.click(screen.getByRole('button', { name: 'Cancel' }))
+    expect(mockEditorHandle.setComposerTargetActive).toHaveBeenLastCalledWith(false)
   })
 
   it('submitting the composer calls editorRef.addComment with the typed text and the preferred author name', async () => {

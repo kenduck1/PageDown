@@ -56,6 +56,28 @@
   --color-find-match-active: #f7c948;
   --color-comment-mark: #e3d6fb;
   --color-slash-query: #d9e6fb;
+  /* The range an open Insert-link / Add-comment composer will act on. A
+     FOURTH distinct hue (soft green) after find's yellow, comments' violet
+     and the slash query's light blue, so all four stay tellable apart when
+     they land on the same words -- and deliberately NOT a blue-family tint,
+     because this one specifically stands in for the native text selection
+     (which Chromium paints blue) and must not read as it.
+
+     Measured, not eyeballed: document text (#202124, the literal
+     .pagedown-document pins) on this tint is 12.15:1, and the tint against
+     the page it always sits on (#ffffff) is 1.33:1 -- between comment-mark's
+     1.37 and slash-query's 1.26, i.e. inside the band the three existing
+     affordances already occupy. Against --color-canvas (#e6e6ea) it is
+     1.06:1, but that surface is the grey scroll area BEHIND the page card:
+     no document text ever paints on it, and every existing highlight token
+     sits in the same 1.00-1.10 range there for the same reason.
+
+     LIGHT-ONLY, with no :root[data-theme='dark'] counterpart, following
+     --color-page-guide rather than --color-find-match. The canvas never goes
+     dark (document-typography.css pins .pagedown-document to #ffffff/#202124
+     as literals), so a dark tint here would put a dark background under
+     permanently-dark text. */
+  --color-composer-target: #c9e7d2;
   --color-page-guide: #c8ccd2;
   --color-page-guide-label: #7a8089;
 
@@ -301,6 +323,24 @@
      another even when they happen to overlap the same text. */
   .milkdown-mount .ProseMirror .pagedown-slash-query {
     background: var(--color-slash-query);
+    border-radius: 2px;
+  }
+
+  /* The range an open composer popover (Insert link / Add comment) will act
+     on -- EDITOR-ONLY by the same rule and the same reason as the three
+     above: it describes a UI surface that is open right now, so it must never
+     reach the paginated preview or an exported PDF, which is why it lives
+     here and not in src/typography/document-typography.css.
+
+     Unlike those three, this one is not an annotation of the text at all --
+     it is a STAND-IN FOR THE NATIVE SELECTION, which Chromium destroys the
+     moment the composer's <input> takes focus (see
+     src/renderer/src/milkdown/composer-target-plugin.ts for the measurement,
+     and e56b10e for the ::selection rule that cannot work because of it).
+     That is why the hue is chosen to sit away from selection blue rather than
+     merely away from the other markers. */
+  .milkdown-mount .ProseMirror .pagedown-composer-target {
+    background: var(--color-composer-target);
     border-radius: 2px;
   }
 

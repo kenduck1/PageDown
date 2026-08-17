@@ -42,6 +42,7 @@ import {
   replaceAllMatchesIn,
   type FindStateInput
 } from './find-plugin'
+import { setComposerTargetIn } from './composer-target-plugin'
 import {
   findAncestorListType,
   markActive,
@@ -320,6 +321,25 @@ export interface EditorCommands {
   // resolveCommentCommand (commands.ts) -- removes every mark instance for
   // the given comment id, anywhere in the document.
   resolveComment: (id: string) => void
+  // Tells the composer-target plugin (composer-target-plugin.ts) whether an
+  // Insert-link / Add-comment popover is currently open over this editor, so
+  // it can paint the range that composer will act on.
+  //
+  // This is NOT cosmetic polish on top of the real selection -- it REPLACES
+  // it while a composer is open. Gate 43 measured that once an <input> takes
+  // focus, `window.getSelection()` reports that input's own collapsed
+  // selection and the contenteditable's range disappears from the DOM
+  // Selection API entirely, so there is nothing left for a `::selection` rule
+  // to style (that fix was written, committed and reverted -- see e56b10e and
+  // composer-target-plugin.ts's own header). A decoration is the only surface
+  // that can paint a range the browser no longer considers selected.
+  //
+  // Takes a plain boolean rather than a range: the plugin derives the range
+  // from the LIVE `state.selection`, which is the same thing addComment and
+  // insertLink dispatch against, so the highlight and the command cannot
+  // disagree about what is targeted. Idempotent and transaction-free when the
+  // value has not actually changed.
+  setComposerTargetActive: (active: boolean) => void
   // Runs the slash-menu item with this `id` against the LIVE session
   // (slash-plugin.ts's own slashPluginKey state) -- reads anchorPos/queryEnd
   // fresh at call time rather than accepting them as parameters, so a caller
@@ -650,6 +670,11 @@ export function buildEditorCommands(editor: Editor): EditorCommands {
     },
     resolveComment: (id) => {
       editor.action(callCommand(resolveCommentCommand.key, id))
+    },
+    setComposerTargetActive: (active) => {
+      editor.action((ctx) => {
+        setComposerTargetIn(ctx.get(editorViewCtx), active)
+      })
     },
     runSlashItem: (id) => {
       // Delegates to chooseSlashItem (this file, above) with an id selector

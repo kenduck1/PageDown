@@ -63,7 +63,8 @@ const mockEditorHandle = vi.hoisted(() => ({
   deleteTable: vi.fn(),
   setColumnAlignment: vi.fn(),
   getTableRect: vi.fn(() => null),
-  setActiveSlashIndex: vi.fn()
+  setActiveSlashIndex: vi.fn(),
+  setComposerTargetActive: vi.fn()
 }))
 
 // Captures EditorScreen's own onSelectionChanged so a test can push a real
@@ -195,6 +196,29 @@ describe('EditorScreen insert link', () => {
     await user.type(screen.getByRole('textbox', { name: 'Link URL' }), 'https://a.example{Enter}')
 
     expect(mockEditorHandle.insertLink).toHaveBeenCalledWith('https://a.example')
+  })
+
+  // The composer-target highlight's WIRING, which no plugin-level test can
+  // reach: composer-target-plugin.test.ts proves the plugin paints the range
+  // when told to, and this proves EditorScreen actually tells it. The two
+  // halves fail differently -- an unwired handle leaves the user with exactly
+  // the defect this feature exists to fix (open a composer, and the text you
+  // selected is invisible, because the field's own focus destroyed the DOM
+  // selection) while every plugin test stays green.
+  it('turns the composer-target highlight on while the link composer is open, and off when it closes', async () => {
+    useDocumentStore.setState({ filePath: '/tmp/report.md', content: '# Report' })
+    const user = userEvent.setup()
+    render(<EditorScreen />)
+
+    // Asserted BEFORE the interaction, so a call that only ever passes `true`
+    // (or one fired unconditionally on mount) cannot satisfy this by accident.
+    expect(mockEditorHandle.setComposerTargetActive).not.toHaveBeenCalledWith(true)
+
+    await user.click(screen.getByRole('button', { name: 'Insert link' }))
+    expect(mockEditorHandle.setComposerTargetActive).toHaveBeenCalledWith(true)
+
+    await user.click(screen.getByRole('button', { name: 'Cancel' }))
+    expect(mockEditorHandle.setComposerTargetActive).toHaveBeenLastCalledWith(false)
   })
 
   it('Cancel closes the composer without inserting anything', async () => {

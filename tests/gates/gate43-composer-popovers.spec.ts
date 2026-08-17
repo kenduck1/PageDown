@@ -313,6 +313,56 @@ test('Gate 43: the link composer opens AT the selection, and its URL reaches dis
     // rather than through `window.getSelection()`.
     expect(await readSelectionBox(win)).toBeNull()
 
+    // ...AND HERE IS WHAT REPLACED IT. That the DOM selection is gone was
+    // recorded above as a disclosed consequence; it is now fixed, by the only
+    // mechanism that can paint a range the browser no longer considers
+    // selected -- a ProseMirror decoration
+    // (src/renderer/src/milkdown/composer-target-plugin.ts), driven by the
+    // composer-open flag. A `::selection` rule cannot do this and was reverted
+    // in e56b10e; see FloatingCard.tsx's own note.
+    //
+    // THIS BELONGS IN A GATE rather than only in unit tests, for the same
+    // reason this whole file does: composer-target-plugin.test.ts proves the
+    // decoration lands in the DOM with the right class, but a class with no
+    // rule behind it -- or a rule whose `var()` never resolved, which is a
+    // live hazard here because Tailwind only emits a token as a real custom
+    // property under `@theme static` -- is invisible to jsdom and invisible to
+    // the user in exactly the same way. Only a real browser can say the pixels
+    // changed colour.
+    //
+    // MEASURED at the default 1000x840 window: box 392.84 x 19, computed
+    // background rgb(201, 231, 210) = #c9e7d2, over the full target sentence.
+    //
+    // READ IN ONE evaluate() RATHER THAN FOUR LOCATOR ASSERTIONS, deliberately.
+    // This gate is measurably flaky at baseline (see the FLAKE NOTE above; a
+    // 10-run A/B of THIS test on an unmodified tree failed once, on its own
+    // popover-gap bound), and four auto-retrying locator calls inserted mid-test
+    // spend real time inside the one window where the composer is open. A single
+    // synchronous read costs one round trip, cannot silently absorb five seconds
+    // in a retry loop, and reads every property from the same instant.
+    const highlight = await win.evaluate(() => {
+      const elements = document.querySelectorAll('.pagedown-composer-target')
+      if (elements.length !== 1) return { count: elements.length }
+      const element = elements[0]
+      const rect = element.getBoundingClientRect()
+      return {
+        count: 1,
+        text: element.textContent,
+        // The resolved literal, not the custom property: reading the token back
+        // would be circular, and Tailwind only emits a token as a real custom
+        // property under `@theme static` -- so this is the assertion that would
+        // catch it silently not being emitted at all.
+        background: getComputedStyle(element).backgroundColor,
+        width: rect.width,
+        height: rect.height
+      }
+    })
+    expect(highlight.count).toBe(1)
+    expect(highlight.text).toBe(TARGET_SENTENCE)
+    expect(highlight.background).toBe('rgb(201, 231, 210)')
+    expect(highlight.width).toBeGreaterThan(50)
+    expect(highlight.height).toBeGreaterThan(5)
+
     // The blunt version of the user's actual complaint: the field is no longer
     // parked in a strip at the top of the window. The toolbar occupies roughly
     // the first 45px and the old row sat immediately under it, so anything
@@ -346,6 +396,11 @@ test('Gate 43: the link composer opens AT the selection, and its URL reaches dis
     // The link landed on the ORIGINALLY SELECTED text, in the live document.
     await expect(target.locator('a')).toHaveText(TARGET_SENTENCE)
     await expect(popover).toHaveCount(0)
+    // The highlight goes with the popover -- it describes a surface that is
+    // open, so leaving it behind would be a permanent green stain on the
+    // document. Asserted here rather than in a test of its own so the
+    // appears/disappears pair is measured against one real interaction.
+    await expect(win.locator('.pagedown-composer-target')).toHaveCount(0)
 
     // ...and reached DISK. This hop is the only real proof that ProseMirror's
     // selection survived DOM focus moving into the field: a dropped or
