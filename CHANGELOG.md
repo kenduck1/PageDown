@@ -6,7 +6,7 @@ This project is pre-1.0: minor versions may contain breaking changes, and the
 Markdown a document round-trips to is not yet frozen (see the note on
 normalisation under 0.1.0).
 
-## 0.1.0 — unreleased
+## 0.1.0 — 2026-08-16
 
 First public build. PageDown has been in development for some time; this is the
 first version packaged for download rather than run from source.
