@@ -73,6 +73,8 @@ function composerTargetIsLive(target: { tabId: string; revision: number } | null
 
 function EditorScreen(): React.JSX.Element {
   const goHome = useAppStore((state) => state.goHome)
+  const revealComment = useAppStore((state) => state.revealComment)
+  const activeCommentId = useAppStore((state) => state.activeCommentId)
   const pageSetupOpen = useAppStore((state) => state.pageSetupOpen)
   // Read here as well as in EditorToolbar (which still renders the Page setup
   // button) because File > Page Setup… is a second, independent trigger --
@@ -1282,6 +1284,22 @@ function EditorScreen(): React.JSX.Element {
 
   const handlePageCardClick = (event: React.MouseEvent<HTMLDivElement>): void => {
     const target = event.target as HTMLElement
+    // Clicking a highlighted comment span reveals that comment in the sidebar.
+    //
+    // Checked BEFORE the `.ProseMirror` early return below, which exists to
+    // leave clicks inside the document alone -- a comment mark is always
+    // inside it, so anything after that return can never see one. This is the
+    // missing half of the wiring: handleSelectComment already goes
+    // sidebar -> document, and nothing went document -> sidebar, so a
+    // highlighted span was visibly a comment with no way to read it.
+    //
+    // Deliberately does NOT preventDefault or stop propagation: the click must
+    // still place the caret where the user clicked. Revealing the comment is
+    // additive, not a replacement for editing.
+    const mark = target.closest<HTMLElement>('.pagedown-comment-mark[data-comment-id]')
+    const commentId = mark?.getAttribute('data-comment-id')
+    if (commentId) revealComment(commentId)
+
     if (target.closest('.ProseMirror')) return
     if (mouseDownInsideProseMirrorRef.current) return
     editorRef.current?.focusEnd()
@@ -1882,6 +1900,7 @@ function EditorScreen(): React.JSX.Element {
             filePath={filePath}
             onRestoreVersion={handleRestoreVersion}
             onSelectComment={handleSelectComment}
+            activeCommentId={activeCommentId}
             onResolveComment={handleResolveComment}
           />
         )}

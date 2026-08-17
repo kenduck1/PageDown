@@ -133,4 +133,26 @@ describe('useAppStore', () => {
     useAppStore.getState().toggleSplitFollow()
     expect(useAppStore.getState().splitFollowEnabled).toBe(true)
   })
+
+  it('revealComment opens the Comments tab, shows the sidebar, and marks the comment active', () => {
+    // The sidebar being hidden is the case that makes this one action rather
+    // than three calls at the call site: switching the tab behind a hidden
+    // rail leaves the click looking like it did nothing, which is the exact
+    // bug revealComment exists to fix.
+    useAppStore.setState({ sidebarVisible: false, sidebarTab: 'pages', activeCommentId: null })
+
+    useAppStore.getState().revealComment('c1')
+
+    expect(useAppStore.getState().sidebarTab).toBe('comments')
+    expect(useAppStore.getState().sidebarVisible).toBe(true)
+    expect(useAppStore.getState().activeCommentId).toBe('c1')
+  })
+
+  it('clearActiveComment drops the active comment without closing the sidebar', () => {
+    useAppStore.getState().revealComment('c1')
+    useAppStore.getState().clearActiveComment()
+    expect(useAppStore.getState().activeCommentId).toBeNull()
+    expect(useAppStore.getState().sidebarTab).toBe('comments')
+    expect(useAppStore.getState().sidebarVisible).toBe(true)
+  })
 })

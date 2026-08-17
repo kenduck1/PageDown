@@ -32,6 +32,8 @@ export interface EditorSidebarProps {
   // Forwarded straight through to EditorComments.
   onSelectComment: (id: string) => void
   onResolveComment: (id: string) => void
+  /** The comment clicked in the document, highlighted in the Comments list. */
+  activeCommentId?: string | null
 }
 
 // Segmented-control track/pill styling matches the real design-handoff
@@ -97,7 +99,8 @@ function EditorSidebar({
   filePath,
   onRestoreVersion,
   onSelectComment,
-  onResolveComment
+  onResolveComment,
+  activeCommentId
 }: EditorSidebarProps): React.JSX.Element {
   const sidebarTab = useAppStore((state) => state.sidebarTab)
   const setSidebarTab = useAppStore((state) => state.setSidebarTab)
@@ -176,6 +179,7 @@ function EditorSidebar({
             content={content}
             onSelectComment={onSelectComment}
             onResolveComment={onResolveComment}
+            activeCommentId={activeCommentId}
           />
         ) : (
           <EditorPages

@@ -99,6 +99,20 @@ interface AppStateValues {
   // never asked to hide would be a regression, and the menu item's own
   // checkmark-free label reads as an action either way.
   sidebarVisible: boolean
+  // The comment the user most recently asked to look at, or null.
+  //
+  // Exists because the comment wiring used to run ONE WAY only: the sidebar
+  // could scroll a mark into view in the document, but clicking a highlighted
+  // span in the document did nothing at all. You could see that a comment was
+  // there and had no way to read it without knowing to open the Comments tab
+  // and hunt for the matching row.
+  //
+  // Per-window UI state, not per-tab: it is "what am I looking at right now",
+  // and it is cleared whenever the document changes underneath it. Deliberately
+  // NOT part of documentStore -- nothing here is written to the file, and a
+  // comment id that outlived its mark would be a dangling reference in
+  // document state.
+  activeCommentId: string | null
   // Split-mode "Follow": while true (and only while viewMode === 'split' AND
   // splitLeftMode === 'format' -- see EditorScreen's own gating, this field
   // stays a plain unconditional preference so its state survives leaving and
@@ -124,6 +138,18 @@ interface AppState extends AppStateValues {
   goSettings: () => void
   setViewMode: (mode: ViewMode) => void
   setSidebarTab: (tab: SidebarTab) => void
+  /**
+   * Reveal a comment: switch the sidebar to Comments, make sure the sidebar is
+   * actually on screen, and mark the comment active so the list can highlight
+   * and scroll to it.
+   *
+   * One action rather than three calls at each site, because forgetting the
+   * `sidebarVisible` half is silent -- the tab switches correctly behind a
+   * hidden rail and the click still looks like it did nothing, which is the
+   * exact bug this exists to fix.
+   */
+  revealComment: (id: string) => void
+  clearActiveComment: () => void
   setSplitLeftMode: (mode: SplitLeftMode) => void
   setSplitRatio: (percent: number) => void
   openPageSetup: () => void
@@ -159,6 +185,7 @@ export const initialAppState: AppStateValues = {
   homeActiveSection: 'templates',
   zoom: DEFAULT_ZOOM,
   sidebarVisible: true,
+  activeCommentId: null,
   splitFollowEnabled: true
 }
 
@@ -174,6 +201,10 @@ export const useAppStore = create<AppState>()((set) => ({
   goSettings: () => set({ screen: 'settings' }),
   setViewMode: (mode) => set({ viewMode: mode }),
   setSidebarTab: (tab) => set({ sidebarTab: tab }),
+  // Sets all three together, deliberately -- see the interface doc comment for
+  // why `sidebarVisible` is part of it rather than left to the caller.
+  revealComment: (id) => set({ sidebarTab: 'comments', sidebarVisible: true, activeCommentId: id }),
+  clearActiveComment: () => set({ activeCommentId: null }),
   setSplitLeftMode: (mode) => set({ splitLeftMode: mode }),
   setSplitRatio: (percent) => set({ splitRatio: clampSplitRatio(percent) }),
   openPageSetup: () => set({ pageSetupOpen: true }),
