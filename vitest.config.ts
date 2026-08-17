@@ -20,10 +20,11 @@ export default defineConfig({
     // @milkdown/ctx timer bug it neutralises, and for why this is not
     // `dangerouslyIgnoreUnhandledErrors`.
     //
-    // Declared for both pools so it survives a change of `pool`.
-    poolOptions: {
-      forks: { execArgv: ['--import', './scripts/vitest-dom-teardown-shim.mjs'] },
-      threads: { execArgv: ['--import', './scripts/vitest-dom-teardown-shim.mjs'] }
-    }
+    // TOP-LEVEL `execArgv`, not `poolOptions.forks.execArgv`. Vitest 4 removed
+    // `test.poolOptions` entirely and flattened its contents; the nested form
+    // is not an error, it is silently IGNORED, so the shim never loaded and
+    // the flake it targets was never actually addressed. Caught only because
+    // Vitest prints a deprecation line, which is easy to scroll past.
+    execArgv: ['--import', './scripts/vitest-dom-teardown-shim.mjs']
   }
 })

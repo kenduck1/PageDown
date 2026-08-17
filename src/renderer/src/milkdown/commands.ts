@@ -394,9 +394,27 @@ export const addCommentCommand = $command(
     if (!payload || payload.text.trim() === '') return false
     const { from, to } = state.selection
     if (from === to) return false
-    const $from = state.doc.resolve(from)
-    const $to = state.doc.resolve(to)
-    if (!$from.sameParent($to)) return false
+    // A selection spanning several blocks is ALLOWED, and used to be refused
+    // here by `$from.sameParent($to)`.
+    //
+    // The original reasoning was that remark-stringify serializes block-level
+    // nodes independently, so a mark crossing a block boundary would need its
+    // start and end markers split across two independently-serialized blocks,
+    // risking an HTML comment left open across a blank line. That risk is
+    // real, and it is also not what happens: ProseMirror applies a mark to the
+    // inline content WITHIN each block it covers, and Milkdown's serializer
+    // closes an open mark at the end of every block. So a three-paragraph
+    // comment emits three self-contained marker PAIRS sharing one id -- never
+    // an unclosed comment, and never a marker spanning a blank line.
+    //
+    // Every consumer already handled that shape before this line was removed,
+    // because a hand-wrapped paragraph containing a hardbreak already produced
+    // multiple same-id pairs: extractComments dedupes by id (first occurrence
+    // wins for sourceOffset), and resolveCommentCommand below sweeps the WHOLE
+    // document for every mark carrying the id rather than only the selection.
+    //
+    // What is still refused is an EMPTY selection, above -- there is nothing
+    // to attach a comment to.
 
     const markType = commentSchema.type(ctx)
     const mark = markType.create({
