@@ -8,6 +8,12 @@ Please read [ARCHITECTURE.md](ARCHITECTURE.md) before making a substantial
 change. It documents several invariants that fail _silently_ when broken — no
 error, no failing test, just wrong output.
 
+One thing that surprises people early: many source comments cite `CLAUDE.md`
+or a path under `docs/superpowers/`. Those are internal working documents and
+are deliberately not published here, so those paths will not exist in your
+checkout — nothing is missing or misconfigured. ARCHITECTURE.md is the
+contributor-facing distillation of that material.
+
 ## Setup
 
 Requires **[pnpm](https://pnpm.io)**. The version is pinned in

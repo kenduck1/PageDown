@@ -40,10 +40,9 @@ language like LaTeX or Typst. PageDown tries the third option.
 
 > [!NOTE]
 > PageDown is early-stage and under active development — expect rough edges.
-> Known gaps, named up front: **Windows builds are not signed**, so SmartScreen
-> warns on first run; a never-saved document is crash-protected by a draft
-> store but has no version history; and Split mode's panes follow each other
-> by page rather than scrolling in exact sync.
+> Known gaps, named up front: a never-saved document is crash-protected by a
+> draft store but has no version history, and Split mode's panes follow each
+> other by page rather than scrolling in exact sync.
 
 ## Screenshots
 
@@ -142,17 +141,6 @@ Download the latest build from the
 | Windows               | `pagedown-<version>-setup.exe`                 |
 | Linux                 | `pagedown-<version>-x86_64.AppImage` or `.deb` |
 
-> [!NOTE]
-> **macOS builds are signed and notarized.** They open normally, with no
-> warning and no `xattr` workaround.
->
-> **Windows builds are not signed.** PageDown has no Authenticode certificate,
-> so SmartScreen will warn on first run. Only bypass that for a build you
-> obtained from the Releases page above.
-
-**Windows.** SmartScreen will show "Windows protected your PC". Choose **More
-info → Run anyway**.
-
 **Linux.** Make the AppImage executable (`chmod +x pagedown-*.AppImage`), or
 install the `.deb` with `sudo dpkg -i pagedown_*.deb`.
 
@@ -219,3 +207,8 @@ in `src/renderer/src/assets/fonts/`. It builds on
 [ProseMirror](https://prosemirror.net/),
 [unified](https://unifiedjs.com/)/remark,
 [Mermaid](https://mermaid.js.org/) and [KaTeX](https://katex.org/).
+
+Every third-party component redistributed in a packaged build is listed with
+its copyright and licence in
+[THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md), regenerated with
+`pnpm exec tsx scripts/generate-third-party-notices.ts`.

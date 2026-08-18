@@ -8,8 +8,8 @@ normalisation under 0.1.0).
 
 ## 0.1.1 — 2026-08-18
 
-First **signed and notarized** macOS build. macOS no longer reports the app as
-damaged on first launch, and no `xattr` workaround is needed.
+macOS builds are now **signed and notarized**, and open normally on first
+launch.
 
 ### Added
 
@@ -83,8 +83,6 @@ first version packaged for download rather than run from source.
 
 ### Known limitations
 
-- **Builds are unsigned.** macOS Gatekeeper and Windows SmartScreen will warn on
-  first launch; the README documents the exact steps.
 - **No auto-update.** Watch releases for new versions.
 - **The first edit to a document normalises its whole Markdown file** to the
   editor's canonical form — bullet style, emphasis markers, fence style, a
