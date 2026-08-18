@@ -97,33 +97,52 @@ fi
 echo "set MAC_CERT_PASSWORD"
 
 # -----------------------------------------------------------------------------
-# Notarization credentials.
+# Notarization credentials: an App Store Connect API key.
 # -----------------------------------------------------------------------------
-read -r -p "Apple ID email (the one enrolled in the Developer Program): " APPLE_ID_VALUE
-printf '%s' "$APPLE_ID_VALUE" | gh secret set APPLE_ID
-echo "set APPLE_ID"
+# Chosen over an Apple ID plus app-specific password (electron-builder supports
+# either) because this is a standalone credential with its own identity: it can
+# be revoked on its own without touching the Apple ID that owns the enrollment,
+# and it is not derived from an account password.
+#
+# Create at appstoreconnect.apple.com -> Users and Access -> Integrations ->
+# App Store Connect API. The .p8 file downloads exactly ONCE -- Apple will not
+# let you download it again, only revoke and reissue.
+echo
+echo "Notarization uses an App Store Connect API key."
+echo "appstoreconnect.apple.com -> Users and Access -> Integrations -> App Store Connect API"
+echo
+
+read -r -p "Path to the .p8 key file: " P8_PATH
+P8_PATH="${P8_PATH/#\~/$HOME}"
+[ -f "$P8_PATH" ] || { echo "No such file: $P8_PATH" >&2; exit 1; }
+case "$(head -1 "$P8_PATH")" in
+  *"BEGIN PRIVATE KEY"*) ;;
+  *)
+    echo "That does not look like a .p8 private key." >&2
+    echo "The file should start with -----BEGIN PRIVATE KEY-----" >&2
+    exit 1
+    ;;
+esac
+gh secret set APPLE_API_KEY_P8 < "$P8_PATH"
+echo "set APPLE_API_KEY_P8"
+
+# Apple names the download AuthKey_<KEYID>.p8, so the Key ID can usually be
+# read off the filename rather than asked for.
+GUESS_ID="$(basename "$P8_PATH" | sed -n 's/^AuthKey_\([A-Z0-9]*\)\.p8$/\1/p')"
+if [ -n "$GUESS_ID" ]; then
+  read -r -p "Key ID [$GUESS_ID]: " KEY_ID
+  KEY_ID="${KEY_ID:-$GUESS_ID}"
+else
+  read -r -p "Key ID (shown in the App Store Connect key list): " KEY_ID
+fi
+printf '%s' "$KEY_ID" | gh secret set APPLE_API_KEY_ID
+echo "set APPLE_API_KEY_ID"
 
 echo
-echo "An APP-SPECIFIC password, not your Apple ID password."
-echo "Create one at appleid.apple.com -> Sign-In and Security -> App-Specific Passwords."
-read -r -s -p "App-specific password: " ASP; echo
-printf '%s' "$ASP" | gh secret set APPLE_APP_SPECIFIC_PASSWORD
-unset ASP
-echo "set APPLE_APP_SPECIFIC_PASSWORD"
-
-# The Team ID is embedded in the certificate's common name as
-# "Developer ID Application: Some Name (TEAMID)", so offer it rather than
-# making you go and look it up.
-GUESS="$(security find-identity -v -p codesigning 2>/dev/null \
-  | sed -n 's/.*Developer ID Application: .*(\([A-Z0-9]\{10\}\))".*/\1/p' | head -1 || true)"
-if [ -n "$GUESS" ]; then
-  read -r -p "Team ID [$GUESS]: " TEAM_ID_VALUE
-  TEAM_ID_VALUE="${TEAM_ID_VALUE:-$GUESS}"
-else
-  read -r -p "Team ID (10 characters, developer.apple.com -> Membership): " TEAM_ID_VALUE
-fi
-printf '%s' "$TEAM_ID_VALUE" | gh secret set APPLE_TEAM_ID
-echo "set APPLE_TEAM_ID"
+echo "The Issuer ID is a UUID at the top of the same App Store Connect page."
+read -r -p "Issuer ID: " ISSUER
+printf '%s' "$ISSUER" | gh secret set APPLE_API_ISSUER
+echo "set APPLE_API_ISSUER"
 
 echo
 echo "Secrets now on the repository:"

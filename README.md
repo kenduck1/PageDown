@@ -188,8 +188,18 @@ full chain. No certificate signing request to build by hand.
 ```
 
 With no argument it exports the certificate straight from your keychain
-(macOS will ask for your login password), then sets all five secrets. It never
-echoes a value, and the exported copy is deleted on exit.
+(macOS will ask for your login password), then asks for an **App Store Connect
+API key** for notarization — create one at
+[appstoreconnect.apple.com](https://appstoreconnect.apple.com) → Users and
+Access → **Integrations** → App Store Connect API. The `.p8` downloads exactly
+once.
+
+An API key is used rather than an Apple ID and app-specific password (both work
+with electron-builder) because it is a standalone credential: revocable on its
+own, and not derived from the account that owns the enrollment.
+
+The script never echoes a value, and the exported certificate copy is deleted
+on exit.
 
 That is all. **Notarization is not a separate step** — the workflow enables it
 whenever the secrets are present, and electron-builder submits to Apple and
