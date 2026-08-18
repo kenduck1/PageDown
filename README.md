@@ -162,6 +162,45 @@ info → Run anyway**.
 **Linux.** Make the AppImage executable (`chmod +x pagedown-*.AppImage`), or
 install the `.deb` with `sudo dpkg -i pagedown_*.deb`.
 
+## Signing macOS releases (maintainers)
+
+Releases are unsigned until a Developer ID certificate is configured, which is
+why macOS reports the app as damaged. The release workflow signs and notarizes
+automatically once these secrets exist, and builds unsigned when they do not —
+no workflow edit is needed either way.
+
+One-time setup:
+
+1. **Create a signing request.** Keychain Access → Certificate Assistant →
+   _Request a Certificate From a Certificate Authority_. Enter your Apple ID
+   email, choose **Saved to disk**, and save the `.certSigningRequest`.
+2. **Create the certificate.** [developer.apple.com/account/resources/certificates](https://developer.apple.com/account/resources/certificates)
+   → **+** → **Developer ID Application** → upload the request → download the
+   `.cer` → double-click it to install into your keychain.
+   Note this is **Developer ID Application**, not "Mac App Distribution" —
+   only Developer ID works for software shipped outside the Mac App Store.
+3. **Export it.** In Keychain Access find _Developer ID Application: …_,
+   right-click → **Export**, save as `.p12`, and set a password.
+4. **Upload the secrets:**
+
+   ```bash
+   ./scripts/setup-mac-signing.sh path/to/DeveloperID.p12
+   ```
+
+   That sets all five secrets the workflow reads. It never echoes a value.
+
+Then tag a release as usual. The run summary reports whether the built app is
+**actually** signed — read off the artifact with `codesign`, not inferred from
+the secrets existing.
+
+> [!NOTE]
+> Signing embeds the certificate's common name — `Developer ID Application:
+<NAME> (<TEAMID>)` — in every build, readable by anyone via
+> `codesign -dv --verbose=4`. That is the mechanism, not a leak: Gatekeeper's
+> purpose is telling users who signed the software. For an individual
+> enrollment that name is a legal name; an organization enrollment shows the
+> company name instead. Nothing else from the Apple account is embedded.
+
 ## Building from source
 
 Requires [pnpm](https://pnpm.io) — the version is pinned in `package.json`.
