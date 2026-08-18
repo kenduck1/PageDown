@@ -9,12 +9,13 @@
 #   * No third-party action touches the release or the token. Assets are
 #     uploaded with the `gh` CLI, which is preinstalled on every runner, so
 #     the entire publish path is code you can audit in this file.
-#   * Builds are UNSIGNED. There is no Apple Developer ID or Windows
-#     Authenticode certificate wired up, and `notarize: false` in
-#     electron-builder.yml is itself already a blocker for macOS updates.
-#     README.md documents the Gatekeeper and SmartScreen prompts users will
-#     hit as a result. When certificates do exist, add them as secrets and
-#     drop the CSC_IDENTITY_AUTO_DISCOVERY override in the macOS job.
+#   * macOS builds are SIGNED AND NOTARIZED when the five secrets exist, and
+#     unsigned when they do not -- so this file works either way. Windows is
+#     still unsigned: that needs an Authenticode certificate from a commercial
+#     CA, which has no individual-developer tier. README.md documents the
+#     SmartScreen prompt users will hit as a result.
+#   * `shell: bash` on the packaging step is REQUIRED, not stylistic. Windows
+#     runners default to PowerShell.
 #   * Linux targets are overridden to AppImage + deb on the command line.
 #     electron-builder.yml also lists `snap`, which is right for a local
 #     `pnpm build:linux` but needs snapcraft/LXD in CI and is a reliable way
@@ -126,6 +127,17 @@ jobs:
       # organization puts the company name there instead. Nothing else from the
       # Apple account is embedded.
       - name: Package installers
+        # BASH ON EVERY PLATFORM, INCLUDING WINDOWS. Windows runners default to
+        # PowerShell, where this script is a parse error -- which is how v0.1.1
+        # first failed.
+        #
+        # It also fixes a latent bug that had been passing by accident:
+        # PowerShell reads environment variables as `$env:NAME`, so the old
+        # one-liner's `$BUILDER_ARGS` expanded to NOTHING and electron-builder
+        # ran with no target argument at all. It happened to produce the right
+        # installer only because electron-builder defaults to the host
+        # platform, so `--win` was never actually being passed on Windows.
+        shell: bash
         env:
           BUILDER_ARGS: ${{ matrix.builder_args }}
           IS_MAC: ${{ matrix.os == 'macos-latest' }}
