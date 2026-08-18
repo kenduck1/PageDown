@@ -1,5 +1,5 @@
 /**
- * Regenerates THIRD-PARTY-NOTICES.md from the installed dependency tree.
+ * Regenerates docs/THIRD-PARTY-NOTICES.md from the installed dependency tree.
  *
  *   pnpm exec tsx scripts/generate-third-party-notices.ts
  *
@@ -128,7 +128,8 @@ out.push(
   ''
 )
 out.push(
-  'PageDown itself is MIT-licensed — see [LICENSE](LICENSE). That file is kept',
+  'PageDown itself is MIT-licensed — see [LICENSE](../LICENSE). That file is',
+  'kept',
   "as the bare MIT text and nothing else, because GitHub's licence detection",
   'reports `NOASSERTION` for a LICENSE with extra sections appended, which',
   'costs the repository its licence badge and its place in licence searches.',
@@ -205,7 +206,7 @@ for (const id of licenseIds) {
   }
 }
 
-writeFileSync('THIRD-PARTY-NOTICES.md', out.join('\n').replace(/\n{3,}/g, '\n\n'), 'utf8')
+writeFileSync('docs/THIRD-PARTY-NOTICES.md', out.join('\n').replace(/\n{3,}/g, '\n\n'), 'utf8')
 console.log(
-  `Wrote THIRD-PARTY-NOTICES.md (${totalPackages} packages, ${licenseIds.length} licences)`
+  `Wrote docs/THIRD-PARTY-NOTICES.md (${totalPackages} packages, ${licenseIds.length} licences)`
 )

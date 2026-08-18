@@ -132,7 +132,7 @@ Several harnesses use this context, all serving the same bundle:
 
 ## Security model
 
-See [SECURITY.md](SECURITY.md) for reporting. The boundaries themselves:
+See [SECURITY.md](../.github/SECURITY.md) for reporting. The boundaries themselves:
 
 **Untrusted document content never runs privileged.** Mermaid and KaTeX render
 only inside the sandboxed context. The app-shell renderer never renders

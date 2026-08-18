@@ -1,17 +1,23 @@
+import { fileURLToPath } from 'node:url'
 import { defineConfig } from 'vitest/config'
 import react from '@vitejs/plugin-react'
 
 export default defineConfig({
   plugins: [react()],
   test: {
+    // This config lives in tests/, but every path below is repo-relative and
+    // the suite under test is src/. Vitest defaults `root` to the config
+    // file's own directory, so without this the include glob would resolve
+    // against tests/ and match nothing.
+    root: fileURLToPath(new URL('..', import.meta.url)),
     environment: 'jsdom',
     setupFiles: ['./src/renderer/src/test-setup.ts'],
     include: ['src/**/*.test.ts', 'src/**/*.test.tsx'],
-    // Vitest 4 exits non-zero when no test files match by default (a behavior
-    // change from the version the plan brief was written against). Task 1 runs
-    // this before any tests exist, so allow a clean exit until Task 4 adds the
-    // first spec.
-    passWithNoTests: true,
+    // Deliberately NOT `passWithNoTests: true`. That was set when this config
+    // predated the first spec; with 2000+ tests it would instead turn "the
+    // include glob no longer matches anything" into a silent green run. This
+    // config moved into tests/ and now depends on `root` above resolving
+    // correctly, which is exactly the mistake that needs to fail loudly.
     // Loaded with `--import` rather than added to `setupFiles`, and that
     // distinction is the whole point: setup files run AFTER the jsdom
     // environment is installed, and this has to define a global BEFORE it, so

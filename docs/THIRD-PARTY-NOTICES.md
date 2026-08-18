@@ -4,7 +4,8 @@ PageDown is distributed as a packaged desktop application, so a release
 redistributes the third-party software listed here in binary form. Each
 component remains under its own licence and its own copyright.
 
-PageDown itself is MIT-licensed — see [LICENSE](LICENSE). That file is kept
+PageDown itself is MIT-licensed — see [LICENSE](../LICENSE). That file is
+kept
 as the bare MIT text and nothing else, because GitHub's licence detection
 reports `NOASSERTION` for a LICENSE with extra sections appended, which
 costs the repository its licence badge and its place in licence searches.
@@ -2732,7 +2733,7 @@ exhaustive, and do not form part of our licenses.
      such as asking that all changes be marked or described.
      Although not required by our licenses, you are encouraged to
      respect those requests where reasonable. More_considerations
-     for the public:
+     for the public: 
 	wiki.creativecommons.org/Considerations_for_licensees
 
 =======================================================================

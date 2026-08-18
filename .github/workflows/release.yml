@@ -10,14 +10,13 @@
 #     uploaded with the `gh` CLI, which is preinstalled on every runner, so
 #     the entire publish path is code you can audit in this file.
 #   * macOS builds are SIGNED AND NOTARIZED when the five secrets exist, and
-#     unsigned when they do not -- so this file works either way. Windows is
-#     still unsigned: that needs an Authenticode certificate from a commercial
-#     CA, which has no individual-developer tier. README.md documents the
-#     SmartScreen prompt users will hit as a result.
+#     unsigned when they do not -- so this file works either way. Windows
+#     signing is not configured: that needs an Authenticode certificate from a
+#     commercial CA, which has no individual-developer tier.
 #   * `shell: bash` on the packaging step is REQUIRED, not stylistic. Windows
 #     runners default to PowerShell.
 #   * Linux targets are overridden to AppImage + deb on the command line.
-#     electron-builder.yml also lists `snap`, which is right for a local
+#     build/electron-builder.yml also lists `snap`, which is right for a local
 #     `pnpm build:linux` but needs snapcraft/LXD in CI and is a reliable way
 #     to get red builds for no user-visible benefit.
 #   * Tag-controlled values are passed through `env:` rather than
@@ -152,13 +151,13 @@ jobs:
           if [ "$IS_MAC" != "true" ] || [ -z "${CSC_LINK:-}" ] || [ -z "${APPLE_API_KEY_P8:-}" ]; then
             if [ "$IS_MAC" = "true" ]; then
               echo "::warning::No macOS signing secrets set -- building UNSIGNED."
-              echo "::warning::Users will see 'PageDown is damaged'. See the README's Installing section."
+              echo "::warning::Users will see 'PageDown is damaged' on first launch."
             fi
             # Without this, electron-builder searches the keychain for an
             # identity and can fail confusingly rather than simply producing an
             # unsigned build.
             CSC_IDENTITY_AUTO_DISCOVERY=false \
-              pnpm exec electron-builder $BUILDER_ARGS --publish never
+              pnpm exec electron-builder --config build/electron-builder.yml $BUILDER_ARGS --publish never
             exit 0
           fi
 
@@ -176,7 +175,7 @@ jobs:
           echo "Signing identity present -- signing and notarizing."
           echo "Notarization contacts Apple and can take several minutes."
           APPLE_API_KEY="$KEY_PATH" \
-            pnpm exec electron-builder $BUILDER_ARGS --publish never -c.mac.notarize=true
+            pnpm exec electron-builder --config build/electron-builder.yml $BUILDER_ARGS --publish never -c.mac.notarize=true
 
       # Records, in the run summary, whether what just shipped is actually
       # signed -- read from the artifact rather than inferred from whether a

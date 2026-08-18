@@ -267,12 +267,12 @@
    condition, not a courtesy -- BSD-3-Clause requires that redistributions in
    source form retain it. Do not delete it when editing the colours; if the
    theme is ever replaced with one written from scratch, remove the notice in
-   the same commit and update THIRD-PARTY-NOTICES.md.
+   the same commit and update docs/THIRD-PARTY-NOTICES.md.
 
      Copyright (c) 2006, Ivan Sagalaev.
      All rights reserved.
      Licensed under the BSD 3-Clause License. Full text:
-     THIRD-PARTY-NOTICES.md, or node_modules/highlight.js/LICENSE.
+     docs/THIRD-PARTY-NOTICES.md, or node_modules/highlight.js/LICENSE.
 
    Only the color rules are copied;
    github.css's own structural rules (`pre code.hljs { padding: 1em;

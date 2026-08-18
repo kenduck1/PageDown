@@ -4,7 +4,7 @@ Thanks for your interest. PageDown is an early-stage desktop app, so the most
 useful contributions right now are bug reports with a document that reproduces
 the problem, and fixes for things that are plainly broken.
 
-Please read [ARCHITECTURE.md](ARCHITECTURE.md) before making a substantial
+Please read [ARCHITECTURE.md](../docs/ARCHITECTURE.md) before making a substantial
 change. It documents several invariants that fail _silently_ when broken — no
 error, no failing test, just wrong output.
 
@@ -50,7 +50,7 @@ main-process bundle (see ARCHITECTURE.md).
 ## Tests
 
 Three suites, covering different layers. See the Testing section of
-[ARCHITECTURE.md](ARCHITECTURE.md) for what belongs where.
+[ARCHITECTURE.md](../docs/ARCHITECTURE.md) for what belongs where.
 
 ```bash
 pnpm test:unit                    # fast; jsdom

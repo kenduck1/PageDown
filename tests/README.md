@@ -50,9 +50,11 @@ The Milkdown/ProseMirror feasibility spike, kept frozen at the composition it
 measured. **Some of these fail on purpose** — the failure _is_ the recorded
 finding. Do not "fix" them by loosening assertions.
 
-They are covered by neither `vitest.config.ts` nor `playwright.config.ts`, on
-purpose: running a spike spec under the root configs would silently match
-nothing and exit 0. Keep the configs disjoint.
+They are covered by neither `tests/vitest.config.ts` nor
+`tests/playwright.config.ts`, on purpose: running a spike spec under the main
+configs would match nothing. Keep the configs disjoint. (`vitest.config.ts` no
+longer sets `passWithNoTests`, so a glob that matches nothing now fails loudly
+rather than exiting 0.)
 
 ## Naming
 

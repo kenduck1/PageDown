@@ -178,7 +178,7 @@ Requires Node 22 (`.nvmrc`).
 pnpm build && pnpm exec tsx scripts/capture-screenshots.ts
 ```
 
-See **[ARCHITECTURE.md](ARCHITECTURE.md)** for how the app is put together —
+See **[ARCHITECTURE.md](docs/ARCHITECTURE.md)** for how the app is put together —
 the three execution contexts, the sandboxed render context and why it exists,
 the Markdown pipeline's ordering rules, and the editor/paginator parity
 invariant. It is worth reading before a substantial change: several of those
@@ -187,13 +187,13 @@ invariants fail silently when broken.
 ## Contributing
 
 Bug reports and fixes are welcome. See
-**[CONTRIBUTING.md](CONTRIBUTING.md)**.
+**[CONTRIBUTING.md](.github/CONTRIBUTING.md)**.
 
 The single most useful thing in a bug report is the minimal Markdown document
 that reproduces the problem, including its frontmatter, plus which editing
 mode you were in.
 
-For security issues, please see **[SECURITY.md](SECURITY.md)** and report
+For security issues, please see **[SECURITY.md](.github/SECURITY.md)** and report
 privately rather than opening an issue.
 
 ## Licence
@@ -210,5 +210,5 @@ in `src/renderer/src/assets/fonts/`. It builds on
 
 Every third-party component redistributed in a packaged build is listed with
 its copyright and licence in
-[THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md), regenerated with
+[THIRD-PARTY-NOTICES.md](docs/THIRD-PARTY-NOTICES.md), regenerated with
 `pnpm exec tsx scripts/generate-third-party-notices.ts`.
