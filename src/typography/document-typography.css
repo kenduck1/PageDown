@@ -260,7 +260,21 @@
 /* Syntax-highlighting token colors -- values copied verbatim from
    highlight.js's own bundled `styles/github.css` theme (the light GitHub
    theme, matching this app's other GitHub-style conventions, e.g. the
-   sanitize schema's own defaultSchema). Only the color rules are copied;
+   sanitize schema's own defaultSchema).
+
+   Because these values are copied rather than imported, highlight.js's own
+   licence travels with them and the notice below is a redistribution
+   condition, not a courtesy -- BSD-3-Clause requires that redistributions in
+   source form retain it. Do not delete it when editing the colours; if the
+   theme is ever replaced with one written from scratch, remove the notice in
+   the same commit and update THIRD-PARTY-NOTICES.md.
+
+     Copyright (c) 2006, Ivan Sagalaev.
+     All rights reserved.
+     Licensed under the BSD 3-Clause License. Full text:
+     THIRD-PARTY-NOTICES.md, or node_modules/highlight.js/LICENSE.
+
+   Only the color rules are copied;
    github.css's own structural rules (`pre code.hljs { padding: 1em;
    overflow-x: auto; display: block }`) are deliberately NOT copied, since
    the pre/code box rules above already handle padding/overflow uniformly
