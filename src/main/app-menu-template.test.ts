@@ -12,8 +12,10 @@ import type { MenuCommand } from '../menu/commands'
 function build(overrides: Partial<AppMenuTemplateParams> = {}): {
   template: MenuItemConstructorOptions[]
   send: ReturnType<typeof vi.fn>
+  checkForUpdates: ReturnType<typeof vi.fn>
 } {
   const send = vi.fn()
+  const checkForUpdates = vi.fn()
   const template = buildAppMenuTemplate({
     appName: 'PageDown',
     platform: 'darwin',
@@ -21,9 +23,14 @@ function build(overrides: Partial<AppMenuTemplateParams> = {}): {
     state: DEFAULT_WINDOW_UI_STATE,
     recentFiles: [],
     send: send as unknown as (command: MenuCommand, payload?: string) => void,
+    // Defaults to the PACKAGED case, so the collision sweep and every other
+    // pre-existing test in this file sees the real shipped menu rather than a
+    // reduced development one.
+    updatesEnabled: true,
+    checkForUpdates,
     ...overrides
   })
-  return { template, send }
+  return { template, send, checkForUpdates }
 }
 
 const EDITING: WindowUiState = {
@@ -489,6 +496,44 @@ describe('buildAppMenuTemplate: enablement', () => {
     expect(itemIn(submenuOf(closed, 'Help'), 'Keyboard Shortcuts').enabled).toBe(true)
     const open = build({ state: EDITING }).template
     expect(itemIn(submenuOf(open, 'Help'), 'Keyboard Shortcuts').enabled).toBe(true)
+  })
+
+  describe('Help > Check for Updates…', () => {
+    it('is present and enabled on every screen in a packaged build', () => {
+      // Same reasoning as Keyboard Shortcuts directly above: checking for
+      // updates has nothing to do with whether a document is on screen, so
+      // gating it on documentOpen would make it unreachable from Home --
+      // which is exactly where a user who just launched the app is standing.
+      const closed = build({ updatesEnabled: true, state: DEFAULT_WINDOW_UI_STATE }).template
+      expect(itemIn(submenuOf(closed, 'Help'), 'Check for Updates…').enabled).toBe(true)
+      const open = build({ updatesEnabled: true, state: EDITING }).template
+      expect(itemIn(submenuOf(open, 'Help'), 'Check for Updates…').enabled).toBe(true)
+    })
+
+    it('is omitted entirely, not disabled, when updates cannot run', () => {
+      // A greyed item would be describing the BUILD rather than the
+      // document, and nothing the user does can change it -- see the item's
+      // own comment in app-menu-template.ts for why that distinction decides
+      // between "disabled" and "absent".
+      const help = submenuOf(build({ updatesEnabled: false }).template, 'Help')
+      expect(help.map((item) => item.label)).not.toContain('Check for Updates…')
+      // ...and the rest of the Help menu is untouched by its absence.
+      expect(itemIn(help, 'Keyboard Shortcuts').enabled).toBe(true)
+    })
+
+    it('calls the injected main-process callback, NOT the renderer command channel', () => {
+      // The distinction this pins: every other item in this menu routes
+      // through `send` to a renderer. This one must not -- there is no
+      // renderer state to consult, and bouncing it through a window only to
+      // have that window invoke straight back into main is a round trip with
+      // no purpose. A regression that "helpfully" moved it onto `send` would
+      // otherwise be invisible.
+      const { template, send, checkForUpdates } = build({ updatesEnabled: true })
+      const item = itemIn(submenuOf(template, 'Help'), 'Check for Updates…')
+      ;(item.click as () => void)()
+      expect(checkForUpdates).toHaveBeenCalledTimes(1)
+      expect(send).not.toHaveBeenCalled()
+    })
   })
 
   it('disables the three Zoom items in Split mode, and only those', () => {

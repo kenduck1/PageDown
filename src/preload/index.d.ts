@@ -17,6 +17,9 @@ import type { DocumentWarning } from '../markdown/document-warnings'
 // dependency-free contract module (it has to be -- it is bundled into the
 // sandboxed render context), shared by main, preload and renderer alike.
 import type { PageBreakPosition } from '../pagination/page-breaks'
+// Same exception again: src/updates/update-state.ts is dependency-free by
+// construction (main, preload and renderer all import it at runtime).
+import type { UpdateState } from '../updates/update-state'
 
 export interface RecentFileEntry {
   filePath: string
@@ -297,6 +300,20 @@ export interface FileApi {
   getStartupWarnings: () => Promise<string[]>
   // package.json's real, running version (main process's app.getVersion()).
   getAppVersion: () => Promise<string>
+  // --- In-app auto-update (src/updates/update-state.ts) ---
+  // Subscribes to the main process's update state. Returns an unsubscribe
+  // function the caller MUST invoke on unmount, same contract (and same
+  // reason) as onMenuCommand/onWindowCloseRequest above.
+  onUpdateState: (callback: (state: UpdateState) => void) => () => void
+  // The current state, for a window that mounted after the last broadcast.
+  getUpdateState: () => Promise<UpdateState>
+  // Restarts and installs a downloaded update. Resolves `false` when there is
+  // nothing staged, or when the user cancelled the unsaved-work prompt that
+  // runs first -- never rejects, and never installs anything the main process
+  // does not independently agree is ready.
+  installUpdate: () => Promise<boolean>
+  // "Later" -- hides the banner without discarding the staged update.
+  dismissUpdateNotice: () => Promise<void>
 }
 
 declare global {

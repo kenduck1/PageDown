@@ -106,30 +106,41 @@ appImage:
   # already carries the architecture.
   artifactName: ${name}-${version}-${arch}.${ext}
 npmRebuild: false
-# Product-completeness audit Tier 3: auto-update. `electron-updater` is not a
-# dependency (checked package.json and the lockfile directly) and no real
-# release host/code signing pipeline exists for this project yet -- shipping
-# a `publish` block pointing anywhere, real or fake, would be actively
-# misleading, because electron-builder bakes it straight into each
-# platform's own update-manifest file (latest-mac.yml/latest.yml/
-# latest-linux.yml) REGARDLESS of whether anything in the app ever reads it.
-# The PREVIOUS value here (`https://example.com/auto-updates`, scaffold
-# from the original electron-vite template, never touched since) is exactly
-# that failure mode already realized: every build silently baked a bogus,
-# unreachable URL into its own shipped update manifest.
+# In-app auto-update. This block does TWO things, and the second one is the
+# reason the previous value here was a real defect rather than an unused
+# setting: electron-builder bakes this configuration into each platform's own
+# update-manifest file (latest-mac.yml / latest.yml / latest-linux.yml) AND
+# into the packaged app itself as `app-update.yml`, which is exactly what
+# electron-updater reads at runtime to find its feed.
 #
-# `publish: null` is the honest state -- electron-builder skips generating
-# those manifest files entirely when no publish target is configured, so a
-# shipped build no longer claims an update channel it doesn't have. This is
-# a decision to defer, not an oversight: see docs/superpowers/plans/
-# 2026-08-10-product-completeness-audit.md's Tier 3 entry and this task's
-# own commit message for what a real auto-update integration would still
-# need (a real release host reachable from end-user machines, real code
-# signing/notarization on macOS -- `notarize: false` above is itself
-# already a blocker, since Squirrel.Mac/electron-updater's macOS support
-# requires a signed, notarized app to apply an update at all -- and a UI
-# surface for "an update is available" / "restart to update"). Revisit
-# this the moment any of those three actually exist; wiring electron-updater
-# against a still-nonexistent release host would only trade one honest gap
-# for a differently-shaped broken one.
-publish: null
+# The history is worth keeping, because both previous states were wrong in
+# opposite directions. It was originally `https://example.com/auto-updates`
+# (electron-vite scaffold, never touched), so every build silently shipped a
+# bogus, unreachable update channel. That was replaced with `publish: null`,
+# which was the honest state while no updater existed -- electron-builder
+# then skips generating the manifests entirely, so a build claimed no update
+# channel at all. Now that src/main/updater.ts is real, `null` would break the
+# feature at the packaging layer while every line of application code looked
+# correct: with no manifests generated and no app-update.yml bundled,
+# electron-updater has nothing to read and fails at startup.
+#
+# The GitHub provider needs NO TOKEN for a public repository -- it reads the
+# public releases API. Do not add one: anything shipped inside the app is
+# extractable from every copy of it by anyone who downloads one, so an
+# embedded token is a published token.
+#
+# WHICH IS ALSO WHY UPDATES CANNOT WORK YET. This repository is PRIVATE, and
+# the releases API 404s for a private repo without a token. Every check fails
+# until the repo is made public, and src/main/updater.ts makes that failure
+# completely silent by design (see its own EXPECTED-UNTIL-PUBLIC comment).
+# macOS additionally needs a signed and notarized build -- Squirrel.Mac will
+# not apply an update to one that is not -- so `notarize: false` above is a
+# second, independent blocker for that platform specifically.
+#
+# `owner`/`repo` are stated explicitly rather than inferred from
+# package.json's `repository` field, so a future rename of that field cannot
+# silently repoint the update feed of every shipped copy of the app.
+publish:
+  provider: github
+  owner: kenduck1
+  repo: PageDown

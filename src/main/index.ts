@@ -86,6 +86,21 @@ import {
   WINDOW_CLOSE_RESPONSE_CHANNEL
 } from '../window/close-request'
 import { extractMarkdownPathFromArgv, looksLikeMarkdownPath } from './open-file-args'
+import {
+  checkForUpdates,
+  dismissUpdateNotice,
+  getUpdateState,
+  initAutoUpdate,
+  quitAndInstallUpdate
+} from './updater'
+import {
+  UPDATE_DISMISS_CHANNEL,
+  UPDATE_GET_STATE_CHANNEL,
+  UPDATE_INSTALL_CHANNEL,
+  UPDATE_STATE_CHANNEL,
+  canInstallUpdate,
+  type UpdateState
+} from '../updates/update-state'
 
 // Must run before app.whenReady() is awaited anywhere — Electron requires
 // protocol.registerSchemesAsPrivileged() to be called before the `ready`
@@ -581,6 +596,20 @@ const windowOpenPaths = new WeakMap<BrowserWindow, readonly string[]>()
 //
 // Fire-and-forget and individually guarded: a window that dies between the
 // snapshot and the send must not fail an already-completed preferences write.
+// Pushes a just-changed update state to EVERY window, sender included --
+// unlike broadcastPreferences below, which excludes the window that made the
+// change. There is no equivalent exclusion to make here: the state changes in
+// the MAIN process, driven by a release feed and a background download, so no
+// renderer ever holds a locally-applied copy this could fight with. Fire-and-
+// forget and individually guarded, same as that function.
+function broadcastUpdateState(state: UpdateState): void {
+  for (const win of documentWindows) {
+    if (win.isDestroyed()) continue
+    if (win.webContents.isDestroyed()) continue
+    win.webContents.send(UPDATE_STATE_CHANNEL, state)
+  }
+}
+
 function broadcastPreferences(preferences: Preferences, senderWebContentsId: number): void {
   for (const win of documentWindows) {
     if (win.isDestroyed()) continue
@@ -732,6 +761,68 @@ async function closeWindowWithApproval(win: BrowserWindow): Promise<boolean> {
 let quitApproved = false
 let quitInProgress = false
 
+// Asks every window for permission to end the session, and -- if they all
+// agree -- leaves the app in a state where quitting will not re-prompt.
+//
+// EXTRACTED FROM `before-quit` so a SECOND caller can reuse it: installing a
+// downloaded update (the `update:install` handler below) also ends the
+// session, and must ask the same questions in the same order. See
+// quitAndInstallUpdate's own comment in updater.ts for why running this
+// first is required rather than merely polite -- Electron's `quitAndInstall`
+// closes every window itself, which this app's own close guard cancels,
+// so an un-approved install would stall behind a prompt nobody knows is
+// there.
+//
+// Returns true when the caller may proceed to actually quit.
+async function requestQuitApproval(): Promise<boolean> {
+  if (quitApproved) return true
+  // A round of prompts is already in flight (a Cmd+Q the user is part-way
+  // through answering). Starting a second, parallel round on top of it --
+  // which is reachable now that `update:install` can call this too -- would
+  // show every window two dialogs. `before-quit` never reaches this line in
+  // that state; the install path can.
+  if (quitInProgress) return false
+  quitInProgress = true
+  try {
+    // TWO PHASES, and the split is the whole point: ask everything first,
+    // act only once every window has agreed.
+    //
+    // This loop used to call `closeWindowWithApproval`, which CLOSES each
+    // window as it is approved, and `return`ed on the first refusal. So
+    // "Cancel" did not cancel: window 1 answered, closed, and was destroyed;
+    // window 2's prompt got Cancel; the quit aborted -- and window 1 was
+    // already gone, unrecoverably. A user who chose "Don't Save" on window 1
+    // intending to reconsider by the end of the sequence had no way back.
+    // Nothing may be destroyed until the whole decision is known.
+    //
+    // A copied array, not the live Set: a window can still be closed by
+    // something else (a renderer crash prompt, the OS) while this awaits,
+    // which mutates `documentWindows` from its own 'closed' handler.
+    const windows = [...documentWindows]
+    for (const win of windows) {
+      if (win.isDestroyed()) continue
+      // ONE window cancelling cancels the whole quit -- the same semantics
+      // every document-based app has, and the only safe reading of "Cancel"
+      // when the alternative is discarding that window's work anyway.
+      // Returning here now genuinely leaves every window standing, including
+      // the ones that already said yes.
+      if (!(await requestCloseApproval(win))) return false
+    }
+    // Every window agreed. Mark them all approved BEFORE quitting, so each
+    // one's own `close` handler short-circuits instead of re-asking, then
+    // let app.quit() do the actual closing -- there is no need to close them
+    // by hand here, and doing so would only add a window in which a partial
+    // close could be left behind if something threw mid-loop.
+    for (const win of windows) {
+      if (!win.isDestroyed()) closeApproved.add(win)
+    }
+    quitApproved = true
+    return true
+  } finally {
+    quitInProgress = false
+  }
+}
+
 app.on('before-quit', (event) => {
   // Second pass, after every window has already confirmed -- let it through.
   if (quitApproved) return
@@ -739,48 +830,10 @@ app.on('before-quit', (event) => {
   // A second Cmd+Q while the first quit is still asking must not restart the
   // prompts; the in-flight round trip is already covering every window.
   if (quitInProgress) return
-  quitInProgress = true
 
-  void (async () => {
-    try {
-      // TWO PHASES, and the split is the whole point: ask everything first,
-      // act only once every window has agreed.
-      //
-      // This loop used to call `closeWindowWithApproval`, which CLOSES each
-      // window as it is approved, and `return`ed on the first refusal. So
-      // "Cancel" did not cancel: window 1 answered, closed, and was destroyed;
-      // window 2's prompt got Cancel; the quit aborted -- and window 1 was
-      // already gone, unrecoverably. A user who chose "Don't Save" on window 1
-      // intending to reconsider by the end of the sequence had no way back.
-      // Nothing may be destroyed until the whole decision is known.
-      //
-      // A copied array, not the live Set: a window can still be closed by
-      // something else (a renderer crash prompt, the OS) while this awaits,
-      // which mutates `documentWindows` from its own 'closed' handler.
-      const windows = [...documentWindows]
-      for (const win of windows) {
-        if (win.isDestroyed()) continue
-        // ONE window cancelling cancels the whole quit -- the same semantics
-        // every document-based app has, and the only safe reading of "Cancel"
-        // when the alternative is discarding that window's work anyway.
-        // Returning here now genuinely leaves every window standing, including
-        // the ones that already said yes.
-        if (!(await requestCloseApproval(win))) return
-      }
-      // Every window agreed. Mark them all approved BEFORE quitting, so each
-      // one's own `close` handler short-circuits instead of re-asking, then
-      // let app.quit() do the actual closing -- there is no need to close them
-      // by hand here, and doing so would only add a window in which a partial
-      // close could be left behind if something threw mid-loop.
-      for (const win of windows) {
-        if (!win.isDestroyed()) closeApproved.add(win)
-      }
-      quitApproved = true
-      app.quit()
-    } finally {
-      quitInProgress = false
-    }
-  })()
+  void requestQuitApproval().then((approved) => {
+    if (approved) app.quit()
+  })
 })
 
 // Routes an application-menu command to the window that should act on it.
@@ -1342,6 +1395,46 @@ app.whenReady().then(async () => {
   // preferences/recent-files file is surfaced exactly once per app run.
   ipcMain.handle('app:getStartupWarnings', () => drainConfigWarnings())
 
+  // --- In-app auto-update (src/main/updater.ts, src/updates/update-state.ts) ---
+  //
+  // NONE of these three takes a path, or any renderer-supplied value at all,
+  // so CLAUDE.md's `isKnownPath` rule genuinely does not apply -- there is
+  // nothing to validate. The only capability here is `update:install`, and it
+  // is gated on the MAIN process's own state rather than on anything the
+  // caller says (see below).
+
+  // Current state, for a window that mounts after a state change has already
+  // been broadcast -- a second window, or the first one finishing its own
+  // startup after the launch check has landed. Without it, a window could sit
+  // on INITIAL_UPDATE_STATE forever while an update was staged and every
+  // other window was showing the banner.
+  ipcMain.handle(UPDATE_GET_STATE_CHANNEL, () => getUpdateState())
+
+  // The ONLY path to an install, and it is a two-key operation: the user's
+  // explicit click gets it here, and the main process's own state decides
+  // whether there is anything to install. `canInstallUpdate` is checked HERE,
+  // not merely in the component that renders the button -- contextBridge
+  // grants no protection against a renderer calling an exposed method with
+  // arguments (or at a moment) of its choosing, and this one replaces the
+  // user's installed application.
+  //
+  // The quit approval runs BEFORE quitAndInstall, never after: see
+  // quitAndInstallUpdate's own comment in updater.ts. A user who cancels at
+  // the unsaved-work prompt keeps both their work and their current version.
+  ipcMain.handle(UPDATE_INSTALL_CHANNEL, async () => {
+    if (!canInstallUpdate(getUpdateState())) return false
+    if (!(await requestQuitApproval())) return false
+    quitAndInstallUpdate()
+    return true
+  })
+
+  // "Later". Hides the banner without discarding the staged update -- see
+  // UpdateState.dismissed for why those are separate, and for how a manual
+  // Help > Check for Updates… brings it back.
+  ipcMain.handle(UPDATE_DISMISS_CHANNEL, () => {
+    dismissUpdateNotice()
+  })
+
   // package.json's own `version` field -- app.getVersion() reads it directly
   // in development and from the packaged app's metadata once built, so this
   // is always the real shipped version, never a hand-maintained duplicate.
@@ -1424,8 +1517,24 @@ app.whenReady().then(async () => {
   initApplicationMenu({
     userDataDir: app.getPath('userData'),
     isDev: is.dev,
-    dispatch: dispatchMenuCommand
+    dispatch: dispatchMenuCommand,
+    // The same predicate updater.ts gates on, so the menu can never offer an
+    // item that does nothing. `app.isPackaged`, not `is.dev` -- see
+    // initAutoUpdate's own comment for why that is the correct question even
+    // though the two are exact negations of each other today.
+    updatesEnabled: app.isPackaged,
+    checkForUpdates: () => void checkForUpdates(true)
   })
+
+  // In-app auto-update. Deliberately started AFTER the first window exists:
+  // the launch check's own delay is measured from here, and a state broadcast
+  // that arrived before any window was listening would simply be dropped.
+  //
+  // Safe to call unconditionally -- it returns immediately for an unpackaged
+  // app, so `pnpm dev` and every gate spec (which all launch the unpackaged
+  // `out/` build) never contact a release feed, never schedule a check, and
+  // never touch electron-updater's lazily-constructed autoUpdater at all.
+  initAutoUpdate({ broadcast: broadcastUpdateState })
 
   // Applies the spellcheck half of a preferences change LIVE, not just on the
   // next app launch -- session.setSpellCheckerEnabled is a real runtime toggle

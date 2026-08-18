@@ -107,6 +107,30 @@ export default defineConfig({
           // Left externalized on purpose rather than "excluded to be safe":
           // bundling it would add roughly 300KB to out/main/index.js in
           // exchange for nothing.
+          //
+          // `electron-updater` (in-app auto-update, src/main/updater.ts) is
+          // likewise DELIBERATELY NOT on this list, and the check is recorded
+          // here so nobody has to redo it. It is plain CommonJS -- no
+          // `"type": "module"` at all, `main: "out/main.js"` -- so it never
+          // reaches Node's require(esm) interop and the failure mode this
+          // whole comment block exists for cannot arise.
+          //
+          // Verified against the REAL COMPILED BUNDLE, per this file's own
+          // warning that Vitest/Playwright mask exactly this class of bug: a
+          // CJS probe placed inside `out/main/` (so it resolves the module
+          // identically to the emitted `require("electron-updater")`)
+          // reported `{hasDefaultOnly: false, hasNamedExports: true,
+          // sampleNames: ["BaseUpdater","AppUpdater","NoOpLogger",...]}`.
+          //
+          // One more thing worth knowing, since it decides whether the
+          // `app.isPackaged` gate in updater.ts actually holds: `autoUpdater`
+          // is a LAZY GETTER whose first access constructs a platform updater
+          // and immediately reads `app.getVersion()`. Rollup emits every
+          // reference as a property access at the USE site
+          // (`electronUpdater.autoUpdater.on(...)`), never as a destructure
+          // at module load -- confirmed by grepping the built bundle -- so a
+          // development run never touches it at all. Bundling it here would
+          // add ~1MB and gain nothing.
         ]
       }
     }

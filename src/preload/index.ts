@@ -13,6 +13,13 @@ import {
 } from '../window/close-request'
 import type { WindowUiState } from '../menu/window-state'
 import { PREFERENCES_CHANGED_CHANNEL } from '../preferences/channel'
+import {
+  UPDATE_DISMISS_CHANNEL,
+  UPDATE_GET_STATE_CHANNEL,
+  UPDATE_INSTALL_CHANNEL,
+  UPDATE_STATE_CHANNEL,
+  type UpdateState
+} from '../updates/update-state'
 
 // Custom APIs for renderer
 const api = {
@@ -260,7 +267,47 @@ const api = {
   getStartupWarnings: (): Promise<string[]> => ipcRenderer.invoke('app:getStartupWarnings'),
   // package.json's real version, via the main process's own app.getVersion()
   // -- the renderer has no direct Node/Electron access to read it itself.
-  getAppVersion: (): Promise<string> => ipcRenderer.invoke('app:getVersion')
+  getAppVersion: (): Promise<string> => ipcRenderer.invoke('app:getVersion'),
+  // --- In-app auto-update ---
+  //
+  // None of these four takes a renderer-supplied value of any kind: the main
+  // process owns the whole state machine and every decision in it. The
+  // renderer's entire role is "render what you are told" plus two explicit
+  // user gestures (install, dismiss).
+  //
+  // This surface's FOURTH push channel, and it follows onMenuCommand's own
+  // three rules verbatim: no raw `ipcRenderer.on` is exposed, the
+  // `IpcRendererEvent` (which carries a live privileged `sender` handle) is
+  // stripped rather than forwarded, and a real unsubscribe function is
+  // returned because a bridged callback is never reference-identical to the
+  // one the caller passed.
+  //
+  // The payload is NOT re-validated here, matching onPreferencesChanged's own
+  // precedent and for the identical reason: unlike a menu command, it does
+  // not originate in this process. It is the main process's own UpdateState
+  // object, produced by one pure reducer that is the only thing that can
+  // write it -- there is no untrusted input anywhere upstream to sanitize.
+  onUpdateState: (callback: (state: UpdateState) => void) => {
+    const listener = (_event: IpcRendererEvent, state: UpdateState): void => {
+      callback(state)
+    }
+    ipcRenderer.on(UPDATE_STATE_CHANNEL, listener)
+    return () => {
+      ipcRenderer.removeListener(UPDATE_STATE_CHANNEL, listener)
+    }
+  },
+  // For a window that mounts after a state change was already broadcast --
+  // a second window, or a first one still starting up when the launch check
+  // landed. Without it such a window would sit on the initial state forever
+  // while an update was staged and every other window offered to install it.
+  getUpdateState: (): Promise<UpdateState> => ipcRenderer.invoke(UPDATE_GET_STATE_CHANNEL),
+  // Resolves `false` -- never rejects -- when there is nothing staged to
+  // install, or when the user cancelled at the unsaved-work prompt that runs
+  // first. The main process re-checks its own state regardless of when or how
+  // this is called; see the `update:install` handler in src/main/index.ts.
+  installUpdate: (): Promise<boolean> => ipcRenderer.invoke(UPDATE_INSTALL_CHANNEL),
+  // "Later". Hides the banner; does NOT discard the downloaded update.
+  dismissUpdateNotice: (): Promise<void> => ipcRenderer.invoke(UPDATE_DISMISS_CHANNEL)
 }
 
 // Use `contextBridge` APIs to expose Electron APIs to

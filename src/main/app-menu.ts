@@ -31,6 +31,13 @@ interface AppMenuDeps {
   // by src/main/index.ts, which owns both the window set and createWindow --
   // this module deliberately does not decide routing policy.
   dispatch: (command: MenuCommand, payload?: string) => void
+  // Whether Help > Check for Updates… exists in this build at all
+  // (`app.isPackaged`), and what it runs. Both threaded straight through to
+  // buildAppMenuTemplate -- see that module's own comments for why this one
+  // item takes a dedicated main-process callback instead of a MENU_COMMANDS
+  // entry routed through the focused renderer.
+  updatesEnabled: boolean
+  checkForUpdates: () => void
 }
 
 let deps: AppMenuDeps | null = null
@@ -77,7 +84,9 @@ export async function refreshApplicationMenu(): Promise<void> {
     isDev: current.isDev,
     state,
     recentFiles: recents.map((entry) => entry.filePath),
-    send: current.dispatch
+    send: current.dispatch,
+    updatesEnabled: current.updatesEnabled,
+    checkForUpdates: current.checkForUpdates
   })
   Menu.setApplicationMenu(Menu.buildFromTemplate(template))
 }

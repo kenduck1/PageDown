@@ -171,14 +171,37 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: installers-${{ matrix.artifact }}
-          # Installers only. The .blockmap files electron-builder emits
-          # alongside them exist for auto-update, which this project does not
-          # ship, and the unpacked app directories are build intermediates.
+          # Installers AND the auto-update metadata. That second half is new,
+          # and the comment that used to sit here said the opposite -- that
+          # blockmaps "exist for auto-update, which this project does not
+          # ship" -- which stopped being true the moment src/main/updater.ts
+          # landed.
+          #
+          # What electron-updater actually reads, and why each is here:
+          #
+          #   * latest-mac.yml / latest.yml / latest-linux.yml -- THE FEED.
+          #     electron-updater fetches the one for its own platform from the
+          #     release and compares the version it names against the running
+          #     app's. Without these attached to the release, there is nothing
+          #     to check against and the updater does nothing, forever, with
+          #     no error a user would ever see. This is the piece whose
+          #     absence would look exactly like "the feature was never built".
+          #   * *.blockmap -- DIFFERENTIAL DOWNLOAD. electron-updater uses it
+          #     to fetch only the changed chunks of an installer instead of
+          #     the whole thing. Not strictly required (it falls back to a
+          #     full download), but it is the difference between a background
+          #     update costing a few MB and costing ~100MB, which for a
+          #     download that happens without asking is the whole point.
+          #
+          # The unpacked app directories stay excluded -- those really are
+          # build intermediates.
           path: |
             dist/*.dmg
             dist/*.exe
             dist/*.AppImage
             dist/*.deb
+            dist/latest*.yml
+            dist/*.blockmap
           # A build that silently produced nothing must fail here rather than
           # yield an empty release.
           if-no-files-found: error
@@ -259,6 +282,14 @@ jobs:
             echo "when you publish it — until then the Releases tab also shows"
             echo "the bare \`$TAG_NAME\` tag with only auto-generated source"
             echo "archives. Publishing the draft moves the installers onto the tag."
+            echo ""
+            echo "**In-app auto-update needs this draft PUBLISHED.** electron-updater"
+            echo "reads the repository's latest-release API, which excludes drafts —"
+            echo "so a draft is invisible to it no matter what is attached. The"
+            echo "\`latest*.yml\` and \`.blockmap\` assets below are what it reads once"
+            echo "the release is public; a release missing them updates nobody."
+            echo "(And note the repository itself must be public: that API 404s for"
+            echo "a private repo, and a token cannot ship inside the app.)"
             echo ""
             echo "Assets attached:"
             gh release view "$TAG_NAME" --repo "$REPO" \

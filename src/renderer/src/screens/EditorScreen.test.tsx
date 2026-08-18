@@ -70,6 +70,15 @@ beforeEach(() => {
     respondToWindowClose: vi.fn(),
     getStartupWarnings: vi.fn().mockResolvedValue([]),
     getAppVersion: vi.fn().mockResolvedValue('1.0.0'),
+    // In-app auto-update. onUpdateState must return a real unsubscribe
+    // FUNCTION -- UpdateBanner calls it from an effect cleanup, same
+    // contract (and same reason) as onMenuCommand above.
+    onUpdateState: vi.fn().mockReturnValue(() => {}),
+    getUpdateState: vi
+      .fn()
+      .mockResolvedValue({ status: 'idle', version: null, manual: false, dismissed: false }),
+    installUpdate: vi.fn().mockResolvedValue(false),
+    dismissUpdateNotice: vi.fn().mockResolvedValue(undefined),
     resolveLocalImage: vi.fn()
   }
 })

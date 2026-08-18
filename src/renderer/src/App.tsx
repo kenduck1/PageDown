@@ -7,6 +7,7 @@ import { useCreateDocument } from './hooks/useCreateDocument'
 import { confirmWindowClose } from './lib/close-guard'
 import Toast from './components/Toast'
 import ShortcutsHelpModal from './components/ShortcutsHelpModal'
+import UpdateBanner from './components/UpdateBanner'
 import HomeScreen from './screens/HomeScreen'
 import EditorScreen from './screens/EditorScreen'
 import SettingsScreen from './screens/SettingsScreen'
@@ -266,9 +267,28 @@ function App(): React.JSX.Element {
 
   return (
     <>
-      {screen === 'editor' ? <EditorScreen /> : null}
-      {screen === 'settings' ? <SettingsScreen /> : null}
-      {screen === 'home' ? <HomeScreen /> : null}
+      {/* A LAYOUT ROW above every screen, never a floating overlay -- see
+      UpdateBanner.tsx's own module comment for why that is architectural
+      rather than aesthetic (a native WebContentsView composites above ALL
+      DOM). It lives HERE rather than inside EditorScreen, unlike
+      RemoteImageBanner, because an available update is an application-level
+      fact: it has to be visible on Home and Settings too, and Home is exactly
+      where a user is standing when the launch check fires.
+
+      The wrapper below is what makes it a row rather than an overlay: each
+      screen is `h-full`, so it needs a parent with a definite height, and
+      `min-h-0` keeps a screen's own internal scrolling from being forced open
+      by its content. When no update is showing, UpdateBanner renders null and
+      this column is indistinguishable from the screen filling the viewport
+      directly. */}
+      <div className="flex h-full flex-col">
+        <UpdateBanner />
+        <div className="min-h-0 flex-1">
+          {screen === 'editor' ? <EditorScreen /> : null}
+          {screen === 'settings' ? <SettingsScreen /> : null}
+          {screen === 'home' ? <HomeScreen /> : null}
+        </div>
+      </div>
       {/* Rendered at App level rather than inside a screen: a config-read
           failure happens at startup, before the user has navigated anywhere,
           and the notice must not disappear the moment they open a document.

@@ -264,7 +264,16 @@ test('Gate 25: Open in New Window creates a genuinely independent second window,
         .api
       return api.getPageCount(src)
     }, `# ${marker}\n\nStill alive after window 2 closed.\n`)
-    expect(pageCountResult).toEqual({ pageCount: 1 })
+    // Asserts the pageCount FIELD, not the whole object. A deep equality here
+    // was silently coupling this gate to the exact shape of an unrelated
+    // result type: page-break guides later added `blockCount`, `pageBreaks`
+    // and `warnings` to it, and this line started failing even though the
+    // thing it exists to prove -- that window 1's IPC still works after
+    // window 2 closes -- was never affected.
+    //
+    // Confirmed pre-existing rather than assumed: stashing all of the
+    // auto-update work and rebuilding reproduces the identical failure.
+    expect(pageCountResult).toMatchObject({ pageCount: 1 })
   } finally {
     if (fixtureDir) await rm(fixtureDir, { recursive: true, force: true })
     if (app && close) await close()

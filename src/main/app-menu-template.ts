@@ -104,10 +104,28 @@ export interface AppMenuTemplateParams {
   // Delivers a command to the focused window. Injected rather than imported
   // so this module stays free of BrowserWindow/webContents entirely.
   send: (command: MenuCommand, payload?: string) => void
+  // Whether in-app updates can do anything at all in this build -- i.e.
+  // `app.isPackaged`, the same predicate src/main/updater.ts gates on, passed
+  // in rather than inferred from `isDev` so the two can never drift.
+  //
+  // Controls whether Help > Check for Updates… is present AT ALL, rather than
+  // present-but-disabled. It is not gated on `documentOpen` like the File and
+  // View items, because checking for updates has nothing to do with whether a
+  // document happens to be on screen -- same reasoning as Keyboard Shortcuts
+  // just below it.
+  updatesEnabled: boolean
+  // Runs a check right now. A SEPARATE callback from `send` above, not a new
+  // MENU_COMMANDS entry, because this is the one menu item whose action is
+  // entirely a MAIN-process concern: there is no renderer state to consult
+  // and nothing for a window to do with it. Routing it through the renderer
+  // would mean adding a command every renderer has to receive and bounce
+  // straight back over a second IPC hop to reach the process it started in.
+  checkForUpdates: () => void
 }
 
 export function buildAppMenuTemplate(params: AppMenuTemplateParams): MenuItemConstructorOptions[] {
-  const { appName, platform, isDev, state, recentFiles, send } = params
+  const { appName, platform, isDev, state, recentFiles, send, updatesEnabled, checkForUpdates } =
+    params
   const isMac = platform === 'darwin'
   // Every File/View item that acts on the document currently on screen. The
   // enablement question this answers is deliberately coarse -- "is the editor
@@ -579,6 +597,30 @@ export function buildAppMenuTemplate(params: AppMenuTemplateParams): MenuItemCon
         enabled: true,
         click: clickCommand('app:shortcuts')
       },
+      // OMITTED ENTIRELY rather than disabled when updates cannot run (a
+      // development run -- `app.isPackaged === false`), and that is the
+      // opposite of the enabled-but-inert treatment this menu gives Save on a
+      // clean document. The distinction is capability versus state: a greyed
+      // Save tells the user something true about *their document* that will
+      // change the moment they type. A greyed "Check for Updates…" would be
+      // telling them something about the BUILD they are running, which they
+      // cannot act on and which will never change while it runs. There is
+      // nothing to communicate, so there is nothing to show.
+      //
+      // No accelerator, deliberately: a rarely-used, deliberate action does
+      // not need one, and every free CmdOrCtrl letter is worth more to the
+      // editor (see this module's own header on the Cmd+E collision).
+      ...(updatesEnabled
+        ? ([
+            {
+              label: 'Check for Updates…',
+              // Not gated on documentOpen, for the same reason as Keyboard
+              // Shortcuts above: it is meaningful on every screen.
+              enabled: true,
+              click: () => checkForUpdates()
+            }
+          ] as MenuItemConstructorOptions[])
+        : []),
       // macOS already carries About in the application menu below.
       ...(isMac ? [] : ([{ type: 'separator' }, { role: 'about' }] as MenuItemConstructorOptions[]))
     ]
