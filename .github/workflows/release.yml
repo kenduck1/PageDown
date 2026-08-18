@@ -275,12 +275,6 @@ jobs:
         run: |
           set -euo pipefail
           {
-            echo "> [!WARNING]"
-            echo "> These builds are **unsigned** -- PageDown has no code-signing"
-            echo "> certificate yet. macOS Gatekeeper and Windows SmartScreen will"
-            echo "> warn on first launch. The README's *Installing* section has the"
-            echo "> exact steps to get past each."
-            echo ""
             echo "### Downloads"
             echo ""
             echo "| Platform | File |"
@@ -290,7 +284,7 @@ jobs:
             echo "| Windows | \`*-setup.exe\` |"
             echo "| Linux | \`*.AppImage\` or \`*.deb\` |"
             echo ""
-            echo "See [CHANGELOG.md](https://github.com/${GITHUB_REPOSITORY}/blob/${GITHUB_REF_NAME}/CHANGELOG.md) for what changed, and the README's *Installing* section for the unsigned-build steps."
+            echo "See [CHANGELOG.md](https://github.com/${GITHUB_REPOSITORY}/blob/${GITHUB_REF_NAME}/CHANGELOG.md) for what changed, and the README's *Installing* section for per-platform steps."
           } > release-notes.md
           cat release-notes.md
 
