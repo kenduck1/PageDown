@@ -5,6 +5,25 @@ directories:
 files:
   - '!**/.vscode/*'
   - '!src/*'
+  # These three were being packaged into app.asar and shipped to users --
+  # 2.6MB of Playwright gate specs and their corpus fixtures, 1.3MB of README
+  # screenshots, and the build scripts. None is reachable at runtime: the app
+  # entry point is out/main/index.js and nothing under it resolves a path into
+  # any of them. Excluding `src/*` alone never covered them because they are
+  # siblings of src, not children.
+  - '!{tests,docs,scripts}/**'
+  - '!.github/**'
+  # electron-builder packages the working directory, not the git index, so an
+  # untracked local file still ships. CLAUDE.md is the notable one: it is no
+  # longer in the repository, so a CI build never sees it, but any local
+  # `pnpm build:mac` was putting 352KB of internal engineering notes inside
+  # app.asar where anyone can read them. The rest are build artifacts and test
+  # configs with no runtime role.
+  - '!CLAUDE.md'
+  - '!*.tsbuildinfo'
+  - '!test-results/**'
+  - '!{vitest,playwright}.*.{ts,mts}'
+  - '!{vitest,playwright}.config.{ts,mts}'
   - '!electron.vite.config.{js,ts,mjs,cjs}'
   - '!{.eslintcache,eslint.config.mjs,.prettierignore,.prettierrc.yaml,CHANGELOG.md,README.md}'
   - '!{.env,.env.*,.npmrc,pnpm-lock.yaml}'

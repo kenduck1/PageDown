@@ -455,6 +455,41 @@ A related build-layer gotcha: `.css?asset` does **not** work in the main
 build — Vite's CSS plugin intercepts the specifier ahead of the asset plugin.
 Use `?raw` with an ambient type declaration.
 
+### `dependencies` means "shipped", not "used"
+
+electron-builder packages every `package.json` **dependency** into `app.asar`.
+Almost nothing here needs that: Rollup, Vite and esbuild bundle their inputs
+into `out/`, so a bundled package is already inside the app and a second copy
+under `node_modules` is dead weight that is never read.
+
+Exactly **five** packages are `require()`d at runtime —
+`@electron-toolkit/preload`, `@electron-toolkit/utils`, `docx`,
+`electron-updater`, `js-yaml`. Those are the only entries in `dependencies`.
+Everything else is a `devDependency`, including things that are unambiguously
+shipped _code_ (Mermaid, KaTeX, Paged.js, all of Milkdown, the whole
+remark/rehype stack). They reach users bundled inside `out/`, not as packages.
+
+This was measured, not assumed: `node_modules` inside `app.asar` was **199 MB**
+against 13 MB of actual application code, and the installed app was 455 MB.
+Mermaid alone was 85 MB, present in full and loaded by nothing.
+
+> **The trap this creates.** A new `import` in main-process code from a package
+> that sits in `devDependencies` compiles, typechecks, passes every test and
+> runs fine under `pnpm dev` — `node_modules` is right there. It fails only in
+> the **packaged** app, as `MODULE_NOT_FOUND` at startup. Same shape as the
+> `externalizeDeps` trap above: correct everywhere except the artifact users
+> get. If you add a main-process dependency that must be resolved at runtime
+> rather than bundled, move it to `dependencies`.
+
+To check what the compiled output actually resolves at runtime:
+
+```bash
+grep -oE 'require\("(@[^"]*|[^"@./][^"]*)"\)' out/main/index.js | sort -u
+```
+
+Anything that appears there and is not a Node builtin, `electron`, or one of
+the five above is a packaging bug.
+
 ## Testing
 
 Three suites with different purposes. Do not blur them.
