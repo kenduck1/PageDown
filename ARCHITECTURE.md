@@ -536,9 +536,13 @@ Recorded so they are not mistaken for oversights:
 
 - **Track changes.** Cannot be represented portably in plain Markdown without
   a sidecar. (Comments _can_, and are built, using an HTML-comment convention.)
-- **Auto-update.** `publish: null` is the honest state. A real updater needs a
-  release host, code signing _and_ notarization, and an update UI. A broken
-  updater is worse than a documented absence.
+- **Silent or forced updates.** In-app update _is_ built (`src/main/updater.ts`,
+  `electron-updater` against this repository's GitHub releases), but only as
+  far as check, download in the background, and offer. `autoInstallOnAppQuit`
+  is off, so quitting is not consent and the app never restarts itself — the
+  only path to an install is the update banner's own button. A document editor
+  that swaps itself out from under an open document is worse than one that
+  waits to be asked.
 - **Incremental re-layout.** Split mode does a full re-layout per settled
   edit, debounced at 500ms. Roughly 170ms for a 20-page document, ~2.5s for 300. Fine for the reports-and-letters use case this app targets, degrading
   for true long-document live editing. A checkpoint-resume engine was proven

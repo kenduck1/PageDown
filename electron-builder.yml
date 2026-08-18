@@ -148,13 +148,18 @@ npmRebuild: false
 # extractable from every copy of it by anyone who downloads one, so an
 # embedded token is a published token.
 #
-# WHICH IS ALSO WHY UPDATES CANNOT WORK YET. This repository is PRIVATE, and
-# the releases API 404s for a private repo without a token. Every check fails
-# until the repo is made public, and src/main/updater.ts makes that failure
-# completely silent by design (see its own EXPECTED-UNTIL-PUBLIC comment).
-# macOS additionally needs a signed and notarized build -- Squirrel.Mac will
-# not apply an update to one that is not -- so `notarize: false` above is a
-# second, independent blocker for that platform specifically.
+# WHICH IS ALSO WHY UPDATES ONLY WORK ONCE THIS REPOSITORY IS PUBLIC. The
+# releases API 404s for a private repo without a token, so every check fails
+# until then, and src/main/updater.ts makes that failure completely silent by
+# design (see its own EXPECTED-UNTIL-PUBLIC comment).
+#
+# The macOS half of that story is now CLOSED, and the note that used to sit
+# here calling `notarize: false` "a second, independent blocker" is stale:
+# Squirrel.Mac does refuse to apply an update to a build that is not signed
+# and notarized, but the release workflow passes `-c.mac.notarize=true`
+# whenever the signing secrets are present, so a real release IS notarized.
+# `notarize: false` here is only the default for a local `pnpm build:mac`,
+# which has no Apple credentials and would otherwise fail outright.
 #
 # `owner`/`repo` are stated explicitly rather than inferred from
 # package.json's `repository` field, so a future rename of that field cannot

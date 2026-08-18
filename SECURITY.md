@@ -125,14 +125,34 @@ one.
 matches a per-render random token rather than the public class name, so a
 document's own raw HTML cannot forge a real page break.
 
-### What is out of scope
+**Escape from the app into the privileged renderer.** The window that hosts
+the editor has the `contextBridge` API attached, so anything it can be made
+to display inherits that bridge. Navigation away from the app's own document
+is therefore refused outright: `will-navigate` allows only the app's own
+origin and path, `setWindowOpenHandler` denies every `window.open` and passes
+only `http`/`https` to the real browser, and `dragover`/`drop` are cancelled
+across the whole window so that a file dropped on the app's chrome cannot
+trigger Chromium's navigate-to-the-dropped-file default. `tests/gates/gate44`
+exercises all of this against the real built app.
 
-- **Builds are unsigned.** There is no Apple Developer ID or Windows
-  Authenticode certificate, and macOS notarization is off. Verify what you
-  download. This is a known gap, not a claim of safety.
-- **There is no auto-update mechanism**, so there is no update channel to
-  compromise — and equally, no automatic delivery of security fixes. Watch
-  releases.
+**A compromised update channel.** Updates are fetched over HTTPS from this
+repository's GitHub releases, and each downloaded artifact is checked by
+`electron-updater` against the SHA-512 recorded in the release manifest —
+which is itself served over HTTPS from the same release. Downgrades and
+pre-releases are refused for a released version, and code-signature
+verification is left at `electron-updater`'s own default rather than
+disabled. Nothing is installed without an explicit click: the download
+happens in the background, but `autoInstallOnAppQuit` is off, so quitting is
+not consent and the app never restarts itself. No token is embedded in the
+app — the releases API is public, and a shipped token would be a published
+one.
+
+The trust anchor is therefore this repository's own GitHub releases: an
+attacker able to publish a release here, or to break TLS between the app and
+GitHub, could serve a malicious update. Protecting the accounts that can
+publish a release is part of the app's security boundary.
+
+### What is out of scope
 - **Denial of service from pathological documents.** Margins are clamped
   specifically to prevent a frontmatter typo producing an effectively infinite
   page count, and KaTeX's `maxSize` is bounded, but a sufficiently
