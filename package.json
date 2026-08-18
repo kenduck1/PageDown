@@ -1,6 +1,6 @@
 {
   "name": "pagedown",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "A page-first Markdown editor for long-form documents that need exact page layout and print fidelity.",
   "main": "./out/main/index.js",
   "author": "Kai Ko",

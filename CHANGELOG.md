@@ -6,6 +6,38 @@ This project is pre-1.0: minor versions may contain breaking changes, and the
 Markdown a document round-trips to is not yet frozen (see the note on
 normalisation under 0.1.0).
 
+## 0.1.1 — 2026-08-18
+
+First **signed and notarized** macOS build. macOS no longer reports the app as
+damaged on first launch, and no `xattr` workaround is needed.
+
+### Added
+
+- **In-app updates.** The app checks for a new release, downloads it in the
+  background, and offers to restart and install. Never installs without an
+  explicit click. Requires a public repository to function.
+- **Comment history.** Resolve, unresolve and delete are now three distinct
+  actions; resolved comments stay in the document and collapse into their own
+  section rather than being destroyed.
+- Comments can span more than one paragraph.
+- Clicking a highlighted comment in the document reveals it in the sidebar.
+
+### Fixed
+
+- The selected text stays visible while the comment or link composer has focus.
+- Running headers and footers now render in the Format canvas, not only in the
+  paginated preview and exported output.
+- The frontmatter placeholder box no longer paints onto page 1 of the editor
+  canvas; it renders as nothing, matching every output surface.
+- macOS `Info.plist` usage descriptions were nested under a stray `"0"` key and
+  so were invisible to the OS. Camera and microphone declarations, inherited
+  from a project template and never used, are removed.
+
+### Changed
+
+- Electron 39 → 43. Electron 39 was out of support and no longer receiving
+  Chromium security fixes. No page count changed across the reference corpus.
+
 ## 0.1.0 — 2026-08-16
 
 First public build. PageDown has been in development for some time; this is the
