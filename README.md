@@ -40,8 +40,8 @@ language like LaTeX or Typst. PageDown tries the third option.
 
 > [!NOTE]
 > PageDown is early-stage and under active development — expect rough edges.
-> Known gaps, named up front: builds are **not signed or notarized** and there
-> is **no auto-update**; a never-saved document is crash-protected by a draft
+> Known gaps, named up front: **Windows builds are not signed**, so SmartScreen
+> warns on first run; a never-saved document is crash-protected by a draft
 > store but has no version history; and Split mode's panes follow each other
 > by page rather than scrolling in exact sync.
 
@@ -142,101 +142,19 @@ Download the latest build from the
 | Windows               | `pagedown-<version>-setup.exe`                 |
 | Linux                 | `pagedown-<version>-x86_64.AppImage` or `.deb` |
 
-> [!WARNING]
-> **Builds are unsigned.** PageDown has no Apple Developer ID or Windows
-> Authenticode certificate, so both operating systems will warn you. This is a
-> real gap, not a formality — only bypass these warnings for a build you
+> [!NOTE]
+> **macOS builds are signed and notarized.** They open normally, with no
+> warning and no `xattr` workaround.
+>
+> **Windows builds are not signed.** PageDown has no Authenticode certificate,
+> so SmartScreen will warn on first run. Only bypass that for a build you
 > obtained from the Releases page above.
-
-**macOS.** Gatekeeper will report that the app "is damaged and can't be
-opened", which is what it says for any unsigned, un-notarized app carrying a
-download quarantine flag. To run it anyway:
-
-```bash
-xattr -dr com.apple.quarantine /Applications/PageDown.app
-```
 
 **Windows.** SmartScreen will show "Windows protected your PC". Choose **More
 info → Run anyway**.
 
 **Linux.** Make the AppImage executable (`chmod +x pagedown-*.AppImage`), or
 install the `.deb` with `sudo dpkg -i pagedown_*.deb`.
-
-## Signing macOS releases (maintainers)
-
-Releases are unsigned until a Developer ID certificate is configured, which is
-why macOS reports the app as damaged. The release workflow signs and notarizes
-automatically once these secrets exist, and builds unsigned when they do not —
-no workflow edit is needed either way.
-
-One-time setup, two steps:
-
-**1. Let Xcode create the certificate.** Xcode → Settings → **Accounts** → add
-your Apple ID → select the team → **Manage Certificates…** → **+** →
-**Developer ID Application**.
-
-Xcode generates the key, requests the certificate, and installs it with the
-full chain. No certificate signing request to build by hand.
-
-> Pick **Developer ID Application**, not "Mac App Distribution" — only
-> Developer ID works for software shipped outside the Mac App Store.
-
-**2. Upload the secrets:**
-
-```bash
-./scripts/setup-mac-signing.sh
-```
-
-With no argument it exports the certificate straight from your keychain
-(macOS will ask for your login password), then asks for an **App Store Connect
-API key** for notarization — create one at
-[appstoreconnect.apple.com](https://appstoreconnect.apple.com) → Users and
-Access → **Integrations** → App Store Connect API. The `.p8` downloads exactly
-once.
-
-An API key is used rather than an Apple ID and app-specific password (both work
-with electron-builder) because it is a standalone credential: revocable on its
-own, and not derived from the account that owns the enrollment.
-
-The script never echoes a value, and the exported certificate copy is deleted
-on exit.
-
-That is all. **Notarization is not a separate step** — the workflow enables it
-whenever the secrets are present, and electron-builder submits to Apple and
-staples the ticket during the build. It adds a few minutes.
-
-<details>
-<summary>Without Xcode</summary>
-
-Two scripts cover the manual route. They exist because doing this by hand has
-one non-obvious failure: the `.p12` must carry Apple's **Developer ID
-intermediate** certificate, which Keychain Access supplies for free and a
-hand-rolled export does not. Omitting it yields a signature that looks fine
-locally and is rejected at notarization.
-
-```bash
-./scripts/make-signing-request.sh "you@example.com" "Your Name"
-# upload the .certSigningRequest at developer.apple.com, download the .cer
-./scripts/build-signing-p12.sh ~/Downloads/developerID_application.cer
-./scripts/setup-mac-signing.sh ~/.pagedown-signing/DeveloperID.p12
-```
-
-`build-signing-p12.sh` fetches the intermediate and verifies the chain before
-building, so a wrong certificate fails in seconds rather than at notarization.
-
-</details>
-
-Then tag a release as usual. The run summary reports whether the built app is
-**actually** signed — read off the artifact with `codesign`, not inferred from
-the secrets existing.
-
-> [!NOTE]
-> Signing embeds the certificate's common name — `Developer ID Application:
-<NAME> (<TEAMID>)` — in every build, readable by anyone via
-> `codesign -dv --verbose=4`. That is the mechanism, not a leak: Gatekeeper's
-> purpose is telling users who signed the software. For an individual
-> enrollment that name is a legal name; an organization enrollment shows the
-> company name instead. Nothing else from the Apple account is embedded.
 
 ## Building from source
 
