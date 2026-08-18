@@ -1165,6 +1165,48 @@ function createWindow(openPath?: string, initialBounds?: InitialWindowBounds): B
     return { action: 'deny' }
   })
 
+  // The other half of the same control, and the one that was missing.
+  //
+  // `setWindowOpenHandler` above covers `window.open` and `target="_blank"`
+  // ONLY. It does nothing about a top-level navigation in the existing frame
+  // — a plain `<a href>`, a scripted `location.href =`, or (the realistic
+  // one for a document editor) Chromium's default action for a file dropped
+  // on the window. That matters far more here than it would in a normal web
+  // page, because THIS is the privileged renderer: `contextBridge` re-runs
+  // the preload for the new document, so navigating away hands the app's
+  // whole `window.api` surface — `saveFile`, `openPath`, `getRecentFiles`,
+  // `exportPdf`, `setPreferences`, `resolveLocalImage` — to whatever was
+  // navigated to. Measured against the real built app before this existed:
+  // the bridge survived the navigation intact, all 44 methods.
+  //
+  // Renderer-initiated navigation only, which is exactly the scope wanted:
+  // `will-navigate` does not fire for main-process `loadURL`/`loadFile`/
+  // `reload()`, so the `?openPath=` load below and the crash handler's
+  // `win.reload()` are unaffected and need no exemption.
+  //
+  // The comparison is origin + pathname, deliberately ignoring search and
+  // hash: `?openPath=` is a legitimate part of this window's own URL, and a
+  // same-document hash change must not be treated as an escape. Anything
+  // else is denied, and an http/https target is handed to the real browser
+  // so a stray link in a document still does something useful — the same
+  // disposition, and the same scheme allowlist, as the handler above.
+  win.webContents.on('will-navigate', (event, targetUrl) => {
+    const current = win.webContents.getURL()
+    try {
+      const target = new URL(targetUrl)
+      const appUrl = new URL(current)
+      if (target.origin === appUrl.origin && target.pathname === appUrl.pathname) return
+      event.preventDefault()
+      if (target.protocol === 'http:' || target.protocol === 'https:') {
+        shell.openExternal(targetUrl)
+      }
+    } catch {
+      // Unparseable target, or no current URL to compare against: deny. A
+      // navigation we cannot reason about is exactly the one to refuse.
+      event.preventDefault()
+    }
+  })
+
   // Every window gets its own real context menu (Multi-window support) --
   // previously only ever attached to the single, first-created mainWindow,
   // so a second window would have had NO Cut/Copy/Paste/spelling-suggestion

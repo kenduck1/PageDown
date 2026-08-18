@@ -159,6 +159,41 @@ function App(): React.JSX.Element {
     return () => window.removeEventListener('keydown', handleKeyDown)
   }, [openShortcutsHelp])
 
+  // Suppress the browser's default action for anything dropped on the app.
+  //
+  // THIS IS A SECURITY CONTROL, not drag-and-drop plumbing. Chromium's
+  // default action for a file dropped on a page that is not a drop target is
+  // to NAVIGATE the frame to it -- and this renderer is the privileged one,
+  // so `contextBridge` re-runs the preload for whatever it lands on and hands
+  // the app's entire `window.api` surface to it. Dropping an HTML file onto
+  // the toolbar therefore used to be enough to give arbitrary local content
+  // `saveFile`, `openPath`, `getRecentFiles` and `setPreferences`. Measured
+  // against the real built app; `will-navigate` in the main process is the
+  // other half of the same fix, and tests/gates/gate44 covers both.
+  //
+  // The gesture is one this app actively teaches: dropping an image INTO the
+  // editor already inserts it. Everything outside those panes -- toolbar,
+  // sidebar, tab bar, status bar, Home, Settings -- was the unguarded region.
+  //
+  // Registered on `document` in the BUBBLE phase, so it runs after the
+  // handlers that genuinely want a drop (the Milkdown drop plugin,
+  // SourceEditor's textarea, the tab bar's reorder). Those call
+  // `preventDefault()` themselves and have already done their work by the
+  // time the event reaches here; `preventDefault()` is idempotent, so this
+  // cannot interfere with them. Cancelling `dragover` is what makes the whole
+  // window a drop target in the first place -- without it the `drop` event
+  // never fires at all and Chromium navigates instead, which is why both
+  // listeners are required rather than just the `drop` one.
+  useEffect(() => {
+    const suppressDefault = (event: DragEvent): void => event.preventDefault()
+    document.addEventListener('dragover', suppressDefault)
+    document.addEventListener('drop', suppressDefault)
+    return () => {
+      document.removeEventListener('dragover', suppressDefault)
+      document.removeEventListener('drop', suppressDefault)
+    }
+  }, [])
+
   // The application-menu commands that are meaningful on EVERY screen, and
   // therefore cannot live in EditorScreen (which is unmounted on Home and
   // Settings). Everything document-scoped -- Save, Export, Find, view modes,
