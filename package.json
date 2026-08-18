@@ -40,7 +40,7 @@
     "prestart": "pnpm run build:pagination-render",
     "build:pagination-render": "tsx scripts/build-pagination-render.ts",
     "build": "pnpm run typecheck && electron-vite build && pnpm run build:pagination-render",
-    "postinstall": "electron-builder --config build/electron-builder.yml install-app-deps",
+    "postinstall": "electron-builder install-app-deps",
     "build:unpack": "pnpm run build && electron-builder --config build/electron-builder.yml --dir",
     "build:win": "pnpm run build && electron-builder --config build/electron-builder.yml --win",
     "build:mac": "electron-vite build && pnpm run build:pagination-render && electron-builder --config build/electron-builder.yml --mac",
