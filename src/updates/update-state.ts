@@ -187,6 +187,34 @@ export function shouldCheckForUpdates(input: { isPackaged: boolean; state: Updat
   return true
 }
 
+// Starting a check is TWO decisions -- what the user should now see, and
+// whether to do any network work -- and they MUST be made against the same
+// snapshot of state. They are returned together, from one function, because
+// making them separately in the wrong order is a defect this project already
+// shipped: it disabled auto-update completely, and nothing detected it.
+//
+// The trap is genuinely easy to walk into, which is why the fix is structural
+// rather than a comment. `check-started` resolves to `status: 'checking'`, and
+// shouldCheckForUpdates rejects 'checking' as "a check is already in flight".
+// So a caller that dispatches first and then consults the gate against its own
+// updated state gets `false` every single time. Both halves are individually
+// correct and individually tested; only their composition was wrong.
+//
+// Ordering here is the whole point: `shouldCheck` is computed from `state` as
+// it stands on entry, BEFORE `next` is derived from it.
+export function beginUpdateCheck(
+  state: UpdateState,
+  input: { manual: boolean; isPackaged: boolean; currentVersion: string }
+): { next: UpdateState; shouldCheck: boolean } {
+  const shouldCheck = shouldCheckForUpdates({ isPackaged: input.isPackaged, state })
+  const next = reduceUpdateState(
+    state,
+    { type: 'check-started', manual: input.manual },
+    input.currentVersion
+  )
+  return { next, shouldCheck }
+}
+
 // The whole state machine, as one pure function.
 //
 // `currentVersion` is the running app's own version (app.getVersion()),

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   INITIAL_UPDATE_STATE,
+  beginUpdateCheck,
   canInstallUpdate,
   compareVersions,
   isNewerVersion,
@@ -92,6 +93,20 @@ describe('shouldCheckForUpdates', () => {
     ).toBe(false)
   })
 
+  // Pins the interaction that made this gate reject every real check. It is
+  // stated as its own test because the value is the EXPLANATION: the state
+  // `check-started` produces always fails this gate, so anything that
+  // dispatches first and gates afterwards can never check for updates.
+  it('rejects the very state that check-started produces', () => {
+    const afterDispatch = reduce(INITIAL_UPDATE_STATE, { type: 'check-started', manual: false })
+    expect(afterDispatch.status).toBe('checking')
+    expect(shouldCheckForUpdates({ isPackaged: true, state: afterDispatch })).toBe(false)
+    // ...while the same gate, asked about the state as it stood BEFORE that
+    // dispatch, permits it. Both answers are correct; only the choice of which
+    // snapshot to ask about is not.
+    expect(shouldCheckForUpdates({ isPackaged: true, state: INITIAL_UPDATE_STATE })).toBe(true)
+  })
+
   it('runs again after a previous check was silently abandoned', () => {
     const afterFailure = reduce(
       INITIAL_UPDATE_STATE,
@@ -101,6 +116,67 @@ describe('shouldCheckForUpdates', () => {
       }
     )
     expect(shouldCheckForUpdates({ isPackaged: true, state: afterFailure })).toBe(true)
+  })
+})
+
+// The actual regression guard for the auto-update outage. shouldCheckForUpdates
+// and reduceUpdateState were each correct and each tested; the bug lived purely
+// in the ORDER a caller combined them, in src/main/updater.ts -- a module that
+// cannot be unit-tested at all (importing it outside Electron throws, because
+// electron-updater's `autoUpdater` export is a lazy getter that reads
+// app.getVersion() on first access). So the composition was moved in here,
+// where it can be tested, rather than left as a comment asking future callers
+// to remember the ordering.
+describe('beginUpdateCheck', () => {
+  it('permits a real check from a packaged, idle app while still moving to checking', () => {
+    const { next, shouldCheck } = beginUpdateCheck(INITIAL_UPDATE_STATE, {
+      manual: false,
+      isPackaged: true,
+      currentVersion: CURRENT
+    })
+    // This is the assertion that fails if the gate is ever evaluated against
+    // the post-dispatch state again -- the exact defect that shipped, where
+    // this was false on every call and no update check ever ran.
+    expect(shouldCheck).toBe(true)
+    expect(next.status).toBe('checking')
+  })
+
+  it('still refuses network work for an unpackaged app', () => {
+    const { shouldCheck } = beginUpdateCheck(INITIAL_UPDATE_STATE, {
+      manual: false,
+      isPackaged: false,
+      currentVersion: CURRENT
+    })
+    expect(shouldCheck).toBe(false)
+  })
+
+  it('does no network work when an update is already staged, but still clears the dismissal', () => {
+    const staged: UpdateState = {
+      status: 'ready',
+      version: '0.2.0',
+      manual: false,
+      dismissed: true
+    }
+    const { next, shouldCheck } = beginUpdateCheck(staged, {
+      manual: true,
+      isPackaged: true,
+      currentVersion: CURRENT
+    })
+    // Both halves matter: a staged update needs no round trip, but the manual
+    // check must still re-surface the banner the user clicked "Later" on --
+    // which is the whole reason the dispatch happens even when the gate says
+    // no, and therefore the reason the two decisions are entangled at all.
+    expect(shouldCheck).toBe(false)
+    expect(next.status).toBe('ready')
+    expect(next.dismissed).toBe(false)
+  })
+
+  it('does not stack a second check on one already in flight', () => {
+    const { shouldCheck } = beginUpdateCheck(
+      { ...INITIAL_UPDATE_STATE, status: 'checking' },
+      { manual: false, isPackaged: true, currentVersion: CURRENT }
+    )
+    expect(shouldCheck).toBe(false)
   })
 })
 

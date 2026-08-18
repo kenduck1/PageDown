@@ -228,8 +228,20 @@ jobs:
           #
           # The unpacked app directories stay excluded -- those really are
           # build intermediates.
+          #   * *-mac.zip -- THE macOS UPDATE PAYLOAD, and its absence was a
+          #     real shipped defect rather than an omission of convenience.
+          #     Squirrel.Mac installs from a ZIP, never from a DMG: the DMG is
+          #     purely a human-facing installer. latest-mac.yml's own `path:`
+          #     key names `PageDown-<version>-mac.zip`, so with the zip
+          #     missing every macOS update resolved the feed, found a newer
+          #     version, and then 404'd fetching the payload. The .blockmap
+          #     for that same zip WAS being uploaded, which is what made the
+          #     gap easy to miss -- the filter looked complete.
+          #     This is the largest asset by far (~110MB per arch), and that
+          #     is simply the price of macOS auto-update.
           path: |
             dist/*.dmg
+            dist/*-mac.zip
             dist/*.exe
             dist/*.AppImage
             dist/*.deb

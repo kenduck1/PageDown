@@ -2,8 +2,8 @@ import { app } from 'electron'
 import { autoUpdater } from 'electron-updater'
 import {
   INITIAL_UPDATE_STATE,
+  beginUpdateCheck,
   reduceUpdateState,
-  shouldCheckForUpdates,
   type UpdateEvent,
   type UpdateState
 } from '../updates/update-state'
@@ -86,11 +86,14 @@ export function getUpdateState(): UpdateState {
 // reducer returning the same object, e.g. an ignored downgrade) broadcasts
 // nothing -- pushing an identical state to every renderer on every ignored
 // event would be pure noise.
-function dispatch(event: UpdateEvent): void {
-  const next = reduceUpdateState(state, event, app.getVersion())
+function commit(next: UpdateState): void {
   if (next === state) return
   state = next
   deps?.broadcast(state)
+}
+
+function dispatch(event: UpdateEvent): void {
+  commit(reduceUpdateState(state, event, app.getVersion()))
 }
 
 // Wires electron-updater's own events onto this module's normalized event set.
@@ -151,9 +154,28 @@ export async function checkForUpdates(manual: boolean): Promise<void> {
   // it does clear `dismissed`, which is what re-surfaces a banner the user
   // clicked "Later" on. Without that, "Later" would be permanent until
   // relaunch and the menu item would appear to do nothing.
-  dispatch({ type: 'check-started', manual })
+  //
+  // The gate is evaluated against the PRE-dispatch state, and `beginUpdateCheck`
+  // exists to make that impossible to get wrong -- see its own comment. This
+  // was a real defect that disabled the entire feature: `check-started`
+  // resolves to `status: 'checking'`, which the gate rejects as "a check is
+  // already in flight", so consulting it after dispatching returned false
+  // every time and `autoUpdater.checkForUpdates()` was never once reached.
+  //
+  // It hid because both halves are individually correct and every failure mode
+  // of this feature is deliberately silent: no request is indistinguishable
+  // from a failed request when the failure is only logged on paths that were
+  // never taken. This module's own EXPECTED-UNTIL-PUBLIC note then supplied a
+  // ready explanation for "updates do nothing" -- a cause that was real, but
+  // not the one operating.
+  const { next, shouldCheck } = beginUpdateCheck(state, {
+    manual,
+    isPackaged: app.isPackaged,
+    currentVersion: app.getVersion()
+  })
+  commit(next)
 
-  if (!shouldCheckForUpdates({ isPackaged: app.isPackaged, state })) return
+  if (!shouldCheck) return
 
   try {
     await autoUpdater.checkForUpdates()
