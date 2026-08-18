@@ -17,17 +17,60 @@
 # your shell history or in this script's output.
 set -euo pipefail
 
-P12="${1:-}"
-if [ -z "$P12" ] || [ ! -f "$P12" ]; then
-  echo "usage: $0 path/to/DeveloperID.p12" >&2
-  echo >&2
-  echo "Export one from Keychain Access: find your 'Developer ID Application'" >&2
-  echo "certificate, right-click -> Export, choose .p12, and set a password." >&2
-  exit 1
-fi
-
 command -v gh >/dev/null || { echo "gh CLI not found" >&2; exit 1; }
 gh auth status >/dev/null 2>&1 || { echo "run 'gh auth login' first" >&2; exit 1; }
+
+# With no argument, export the certificate straight out of the keychain.
+#
+# That is the normal path when Xcode created it (Settings -> Accounts ->
+# Manage Certificates -> + -> Developer ID Application), which installs it
+# directly and is by far the easiest way to get one. Passing a .p12 explicitly
+# still works, for a certificate obtained some other way.
+P12="${1:-}"
+TEMP_P12=""
+if [ -z "$P12" ]; then
+  COUNT="$(security find-identity -v -p codesigning 2>/dev/null \
+    | grep -c "Developer ID Application" || true)"
+  if [ "$COUNT" -eq 0 ]; then
+    echo "No 'Developer ID Application' certificate found in your keychain." >&2
+    echo >&2
+    echo "Easiest way to get one, since Xcode is installed:" >&2
+    echo "  Xcode -> Settings -> Accounts -> add your Apple ID -> select the" >&2
+    echo "  team -> Manage Certificates... -> + -> Developer ID Application" >&2
+    echo >&2
+    echo "Then re-run this with no arguments. Or pass a .p12 explicitly:" >&2
+    echo "  $0 path/to/DeveloperID.p12" >&2
+    exit 1
+  fi
+  if [ "$COUNT" -gt 1 ]; then
+    echo "More than one Developer ID Application certificate is installed:" >&2
+    security find-identity -v -p codesigning | grep "Developer ID Application" >&2
+    echo >&2
+    echo "Export the one you want from Keychain Access and pass it explicitly," >&2
+    echo "so this cannot upload the wrong identity." >&2
+    exit 1
+  fi
+
+  echo "Found one Developer ID Application certificate; exporting it."
+  echo "macOS will ask for your login password to release the private key."
+  TEMP_P12="$(mktemp -t pagedown-signing).p12"
+  # A random transport password. It is only ever used to move the certificate
+  # from keychain to GitHub, and it is uploaded alongside as
+  # MAC_CERT_PASSWORD, so it never needs to be memorable or reused.
+  EXPORT_PW="$(openssl rand -base64 24)"
+  if ! security export -t identities -f pkcs12 -P "$EXPORT_PW" -o "$TEMP_P12" 2>/dev/null; then
+    rm -f "$TEMP_P12"
+    echo "Keychain export failed -- macOS may have denied access." >&2
+    echo "Export manually from Keychain Access and pass the .p12 to this script." >&2
+    exit 1
+  fi
+  P12="$TEMP_P12"
+  PRESET_PW="$EXPORT_PW"
+fi
+# The temp .p12 holds a private key; remove it however this script exits.
+trap '[ -n "$TEMP_P12" ] && rm -f "$TEMP_P12"' EXIT
+
+[ -f "$P12" ] || { echo "No such file: $P12" >&2; exit 1; }
 
 echo "Repository: $(gh repo view --json nameWithOwner --jq .nameWithOwner)"
 echo
@@ -41,9 +84,16 @@ echo
 base64 -i "$P12" | gh secret set MAC_CERT_P12_BASE64
 echo "set MAC_CERT_P12_BASE64"
 
-read -r -s -p "Password you set when exporting the .p12: " CERT_PW; echo
-printf '%s' "$CERT_PW" | gh secret set MAC_CERT_PASSWORD
-unset CERT_PW
+if [ -n "${PRESET_PW:-}" ]; then
+  # Exported from the keychain a moment ago with a generated transport
+  # password -- no need to ask for something the user never chose.
+  printf '%s' "$PRESET_PW" | gh secret set MAC_CERT_PASSWORD
+  unset PRESET_PW EXPORT_PW
+else
+  read -r -s -p "Password you set when exporting the .p12: " CERT_PW; echo
+  printf '%s' "$CERT_PW" | gh secret set MAC_CERT_PASSWORD
+  unset CERT_PW
+fi
 echo "set MAC_CERT_PASSWORD"
 
 # -----------------------------------------------------------------------------

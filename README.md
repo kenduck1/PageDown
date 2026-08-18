@@ -169,25 +169,52 @@ why macOS reports the app as damaged. The release workflow signs and notarizes
 automatically once these secrets exist, and builds unsigned when they do not —
 no workflow edit is needed either way.
 
-One-time setup:
+One-time setup, two steps:
 
-1. **Create a signing request.** Keychain Access → Certificate Assistant →
-   _Request a Certificate From a Certificate Authority_. Enter your Apple ID
-   email, choose **Saved to disk**, and save the `.certSigningRequest`.
-2. **Create the certificate.** [developer.apple.com/account/resources/certificates](https://developer.apple.com/account/resources/certificates)
-   → **+** → **Developer ID Application** → upload the request → download the
-   `.cer` → double-click it to install into your keychain.
-   Note this is **Developer ID Application**, not "Mac App Distribution" —
-   only Developer ID works for software shipped outside the Mac App Store.
-3. **Export it.** In Keychain Access find _Developer ID Application: …_,
-   right-click → **Export**, save as `.p12`, and set a password.
-4. **Upload the secrets:**
+**1. Let Xcode create the certificate.** Xcode → Settings → **Accounts** → add
+your Apple ID → select the team → **Manage Certificates…** → **+** →
+**Developer ID Application**.
 
-   ```bash
-   ./scripts/setup-mac-signing.sh path/to/DeveloperID.p12
-   ```
+Xcode generates the key, requests the certificate, and installs it with the
+full chain. No certificate signing request to build by hand.
 
-   That sets all five secrets the workflow reads. It never echoes a value.
+> Pick **Developer ID Application**, not "Mac App Distribution" — only
+> Developer ID works for software shipped outside the Mac App Store.
+
+**2. Upload the secrets:**
+
+```bash
+./scripts/setup-mac-signing.sh
+```
+
+With no argument it exports the certificate straight from your keychain
+(macOS will ask for your login password), then sets all five secrets. It never
+echoes a value, and the exported copy is deleted on exit.
+
+That is all. **Notarization is not a separate step** — the workflow enables it
+whenever the secrets are present, and electron-builder submits to Apple and
+staples the ticket during the build. It adds a few minutes.
+
+<details>
+<summary>Without Xcode</summary>
+
+Two scripts cover the manual route. They exist because doing this by hand has
+one non-obvious failure: the `.p12` must carry Apple's **Developer ID
+intermediate** certificate, which Keychain Access supplies for free and a
+hand-rolled export does not. Omitting it yields a signature that looks fine
+locally and is rejected at notarization.
+
+```bash
+./scripts/make-signing-request.sh "you@example.com" "Your Name"
+# upload the .certSigningRequest at developer.apple.com, download the .cer
+./scripts/build-signing-p12.sh ~/Downloads/developerID_application.cer
+./scripts/setup-mac-signing.sh ~/.pagedown-signing/DeveloperID.p12
+```
+
+`build-signing-p12.sh` fetches the intermediate and verifies the chain before
+building, so a wrong certificate fails in seconds rather than at notarization.
+
+</details>
 
 Then tag a release as usual. The run summary reports whether the built app is
 **actually** signed — read off the artifact with `codesign`, not inferred from
